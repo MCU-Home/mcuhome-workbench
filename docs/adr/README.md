@@ -18,3 +18,4 @@ dashboard-specific decisions live in
 | [0005](0005-semver-and-conventional-commits.md) | SemVer 0.x with Conventional Commits | accepted |
 | [0006](0006-matter-sdk-source.md) | Matter SDK source: upstream CHIP vs. Nordic fork | deferred |
 | [0007](0007-containerized-toolchain.md) | Containerized toolchain, minimal host requirements | accepted |
+| [0008](0008-zephyr-version-strategy.md) | Zephyr version strategy: track latest stable, not LTS | accepted |
