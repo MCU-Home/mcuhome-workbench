@@ -17,3 +17,4 @@ dashboard-specific decisions live in
 | [0004](0004-zephyr-west-t2-manifest-and-module.md) | Zephyr west T2 manifest repo that is also a Zephyr module | accepted |
 | [0005](0005-semver-and-conventional-commits.md) | SemVer 0.x with Conventional Commits | accepted |
 | [0006](0006-matter-sdk-source.md) | Matter SDK source: upstream CHIP vs. Nordic fork | deferred |
+| [0007](0007-containerized-toolchain.md) | Containerized toolchain, minimal host requirements | accepted |
