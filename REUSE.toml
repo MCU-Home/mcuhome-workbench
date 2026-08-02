@@ -1,0 +1,21 @@
+version = 1
+SPDX-PackageName = "MCUHome"
+SPDX-PackageSupplier = "The MCUHome Contributors"
+SPDX-PackageDownloadLocation = "https://github.com/mcu-home/mcuhome"
+
+# Fallback annotation: files carrying their own SPDX headers take
+# precedence ("closest"); everything else (Markdown, VERSION, templates,
+# generated placeholders) is covered here.
+[[annotations]]
+path = "**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 The MCUHome Contributors"
+SPDX-License-Identifier = "Apache-2.0"
+
+# The Code of Conduct is the Contributor Covenant 3.0, which is licensed
+# CC-BY-SA-4.0 by its authors — not Apache-2.0.
+[[annotations]]
+path = "CODE_OF_CONDUCT.md"
+precedence = "override"
+SPDX-FileCopyrightText = "Organization for Ethical Source / Contributor Covenant contributors"
+SPDX-License-Identifier = "CC-BY-SA-4.0"

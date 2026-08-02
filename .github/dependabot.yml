@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The github-actions ecosystem entry is added together with the first CI
+# workflow — dependabot errors on repos without workflow files. Pin all
+# actions to full commit SHAs when that happens.
+
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-deps:
+        patterns: ["*"]

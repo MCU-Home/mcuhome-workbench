@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Install: pre-commit install --install-hooks
+#          pre-commit install --hook-type commit-msg
+# Update pins periodically with: pre-commit autoupdate
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+
+  - repo: https://github.com/fsfe/reuse-tool
+    rev: v5.0.2
+    hooks:
+      - id: reuse
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format (Zephyr style)
+        language: system
+        entry: clang-format -i
+        files: \.(c|h)$

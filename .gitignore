@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Build outputs
+build/
+build_*/
+twister-out*/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.cache/
+compile_commands.json
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude Code local files
+.claude/settings.local.json
+CLAUDE.local.md

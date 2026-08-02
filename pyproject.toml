@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcuhome"
+version = "0.1.0.dev0"
+description = "MCUHome firmware builder: compiles MCUHome YAML device configurations into Zephyr firmware images."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "The MCUHome Contributors" }]
+keywords = [
+  "zephyr",
+  "matter",
+  "thread",
+  "coap",
+  "home-assistant",
+  "firmware",
+  "esphome-alternative",
+]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Home Automation",
+]
+
+[project.urls]
+Homepage = "https://github.com/mcu-home/mcuhome"
+Issues = "https://github.com/mcu-home/mcuhome/issues"
+Changelog = "https://github.com/mcu-home/mcuhome/blob/main/CHANGELOG.md"
+
+[project.scripts]
+mcuhome = "mcuhome.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcuhome"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

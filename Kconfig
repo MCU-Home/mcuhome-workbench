@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig MCUHOME
+	bool "MCUHome firmware framework"
+	help
+	  Enable the MCUHome runtime: the component framework, the CoAP and
+	  Matter networking layers and the device services generated from a
+	  MCUHome YAML device configuration.
+
+if MCUHOME
+
+# Component and driver Kconfig trees are sourced here as they are
+# implemented.
+
+endif # MCUHOME

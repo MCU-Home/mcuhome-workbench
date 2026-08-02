@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Feature request
+description: Propose a concrete, scoped feature for the firmware framework or builder
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For open-ended ideas or discussion, please start in
+        [Discussions](https://github.com/mcu-home/mcuhome/discussions) —
+        use this form for concrete, scoped proposals.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today? What is the use case?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: input
+    id: hardware
+    attributes:
+      label: Affected hardware / transport (if applicable)
+      placeholder: e.g. nRF54L15, Thread SED battery devices

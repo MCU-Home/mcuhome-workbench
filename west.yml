@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# West manifest for the MCUHome firmware framework.
+#
+# This repository uses the west "T2" star topology: it is the manifest
+# repository of the workspace. The workspace top directory must NOT be a
+# git repository itself.
+#
+# Usage (inside an empty workspace directory):
+#   west init -m https://github.com/mcu-home/mcuhome
+#   west update
+#
+# Or with an existing clone (workspace-dir/mcuhome = this repo):
+#   west init -l mcuhome
+#   west update
+
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    # Zephyr is pinned to a release tag — never track main. Bump the pin
+    # deliberately and update the matching Zephyr release/SDK references in
+    # README.md and CONTRIBUTING.md at the same time. (v4.5 is expected
+    # 2026-10, next LTS v4.6 ~2027-04.)
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: v4.4.0
+      import:
+        # Keep the workspace small: only pull the modules we actually use.
+        # Extend this list as board and feature support grows.
+        name-allowlist:
+          - cmsis_6        # ARM CMSIS headers (nRF and other ARM SoCs)
+          - hal_nordic     # Nordic nRF52/53/54 HAL (primary Thread targets)
+          - hal_espressif  # Espressif ESP32 HAL (WiFi targets; requires
+                           # `west blobs fetch hal_espressif`)
+          - mbedtls        # TLS/crypto (CoAP over DTLS, Matter)
+          - openthread     # Thread stack incl. MTD/SED device roles
+
+    # Matter (connectedhomeip) will be added here as a pinned-SHA project in
+    # an optional "matter" west group once ADR 0006 (upstream project-chip
+    # vs. Nordic sdk-connectedhomeip fork) is decided. Note: CHIP vendors
+    # its dependencies as git submodules, so that entry must list them
+    # explicitly via the `submodules:` key (nlio, nlassert, pigweed, ...).
+
+  self:
+    path: mcuhome
