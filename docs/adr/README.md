@@ -20,3 +20,4 @@ dashboard-specific decisions live in
 | [0007](0007-containerized-toolchain.md) | Containerized toolchain, minimal host requirements | accepted |
 | [0008](0008-zephyr-version-strategy.md) | Zephyr version strategy: track latest stable, not LTS | accepted |
 | [0009](0009-matter-explicit-yaml-schema.md) | Matter-explicit YAML schema, aligned with devicetree conventions | accepted |
+| [0010](0010-matter-only-coap-deferred.md) | Matter-only integration; CoAP deferred to a maintenance channel | accepted |
