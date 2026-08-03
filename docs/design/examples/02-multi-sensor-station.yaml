@@ -1,0 +1,76 @@
+# =========================================================================
+# Example 2 — Mains-powered multi-sensor station with battery monitoring
+# =========================================================================
+# nRF52840-DK, BME688 (temperature/humidity/pressure/gas) + BH1750 light
+# sensor on one I2C bus, battery-backup monitoring via voltage divider.
+# Thread MTD (mains-powered, always-on receiver). Shows: multiple
+# peripherals per bus, four endpoints, explicit I2C controller selection.
+# =========================================================================
+
+device:
+  name: utility-sensor-station
+  friendly_name: Utility Room Sensor Station
+  board: nrf52840dk/nrf52840
+  power:
+    source: mains
+
+network:
+  thread:
+    device_role: mtd
+  matter:
+    enabled: true
+
+hardware:
+  buses:
+    i2c0:
+      controller: i2c0            # pin a specific SoC controller
+      sda: gpio0.26
+      scl: gpio0.27
+      frequency: 400khz
+  peripherals:
+    env_chip:
+      driver: bosch,bme680        # BME688 answers to the bme680 driver
+      bus: i2c0
+      address: 0x76
+    light_chip:
+      driver: rohm,bh1750
+      bus: i2c0
+      address: 0x23
+    backup_battery:
+      driver: voltage-divider
+      adc:
+        channel: 4
+      divider: [1500k, 180k]
+
+node:
+  endpoints:
+    - id: 1
+      alias: temperature
+      device_type: temperature_sensor
+      clusters:
+        temperature_measurement:
+          source: env_chip.temperature
+          sampling: 30s
+    - id: 2
+      alias: humidity
+      device_type: humidity_sensor
+      clusters:
+        relative_humidity_measurement:
+          source: env_chip.humidity
+          sampling: 30s
+    - id: 3
+      alias: pressure
+      device_type: pressure_sensor
+      clusters:
+        pressure_measurement:
+          source: env_chip.pressure
+          sampling: 60s
+    - id: 4
+      alias: illuminance
+      device_type: light_sensor
+      clusters:
+        illuminance_measurement:
+          source: light_chip.illuminance
+          sampling: 10s
+          report:
+            delta: 50           # lux

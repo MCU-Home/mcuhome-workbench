@@ -1,0 +1,87 @@
+# =========================================================================
+# Example 3 — CO2 sensor with local alarm logic (automation engine)
+# =========================================================================
+# nRF54L15-DK, SCD41 CO2 sensor, status LED and buzzer. Thread SSED.
+# Shows: automations (thresholds, for:, conditions, action sequence),
+# actuator wiring (target: instead of source:), and that local logic
+# keeps working when the network is down.
+# =========================================================================
+
+device:
+  name: office-co2-guard
+  friendly_name: Office CO2 Guard
+  board: nrf54l15dk/nrf54l15/cpuapp
+  power:
+    source: battery
+
+network:
+  thread:
+    device_role: ssed           # synchronized sleepy — lowest power
+    poll_interval: 10s
+  matter:
+    enabled: true
+
+hardware:
+  buses:
+    i2c0:
+      sda: gpio1.11
+      scl: gpio1.12
+  peripherals:
+    co2_chip:
+      driver: sensirion,scd41
+      bus: i2c0
+      address: 0x62
+    status_led:
+      driver: gpio-led
+      pin: gpio0.9
+      active_low: true
+    buzzer:
+      driver: gpio-output         # generic switched output (MCUHome binding)
+      pin: gpio0.10
+
+node:
+  endpoints:
+    - id: 1
+      alias: co2
+      device_type: air_quality_sensor
+      clusters:
+        carbon_dioxide_measurement:
+          source: co2_chip.co2
+          sampling: 5min          # SCD41 single-shot keeps power budget
+          report:
+            delta: 50             # ppm
+    - id: 2
+      alias: warn_light
+      device_type: on_off_light   # controllable from HA as well
+      clusters:
+        on_off:
+          target: status_led
+
+automations:
+  - id: co2_warn
+    triggers:
+      - attribute: co2.measured_value
+        above: 1200
+        for: 2min
+    actions:
+      - command: warn_light.on_off.on
+
+  - id: co2_alarm
+    triggers:
+      - attribute: co2.measured_value
+        above: 2000
+    actions:
+      - command: warn_light.on_off.on
+      - set: buzzer.state         # hardware view: direct channel write
+        value: true
+      - delay: 5s
+      - set: buzzer.state
+        value: false
+
+  - id: co2_clear
+    triggers:
+      - attribute: co2.measured_value
+        below: 900
+        for: 5min
+    actions:
+      - command: warn_light.on_off.off

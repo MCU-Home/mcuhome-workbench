@@ -1,0 +1,53 @@
+# =========================================================================
+# Example 1 — Minimal battery climate sensor (the "hello world")
+# =========================================================================
+# nRF54L15-DK, SHT40 on I2C, Thread Sleepy End Device, Matter. ~30 lines.
+# =========================================================================
+
+device:
+  name: bedroom-climate
+  friendly_name: Bedroom Climate
+  board: nrf54l15dk/nrf54l15/cpuapp
+  power:
+    source: battery
+
+network:
+  thread:
+    device_role: sed
+    poll_interval: 5s
+  matter:
+    enabled: true        # default when a transport exists; shown for clarity
+
+hardware:
+  buses:
+    i2c0:
+      sda: gpio1.11
+      scl: gpio1.12
+  peripherals:
+    climate_chip:
+      driver: sensirion,sht4x
+      bus: i2c0
+      address: 0x44
+
+node:
+  endpoints:
+    - id: 1
+      alias: temperature
+      device_type: temperature_sensor
+      clusters:
+        temperature_measurement:
+          source: climate_chip.temperature
+          sampling: 60s
+          report:
+            delta: 0.2
+            max_interval: 15min
+    - id: 2
+      alias: humidity
+      device_type: humidity_sensor
+      clusters:
+        relative_humidity_measurement:
+          source: climate_chip.humidity
+          sampling: 60s
+          report:
+            delta: 1.0
+            max_interval: 15min
