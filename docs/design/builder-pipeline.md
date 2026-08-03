@@ -117,6 +117,13 @@ users, cached per cluster set).
 - `mcuhome build` runs stage 5 inside the versioned builder image
   (Zephyr SDK + pinned west workspace pre-baked). Host needs docker
   only; a persistent volume carries ccache + west workspace across runs.
+- **ccache is a hard requirement of the builder image** (PO decision,
+  2026-08-03), not an optimization: on Raspberry-class Home Assistant
+  hosts without a remote build server it is the difference between
+  usable and painful rebuild times. Prototype finding to honor: Zephyr's
+  CMake side picks ccache up automatically, but the Matter SDK's inner
+  GN build invokes the compiler directly — the builder must explicitly
+  route it through ccache (compiler-launcher wiring in the GN args).
 - Inside the Home Assistant add-on the same code path runs natively —
   the add-on container *is* the builder image plus dashboard.
 - `--native` escape hatch: developers with a local west workspace
