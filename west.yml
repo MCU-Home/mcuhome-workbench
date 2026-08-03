@@ -19,6 +19,8 @@ manifest:
   remotes:
     - name: zephyrproject-rtos
       url-base: https://github.com/zephyrproject-rtos
+    - name: project-chip
+      url-base: https://github.com/project-chip
 
   projects:
     # Zephyr is pinned to a release tag — never track main. Bump the pin
@@ -37,13 +39,24 @@ manifest:
           - hal_espressif  # Espressif ESP32 HAL (WiFi targets; requires
                            # `west blobs fetch hal_espressif`)
           - mbedtls        # TLS/crypto (CoAP over DTLS, Matter)
+          - tf-psa-crypto  # PSA crypto core, required companion of mbedtls
           - openthread     # Thread stack incl. MTD/SED device roles
 
-    # Matter (connectedhomeip) will be added here as a pinned-SHA project in
-    # an optional "matter" west group once ADR 0006 (upstream project-chip
-    # vs. Nordic sdk-connectedhomeip fork) is decided. Note: CHIP vendors
-    # its dependencies as git submodules, so that entry must list them
-    # explicitly via the `submodules:` key (nlio, nlassert, pigweed, ...).
+    # Matter SDK (upstream CHIP, prototype pin — ADR 0006 evaluation).
+    # CHIP vendors its dependencies as git submodules, hence the explicit
+    # `submodules:` list. In the optional "matter" west group so it can
+    # be skipped via group-filter.
+    - name: connectedhomeip
+      remote: project-chip
+      revision: v1.5.1.0
+      path: modules/lib/connectedhomeip
+      groups:
+        - matter
+      submodules:
+        - path: third_party/nlio/repo
+        - path: third_party/nlassert/repo
+        - path: third_party/pigweed/repo
+        - path: third_party/jsoncpp/repo
 
   self:
     path: mcuhome
