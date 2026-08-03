@@ -53,6 +53,8 @@ standalone use has the same tree under any root):
 ├── shared/
 │   ├── thread-sed-defaults.yaml # reusable fragments (consumed by the
 │   └── i2c-standard-pins.yaml   #  packages mechanism, schema rev. 2)
+├── components/                  # tree-wide custom components (see the
+│                                #  component-model design, §8)
 └── secrets.yaml                 # one secrets store for the whole tree
 ```
 
@@ -63,6 +65,10 @@ standalone use has the same tree under any root):
 - `shared/` is reserved for reusable fragments now and becomes active
   together with the packages/include mechanism (schema revision 2);
   creating the folder and its semantics from day one avoids a migration.
+- `components/` holds custom components shared across the tree;
+  device-local ones live in `devices/<name>/components/`. Resolution
+  order and the future git-referenced mechanism are defined in the
+  component-model design (§8).
 - `secrets.yaml` lives at tree root (`!secret` resolves against it).
 - Build output does **not** pollute the config tree: it goes to a
   separate work dir (`build/<device>/`, location configurable) — the
