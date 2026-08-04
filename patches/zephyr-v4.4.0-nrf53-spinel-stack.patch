@@ -1,0 +1,19 @@
+diff --git a/modules/hal_nordic/nrf_802154/serialization/platform/nrf_802154_spinel_backend_ipc.c b/modules/hal_nordic/nrf_802154/serialization/platform/nrf_802154_spinel_backend_ipc.c
+index 148bf60c220..148145580ff 100644
+--- a/modules/hal_nordic/nrf_802154/serialization/platform/nrf_802154_spinel_backend_ipc.c
++++ b/modules/hal_nordic/nrf_802154/serialization/platform/nrf_802154_spinel_backend_ipc.c
+@@ -89,7 +89,13 @@ nrf_802154_ser_err_t nrf_802154_backend_init(void)
+ }
+ 
+ /* Send packet thread details */
+-#define SEND_THREAD_STACK_SIZE 1024
++/* MCUHome prototype patch: 1024 bytes overflow on the spinel send path
++ * (verified via z_fatal_error breakpoint, reason K_ERR_STACK_CHK_FAIL,
++ * fault in nrf_802154_spinel_send/spinel_datatype_vpack_). Upstream has
++ * no Kconfig for this stack; bump it and keep it overridable. */
++#ifndef SEND_THREAD_STACK_SIZE
++#define SEND_THREAD_STACK_SIZE 2048
++#endif
+ 
+ /* Make the ring buffer long enough to hold all notifications that the driver can produce */
+ #define RING_BUFFER_LEN (NRF_802154_MAX_PENDING_NOTIFICATIONS + 1)
