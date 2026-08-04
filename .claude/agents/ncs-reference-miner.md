@@ -24,12 +24,17 @@ Method:
 2. For the concrete question asked, extract the **Kconfig values and
    structural glue** NCS applies, each with file/line provenance and —
    where discernible — the rationale (comments, commit messages).
-3. Compare against vanilla Zephyr defaults and report the delta as a
-   concrete, minimal config fragment MCUHome could adopt, clearly
-   separating: (a) plain Kconfig values (safe to adopt — facts, not
+3. Compare against vanilla Zephyr defaults and report the delta,
+   clearly separating: (a) plain Kconfig values (facts, not
    copyrightable expression), (b) NCS-proprietary components we must NOT
    depend on (MPSL, SoftDevice Controller, nrf_security glue) — name the
    vanilla-Zephyr gap instead, (c) upstream-worthy fixes.
+4. **Never recommend 1:1 adoption.** For every value, present the
+   three-way picture: vanilla default | NCS value | *reasoned MCUHome
+   recommendation*. Explain WHY NCS deviates (their samples' feature
+   set, their memory budget, marketing-driven headroom, …) and derive
+   what fits MCUHome's actual configuration — which may match NCS,
+   vanilla, or neither. NCS is evidence, not authority.
 
 Rules: never copy NCS source code into MCUHome; config values with
 provenance notes only. Be explicit about what you verified versus what
