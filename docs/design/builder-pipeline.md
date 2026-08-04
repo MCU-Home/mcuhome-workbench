@@ -100,17 +100,21 @@ artifacts: firmware.hex/.uf2, OTA image, build-manifest.json, memory report
   actions as data) interpreted by a small runtime engine — no generated
   C control flow.
 
-## 4. Matter data model wiring (needs prototype)
+## 4. Matter data model wiring (verified by prototype)
 
 The Matter SDK's conventional path generates cluster code from ZAP files
 at compile time. For a YAML-driven framework that is hostile: ZAP is a
-heavy toolchain and static per-config codegen contradicts §1. Preferred
-approach: **dynamic endpoint registration** at runtime from our config
-tables (the mechanism Matter bridges use). Risk: feature gaps for some
-clusters. Decision needs a prototype against our pinned versions —
-tracked as an open point; ADR follows the prototype result. Fallback:
-builder-invoked ZAP generation as an implementation detail (hidden from
-users, cached per cluster set).
+heavy toolchain and static per-config codegen contradicts §1. The
+integration prototype (2026-08-04, see
+[matter-zephyr-integration.md](matter-zephyr-integration.md))
+**verified dynamic endpoint registration at runtime on hardware**
+(nRF5340, upstream CHIP v1.5.1.0): endpoints register from tables via
+`emberAfSetDynamicEndpoint`, with a static ZAP-generated data model only
+for the fixed root endpoint — generated once per MCUHome release, not
+per device config. Requirements the builder owns:
+`CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT` sizing via the project
+config header, zap-cli/gn provisioning, and the vanilla-Zephyr patch set
+([../../patches/](../../patches/)).
 
 ## 5. Build execution (per ADR 0007)
 
