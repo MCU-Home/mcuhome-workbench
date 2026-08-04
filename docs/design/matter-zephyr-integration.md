@@ -229,3 +229,95 @@ multiprotocol later after feasibility analysis).
 Remaining for full E2E: Thread dataset provisioning, border router,
 HA commissioning test. Dongle (nRF52840) backport expected to benefit
 from fixes 3-5 directly.
+
+## Addendum 3: end-to-end commissioning into Home Assistant — SUCCESS (2026-08-04)
+
+The prototype node was commissioned into a production Home Assistant
+instance (HA OS 2026.7.4, Matter Server add-on 9.1.1, OpenThread Border
+Router add-on 3.0.2 on an RPi 4) over Thread, with **no BLE** — the
+on-network path of ADR 0011. The simulated temperature value of the
+dynamically registered endpoint arrives as a normal HA sensor entity.
+
+Reaching that state required seven further fixes. All of them are
+vanilla-Zephyr defaults or upstream gaps that the nRF Connect SDK papers
+over; each one failed *silently*, which is why they had to be found one
+at a time by instrumenting the vendored sources.
+
+### The blocking chain (in the order they had to be solved)
+
+1. **`CONFIG_MBEDTLS_HEAP_SIZE` defaults to 1 KB.** The first real ECC
+   operation — exporting the persistent SRP signing key — fails with
+   `PSA_ERROR_INSUFFICIENT_MEMORY`. The SRP update is never even built,
+   so the node never registers with the border router and stays
+   invisible. Set to 15360 (matches the NCS reference sizing).
+2. **`ThreadStackMgr().InitThreadStack()` was missing in the app.**
+   Thread itself still runs (Zephyr's L2 starts OpenThread on its own),
+   so this is invisible until a CHIP feature needs the OT instance: the
+   SRP hostname build then fails with `CHIP_ERROR_NOT_FOUND` and DNS-SD
+   advertising is skipped without a useful message.
+3. **`CONFIG_OPENTHREAD_SLAAC` is off in vanilla Zephyr** (NCS enables
+   it). Without it the node never gets an address from the border
+   router's OMR prefix and the SRP server answers every update with
+   SERVFAIL ("internal server error" in CHIP's mapping).
+4. **`CONFIG_NET_CONTEXT_RECV_PKTINFO` is off by default.** CHIP's UDP
+   endpoints need IPv6 packet info to answer from the correct source
+   address; without it `setsockopt(IPV6_RECVPKTINFO)` fails (errno 109)
+   and the commissioner sees "address unreachable".
+5. **PSA `PSA_WANT_*` symbols are promptless** while `MBEDTLS_PROMPTLESS`
+   is active — assignments in `prj.conf` are **silently dropped**. The
+   missing `PSA_WANT_ALG_HKDF` killed the SPAKE2+ key derivation with a
+   bare `CHIP_ERROR_INTERNAL` *after* ~2.3 s of correct point math, and
+   the device sent a PASE status report that matter.js surfaced as
+   "device unreachable". Fix: `select` the needed symbols from the
+   application's own Kconfig. (`PSA_CRYPTO_ENABLE_ALL` is not a
+   substitute — it enables every ECC curve, which collides with the
+   p256-m partial acceleration and overflows CHIP's Spake2p context.)
+6. **DNS-SD advertising is never retried on the OpenThread platform.**
+   `kDnssdInitialized`/`kDnssdRestartNeeded` are posted only from WiFi
+   code, so an advertisement that fails at `ServerInit` (normal with a
+   pre-provisioned dataset: the SRP server is not in the network data
+   yet) stays failed forever. Worked around by re-running
+   `DnssdServer::StartServer()` periodically for the first few minutes.
+   Upstream candidate.
+7. **Device attestation.** The prototype uses the CHIP test DAC, so the
+   controller must allow test-net DCL certificates — see ADR 0012 for
+   the strategy (path A now, MCUHome's own attestation root for v1.0).
+
+### Secondary findings
+
+- **Stale RTT control block.** With a log-only RTT build nothing
+  re-initializes SEGGER's control block after a reset (the log backend
+  uses the NoLock API, which skips the lazy init), so stale offsets
+  silence all output — and a host-side scan may also latch onto the
+  previous session's block. Fix: explicit `SEGGER_RTT_Init()` in a
+  `SYS_INIT(PRE_KERNEL_1)` hook, plus `LOG_BACKEND_RTT_MODE_DROP`.
+- **Shell-over-RTT wedges under log load.** The RX event is raised
+  (verified by breakpoint) but the shell thread never leaves
+  `k_event_wait`. Dropped in favour of a log-only transport; runtime
+  provisioning is not needed once the dataset is persisted.
+- **GDB-driven resets are unreliable here** (target silently left halted
+  at the reset vector, producing "dead" captures that look like
+  crashes). `JLinkExe`'s `r`/`g` is the dependable path — matches the
+  earlier bring-up experience.
+- **Flashing preserves the fabric.** A firmware reflash keeps the
+  commissioning (fabric credentials live in the settings/NVS partition,
+  outside the app image) — the device rejoins HA on its own. Relevant
+  for the builder's OTA/update story.
+- **MRP intervals matter on slow crypto.** Advertised SII/SAI values
+  (`CHIP_CONFIG_MRP_LOCAL_*_RETRY_INTERVAL`) were raised to 4–5 s so
+  controllers wait through software SPAKE2+ on the plain M33. Software
+  ECC needs ~2.3 s per PASE step here; a device without a crypto
+  accelerator has no margin at the defaults.
+- **Multi-VLAN homes need the server-side commissioning path.** The HA
+  companion app commissions from the *phone*, which needs mDNS and a
+  route to the device — that fails across VLAN boundaries. The
+  server-side flow (controller on the HA host) is unaffected.
+
+### Environment quirks encountered on the operator side
+
+- The border router's radio reported `ChannelAccessFailure` on every
+  transmit for days: the Nordic RCP dongle sat in a USB3 port next to
+  the boot SSD. Moving it to USB2 on an extension cable fixed it
+  completely. Worth a troubleshooting note in the user documentation —
+  the symptom (a border router that receives but never sends) looks like
+  a software problem.
