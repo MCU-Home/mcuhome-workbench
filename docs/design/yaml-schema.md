@@ -49,7 +49,7 @@ device:
   power:
     source: battery                # battery | mains  (default: mains)
   # Advanced (ADR 0013 incl. amendment) — defaults serve the typical user:
-  blob_mode: auto                  # auto | none  (default: auto)
+  blob_usage: auto                  # auto | none  (default: auto)
   zephyr_version: auto             # auto | <release line, e.g. "4.4"> | latest
   blobs:                           # per-blob overrides (rarely needed)
     nordic-cc3xx: auto             # enabled | disabled | auto (version wins)
@@ -63,7 +63,7 @@ device:
   is wired — see the `voltage-divider` peripheral in §5).
 - Matter vendor/product IDs default to the Matter test VID/PID (fine for
   DIY/commissioning; real IDs are a product-owner topic far later).
-- `blob_mode`/`zephyr_version`/`blobs` implement the blob policy and
+- `blob_usage`/`zephyr_version`/`blobs` implement the blob policy and
   per-device Zephyr pinning of ADR 0013 (incl. per-blob amendment).
   Default resolution: blobs are hard constraints and drive the automatic
   Zephyr pin. A per-blob `auto` inverts that priority (version wins,

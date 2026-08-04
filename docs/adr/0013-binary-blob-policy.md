@@ -69,10 +69,10 @@ images redistribute nothing.
      latest + one blob-pin line); each maps to its own container image
      (ADR 0007) and patch series.
    - Validation UX: if a user forces a combination that cannot work
-     (e.g. `zephyr_version: latest` + `blob_mode: standard` on a board
+     (e.g. `zephyr_version: latest` + `blob_usage: standard` on a board
      whose blobs lag), the builder rejects it with a plain-language
      message that states MCUHome's recommendation (drop the pin — `auto`
-     picks the best version) and the alternative (`blob_mode: open`),
+     picks the best version) and the alternative (`blob_usage: open`),
      with a docs link. No raw technical detail in the error itself.
 
 ## Consequences
@@ -80,7 +80,7 @@ images redistribute nothing.
 - ADR 0008 gets a cross-reference; its 6-monthly bump task now includes
   re-testing the blob glue and moving/retiring the pin line.
 - The YAML schema gains `device.zephyr_version` (default `auto`) and
-  `device.blob_mode` (`standard` | `open`, default `standard`); the
+  `device.blob_usage` (`standard` | `open`, default `standard`); the
   builder's canonical device model carries the resolved Zephyr line and
   profile so the dashboard can display both.
 - The v0.1 entropy plan is unchanged: netcore boot-seed + DRBG is built
@@ -97,8 +97,8 @@ Blob incompatibility with a Zephyr line is a per-blob property (MPSL may
 work on latest while nrf_cc3xx lags), so an all-or-nothing profile
 switch is the wrong resolution granularity. Refined model:
 
-- Global `blob_mode: auto` (default; replaces the "standard" name) or
-  `none` (all blobs off; value renamed from "open" 2026-08-05 — values
+- Global `blob_usage: auto` (default; replaces the "standard" name) or
+  `none` (all blobs off; key renamed from "blob_mode" and value from "open", 2026-08-05 — values
   describe the effect, not the motivation; docs may still call the
   result the "fully open build"). Under `auto`, the builder resolves a per-blob
   structure for the board — only *applicable* blobs appear (no
