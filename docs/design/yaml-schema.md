@@ -49,7 +49,7 @@ device:
   power:
     source: battery                # battery | mains  (default: mains)
   # Advanced (ADR 0013 incl. amendment) — defaults serve the typical user:
-  blob_mode: auto                  # auto | open  (default: auto)
+  blob_mode: auto                  # auto | none  (default: auto)
   zephyr_version: auto             # auto | <release line, e.g. "4.4"> | latest
   blobs:                           # per-blob overrides (rarely needed)
     nordic-cc3xx: auto             # enabled | disabled | auto (version wins)

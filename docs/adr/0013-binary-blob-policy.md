@@ -98,7 +98,9 @@ work on latest while nrf_cc3xx lags), so an all-or-nothing profile
 switch is the wrong resolution granularity. Refined model:
 
 - Global `blob_mode: auto` (default; replaces the "standard" name) or
-  `open` (all blobs off). Under `auto`, the builder resolves a per-blob
+  `none` (all blobs off; value renamed from "open" 2026-08-05 — values
+  describe the effect, not the motivation; docs may still call the
+  result the "fully open build"). Under `auto`, the builder resolves a per-blob
   structure for the board — only *applicable* blobs appear (no
   `espressif-wifi` entry on a Nordic board).
 - Per-blob overrides in a `blobs:` map with three values:
