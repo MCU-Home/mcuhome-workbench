@@ -48,9 +48,11 @@ device:
   board: nrf54l15dk/nrf54l15/cpuapp  # Zephyr board target, verbatim
   power:
     source: battery                # battery | mains  (default: mains)
-  # Advanced (ADR 0013) — defaults serve the typical user:
-  blob_mode: standard              # standard | open  (default: standard)
+  # Advanced (ADR 0013 incl. amendment) — defaults serve the typical user:
+  blob_mode: auto                  # auto | open  (default: auto)
   zephyr_version: auto             # auto | <release line, e.g. "4.4"> | latest
+  blobs:                           # per-blob overrides (rarely needed)
+    nordic-cc3xx: auto             # enabled | disabled | auto (version wins)
 ```
 
 - `board` is the exact Zephyr board target string — no own board naming
@@ -61,11 +63,15 @@ device:
   is wired — see the `voltage-divider` peripheral in §5).
 - Matter vendor/product IDs default to the Matter test VID/PID (fine for
   DIY/commissioning; real IDs are a product-owner topic far later).
-- `blob_mode`/`zephyr_version` implement the blob policy and per-device
-  Zephyr pinning of ADR 0013. `auto` resolves to the newest supported
-  Zephyr line that fully supports board + profile; impossible forced
-  combinations are rejected at validation time with a plain-language
-  recommendation, not a technical error.
+- `blob_mode`/`zephyr_version`/`blobs` implement the blob policy and
+  per-device Zephyr pinning of ADR 0013 (incl. per-blob amendment).
+  Default resolution: blobs are hard constraints and drive the automatic
+  Zephyr pin. A per-blob `auto` inverts that priority (version wins,
+  blob used iff compatible — self-healing when the vendor catches up).
+  Impossible forced combinations are rejected at validation time with a
+  plain-language recommendation and a copy-paste snippet; the builder
+  never flips functional trade-offs implicitly. A recommendation-drift
+  check flags override lines that have become redundant.
 
 ## 4. `network:` — transports and protocols
 

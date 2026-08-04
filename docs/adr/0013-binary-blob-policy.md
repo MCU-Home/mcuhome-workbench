@@ -90,3 +90,38 @@ images redistribute nothing.
 - Documentation states plainly which blobs each profile uses, from whom,
   and why — including that firmware built with the standard profile is
   not fully auditable.
+
+## Amendment: per-blob granularity (2026-08-05, product owner)
+
+Blob incompatibility with a Zephyr line is a per-blob property (MPSL may
+work on latest while nrf_cc3xx lags), so an all-or-nothing profile
+switch is the wrong resolution granularity. Refined model:
+
+- Global `blob_mode: auto` (default; replaces the "standard" name) or
+  `open` (all blobs off). Under `auto`, the builder resolves a per-blob
+  structure for the board — only *applicable* blobs appear (no
+  `espressif-wifi` entry on a Nordic board).
+- Per-blob overrides in a `blobs:` map with three values:
+  - `enabled` — hard requirement; version resolution must satisfy it,
+    otherwise a validation error.
+  - `disabled` — never used.
+  - `auto` — **priority inversion**: the resolved Zephyr version wins,
+    the blob is used iff compatible with it. This is the one-line answer
+    the validator suggests when a user forces `zephyr_version` into
+    conflict with a blob — and it self-heals: once the vendor ships a
+    compatible blob for that line, it is picked up again automatically.
+- Default semantics (no overrides): blobs are hard constraints and drive
+  the automatic Zephyr pin (see the pinning rules above).
+- Validation is peripheral-aware: each configured component is checked
+  against driver availability in the resolved Zephyr line (the
+  availability matrix is extracted automatically from the Zephyr trees
+  when the builder container images are built, never hand-maintained).
+  Errors state the conflict and both resolutions in plain language,
+  including a copy-paste config snippet — but the builder NEVER flips
+  functional trade-offs implicitly (adding a sensor must not silently
+  remove BLE commissioning).
+- **Recommendation-drift check:** on every build, explicit config
+  entries are compared against what `auto` would currently produce;
+  entries that have become redundant or now only restrict (e.g. a
+  parked `nrf_cryptocell: auto` after the vendor caught up) produce an
+  info-level hint recommending their removal.
