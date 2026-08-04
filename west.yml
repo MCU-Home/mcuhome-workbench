@@ -41,6 +41,9 @@ manifest:
           - mbedtls        # TLS/crypto (CoAP over DTLS, Matter)
           - tf-psa-crypto  # PSA crypto core, required companion of mbedtls
           - openthread     # Thread stack incl. MTD/SED device roles
+          - segger         # RTT (debugger-channel logging), SystemView
+          - open-amp       # RPMsg inter-core IPC (nRF53 app<->net core)
+          - libmetal       # HW abstraction used by open-amp
 
     # Matter SDK (upstream CHIP, prototype pin — ADR 0006 evaluation).
     # CHIP vendors its dependencies as git submodules, hence the explicit
