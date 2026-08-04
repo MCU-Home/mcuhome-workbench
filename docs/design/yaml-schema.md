@@ -48,6 +48,9 @@ device:
   board: nrf54l15dk/nrf54l15/cpuapp  # Zephyr board target, verbatim
   power:
     source: battery                # battery | mains  (default: mains)
+  # Advanced (ADR 0013) — defaults serve the typical user:
+  blob_mode: standard              # standard | open  (default: standard)
+  zephyr_version: auto             # auto | <release line, e.g. "4.4"> | latest
 ```
 
 - `board` is the exact Zephyr board target string — no own board naming
@@ -58,6 +61,11 @@ device:
   is wired — see the `voltage-divider` peripheral in §5).
 - Matter vendor/product IDs default to the Matter test VID/PID (fine for
   DIY/commissioning; real IDs are a product-owner topic far later).
+- `blob_mode`/`zephyr_version` implement the blob policy and per-device
+  Zephyr pinning of ADR 0013. `auto` resolves to the newest supported
+  Zephyr line that fully supports board + profile; impossible forced
+  combinations are rejected at validation time with a plain-language
+  recommendation, not a technical error.
 
 ## 4. `network:` — transports and protocols
 

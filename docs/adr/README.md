@@ -23,3 +23,4 @@ dashboard-specific decisions live in
 | [0010](0010-matter-only-coap-deferred.md) | Matter-only integration; CoAP deferred to a maintenance channel | accepted |
 | [0011](0011-commissioning-and-radio-coexistence.md) | Commissioning strategy and BLE/Thread radio coexistence | accepted |
 | [0012](0012-device-attestation-strategy.md) | Device attestation (DAC) strategy for user-built devices | accepted |
+| [0013](0013-binary-blob-policy.md) | Binary blob policy, build profiles, per-device Zephyr pinning | accepted |

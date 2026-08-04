@@ -35,3 +35,13 @@ toolchain container (ADR 0007), so Zephyr bumps are invisible to them.
   regressions surface during the bump task, not at user machines.
 - Each MCUHome release documents its exact Zephyr/SDK pairing via
   `west.yml` and the container image tag.
+
+## Amendment (2026-08-05, see ADR 0013)
+
+Vendor binary blobs (ADR 0013) are validated against specific Zephyr
+states and may temporarily be incompatible with the latest stable line.
+This does NOT change the strategy above: the project keeps tracking
+latest stable. Instead, affected device configurations pin a Zephyr
+**release line** per device (`device.zephyr_version`, default `auto`),
+with at most two lines maintained concurrently. The 6-monthly bump task
+now includes re-testing blob glue and moving or retiring the pin line.
