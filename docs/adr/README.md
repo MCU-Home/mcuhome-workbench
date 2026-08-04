@@ -24,3 +24,4 @@ dashboard-specific decisions live in
 | [0011](0011-commissioning-and-radio-coexistence.md) | Commissioning strategy and BLE/Thread radio coexistence | accepted |
 | [0012](0012-device-attestation-strategy.md) | Device attestation (DAC) strategy for user-built devices | accepted |
 | [0013](0013-binary-blob-policy.md) | Binary blob policy, build profiles, per-device Zephyr pinning | accepted |
+| [0014](0014-generated-tables-contract.md) | Generated-tables contract and native composed-node topology | accepted |
