@@ -73,7 +73,10 @@ ruff check --fix . && ruff format .
 pre-commit run --all-files
 ```
 
-There is no CI yet — it is added together with the first real test suite.
+CI (`.github/workflows/ci.yml`) runs the lint/licensing checks below on
+every push and PR. It landed together with the first test suite
+(`tests/matter_tables/`); the twister/Zephyr build itself is not wired
+into CI yet — see the TODO block in the workflow file.
 
 ## Coding standards
 

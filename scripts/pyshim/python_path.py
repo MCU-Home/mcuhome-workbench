@@ -5,6 +5,7 @@ v1.5.1.0 release tarball (their CI provides it via the pigweed bootstrap
 environment). Provides the context manager used by scripts/codegen.py and
 scripts/codegen_paths.py to import py_matter_idl from the source tree."""
 
+import contextlib
 import os
 import sys
 
@@ -21,8 +22,6 @@ class PythonPath:
 
     def __exit__(self, *exc):
         for p in self.paths:
-            try:
+            with contextlib.suppress(ValueError):
                 sys.path.remove(p)
-            except ValueError:
-                pass
         return False

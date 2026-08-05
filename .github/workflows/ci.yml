@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# First CI workflow, landing together with the first test suite
+# (tests/matter_tables/, ADR 0014) per repo policy: the pipeline must be
+# green from day one, so it starts minimal and grows deliberately instead
+# of shipping red.
+#
+# Scope today: the same lint/licensing checks .pre-commit-config.yaml runs
+# locally (ruff, REUSE). The Zephyr/twister build is NOT here yet — it
+# needs a full west workspace (Zephyr + upstream CHIP + the Nordic HAL +
+# the Zephyr SDK toolchain), and the container strategy for that is a
+# separate decision. See the commented sketch at the bottom.
+#
+# All actions are pinned to commit SHAs, not tags (see dependabot.yml,
+# which keeps the pins current via its github-actions ecosystem entry).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (ruff + REUSE)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # Pinned to the same versions as .pre-commit-config.yaml so local
+      # and CI runs agree; bump both together.
+      - name: Install lint tools
+        run: python -m pip install --disable-pip-version-check ruff==0.8.4 reuse==5.0.2
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: REUSE lint
+        run: reuse lint
+
+# ---------------------------------------------------------------------------
+# TODO(twister): the real regression gate — not wired up yet. Sketch only:
+#
+#   twister:
+#     name: Twister (native_sim)
+#     runs-on: ubuntu-latest
+#     container: <mcuhome twister image: Zephyr SDK + a pre-populated west
+#                 workspace, pinned to the same Zephyr/CHIP revisions as
+#                 west.yml — CHIP's GN build is the expensive part>
+#     steps:
+#       - uses: actions/checkout@<pinned-sha>
+#         with:
+#           path: mcuhome
+#       - run: west init -l mcuhome && west update
+#       - run: >
+#           west twister -T mcuhome/tests --integration --inline-logs
+#           -p native_sim/native/64
+#
+# Blocked on: choosing/building the container image and deciding whether
+# it lives in this repo or a separate infra repo. Tracked for the builder
+# implementation phase; tests/matter_tables/ is CHIP-free by design (ADR
+# 0014) precisely so it does not have to wait for this.
+# ---------------------------------------------------------------------------

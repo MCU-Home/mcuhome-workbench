@@ -14,6 +14,12 @@
  * they cannot live in application code once more than one component wants
  * attributes — moving them here is what makes the generated app glue
  * CHIP-free.
+ *
+ * Pure table validation (duplicate IDs, pool bounds, parent-chain cycles,
+ * …) is NOT here: it lives in table_validate.c, a CHIP-free translation
+ * unit that also builds standalone for the native_sim suite in
+ * tests/matter_tables/, because CHIP cannot compile there. This file calls
+ * it before translating a single table entry to ember metadata.
  */
 
 #include <errno.h>
@@ -39,6 +45,7 @@
 #include <mcuhome/matter_tables.h>
 
 #include "matter_internal.h"
+#include "table_validate.h"
 
 LOG_MODULE_DECLARE(MCUHOME_MATTER_LOG_MODULE, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -67,27 +74,10 @@ constexpr size_t kMaxAttrs = CONFIG_MCUHOME_MATTER_MAX_ATTRS_PER_ENDPOINT;
 constexpr size_t kMaxDeviceTypes = CONFIG_MCUHOME_MATTER_MAX_DEVICE_TYPES_PER_ENDPOINT;
 
 /* Spec-fixed global attribute IDs. The framework serves both for every
- * table cluster (ADR 0014); tables must not declare them. */
+ * table cluster (ADR 0014); tables must not declare them. Their reserved
+ * range (0xFFF8-0xFFFD) is rejected in table_validate.c. */
 constexpr AttributeId kFeatureMapId = 0xFFFCu;
 constexpr AttributeId kClusterRevisionId = 0xFFFDu;
-
-/* Full code-generated global attribute range (Matter core spec, "Global
- * Elements"): GeneratedCommandList (0xFFF8), AcceptedCommandList (0xFFF9),
- * EventList (0xFFFA, reserved), AttributeList (0xFFFB), FeatureMap (0xFFFC)
- * and ClusterRevision (0xFFFD). CodegenDataModelProvider appends
- * GlobalAttributesNotInMetadata {0xFFF8, 0xFFF9, 0xFFFB} to every cluster's
- * AttributeList itself, and the framework separately serves FeatureMap /
- * ClusterRevision (above) — a table declaring any ID in this range would
- * duplicate an AttributeList entry on the wire. Reject the whole range, not
- * just the two IDs the framework happens to serve. */
-constexpr AttributeId kGlobalAttrRangeStart = 0xFFF8u;
-constexpr AttributeId kGlobalAttrRangeEnd = 0xFFFDu; /* inclusive */
-
-/* Every table cluster costs its own attributes plus FeatureMap and
- * ClusterRevision; the appended Descriptor cluster costs one (its auto
- * ClusterRevision entry). */
-constexpr size_t kGlobalAttrsPerCluster = 2;
-constexpr size_t kDescriptorAttrCount = 1;
 
 /* --- Static translation pools -----------------------------------------
  *
@@ -305,226 +295,6 @@ uint32_t GetRaw(const uint8_t *buffer, uint16_t size)
 	return raw;
 }
 
-/* --- Validation --------------------------------------------------------
- *
- * Runs before a single ember structure is touched: a half-registered node
- * is far harder to diagnose than a refused one. Each failure logs its own
- * message and returns a distinct errno (see <mcuhome/matter.h>). */
-int ValidateAttr(const struct mcuhome_matter_attr *attr)
-{
-	EmberAfAttributeType emberType;
-	uint16_t typeSize;
-
-	if (!MapType(attr->type, emberType, typeSize)) {
-		LOG_ERR("attr 0x%08x: unknown type %d (contract v%u)", attr->id, (int)attr->type,
-			MCUHOME_MATTER_TABLES_VERSION);
-		return -EINVAL;
-	}
-	if (attr->size != typeSize) {
-		LOG_ERR("attr 0x%08x: size %u does not match its type (expected %u)", attr->id,
-			attr->size, typeSize);
-		return -EINVAL;
-	}
-	if (attr->id >= kGlobalAttrRangeStart && attr->id <= kGlobalAttrRangeEnd) {
-		LOG_ERR("attr 0x%08x: code-generated global attributes (0xFFF8-0xFFFD) are "
-			"framework-owned",
-			attr->id);
-		return -EINVAL;
-	}
-	if ((attr->flags & MCUHOME_ATTR_F_WRITABLE) != 0 && attr->store == nullptr) {
-		LOG_ERR("attr 0x%08x: writable attributes need a store cell", attr->id);
-		return -EINVAL;
-	}
-	return 0;
-}
-
-int ValidateEndpoint(const struct mcuhome_matter_endpoint *endpoint)
-{
-	size_t attrSlots = kDescriptorAttrCount;
-
-	/* Defense in depth. emberAfSetDynamicEndpoint() checks uniqueness only
-	 * against other *dynamic* endpoints — its loop starts at
-	 * FIXED_ENDPOINT_COUNT (attribute-storage.cpp), so a dynamic endpoint
-	 * that shadows a statically compiled one is accepted and silently
-	 * produces two endpoints with the same ID. Upstream-fix candidate;
-	 * until then we refuse the collision ourselves. */
-	if (endpoint->endpoint_id < FIXED_ENDPOINT_COUNT) {
-		LOG_ERR("endpoint %u collides with the static endpoint range [0, %u)",
-			endpoint->endpoint_id, (unsigned int)FIXED_ENDPOINT_COUNT);
-		return -EEXIST;
-	}
-	if (endpoint->endpoint_id == chip::kInvalidEndpointId) {
-		LOG_ERR("endpoint id 0x%04x is reserved", endpoint->endpoint_id);
-		return -EINVAL;
-	}
-	if (endpoint->device_type_count == 0) {
-		LOG_ERR("endpoint %u has no device type", endpoint->endpoint_id);
-		return -EINVAL;
-	}
-	if (endpoint->device_type_count > kMaxDeviceTypes) {
-		LOG_ERR("endpoint %u: %u device types exceed "
-			"CONFIG_MCUHOME_MATTER_MAX_DEVICE_TYPES_PER_ENDPOINT (%u)",
-			endpoint->endpoint_id, (unsigned int)endpoint->device_type_count,
-			(unsigned int)kMaxDeviceTypes);
-		return -ENOSPC;
-	}
-	/* NULL-with-nonzero-count checks below run BEFORE anything dereferences
-	 * the pointer they guard: a malformed table must be refused here, not
-	 * turn into a NULL dereference in this function's own loops or later in
-	 * TranslateEndpoint(). */
-	if (endpoint->device_types == nullptr && endpoint->device_type_count > 0) {
-		LOG_ERR("endpoint %u: device_type_count %u but device_types is NULL",
-			endpoint->endpoint_id, (unsigned int)endpoint->device_type_count);
-		return -EINVAL;
-	}
-	/* +1: the Descriptor cluster the framework appends below. */
-	if (endpoint->cluster_count + 1 > kMaxClusters) {
-		LOG_ERR("endpoint %u: %u clusters (+1 Descriptor) exceed "
-			"CONFIG_MCUHOME_MATTER_MAX_CLUSTERS_PER_ENDPOINT (%u)",
-			endpoint->endpoint_id, (unsigned int)endpoint->cluster_count,
-			(unsigned int)kMaxClusters);
-		return -ENOSPC;
-	}
-	if (endpoint->clusters == nullptr && endpoint->cluster_count > 0) {
-		LOG_ERR("endpoint %u: cluster_count %u but clusters is NULL", endpoint->endpoint_id,
-			(unsigned int)endpoint->cluster_count);
-		return -EINVAL;
-	}
-
-	for (size_t c = 0; c < endpoint->cluster_count; c++) {
-		const struct mcuhome_matter_cluster *cluster = &endpoint->clusters[c];
-
-		if (cluster->id == chip::app::Clusters::Descriptor::Id) {
-			LOG_ERR("endpoint %u declares the Descriptor cluster; the framework "
-				"appends it and derives its content from the tables",
-				endpoint->endpoint_id);
-			return -EINVAL;
-		}
-		for (size_t c2 = 0; c2 < c; c2++) {
-			if (endpoint->clusters[c2].id == cluster->id) {
-				LOG_ERR("endpoint %u: duplicate cluster id 0x%08x",
-					endpoint->endpoint_id, cluster->id);
-				return -EEXIST;
-			}
-		}
-		attrSlots += cluster->attr_count + kGlobalAttrsPerCluster;
-
-		if (cluster->attrs == nullptr && cluster->attr_count > 0) {
-			LOG_ERR("endpoint %u cluster 0x%08x: attr_count %u but attrs is NULL",
-				endpoint->endpoint_id, cluster->id,
-				(unsigned int)cluster->attr_count);
-			return -EINVAL;
-		}
-
-		for (size_t a = 0; a < cluster->attr_count; a++) {
-			int err = ValidateAttr(&cluster->attrs[a]);
-
-			if (err != 0) {
-				LOG_ERR("  ... in endpoint %u cluster 0x%08x",
-					endpoint->endpoint_id, cluster->id);
-				return err;
-			}
-			for (size_t a2 = 0; a2 < a; a2++) {
-				if (cluster->attrs[a2].id == cluster->attrs[a].id) {
-					LOG_ERR("endpoint %u cluster 0x%08x: duplicate attr "
-						"id 0x%08x",
-						endpoint->endpoint_id, cluster->id,
-						cluster->attrs[a].id);
-					return -EEXIST;
-				}
-			}
-		}
-	}
-
-	if (attrSlots > kMaxAttrs) {
-		LOG_ERR("endpoint %u needs %u attribute slots, "
-			"CONFIG_MCUHOME_MATTER_MAX_ATTRS_PER_ENDPOINT is %u",
-			endpoint->endpoint_id, (unsigned int)attrSlots, (unsigned int)kMaxAttrs);
-		return -ENOSPC;
-	}
-	return 0;
-}
-
-int ValidateNode(const struct mcuhome_matter_node *node)
-{
-	if (node == nullptr || node->endpoints == nullptr) {
-		LOG_ERR("no node configuration");
-		return -EINVAL;
-	}
-	if (node->tables_version != MCUHOME_MATTER_TABLES_VERSION) {
-		LOG_ERR("tables version %u, framework expects %u — regenerate the device "
-			"configuration against this framework revision",
-			node->tables_version, MCUHOME_MATTER_TABLES_VERSION);
-		return -EINVAL;
-	}
-	if (node->endpoint_count > kMaxEndpoints) {
-		LOG_ERR("%u endpoints exceed CONFIG_MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS (%u)",
-			(unsigned int)node->endpoint_count, (unsigned int)kMaxEndpoints);
-		return -ENOSPC;
-	}
-
-	for (size_t i = 0; i < node->endpoint_count; i++) {
-		int err = ValidateEndpoint(&node->endpoints[i]);
-
-		if (err != 0) {
-			return err;
-		}
-		for (size_t j = 0; j < i; j++) {
-			if (node->endpoints[j].endpoint_id == node->endpoints[i].endpoint_id) {
-				LOG_ERR("duplicate endpoint id %u", node->endpoints[i].endpoint_id);
-				return -EEXIST;
-			}
-		}
-	}
-
-	/* Walk every endpoint's parent chain within the table. VERIFIED against
-	 * CHIP v1.5.1.0: emberAfEndpointEnableDisable()'s own parent walk
-	 * (src/app/util/attribute-storage.cpp:1011-1023) has no cycle guard and
-	 * infinite-loops under the held CHIP StackLock if a parent_id is
-	 * self-referential or forms a cycle with another dynamic endpoint —
-	 * that hangs the whole CHIP thread, not just the one endpoint. The
-	 * table layer must make that state unreachable before it ever reaches
-	 * ember. */
-	for (size_t i = 0; i < node->endpoint_count; i++) {
-		uint16_t currentId = node->endpoints[i].endpoint_id;
-		uint16_t parentId = node->endpoints[i].parent_id;
-		size_t steps = 0;
-
-		while (parentId != 0) {
-			if (parentId == currentId) {
-				LOG_ERR("endpoint %u: parent chain is self-referential "
-					"(endpoint 0x%04x points back to itself)",
-					node->endpoints[i].endpoint_id, currentId);
-				return -EINVAL;
-			}
-			if (++steps > node->endpoint_count) {
-				LOG_ERR("endpoint %u: parent chain exceeds %u steps (cycle)",
-					node->endpoints[i].endpoint_id,
-					(unsigned int)node->endpoint_count);
-				return -EINVAL;
-			}
-
-			const struct mcuhome_matter_endpoint *parent = nullptr;
-
-			for (size_t k = 0; k < node->endpoint_count; k++) {
-				if (node->endpoints[k].endpoint_id == parentId) {
-					parent = &node->endpoints[k];
-					break;
-				}
-			}
-			if (parent == nullptr) {
-				LOG_ERR("endpoint %u: parent_id %u is not a declared endpoint",
-					node->endpoints[i].endpoint_id, parentId);
-				return -EINVAL;
-			}
-
-			currentId = parent->endpoint_id;
-			parentId = parent->parent_id;
-		}
-	}
-	return 0;
-}
-
 /* --- Translation ------------------------------------------------------- */
 
 EmberAfAttributeMetadata MakeAttrMeta(AttributeId id, EmberAfAttributeType type, uint16_t size,
@@ -628,7 +398,7 @@ void TranslateEndpoint(size_t index, const struct mcuhome_matter_endpoint *endpo
 	gAttrPool[index][attrCursor++] = MakeAttrMeta(kClusterRevisionId, ZAP_TYPE(INT16U), 2, 0);
 	gClusterPool[index][clusterCursor++] =
 		MakeCluster(chip::app::Clusters::Descriptor::Id, descriptorAttrs,
-			    static_cast<uint16_t>(kDescriptorAttrCount));
+			    static_cast<uint16_t>(MCUHOME_MATTER_DESCRIPTOR_ATTR_COUNT));
 
 	for (size_t d = 0; d < endpoint->device_type_count; d++) {
 		gDeviceTypePool[index][d] = EmberAfDeviceType{
@@ -753,7 +523,9 @@ Status emberAfExternalAttributeWriteCallback(EndpointId endpoint, ClusterId clus
 
 int mcuhome_matter_registry_register(const struct mcuhome_matter_node *node)
 {
-	int err = ValidateNode(node);
+	const struct mcuhome_matter_limits limits = {kMaxEndpoints, kMaxClusters, kMaxAttrs,
+						     kMaxDeviceTypes};
+	int err = mcuhome_matter_validate_node(node, &limits);
 
 	if (err != 0) {
 		return err;

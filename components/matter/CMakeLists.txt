@@ -39,6 +39,7 @@ if(CONFIG_MCUHOME_MATTER)
   zephyr_library_sources(
     src/matter_init.cpp
     src/endpoint_registry.cpp
+    src/table_validate.c
     src/dnssd_retry.cpp
   )
 
