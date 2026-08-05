@@ -8,6 +8,7 @@ their sources.
 |---|---|
 | `matter_tables.h` | The generated-tables contract (ADR 0014): the plain-C structs a builder-generated device configuration is made of. Zero CHIP types by design — this is what insulates generated code from Matter SDK churn. Versioned via `MCUHOME_MATTER_TABLES_VERSION`. |
 | `matter.h` | The Matter runtime API: `mcuhome_matter_start()`, `mcuhome_matter_attr_changed()`, and the weak `mcuhome_matter_stage()` bring-up hook. |
+| `channel.h` | The channel layer (component model §5): `struct mcuhome_channel` binds a typed value to one Matter attribute, `struct mcuhome_sensor_binding` binds a Zephyr sensor reading to a channel, `mcuhome_sensor_start()` starts the poller. Dumb data, like the tables — the builder will emit these arrays too. |
 | `matter/chip_project_config.h` | Framework-owned CHIP SDK configuration, derived from Kconfig. Included by an application's one-line `CHIPProjectConfig.h` wrapper, not directly by application code. |
 
 Rule of thumb for anything added here: if it needs a CHIP, ember or other

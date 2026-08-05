@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig MCUHOME_SENSOR
+	bool "Generic Zephyr-sensor channel adapter"
+	depends on SENSOR
+	depends on MCUHOME_MATTER
+	help
+	  Periodic sampling of Zephyr sensor devices into MCUHome channels
+	  (docs/design/component-model.md §5): one workqueue-driven poller
+	  reads a static binding array, converts each reading into the bound
+	  Matter attribute's raw unit and publishes it on change.
+
+	  This is the "peripheral" component kind's shared runtime — a sensor
+	  chip whose Zephyr driver speaks the standard sensor API needs a
+	  devicetree node and a binding table row, and no C code of its own.
+
+	  The MCUHOME_MATTER dependency is a v1 limitation, not a design
+	  position: channels publish into the Matter attribute store and call
+	  mcuhome_matter_attr_changed(), which only exists when the Matter
+	  runtime is built. When a second northbound protocol lands (CoAP,
+	  ADR 0010) this becomes a choice of publication targets.
+
+if MCUHOME_SENSOR
+
+config MCUHOME_SENSOR_MAX_BINDINGS
+	int "Maximum number of sensor channel bindings"
+	default 8
+	range 1 64
+	help
+	  Size of the poller's static per-binding state pool (last reported
+	  value, sampling countdown, fault latch). No heap after init, so
+	  this is a hard bound: mcuhome_sensor_start() returns -ENOSPC for a
+	  larger array rather than sampling a prefix of it.
+
+	  One binding per sensor channel, not per sensor chip — a BMP180
+	  bound to a temperature and a pressure endpoint costs two.
+
+config MCUHOME_SENSOR_WORKQ_STACK_SIZE
+	int "Sensor poller workqueue stack size"
+	default 2048
+	help
+	  Stack for the poller thread. It has to cover the deepest Zephyr
+	  sensor driver call in the node's binding array, including the
+	  floating-point compensation maths several Bosch drivers do on the
+	  stack. 2048 covers the drivers this framework has been run with;
+	  raise it when adding a driver with a heavier fetch path.
+
+config MCUHOME_SENSOR_WORKQ_PRIO
+	int "Sensor poller workqueue thread priority"
+	default 10
+	help
+	  Preemptible and deliberately low. Sensor sampling has no deadline
+	  worth defending against the networking stack, and a fetch on a
+	  slow I2C part blocks for tens of milliseconds — which is also why
+	  the poller has its own queue instead of using the system
+	  workqueue.
+
+endif # MCUHOME_SENSOR

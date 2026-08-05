@@ -11,6 +11,7 @@ menuconfig MCUHOME
 if MCUHOME
 
 rsource "components/matter/Kconfig"
+rsource "components/sensor/Kconfig"
 rsource "drivers/entropy/Kconfig"
 rsource "lib/debug/Kconfig"
 
