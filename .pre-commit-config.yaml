@@ -45,4 +45,6 @@ repos:
         name: clang-format (Zephyr style)
         language: system
         entry: clang-format -i
-        files: \.(c|h)$
+        # .cpp too: components/matter is C++ internally (CHIP is a C++ SDK)
+        # while its public headers stay C-clean.
+        files: \.(c|h|cpp)$

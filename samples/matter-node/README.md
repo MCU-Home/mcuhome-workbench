@@ -27,12 +27,30 @@ The two snippets are **not optional**:
   console in this configuration) including the boot-time RTT control-block
   re-init.
 
-Building without them compiles fine and then dies at runtime with no
-console to explain why. A build-time guard for this lands with the
-framework C code (Block A4).
+Leaving `-S matter` out is refused at CMake configure time by
+`components/matter/CMakeLists.txt`, which names the snippet; the
+`BUILD_ASSERT`s in `components/matter/src/matter_init.cpp` are the
+backstop. Without that guard the image compiles fine and then dies at
+runtime with no console to explain why.
 
 `nrf52840dongle/nrf52840` is also in `platform_allow`; it uses LED status
 instead of a console (see `boards/nrf52840dongle_nrf52840.conf`).
+
+## What this sample still contains
+
+Almost nothing — which is the point of ADR 0014. The Matter runtime moved
+into the framework component (`components/matter/`), so what is left is
+the shape the builder will generate:
+
+| File | Role |
+|---|---|
+| `src/mcuhome_config.c` | **Golden file.** The device's Matter model as plain-C tables (`mcuhome_node_config`): one endpoint, one cluster, three attributes. Its *shape* is the contract for builder phase-2 codegen, and it doubles as that phase's regression fixture — keep it in lockstep with `include/mcuhome/matter_tables.h`. |
+| `src/main.c` | Application glue: LEDs, `mcuhome_matter_start()`, a simulated sensor writing its attribute store cell, and an override of the `mcuhome_matter_stage()` hook for LED status. Plain C — generated app glue never needs a C++ toolchain. |
+| `include/CHIPProjectConfig.h` | One-line wrapper around the framework's `<mcuhome/matter/chip_project_config.h>`; exists only because CHIP resolves `CONFIG_CHIP_PROJECT_CONFIG` relative to the application directory. |
+
+Neither C file contains a CHIP or ember include, an external attribute
+callback, or a stack lock. If a future change adds one, that change
+belongs in `components/matter/` instead.
 
 ## Environment prerequisites
 

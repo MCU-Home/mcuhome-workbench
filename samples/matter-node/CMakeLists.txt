@@ -27,8 +27,12 @@ target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)
 target_include_directories(app PRIVATE
     ${CHIP_ROOT}/zzz_generated/app-common)
 
+# Application glue (plain C — no CHIP headers) plus the hand-written
+# "as-if-generated" device tables (ADR 0014). The Matter runtime itself
+# lives in the framework component, not here.
 target_sources(app PRIVATE
-    src/main.cpp)
+    src/main.c
+    src/mcuhome_config.c)
 
 # Framework-owned data model: endpoint 0 (root node) only — every device
 # endpoint is registered at runtime (ADR 0014, native composed node).

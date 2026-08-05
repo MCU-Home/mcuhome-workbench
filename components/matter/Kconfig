@@ -4,7 +4,8 @@
 # MCUHome Matter framework component (docs/design/component-model.md §2,
 # "core" kind): wires upstream CHIP (connectedhomeip) into the MCUHome
 # runtime — PSA crypto, Thread/OpenThread defaults, dynamic-endpoint
-# support. C sources land in Block A4; this only wires the Kconfig tree.
+# support, and the runtime that turns the builder's generated tables
+# (ADR 0014, <mcuhome/matter_tables.h>) into registered Matter endpoints.
 
 menuconfig MCUHOME_MATTER
 	bool "MCUHome Matter framework"
@@ -80,5 +81,139 @@ config MCUHOME_MATTER_THREAD_MED
 	  nodes until SED support lands.
 
 endchoice
+
+config MCUHOME_MATTER_TEST_DAC
+	bool "Use CHIP's example device attestation credentials"
+	default y
+	help
+	  Registers connectedhomeip's example Device Attestation Credentials
+	  provider (test PAA/PAI/DAC from the Matter test certificate space).
+	  This is ADR 0012 path A: development and pre-alpha use test
+	  certificates; MCUHome's own attestation root — with per-device DACs
+	  provisioned into a protected partition — is a v1.0 deliverable.
+
+	  Nodes built with this option commission only against controllers
+	  that accept test certificates (Home Assistant, chip-tool and
+	  matter.js do; certified ecosystems do not).
+
+	  Disabling this symbol without linking an alternative provider is a
+	  build error: a node with no attestation provider fails
+	  commissioning at the attestation step with no useful diagnostic.
+
+config MCUHOME_MATTER_INIT_RETRY_FOREVER
+	bool "Retry failing bring-up stages forever"
+	default y
+	help
+	  Development behavior, kept from the E2E prototype: when a CHIP
+	  bring-up stage fails, log it and retry indefinitely instead of
+	  giving up. This gives an attached debugger unlimited reproduction
+	  windows without a reset dance, and it keeps a node that boots
+	  before its network is ready from bricking itself into a reboot
+	  loop.
+
+	  With this disabled, mcuhome_matter_start() returns on the first
+	  failing stage and the application decides what to do. Table
+	  validation errors are never retried either way.
+
+config MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS
+	int "Maximum number of dynamically registered endpoints"
+	default 4
+	range 1 32
+	help
+	  Sizes the framework's endpoint translation pools AND CHIP's own
+	  dynamic endpoint registry
+	  (CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT, see
+	  include/mcuhome/matter/chip_project_config.h) — deliberately the
+	  same symbol for both: if CHIP's registry is the smaller one,
+	  registration still reports success but the endpoint's Descriptor
+	  cluster instance is dropped upstream without an error (ADR 0014).
+
+	  Endpoint 0 (the root node) is static and not counted here.
+
+config MCUHOME_MATTER_MAX_CLUSTERS_PER_ENDPOINT
+	int "Maximum number of server clusters per endpoint"
+	default 4
+	range 2 32
+	help
+	  INCLUDING the Descriptor cluster the framework appends to every
+	  endpoint, so the usable budget for generated table clusters is one
+	  less than this value.
+
+config MCUHOME_MATTER_MAX_ATTRS_PER_ENDPOINT
+	int "Maximum number of attribute metadata slots per endpoint"
+	default 16
+	range 4 256
+	help
+	  Sizes the per-endpoint EmberAfAttributeMetadata pool. Every table
+	  cluster costs its own attributes PLUS two global ones (FeatureMap
+	  and ClusterRevision, which the framework serves from the cluster's
+	  feature_map/cluster_revision fields), and the appended Descriptor
+	  cluster costs one more.
+
+config MCUHOME_MATTER_MAX_DEVICE_TYPES_PER_ENDPOINT
+	int "Maximum number of device types per endpoint"
+	default 2
+	range 1 8
+	help
+	  Sizes the per-endpoint EmberAfDeviceType pool. One entry is enough
+	  for a plain device type; a second covers a device type plus a
+	  namespace/derived type.
+
+config MCUHOME_MATTER_MAX_PENDING_REPORTS
+	int "Maximum number of in-flight attribute change reports"
+	default 8
+	range 1 64
+	help
+	  mcuhome_matter_attr_changed() hands the reporting call to the CHIP
+	  event loop instead of calling into the stack from the application
+	  thread, and needs one slot per change that has been queued but not
+	  yet processed. When all slots are taken the change report is
+	  dropped with a warning — the attribute value itself is unaffected
+	  and the next report re-synchronises the controller.
+
+config MCUHOME_MATTER_DNSSD_RETRY_INTERVAL_S
+	int "DNS-SD advertisement retry interval (seconds)"
+	default 30
+	range 1 3600
+	help
+	  See CONFIG_MCUHOME_MATTER_DNSSD_RETRY_COUNT.
+
+config MCUHOME_MATTER_DNSSD_RETRY_COUNT
+	int "Number of DNS-SD advertisement retries after startup"
+	default 10
+	range 0 100
+	help
+	  Workaround for an upstream gap (candidate C7): on the OpenThread
+	  platform nothing ever posts kDnssdInitialized/kDnssdRestartNeeded,
+	  so a commissionable-node advertisement that fails during
+	  Server::Init() is never retried and the node stays undiscoverable
+	  forever. Observed live on 2026-08-05: the first advertisement fails
+	  because the SRP client has not started yet, and the node recovers
+	  on a later retry once SRP is up.
+
+	  The framework therefore re-runs the DNS-SD server start this many
+	  times, CONFIG_MCUHOME_MATTER_DNSSD_RETRY_INTERVAL_S apart
+	  (defaults cover the first five minutes after boot).
+	  Re-registration is idempotent. Set to 0 to disable once the
+	  upstream event is fixed.
+
+config MCUHOME_MATTER_MRP_ACTIVE_RETRY_MS
+	int "Advertised MRP active retry interval (ms)"
+	default 4000
+	range 100 60000
+	help
+	  CHIP_CONFIG_MRP_LOCAL_ACTIVE_RETRY_INTERVAL. Software SPAKE2+ needs
+	  ~3.2 s per step on a plain Cortex-M33; with the Thread default
+	  (SAI 2 s) the commissioner's retransmission budget expires first
+	  and commissioning fails as "address unreachable". Raise, don't
+	  lower, unless the node has hardware crypto acceleration.
+
+config MCUHOME_MATTER_MRP_IDLE_RETRY_MS
+	int "Advertised MRP idle retry interval (ms)"
+	default 5000
+	range 100 60000
+	help
+	  CHIP_CONFIG_MRP_LOCAL_IDLE_RETRY_INTERVAL. Same rationale as
+	  CONFIG_MCUHOME_MATTER_MRP_ACTIVE_RETRY_MS.
 
 endif # MCUHOME_MATTER

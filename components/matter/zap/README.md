@@ -31,9 +31,8 @@ user's YAML — device endpoints start at EP1, directly under the root
 A statically compiled endpoint in this file would occupy an endpoint ID
 that the dynamic-endpoint allocator also hands out, and would appear to
 controllers as a ghost device the YAML never asked for. So: **never add an
-endpoint here.** The rule is currently enforced by a compile-time assert on
-`FIXED_ENDPOINT_COUNT` in `samples/matter-node/src/main.cpp`; it moves into
-the framework once the framework owns the Matter startup path (Block A4).
+endpoint here.** The rule is enforced by a compile-time assert on
+`FIXED_ENDPOINT_COUNT` in `components/matter/src/matter_init.cpp`.
 
 ## Regeneration
 
