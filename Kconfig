@@ -10,7 +10,10 @@ menuconfig MCUHOME
 
 if MCUHOME
 
-# Component and driver Kconfig trees are sourced here as they are
-# implemented.
+rsource "components/matter/Kconfig"
+rsource "lib/debug/Kconfig"
+
+# Further component and driver Kconfig trees are sourced here as they
+# are implemented.
 
 endif # MCUHOME

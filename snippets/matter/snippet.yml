@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+name: matter
+append:
+  EXTRA_CONF_FILE: matter.conf
+
+boards:
+  nrf7002dk/nrf5340/cpuapp:
+    append:
+      EXTRA_CONF_FILE: boards/nrf7002dk_nrf5340_cpuapp.conf

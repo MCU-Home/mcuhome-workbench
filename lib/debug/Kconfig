@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config MCUHOME_RTT_REINIT
+	bool "Re-initialize the RTT control block at boot"
+	depends on USE_SEGGER_RTT
+	default y if LOG_BACKEND_RTT && MCUHOME
+	help
+	  Log-only RTT builds never re-initialize the RTT control block: the
+	  log backend writes through the NoLock API, which skips SEGGER's lazy
+	  init. After a reset the block keeps stale read/write offsets from
+	  the previous session — the buffer can appear permanently full,
+	  wedging the log thread and silencing all output. This adds a
+	  PRE_KERNEL_1 SYS_INIT hook that calls SEGGER_RTT_Init() explicitly,
+	  before the log core starts (upstream candidate Z7).

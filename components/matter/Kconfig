@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# MCUHome Matter framework component (docs/design/component-model.md §2,
+# "core" kind): wires upstream CHIP (connectedhomeip) into the MCUHome
+# runtime — PSA crypto, Thread/OpenThread defaults, dynamic-endpoint
+# support. C sources land in Block A4; this only wires the Kconfig tree.
+
+menuconfig MCUHOME_MATTER
+	bool "MCUHome Matter framework"
+	depends on CHIP
+	depends on MCUHOME
+	# CHIP's own Kconfig (modules/lib/connectedhomeip/config/zephyr/Kconfig)
+	# does `imply NEWLIB_LIBC_NANO` — an *imply*, not a hard `select`, and
+	# LIBC_IMPLEMENTATION is a `choice`: choice symbols can never be
+	# `select`ed, by upstream or by us, only steered via `default`/prompt.
+	# On nRF52840 the newlib-nano default heap setup dies pre-main
+	# (bisected 2026-08-03), before any of our code — or even the rest of
+	# Kconfig — gets a chance to react. There is no runtime hook left to
+	# catch this once it happens. Depending on PICOLIBC here instead turns
+	# a silent pre-main crash on the bench into a loud configure-time
+	# dependency error (missing CONFIG_PICOLIBC=y) at `west build` time.
+	depends on PICOLIBC
+	# CHIP's UDP endpoints need IPv6 packet info (recvmsg ancillary data) to
+	# answer from the correct source address; without this option the
+	# IPV6_RECVPKTINFO setsockopt fails (errno 109) and PASE handshakes die
+	# silently — the commissioner sees "address unreachable".
+	select NET_CONTEXT_RECV_PKTINFO
+	# SLAAC is off in vanilla Zephyr (NCS turns it on): without it the device
+	# never gets an address from the border router's OMR prefix, and the SRP
+	# server rejects the host registration ("internal server error") — the
+	# node is then invisible to Matter on-network discovery.
+	select OPENTHREAD_SLAAC if NET_L2_OPENTHREAD
+	help
+	  Enables the MCUHome Matter (CHIP) integration: PSA crypto wiring,
+	  Thread/OpenThread defaults and the dynamic-endpoint runtime that the
+	  builder drives from generated device tables. See
+	  docs/design/matter-zephyr-integration.md for the findings behind
+	  the defaults this symbol pulls in.
+
+if MCUHOME_MATTER
+
+config MCUHOME_MATTER_PSA_WANTS
+	bool
+	default y if MBEDTLS
+	# The PSA_WANT_* symbols are promptless while MBEDTLS_PROMPTLESS is
+	# active — plain prj.conf assignments are silently dropped. An app
+	# Kconfig `select` is the supported way to force them on. CHIP needs
+	# HKDF (SPAKE2+ key derivation — missing it kills PASE with a silent
+	# INTERNAL after the point math), ECDH (CASE), SHA-1 (certificates)
+	# and PBKDF2 (PASE prover side).
+	select PSA_WANT_ALG_HKDF
+	select PSA_WANT_ALG_ECDH
+	select PSA_WANT_ALG_SHA_1
+	select PSA_WANT_ALG_PBKDF2_HMAC
+	select PSA_WANT_KEY_TYPE_DERIVE
+	select PSA_WANT_KEY_TYPE_HMAC
+
+choice MCUHOME_MATTER_THREAD_ROLE
+	prompt "Thread device role"
+	depends on NET_L2_OPENTHREAD
+	default MCUHOME_MATTER_THREAD_ROUTER
+	help
+	  CHIP ThreadStackManager device role, set at startup via
+	  ConnectivityManager::SetThreadDeviceType(). Sleepy End Device (SED)
+	  support is not offered here yet — it lands with the power-management
+	  phase (ICD configuration, poll period, Matter LIT/SIT semantics).
+
+config MCUHOME_MATTER_THREAD_ROUTER
+	bool "Router (FTD)"
+	help
+	  Full Thread Device: participates in mesh routing, radio always on.
+	  Correct choice for mains-powered nodes.
+
+config MCUHOME_MATTER_THREAD_MED
+	bool "Minimal End Device (MED)"
+	help
+	  Minimal End Device: does not route for other devices, but (unlike a
+	  Sleepy End Device) keeps its radio on. Use this for battery-powered
+	  nodes until SED support lands.
+
+endchoice
+
+endif # MCUHOME_MATTER
