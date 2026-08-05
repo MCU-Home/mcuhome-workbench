@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+config MCUHOME_ALLOW_INSECURE_ENTROPY
+	bool "I understand this build has NO secure randomness (DEVELOPMENT ONLY)"
+	help
+	  Explicit opt-in gate for the insecure prototype PRNG. Never set
+	  this outside local development: all keys the device generates
+	  (commissioning sessions, SRP signatures) become predictable.
+
+config MCUHOME_PROTO_ENTROPY
+	bool "Insecure prototype entropy driver (nRF5340 appcore experiment)"
+	default y if DT_HAS_MCUHOME_PROTO_ENTROPY_ENABLED
+	depends on ENTROPY_GENERATOR
+	depends on MCUHOME_ALLOW_INSECURE_ENTROPY
+	select ENTROPY_HAS_DRIVER
+
+config MCUHOME_PROTO_PSA_WANTS
+	bool
+	default y if MBEDTLS
+	# The PSA_WANT_* symbols are promptless while MBEDTLS_PROMPTLESS is
+	# active — plain prj.conf assignments are silently dropped. An app
+	# Kconfig `select` is the supported way to force them on. CHIP needs
+	# HKDF (SPAKE2+ key derivation — missing it kills PASE with a silent
+	# INTERNAL after the point math), ECDH (CASE), SHA-1 (certificates)
+	# and PBKDF2 (PASE prover side).
+	select PSA_WANT_ALG_HKDF
+	select PSA_WANT_ALG_ECDH
+	select PSA_WANT_ALG_SHA_1
+	select PSA_WANT_ALG_PBKDF2_HMAC
+	select PSA_WANT_KEY_TYPE_DERIVE
+	select PSA_WANT_KEY_TYPE_HMAC
+
+source "Kconfig.zephyr"
