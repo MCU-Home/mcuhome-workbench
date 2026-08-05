@@ -11,6 +11,7 @@ menuconfig MCUHOME
 if MCUHOME
 
 rsource "components/matter/Kconfig"
+rsource "drivers/entropy/Kconfig"
 rsource "lib/debug/Kconfig"
 
 # Further component and driver Kconfig trees are sourced here as they

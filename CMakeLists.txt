@@ -8,6 +8,7 @@ if(CONFIG_MCUHOME)
   zephyr_include_directories(include)
 
   add_subdirectory(components/matter)
+  add_subdirectory(drivers)
   add_subdirectory(lib)
 
   # Further component, driver and library sources are added here as they

@@ -6,4 +6,4 @@ Sample applications demonstrating MCUHome features, each with a
 
 | Sample | Demonstrates |
 |---|---|
-| `matter-node/` | Minimal Matter node on vanilla Zephyr with one dynamically registered temperature endpoint (upstream CHIP v1.5.1.0, nRF7002-DK) — moved from the workspace `matter-proto/` prototype after E2E commissioning verification. |
+| `matter-node/` | Native composed Matter node (ADR 0014) on vanilla Zephyr: framework root-only ZAP plus one temperature endpoint registered at runtime as EP1 under the root (upstream CHIP v1.5.1.0, nRF7002-DK). Requires the `matter` and `debug-rtt` snippets — see [matter-node/README.md](matter-node/README.md). |

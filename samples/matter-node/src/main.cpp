@@ -9,22 +9,7 @@
  */
 
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/init.h>
 #include <zephyr/kernel.h>
-
-#include <SEGGER_RTT.h>
-
-/* Log-only RTT builds never re-initialize the RTT control block: the log
- * backend writes through the NoLock API, which skips SEGGER's lazy init.
- * After a reset the block keeps stale read/write offsets from the previous
- * session — the buffer can appear permanently full, wedging the log thread
- * and silencing all output. Initialize explicitly before the log core. */
-static int mcuhome_rtt_init(void)
-{
-    SEGGER_RTT_Init();
-    return 0;
-}
-SYS_INIT(mcuhome_rtt_init, PRE_KERNEL_1, 0);
 
 #include <app-common/zap-generated/ids/Attributes.h>
 #include <app-common/zap-generated/ids/Clusters.h>
@@ -45,12 +30,29 @@ using namespace chip::app;
 using namespace chip::app::Clusters;
 using chip::Protocols::InteractionModel::Status;
 
+/* MCUHome devices are native composed nodes, not bridges (ADR 0014): the
+ * framework ZAP (components/matter/zap/mcuhome-root.zap) defines endpoint 0
+ * — the root node — and nothing else. Every application endpoint is created
+ * at runtime with emberAfSetDynamicEndpoint(), starting at EP1 directly
+ * under the root; there is no static aggregator endpoint.
+ *
+ * A statically compiled endpoint would collide with the IDs the dynamic
+ * allocator hands out and show up to controllers as a device the user never
+ * configured. Fail the build, not the commissioning, if the ZAP ever grows
+ * one. (FIXED_ENDPOINT_COUNT comes from the generated
+ * zap-generated/endpoint_config.h, pulled in by app/util/attribute-storage.h
+ * above — no fragile include path needed.) */
+static_assert(FIXED_ENDPOINT_COUNT == 1,
+              "The MCUHome framework ZAP must define endpoint 0 only — "
+              "static endpoints collide with dynamically registered ones");
+
 namespace {
 
 constexpr int kDescriptorAttributeArraySize = 254;
 constexpr uint16_t kTempSensorDeviceTypeId  = 0x0302; /* Matter Temperature Sensor */
 constexpr uint8_t kDeviceVersionDefault     = 1;
-constexpr EndpointId kTempEndpointId        = 2; /* EP0 root + EP1 aggregator are static (zap) */
+/* EP0 (root node) is the only static endpoint; EP1 is the first dynamic one. */
+constexpr EndpointId kTempEndpointId = 1;
 
 int16_t gSimulatedTempCentiC = 2150; /* 21.50 °C, Matter unit: 0.01 °C */
 
@@ -165,7 +167,7 @@ int main(void)
     gpio_pin_configure_dt(&gLedRed, GPIO_OUTPUT_INACTIVE);
     gpio_pin_set_dt(&gLedGreen, 1); /* solid green: initializing */
 
-    printk("mcuhome-proto: boot, image v29-clean\n");
+    printk("mcuhome-proto: boot, image a2-composed-node\n");
 
     STAGE("MemoryInit", chip::Platform::MemoryInit());
     STAGE("InitChipStack", chip::DeviceLayer::PlatformMgr().InitChipStack());
@@ -192,7 +194,8 @@ int main(void)
         chip::DeviceLayer::StackLock lock;
         STAGE("SetDynamicEndpoint", emberAfSetDynamicEndpoint(0, kTempEndpointId, &tempSensorEndpoint,
                                                                Span<DataVersion>(gTempDataVersions),
-                                                               Span<const EmberAfDeviceType>(gTempDeviceTypes), 1 /* parent: EP1 */));
+                                                               Span<const EmberAfDeviceType>(gTempDeviceTypes),
+                                                               0 /* parent: root node */));
     }
 
     STAGE("StartEventLoop", chip::DeviceLayer::PlatformMgr().StartEventLoopTask());

@@ -25,15 +25,18 @@ include(${CHIP_ROOT}/src/app/chip_data_model.cmake)
 target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)
 
 target_include_directories(app PRIVATE
-    ${CHIP_ROOT}/zzz_generated/app-common
-    ${CHIP_ROOT}/examples/bridge-app/bridge-common/include)
+    ${CHIP_ROOT}/zzz_generated/app-common)
 
 target_sources(app PRIVATE
-    src/main.cpp
-    ${CHIP_ROOT}/examples/bridge-app/bridge-common/src/bridged-actions-stub.cpp)
+    src/main.cpp)
 
+# Framework-owned data model: endpoint 0 (root node) only — every device
+# endpoint is registered at runtime (ADR 0014, native composed node).
+# ZCL_PATH must be passed explicitly: the zcl.json path stored inside the
+# .zap is relative to CHIP's own example directories, so it cannot resolve
+# for a .zap that lives outside the CHIP tree (documented escape hatch in
+# chip_data_model.cmake). The .matter IDL is inferred from the .zap name.
 chip_configure_data_model(app
-    ZAP_FILE ${CHIP_ROOT}/examples/bridge-app/bridge-common/bridge-app.zap
+    ZAP_FILE ${CMAKE_CURRENT_SOURCE_DIR}/../../components/matter/zap/mcuhome-root.zap
+    ZCL_PATH ${CHIP_ROOT}/src/app/zap-templates/zcl/zcl.json
 )
-
-target_sources_ifdef(CONFIG_MCUHOME_PROTO_ENTROPY app PRIVATE src/proto_entropy.c)
