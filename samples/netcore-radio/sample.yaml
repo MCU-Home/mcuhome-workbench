@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+sample:
+  name: MCUHome network-core radio image
+  description: >
+    nRF5340 network-core image: the 802.15.4 RPMsg radio server plus the
+    MCUHome entropy service, which forwards the network core's RNG
+    peripheral to the application core over a second endpoint on the
+    existing IPC instance.
+common:
+  tags:
+    - mcuhome
+    - ieee802154
+    - entropy
+tests:
+  sample.mcuhome.netcore_radio:
+    build_only: true
+    platform_allow:
+      - nrf7002dk/nrf5340/cpunet
+      - nrf5340dk/nrf5340/cpunet
+    integration_platforms:
+      - nrf7002dk/nrf5340/cpunet

@@ -215,8 +215,16 @@ source line):
    config header raises it (wired via CONFIG_CHIP_PROJECT_CONFIG).
 6. nRF5340 app core has **no upstream entropy driver** (TRNG on netcore,
    CryptoCell unsupported upstream, and NCS itself disables CC312 in
-   favor of software crypto) — prototype uses a clearly-marked INSECURE
-   PRNG driver; production solution is a design work item.
+   favor of software crypto). The prototype ran on a clearly-marked
+   INSECURE PRNG driver; resolved since by
+   `mcuhome,entropy-ipc` (`drivers/entropy/`) plus the netcore entropy
+   service in `samples/netcore-radio/` — a CTR-DRBG seeded and reseeded
+   from the netcore RNG over the existing `ipc0` instance. Note the trap
+   this exposed: `zephyr/modules/mbedtls/zephyr_entropy.c` silently
+   substitutes `sys_rand_get()` for a failing entropy driver unless
+   `CONFIG_MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG_ALLOW_NON_CSPRNG=n`, which
+   the `matter` snippet now sets (the nRF7002-DK board defconfig turns
+   it on).
 7. RTT/logging notes: deferred logging swallows output of early crashes
    (use LOG_MODE_IMMEDIATE for bring-up); nRF5340 netcore ships
    factory-locked (recover via nrfutil); vanilla Zephyr needs `segger`,

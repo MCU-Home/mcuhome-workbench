@@ -5,4 +5,4 @@ the build system through `dts_root` in [zephyr/module.yml](../../zephyr/module.y
 
 | Binding | Driver |
 |---|---|
-| `mcuhome,proto-entropy.yaml` | [drivers/entropy/](../../drivers/entropy/) |
+| `mcuhome,entropy-ipc.yaml` | [drivers/entropy/](../../drivers/entropy/) |

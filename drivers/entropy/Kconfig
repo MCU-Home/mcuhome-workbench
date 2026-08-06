@@ -1,16 +1,96 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-config MCUHOME_ALLOW_INSECURE_ENTROPY
-	bool "I understand this build has NO secure randomness (DEVELOPMENT ONLY)"
-	help
-	  Explicit opt-in gate for the insecure prototype PRNG. Never set
-	  this outside local development: all keys the device generates
-	  (commissioning sessions, SRP signatures) become predictable.
-
-config MCUHOME_PROTO_ENTROPY
-	bool "Insecure prototype entropy driver (nRF5340 appcore experiment)"
-	default y if DT_HAS_MCUHOME_PROTO_ENTROPY_ENABLED
+config MCUHOME_ENTROPY_IPC
+	bool "Entropy from a peer core over IPC (CTR-DRBG backed)"
+	default y if DT_HAS_MCUHOME_ENTROPY_IPC_ENABLED
 	depends on ENTROPY_GENERATOR
-	depends on MCUHOME_ALLOW_INSECURE_ENTROPY
+	depends on IPC_SERVICE
+	# `depends on`, not `select`: MBEDTLS_PSA_CRYPTO_C selects
+	# CSPRNG_NEEDED, which selects ENTROPY_GENERATOR, which this symbol
+	# depends on — selecting it here closes that ring and Kconfig refuses
+	# the whole tree with a recursive-dependency error, in every build in
+	# the workspace, not just ones that use this driver. Applications
+	# enable PSA themselves (Matter builds always do); a devicetree node
+	# without it is caught at configure time in drivers/CMakeLists.txt.
+	depends on MBEDTLS_PSA_CRYPTO_C
 	select ENTROPY_HAS_DRIVER
+	select MBEDTLS_CTR_DRBG_C
+	# CTR-DRBG uses the low-level AES module when MBEDTLS_AES_C is
+	# defined and routes through the PSA API when it is not. The PSA
+	# route is unusable here: this driver *is* the PSA random source, so
+	# calling back into PSA to produce randomness would invert the
+	# dependency. MBEDTLS_AES_C follows from PSA_WANT_KEY_TYPE_AES inside
+	# a PSA build (crypto_adjust_config_enable_builtins.h, reached only
+	# under MBEDTLS_PSA_CRYPTO_C — hence the dependency above), and
+	# PSA_WANT_* symbols are promptless in this configuration, so
+	# `select` is the only way to force them: plain .conf assignments are
+	# silently dropped.
+	select PSA_WANT_KEY_TYPE_AES
+	help
+	  Zephyr entropy driver for cores that have no entropy peripheral
+	  but share the SoC with a core that does — the nRF5340 application
+	  core, whose RNG lives on the network core.
+
+	  Seeds a CTR-DRBG from the peer over an ipc_service endpoint and
+	  serves all callers from it, so the IPC channel is used once per
+	  boot and once per reseed interval rather than per request. The
+	  peer must run the matching service (samples/netcore-radio).
+
+	  Fails loud: if no seed arrives, entropy_get_entropy() returns
+	  -EIO. There is deliberately no fallback to a non-cryptographic
+	  generator.
+
+if MCUHOME_ENTROPY_IPC
+
+config MCUHOME_ENTROPY_RESEED_INTERVAL_S
+	int "Seconds between CTR-DRBG reseeds"
+	default 300
+	help
+	  Wall-clock interval after which fresh entropy is fetched from the
+	  peer and folded into the DRBG. The request is issued
+	  asynchronously and consumed by a later call, so a reseed never
+	  makes a caller wait.
+
+	  This driver owns the reseed policy completely: mbedTLS' own
+	  request counter is disabled, because it would call the entropy
+	  callback at an unpredictable moment with no peer response staged
+	  and turn a routine psa_generate_random() into a hard failure.
+
+	  0 disables periodic reseeding — the DRBG then runs for the
+	  lifetime of the boot on its initial seed, which SP 800-90A still
+	  considers secure, but which loses recovery from a state
+	  compromise. Only sensible where the peer is known to be
+	  unavailable after startup.
+
+config MCUHOME_ENTROPY_SEED_TIMEOUT_S
+	int "Seconds a caller waits for the first seed"
+	default 10
+	help
+	  How long entropy_get_entropy() blocks before giving up on the peer
+	  and returning -EIO. Sized for the worst case where the peer core
+	  is still booting when the first Matter operation needs randomness;
+	  the request is retried several times inside this window.
+
+	  Only the first call can ever wait this long: once the DRBG is
+	  seeded every call is served locally.
+
+config MCUHOME_ENTROPY_IPC_CONNECT_PRIORITY
+	int "POST_KERNEL init priority of the IPC connect phase"
+	default 90
+	help
+	  The driver initializes in two phases. The device itself comes up
+	  at POST_KERNEL / CONFIG_ENTROPY_INIT_PRIORITY (state only, no IPC
+	  traffic), and a SYS_INIT at POST_KERNEL with this priority opens
+	  the IPC instance, registers the endpoint and fires the first seed
+	  request.
+
+	  Must be higher than CONFIG_IPC_SERVICE_REG_BACKEND_PRIORITY (the
+	  backend device does not exist before that), which a BUILD_ASSERT
+	  enforces. The default is also above
+	  CONFIG_IEEE802154_NRF5_INIT_PRIO (80), so on nRF53 the 802.15.4
+	  spinel host has already opened the shared instance — including the
+	  network-core release and SPU setup it does first — and this driver
+	  only adds an endpoint to it.
+
+endif # MCUHOME_ENTROPY_IPC

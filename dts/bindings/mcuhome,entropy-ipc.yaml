@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Entropy source reached over an IPC endpoint on a peer core.
+
+  For multi-core SoCs whose application core has no entropy peripheral of
+  its own but shares the die with a core that does — the nRF5340 is the
+  motivating case: the RNG sits on the network core, and the application
+  core's devicetree can only offer the Bluetooth HCI entropy driver,
+  which is unavailable in a Thread-only build.
+
+  The driver seeds and periodically reseeds a CTR-DRBG from the peer,
+  rather than forwarding every caller's request across the IPC channel.
+  The peer must run the matching service (MCUHome ships one in
+  samples/netcore-radio); the protocol is include/mcuhome/entropy_ipc.h.
+
+  Node placement is free — this is not a memory-mapped peripheral — but
+  it must be referenced by the `zephyr,entropy` chosen property to be
+  used as the system entropy source:
+
+    / {
+        netcore_entropy: netcore-entropy {
+            compatible = "mcuhome,entropy-ipc";
+            ipc = <&ipc0>;
+            status = "okay";
+        };
+
+        chosen {
+            zephyr,entropy = &netcore_entropy;
+        };
+    };
+
+compatible: "mcuhome,entropy-ipc"
+
+include: base.yaml
+
+properties:
+  ipc:
+    type: phandle
+    required: true
+    description: |
+      The ipc_service instance carrying the entropy endpoint. Point this
+      at an instance that already exists for another purpose — on the
+      nRF5340 that is `ipc0`, shared with the 802.15.4 spinel channel —
+      so the entropy service costs one endpoint rather than a second
+      shared-memory region and mailbox pair.

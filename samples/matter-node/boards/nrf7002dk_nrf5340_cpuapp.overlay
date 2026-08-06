@@ -3,14 +3,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/* Entropy: the nRF5340 application core has no RNG peripheral. The board
+ * default points `zephyr,entropy` at the Bluetooth HCI entropy driver
+ * (`&rng_hci`, see dts/arm/nordic/nrf5340_cpuapp.dtsi), which is dead
+ * weight here — this node is Thread-only and Bluetooth is off (ADR
+ * 0011). Redirect to the IPC driver, which seeds a CTR-DRBG from the
+ * network core's real RNG over a second endpoint on `ipc0` — the same
+ * instance the 802.15.4 spinel channel already uses. The network core
+ * must run mcuhome/samples/netcore-radio for this to bind.
+ */
 / {
-	proto_entropy: proto-entropy {
-		compatible = "mcuhome,proto-entropy";
+	netcore_entropy: netcore-entropy {
+		compatible = "mcuhome,entropy-ipc";
+		ipc = <&ipc0>;
 		status = "okay";
 	};
 
 	chosen {
-		zephyr,entropy = &proto_entropy;
+		zephyr,entropy = &netcore_entropy;
 	};
 };
 

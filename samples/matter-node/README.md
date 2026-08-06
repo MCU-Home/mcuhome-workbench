@@ -166,12 +166,25 @@ export ZAP_INSTALL_PATH=<path to zap install>
 export PATH="$ZAP_INSTALL_PATH:$PATH"
 ```
 
-## Insecure entropy — development only
+## Entropy: the network core image is not optional
 
-The nRF5340 application core has no upstream entropy driver, so the build
-uses MCUHome's placeholder PRNG
-([`drivers/entropy/`](../../drivers/entropy/)). It is gated behind
-`CONFIG_MCUHOME_ALLOW_INSECURE_ENTROPY`, set explicitly in
-`boards/nrf7002dk_nrf5340_cpuapp.conf`. That gate is a deliberate build
-barrier: without it the build fails, so the placeholder cannot slip into a
-release unnoticed. Never set it in a shipping configuration.
+The nRF5340 application core has no RNG peripheral — the one on the die
+belongs to the network core. This sample's board overlay therefore points
+`zephyr,entropy` at `mcuhome,entropy-ipc`
+([`drivers/entropy/`](../../drivers/entropy/)), which seeds a CTR-DRBG
+from the network core over a second endpoint on the `ipc0` instance that
+already carries the 802.15.4 spinel channel.
+
+That endpoint only exists if the network core runs
+[`samples/netcore-radio/`](../netcore-radio/) — MCUHome's replacement for
+the upstream `802154_rpmsg` image, same radio server plus the entropy
+service. **Both images have to be flashed**; the procedure is in that
+sample's README.
+
+Against the wrong network-core image the application core comes up,
+finds no peer for the endpoint, and after
+`CONFIG_MCUHOME_ENTROPY_SEED_TIMEOUT_S` starts returning `-EIO` from
+every entropy request. Commissioning fails loudly and says why in the
+log. It does not fall back to a weaker generator: the `matter` snippet
+sets `CONFIG_MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG_ALLOW_NON_CSPRNG=n`
+precisely to remove that path.

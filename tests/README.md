@@ -15,6 +15,7 @@ host glibc that not every dev machine has, so suites here target the 64-bit
 |---|---|
 | `matter_tables/` | `components/matter/src/table_validate.c` — the CHIP-free tables-contract validator (ADR 0014). CHIP cannot build on native_sim, which is why validation lives in its own translation unit, separate from the CHIP-coupled `endpoint_registry.cpp` that calls it. |
 | `channel/` | `components/sensor/src/sensor_convert.c` — the channel layer's unit conversion, rounding, saturation and report-on-delta decision. Same pattern: the arithmetic is a Zephyr-free, CHIP-free translation unit precisely so it can be exercised exhaustively on the host, while the poller around it (devices, workqueue, Matter reporting) stays on target. |
+| `entropy_ipc/` | `drivers/entropy/entropy_ipc_core.c` — the CTR-DRBG and the seeded/unseeded/reseeding state machine of the netcore entropy driver, plus the wire framing in `include/mcuhome/entropy_ipc.h`. The transport is faked through `struct mcuhome_entropy_seed_source`, which is what makes the seed timeout, the retry behaviour and the reseed interval testable in seconds instead of on a two-core hardware cycle. |
 
 CI (`.github/workflows/ci.yml`) landed together with this first suite, per
 repo policy (we do not ship a red pipeline). It currently only runs the
