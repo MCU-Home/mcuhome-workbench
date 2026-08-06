@@ -23,9 +23,18 @@ shows up as a normal HA sensor entity.
 
 ## Hardware: wiring the BMP180 to the nRF7002-DK
 
-The sensor sits on the DK's Arduino-header I2C bus. Four wires, no
-soldering, no level shifting — the Arduino interface is powered from the
-board's VDD (3.3 V) and a BMP180 breakout is a 3.3 V part.
+The sensor sits on the DK's Arduino-header I2C bus. Four wires — but
+read the voltage warning first.
+
+> **VOLTAGE WARNING — the nRF7002 DK is a 1.8 V board.** Per Nordic's
+> hardware guide (doc 4486_138 §4.4.2), the DK's `VDD` rail — including
+> the Arduino power-header pin where a classic Arduino has 3V3 — is
+> **1.8 V**, and the GPIOs tolerate little above that. A bare BMP180
+> (1.62–3.6 V per datasheet) is fine on `VDD` directly. A typical GY-68
+> breakout with its own 3.3 V regulator, however, needs the `5V` pin and
+> then presents ~3.3 V I2C logic — **which can permanently damage the
+> nRF5340's pins**. Such modules require a bidirectional level shifter.
+> Check which module you have before wiring anything.
 
 > **Naming hazard, read this first.** Nordic labels the DK's *connectors*
 > `P1`…`P17`, and the nRF5340's *GPIO ports* are also called `P0`/`P1`.
@@ -35,7 +44,7 @@ board's VDD (3.3 V) and a BMP180 breakout is a 3.3 V part.
 
 | BMP180 breakout | nRF7002-DK | nRF5340 GPIO |
 |---|---|---|
-| `VIN` / `VCC` / `3V3` | `VDD` on connector **`P1`** (power/GND header) | — |
+| `VIN` / `VCC` / `3V3` | `VDD` (1.8 V!) on connector **`P1`** (power/GND header) — see voltage warning above | — |
 | `GND` | any `GND` on connector **`P1`** | — |
 | `SDA` | the pin silkscreened **`SDA`** on the 10-pin digital header (far end, next to `AREF`) | `P1.02` |
 | `SCL` | the pin silkscreened **`SCL`**, immediately next to `SDA` | `P1.03` |
