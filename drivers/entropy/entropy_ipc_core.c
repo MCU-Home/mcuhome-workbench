@@ -341,7 +341,21 @@ int mcuhome_entropy_core_get(struct mcuhome_entropy_core *core, uint8_t *buffer,
 			k_uptime_get() + (int64_t)core->cfg.seed_timeout_s * MSEC_PER_SEC;
 
 		do {
-			(void)request_seed(core);
+			int rerr = request_seed(core);
+
+			/* The transport's connect phase has not run yet:
+			 * this caller is an earlier POST_KERNEL init level,
+			 * and waiting here would stall the very init thread
+			 * that brings the transport up. Fail fast; the
+			 * caller's fallback handles it (and would have after
+			 * the timeout anyway).
+			 */
+			if (rerr == -ENODEV) {
+				LOG_WRN("entropy requested before the %s transport is up "
+					"(boot-time init order) — failing fast",
+					core->cfg.src->name);
+				return -EIO;
+			}
 
 			if (k_sem_take(&core->arrival, K_MSEC(SEED_REQUEST_TIMEOUT_MS)) == 0) {
 				(void)install_seed(core);

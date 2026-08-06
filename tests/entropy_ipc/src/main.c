@@ -212,6 +212,33 @@ ZTEST(entropy_ipc, test_timeout_fails_loud)
 	zassert_true(all_zero(buf, sizeof(buf)), "buffer touched on failure");
 }
 
+/* A provider that answers -ENODEV signals "the transport's connect
+ * phase has not run yet": the caller is an earlier boot-time init level,
+ * and dwelling in the seed timeout would stall the single init thread
+ * the connect phase itself needs (observed live: secure_storage and
+ * OpenThread settings init serialized the whole boot behind 7 x 10 s
+ * timeouts). The core must fail immediately, not wait.
+ */
+ZTEST(entropy_ipc, test_preconnect_fails_fast)
+{
+	uint8_t buf[32];
+	int64_t start;
+	int err;
+
+	setup_core(300U, 5U, false);
+	fake.request_result = -ENODEV;
+
+	memset(buf, 0, sizeof(buf));
+	start = k_uptime_get();
+	err = mcuhome_entropy_core_get(&core, buf, sizeof(buf));
+
+	zassert_equal(err, -EIO, "must fail, got %d", err);
+	/* Immediately — nowhere near the 5 s seed timeout. */
+	zassert_true(k_uptime_get() - start < 500, "dwelled despite -ENODEV");
+	zassert_false(mcuhome_entropy_core_is_seeded(&core));
+	zassert_true(all_zero(buf, sizeof(buf)), "buffer touched on failure");
+}
+
 ZTEST(entropy_ipc, test_request_failure_is_retried)
 {
 	uint8_t buf[8];

@@ -83,6 +83,16 @@ struct entropy_ipc_data {
 	struct ipc_ept ept;
 	const struct device *dev;
 	bool bound;
+	/* The connect SYS_INIT has run (endpoint registered). Consumers
+	 * that ask for randomness BEFORE that point sit in earlier
+	 * POST_KERNEL init levels — blocking them would stall the single
+	 * init thread that the connect phase itself needs (observed live:
+	 * secure_storage/OpenThread settings init serialized the whole
+	 * boot behind 7 x 10 s seed timeouts). They get an instant
+	 * -ENODEV instead, and fall back exactly as they would after the
+	 * timeout — just 70 s earlier.
+	 */
+	bool connect_started;
 };
 
 /* ---------------------------------------------------------------------
@@ -164,6 +174,10 @@ static int transport_request(void *ctx, uint16_t nbytes)
 		.nbytes = nbytes,
 	};
 	int err;
+
+	if (!data->connect_started) {
+		return -ENODEV;
+	}
 
 	if (!data->bound) {
 		return -ENOTCONN;
@@ -259,6 +273,8 @@ static int entropy_ipc_connect(void)
 		LOG_ERR("IPC instance %s not ready", cfg->ipc->name);
 		return -ENODEV;
 	}
+
+	data->connect_started = true;
 
 	/* Idempotent: on nRF53 the 802.15.4 spinel host has usually opened
 	 * this instance already (POST_KERNEL / CONFIG_IEEE802154_NRF5_INIT_PRIO),
