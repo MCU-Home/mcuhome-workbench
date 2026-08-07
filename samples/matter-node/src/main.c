@@ -2,16 +2,17 @@
  * SPDX-FileCopyrightText: 2026 The MCUHome Contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * MCUHome Matter sample node: application glue in the shape the builder
- * will generate (ADR 0014).
+ * MCUHome Matter sample node: application glue, and nothing else.
  *
  * Note what is NOT here: no CHIP header, no ember macro, no external
- * attribute callback, no stack lock, and — since the channel layer landed
- * — no value-producing loop either. The device's Matter model is data
- * (src/mcuhome_config.c), its sensor wiring is data (the two tables
- * below), the runtime is the framework (components/matter,
- * components/sensor). This file is plain C on purpose: generated
- * application glue never needs a C++ toolchain.
+ * attribute callback, no stack lock, no value-producing loop — and, since
+ * the builder generates this device's configuration, no tables either. The
+ * device's Matter model and its sensor wiring are data
+ * (src/mcuhome_config.c, generated from
+ * docs/design/examples/00-bmp180-two-endpoints.yaml), the runtime is the
+ * framework (components/matter, components/sensor). What remains below is
+ * the LED status this board needs because it has no attached console, plus
+ * three calls.
  *
  * Everything after mcuhome_matter_start() is event-driven — the sensor
  * poller owns its own workqueue, the heartbeat is a kernel timer — so
@@ -20,119 +21,22 @@
 
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/util.h>
 
 #include <mcuhome/channel.h>
 #include <mcuhome/matter.h>
-#include <mcuhome/matter_tables.h>
 
-/* The generated device configuration (src/mcuhome_config.c). */
-extern const struct mcuhome_matter_node mcuhome_node_config;
+#include "mcuhome_config.h"
 
-/* RAM cells behind the two MeasuredValue attributes. A store cell belongs
- * to whoever produces the value — here the sample, in a real device the
- * component/channel instance — never to the generated tables, which only
- * point at them. */
-struct mcuhome_attr_store sample_temp_store;
-struct mcuhome_attr_store sample_press_store;
-
-/* Both endpoints sample the same chip, so one period covers both. 10 s is
- * a deliberate compromise for a mains-powered DK: fast enough to watch the
- * value move while breathing on the sensor, slow enough that the report
- * deltas below — not the period — decide what reaches the controller. */
-#define SAMPLE_PERIOD_MS 10000
-
-/* Matter unit for TemperatureMeasurement::MeasuredValue is 0.01 °C, so a
- * delta of 10 is 0.10 °C: below a BMP180's ±1 °C accuracy, above the noise
- * of a still room. */
-#define SAMPLE_TEMP_DELTA 10
-
-/* Matter unit for PressureMeasurement::MeasuredValue is 0.1 kPa == 1 hPa
- * (see src/mcuhome_config.c), so a delta of 1 is 1 hPa — roughly an hour
- * of weather, or 8 m of altitude. */
-#define SAMPLE_PRESS_DELTA 1
-
-static const struct mcuhome_channel sample_temp_channel = {
-	.store = &sample_temp_store,
-	.type = MCUHOME_ATTR_TYPE_INT16S,
-	.endpoint_id = 1,
-	.cluster_id = 0x0402, /* TemperatureMeasurement */
-	.attr_id = 0x0000,    /* MeasuredValue */
-	.sample_period_ms = SAMPLE_PERIOD_MS,
-	.report_delta = SAMPLE_TEMP_DELTA,
-};
-
-static const struct mcuhome_channel sample_press_channel = {
-	.store = &sample_press_store,
-	.type = MCUHOME_ATTR_TYPE_INT16S,
-	.endpoint_id = 2,
-	.cluster_id = 0x0403, /* PressureMeasurement */
-	.attr_id = 0x0000,    /* MeasuredValue */
-	.sample_period_ms = SAMPLE_PERIOD_MS,
-	.report_delta = SAMPLE_PRESS_DELTA,
-};
-
-/* The sensor peripheral is board-specific: the nRF7002-DK overlay puts a
- * BMP180 on the Arduino I2C header, the dongle build has no I2C bus broken
- * out at all. Generated firmware targets exactly one board and will never
- * carry this guard — it is the price of a sample that builds for two. */
-#define SAMPLE_BMP180 DT_NODELABEL(bmp180)
-
-#if DT_NODE_HAS_STATUS_OKAY(SAMPLE_BMP180)
-
-/* The BMP180 exposes its two quantities through one Zephyr device, and the
- * bindings say so by sharing `dev`: the poller then runs one conversion
- * per cycle for both, which also guarantees the pressure reading uses the
- * temperature reading it was compensated with.
- *
- * fetch_channel is SENSOR_CHAN_ALL because the driver asserts on anything
- * else (bmp180_sample_fetch(), drivers/sensor/bosch/bmp180/bmp180.c).
- *
- * The chip reports its die temperature, not a separate ambient sensor —
- * hence SENSOR_CHAN_DIE_TEMP. In a BMP180 the die IS the reference
- * thermometer for the pressure compensation and the package has no
- * self-heating load worth speaking of, so it tracks ambient; the datasheet
- * specifies it as a ±2 °C part. Good enough to prove the path, not good
- * enough to sell as a room thermometer.
- */
-static const struct mcuhome_sensor_binding sample_bindings[] = {
-	{
-		.dev = DEVICE_DT_GET(SAMPLE_BMP180),
-		.fetch_channel = SENSOR_CHAN_ALL,
-		.zephyr_channel = SENSOR_CHAN_DIE_TEMP,
-		/* Zephyr reports °C; Matter wants 0.01 °C. */
-		.scale_num = 100,
-		.scale_den = 1,
-		.offset = 0,
-		.channel = &sample_temp_channel,
-	},
-	{
-		.dev = DEVICE_DT_GET(SAMPLE_BMP180),
-		.fetch_channel = SENSOR_CHAN_ALL,
-		.zephyr_channel = SENSOR_CHAN_PRESS,
-		/* Zephyr reports kPa; Matter wants 0.1 kPa. */
-		.scale_num = 10,
-		.scale_den = 1,
-		.offset = 0,
-		.channel = &sample_press_channel,
-	},
-};
-
-#endif /* DT_NODE_HAS_STATUS_OKAY(SAMPLE_BMP180) */
-
-/* LED status — the dongle variant of this sample has no console at all,
- * and even on the DK the RTT log is not always attached: green solid =
- * initializing, green slow blink = fully up, red pulse = stage boundary,
- * red fast blink = a stage failed. */
+/* LED status — the RTT log is not always attached, and a board without a
+ * console has nothing else: green solid = initializing, green slow blink =
+ * fully up, red pulse = stage boundary, red fast blink = a stage failed. */
 static const struct gpio_dt_spec led_green = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct gpio_dt_spec led_red = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
 
 /* Heartbeat. A kernel timer rather than a loop in main(): toggling a GPIO
  * is a single register write and safe from the timer ISR, and it keeps the
- * "nothing polls anything from a thread" property this file gained with
- * the channel layer. */
+ * "nothing polls anything from a thread" property this file has. */
 static void heartbeat_expiry(struct k_timer *timer)
 {
 	ARG_UNUSED(timer);
@@ -179,8 +83,7 @@ int main(void)
 
 	/* After Matter, never before: the first sample may publish
 	 * immediately and the reporting path has to exist by then. */
-#if DT_NODE_HAS_STATUS_OKAY(SAMPLE_BMP180)
-	err = mcuhome_sensor_start(sample_bindings, ARRAY_SIZE(sample_bindings));
+	err = mcuhome_sensor_start(mcuhome_sensor_bindings, mcuhome_sensor_binding_count);
 	mcuhome_matter_stage("SensorStart", err);
 	if (err != 0) {
 		/* A malformed binding table or a binding/table ID mismatch
@@ -188,12 +91,9 @@ int main(void)
 		 * not a missing sensor, which the poller handles internally
 		 * and reports as null. Visible (LED + log) but not fatal: the
 		 * node must stay commissionable even with broken sensor
-		 * wiring, so endpoints 1/2 simply keep reporting null. */
+		 * wiring, so its endpoints simply keep reporting null. */
 		printk("mcuhome: sensor channels failed to start: %d\n", err);
 	}
-#else
-	printk("mcuhome: no sensor peripheral on this board - endpoints report null\n");
-#endif
 
 	k_timer_start(&heartbeat, K_SECONDS(1), K_SECONDS(1)); /* slow blink: fully up */
 

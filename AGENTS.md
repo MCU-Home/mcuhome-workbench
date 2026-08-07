@@ -16,9 +16,13 @@ channel layer, netcore entropy, BMP180 two-endpoint sample) is complete
 and hardware-verified against a production Home Assistant over Thread.
 Phase 2 (the Python YAML builder) is in progress: `mcuhome validate`
 runs the front half of the pipeline (load → validate → resolve into the
-canonical device model). Code generation and the container build are not
-implemented — `mcuhome build` refuses. Check `docs/adr/` before assuming
-any design decision.
+canonical device model) and `mcuhome build` runs stage 4 on top of it,
+generating the per-device Zephyr application (tables, overlay, Kconfig
+fragment, CMakeLists) before refusing the compile step, which is the next
+block. Note the consequence of ADR 0014: `samples/matter-node/src/
+mcuhome_config.{c,h}` **is generator output** and the pytest suite
+compares it byte for byte — never hand-edit it, regenerate it. Check
+`docs/adr/` before assuming any design decision.
 
 ## Repository map
 
@@ -80,6 +84,10 @@ pytest
 
 # Check one device configuration with the builder
 mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
+
+# Generate the Zephyr application for it (stage 4; compiling is block C)
+mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
+  --build-dir /tmp/bmp180-node --generate-only
 
 # Python lint/format
 ruff check --fix . && ruff format .

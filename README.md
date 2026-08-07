@@ -29,8 +29,10 @@ channel layer, netcore entropy service, and a BMP180 two-endpoint sample
 — is implemented and hardware-verified: commissioned into a production
 Home Assistant instance over Thread (design record: see
 [docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is under
-construction: `mcuhome validate <device>` already checks a configuration
-and prints what it resolves to, while `mcuhome build` does not exist yet.
+construction: `mcuhome validate <device>` checks a configuration and
+prints what it resolves to, and `mcuhome build <device> --generate-only`
+writes the Zephyr application for it — compiling that application is the
+next step.
 The companion web interface lives in
 [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 

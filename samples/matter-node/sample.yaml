@@ -19,6 +19,10 @@ tests:
     # not from prj.conf — twister must apply them like a manual build does.
     extra_args:
       - SNIPPET="matter;debug-rtt"
+    # One board, deliberately: src/mcuhome_config.c is generator output for
+    # exactly this device configuration, and generated tables reference the
+    # sensor's devicetree node directly. A board without that node cannot
+    # compile them — and a generated device configuration is never built for
+    # a board it was not generated for.
     platform_allow:
       - nrf7002dk/nrf5340/cpuapp
-      - nrf52840dongle/nrf52840

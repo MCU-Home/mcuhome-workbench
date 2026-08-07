@@ -13,10 +13,11 @@ Pipeline (builder-pipeline.md §3), by module:
 :mod:`mcuhome.validate`      stage 2b: cross-refs, gates, conformance
 :mod:`mcuhome.resolve`       stage 3: defaults and completion
 :mod:`mcuhome.model`         the canonical device model
+:mod:`mcuhome.generate`      stage 4: the per-device build tree
 ===========================  ======================================
 
-Stages 4 (code generation) and 5 (container build) are not implemented
-yet; ``mcuhome build`` refuses accordingly.
+Stage 5 (compiling the generated application in the builder container) is
+not implemented yet; ``mcuhome build`` stops after stage 4 and says so.
 """
 
 __version__ = "0.1.0.dev0"

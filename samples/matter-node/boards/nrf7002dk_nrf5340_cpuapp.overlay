@@ -26,6 +26,13 @@
 
 /* Bosch BMP180 on the DK's Arduino-header I2C bus.
  *
+ * The node label is `baro`, not `bmp180`, because that is the peripheral's
+ * name in the device configuration this sample mirrors
+ * (docs/design/examples/00-bmp180-two-endpoints.yaml, hardware.peripherals)
+ * and therefore the label the generated tables reference. This block is
+ * exactly what the builder's overlay generator emits; the entropy node
+ * above is board wiring the generator does not own.
+ *
  * `arduino_i2c` is the board's own label for i2c1
  * (zephyr/boards/nordic/nrf7002dk/nrf5340_cpuapp_common.dtsi); the
  * i2c1_default pinctrl group puts TWIM_SDA on P1.02 and TWIM_SCL on P1.03,
@@ -47,7 +54,7 @@
 &arduino_i2c {
 	status = "okay";
 
-	bmp180: bmp180@77 {
+	baro: baro@77 {
 		compatible = "bosch,bmp180";
 		reg = <0x77>;
 		osr-press = <1>;

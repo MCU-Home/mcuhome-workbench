@@ -3,10 +3,12 @@
 # =========================================================================
 # This is the ONE example the builder can fully process today: it is the
 # YAML form of samples/matter-node, the node that was commissioned into a
-# production Home Assistant over Thread on 2026-08-04. Its resolved model
-# is the golden fixture of the builder test suite, so this file and
-# samples/matter-node/src/{mcuhome_config.c,main.c} must keep saying the
-# same thing.
+# production Home Assistant over Thread on 2026-08-04. It is also the
+# builder's regression fixture in the strongest possible sense: its
+# resolved model AND the files stage 4 generates from it are golden, and
+# samples/matter-node/src/mcuhome_config.{c,h} IS that generator output,
+# compared byte for byte by the test suite (ADR 0014). Editing this file
+# therefore changes the sample — regenerate it in the same commit.
 #
 # nRF7002-DK (nRF5340 application core), one Bosch BMP180 on the Arduino
 # header's I2C bus, exposed as two independent sensor endpoints — the

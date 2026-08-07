@@ -8,11 +8,16 @@
     mcuhome build    <device>          # stages 1-5
     mcuhome clean    <device|--all>
 
-``validate`` is the only command this milestone implements; ``build`` and
-``clean`` exist so the surface is stable and refuse cleanly rather than
-being missing. Nothing is written to disk: validation is a read-only
-operation, and the build directory is deliberately not part of the config
-tree (builder-pipeline.md §2).
+``validate`` and the generating half of ``build`` (stages 1-4) are what
+this milestone implements; compiling the generated application is the
+next block, so ``build`` stops after code generation and says so.
+``clean`` exists so the surface is stable and refuses cleanly rather than
+being missing.
+
+``validate`` writes nothing at all. ``build`` writes only into its build
+directory, which is deliberately outside the configuration tree
+(builder-pipeline.md §2): ``<tree root>/build/<device>/`` unless
+``--build-dir`` says otherwise.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from pathlib import Path
 
 from mcuhome import __version__, registry
 from mcuhome.errors import MCUHomeError
+from mcuhome.generate import APP_DIR, write_tree
 from mcuhome.loader import load_config
 from mcuhome.model import DeviceModel
 from mcuhome.resolve import resolve
@@ -30,9 +36,14 @@ from mcuhome.schema import parse_config
 from mcuhome.tree import ConfigTree, resolve_device
 from mcuhome.validate import validate
 
-__all__ = ["format_summary", "load_device_model", "main"]
+__all__ = ["BUILD_DIR", "format_summary", "load_device_model", "main"]
 
 _NOT_IMPLEMENTED = "is not implemented yet (builder phase 2, block C)"
+
+#: Directory the per-device build trees are created in, at the tree root.
+#: A sibling of ``devices/``, never inside it — build output must not turn
+#: up in the user's config diffs (builder-pipeline.md §2).
+BUILD_DIR = "build"
 
 
 def load_device_model(entry: Path, *, tree: ConfigTree) -> DeviceModel:
@@ -160,9 +171,32 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
-    del args
-    print(f"mcuhome build {_NOT_IMPLEMENTED}.", file=sys.stderr)
-    print("Use `mcuhome validate <device>` to check a configuration today.", file=sys.stderr)
+    tree, entry = resolve_device(args.device, config_root=args.config_root)
+    model = load_device_model(entry, tree=tree)
+
+    out_dir = args.build_dir or tree.root / BUILD_DIR / model.device.name
+    written = write_tree(model, out_dir=out_dir, config_name=entry.name)
+
+    print(f"Generated {len(written)} files for {model.device.name} in {out_dir}:")
+    for path in written:
+        print(f"  {path.relative_to(out_dir)}")
+
+    if args.generate_only:
+        return 0
+
+    print()
+    # Both streams are read together by whoever runs this; flush so the
+    # refusal appears after the listing it refers to, not before it.
+    sys.stdout.flush()
+    print(
+        f"Stopped after code generation: compiling the firmware {_NOT_IMPLEMENTED}.",
+        file=sys.stderr,
+    )
+    print(
+        f"Everything above was written and is yours to inspect ({out_dir / APP_DIR} is the "
+        "application). Pass --generate-only to make stopping here the intended outcome.",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -216,6 +250,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     build_parser_ = subparsers.add_parser("build", help="build firmware for a device")
     build_parser_.add_argument("device", help="device folder name or path")
+    build_parser_.add_argument(
+        "--build-dir",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"where to generate the application (default: <tree root>/{BUILD_DIR}/<device>)",
+    )
+    build_parser_.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="stop after writing the generated application, and succeed",
+    )
     add_common_options(build_parser_)
     build_parser_.set_defaults(func=_cmd_build)
 

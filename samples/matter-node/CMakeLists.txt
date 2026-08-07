@@ -27,9 +27,11 @@ target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)
 target_include_directories(app PRIVATE
     ${CHIP_ROOT}/zzz_generated/app-common)
 
-# Application glue (plain C — no CHIP headers) plus the hand-written
-# "as-if-generated" device tables (ADR 0014). The Matter runtime itself
-# lives in the framework component, not here.
+# Application glue (plain C — no CHIP headers) plus the generated device
+# configuration (ADR 0014), which `mcuhome build` produces from
+# docs/design/examples/00-bmp180-two-endpoints.yaml and the builder test
+# suite compares byte for byte. The Matter runtime itself lives in the
+# framework component, not here.
 target_sources(app PRIVATE
     src/main.c
     src/mcuhome_config.c)

@@ -137,3 +137,16 @@ inherited "Dimmable Light" type).
 - Related standing decisions: ADR 0006 (upstream CHIP as the SDK whose
   types this contract shields the app from) and ADR 0009 (the
   Matter-explicit YAML schema this contract is the compile target of).
+
+## Amendment: channel bindings in the same generated file (2026-08-07)
+
+Builder stage 4 surfaced an under-description in Decision A: "exactly
+one symbol" describes the **Matter tables** contract, whose sole symbol
+remains `mcuhome_node_config`. The generated configuration file
+additionally carries the sensor-channel bindings
+(`mcuhome_sensor_bindings[]` / `mcuhome_sensor_binding_count`, structs
+from `include/mcuhome/channel.h`) — device configuration exactly like
+the tables, emitted from the same YAML, but governed by the channel
+layer's own contract, not this one. Future automation tables (out of
+scope for contract v1, see above) follow the same pattern: one
+generated file per device, one symbol set per contract domain.

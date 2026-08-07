@@ -123,27 +123,26 @@ Leaving `-S matter` out is refused at CMake configure time by
 backstop. Without that guard the image compiles fine and then dies at
 runtime with no console to explain why.
 
-`nrf52840dongle/nrf52840` is also in `platform_allow`; it uses LED status
-instead of a console (see `boards/nrf52840dongle_nrf52840.conf`).
-
 ## What this sample still contains
 
 Almost nothing — which is the point of ADR 0014. The Matter runtime moved
-into the framework component (`components/matter/`), so what is left is
-the shape the builder will generate:
+into the framework component (`components/matter/`) and the device
+configuration is produced by the builder, so what is left is glue:
 
 | File | Role |
 |---|---|
-| `src/mcuhome_config.c` | **Golden file.** The device's Matter model as plain-C tables (`mcuhome_node_config`): two endpoints, one cluster each, three attributes each. Its *shape* is the contract for builder phase-2 codegen, and it doubles as that phase's regression fixture — keep it in lockstep with `include/mcuhome/matter_tables.h`. |
-| `src/main.c` | Application glue: LEDs, `mcuhome_matter_start()`, the channel/binding tables handed to `mcuhome_sensor_start()`, and an override of the `mcuhome_matter_stage()` hook for LED status. Plain C — generated app glue never needs a C++ toolchain. Nothing here polls, converts or publishes: that is the channel layer's job. |
-| `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c`, plus the `zephyr,entropy` redirect to the framework's netcore-seeded entropy driver ([`drivers/entropy/`](../../drivers/entropy/)). Hardware belongs in DTS, never in C constants. |
+| `src/mcuhome_config.c`, `src/mcuhome_config.h` | **Generator output, committed.** Written by `mcuhome build` from [`00-bmp180-two-endpoints.yaml`](../../docs/design/examples/00-bmp180-two-endpoints.yaml): the device's Matter model as plain-C tables (`mcuhome_node_config`) plus the channel/sensor bindings that feed them. **Do not edit by hand** — `tests_py/test_generate.py` compares both files byte for byte against fresh generator output, which is what keeps the sample and the codegen contract in lockstep (ADR 0014). |
+| `src/main.c` | Application glue: LEDs, `mcuhome_matter_start()`, `mcuhome_sensor_start()`, and an override of the `mcuhome_matter_stage()` hook for LED status. Plain C — generated app glue never needs a C++ toolchain. Nothing here polls, converts, publishes or describes the device: that is the channel layer's and the generated tables' job. |
+| `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c` — the block the builder's overlay generator emits, node label included — plus the `zephyr,entropy` redirect to the framework's netcore-seeded entropy driver ([`drivers/entropy/`](../../drivers/entropy/)), which is board wiring the generator does not own. |
 | `include/CHIPProjectConfig.h` | One-line wrapper around the framework's `<mcuhome/matter/chip_project_config.h>`; exists only because CHIP resolves `CONFIG_CHIP_PROJECT_CONFIG` relative to the application directory. |
 
-The `nrf52840dongle/nrf52840` build has no sensor: `src/main.c` guards the
-binding table with `DT_NODE_HAS_STATUS_OKAY()` and simply skips
-`mcuhome_sensor_start()` there. Generated firmware targets exactly one
-board and will never carry that guard — it is the price of a sample that
-builds for two.
+**One board only.** Generated tables reference the sensor's devicetree
+node directly, so they cannot compile for a board that does not have that
+node — and a generated device configuration is never built for a board it
+was not generated for. `nrf52840dongle/nrf52840` was in `platform_allow`
+while the tables were hand-written and guarded with
+`DT_NODE_HAS_STATUS_OKAY()`; the guard went away with the hand-written
+file, and so did the second board.
 
 Neither C file contains a CHIP or ember include, an external attribute
 callback, or a stack lock. If a future change adds one, that change

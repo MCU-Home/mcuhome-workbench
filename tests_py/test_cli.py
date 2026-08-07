@@ -80,11 +80,49 @@ def test_unknown_device_exits_one(capsys) -> None:
     assert "no device called" in capsys.readouterr().err
 
 
-def test_build_refuses_cleanly(capsys) -> None:
-    assert main(["build", str(EXAMPLE)]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith("mcuhome build is not implemented yet (builder phase 2, block C).")
-    assert "mcuhome validate" in err
+def test_build_generates_and_then_refuses_to_compile(tmp_path, capsys) -> None:
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert "Generated 6 files for bmp180-node" in captured.out
+    assert "app/src/mcuhome_config.c" in captured.out
+    assert captured.err.startswith(
+        "Stopped after code generation: compiling the firmware is not implemented yet "
+        "(builder phase 2, block C)."
+    )
+    assert "--generate-only" in captured.err
+    assert (tmp_path / "app" / "src" / "mcuhome_config.c").is_file()
+
+
+def test_build_generate_only_succeeds(tmp_path, capsys) -> None:
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert str(tmp_path) in captured.out
+    assert (tmp_path / "device-model.json").is_file()
+    assert (tmp_path / "app" / "boards" / "nrf7002dk_nrf5340_cpuapp.overlay").is_file()
+
+
+def test_build_defaults_to_a_build_dir_at_the_tree_root(tmp_path, capsys) -> None:
+    tree = tmp_path / "config"
+    (tree / "devices" / "bench-node").mkdir(parents=True)
+    (tree / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
+
+    assert main(["build", "bench-node", "--config-root", str(tree), "--generate-only"]) == 0
+    assert (tree / "build" / "bench-node" / "app" / "prj.conf").is_file()
+    # Build output stays out of the configuration tree proper.
+    assert list((tree / "devices" / "bench-node").iterdir()) == [
+        tree / "devices" / "bench-node" / "main.yaml"
+    ]
+    assert "Generated 6 files for bench-node" in capsys.readouterr().out
+
+
+def test_build_reports_configuration_problems_and_writes_nothing(tmp_path, capsys) -> None:
+    entry = tmp_path / "main.yaml"
+    entry.write_text(VALID_CONFIG.replace("device_role: ftd", "device_role: sed"), "utf-8")
+    out_dir = tmp_path / "out"
+    assert main(["build", str(entry), "--build-dir", str(out_dir), "--generate-only"]) == 1
+    assert "Sleepy end devices" in capsys.readouterr().err
+    assert not out_dir.exists()
 
 
 def test_clean_refuses_cleanly(capsys) -> None:

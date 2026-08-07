@@ -32,6 +32,7 @@ __all__ = [
     "ConfigError",
     "ConfigErrorGroup",
     "ErrorCollector",
+    "GenerationError",
     "Location",
     "MCUHomeError",
 ]
@@ -114,6 +115,24 @@ class ConfigError(MCUHomeError):
 
     def __str__(self) -> str:
         return self.render()
+
+
+class GenerationError(ConfigError):
+    """Stage 4 cannot turn this (otherwise valid) configuration into files.
+
+    Renders exactly like a :class:`ConfigError`, because to the person
+    reading it the two are the same thing: something about the
+    configuration the builder cannot produce a file for. It is a separate
+    type so "your configuration is wrong" (stages 1-3) and "your
+    configuration is fine, but code generation has no way to express it"
+    stay tellable apart in code and in tests.
+
+    Most of what it reports is caught earlier by :mod:`mcuhome.validate`.
+    It still has to exist: a model can reach stage 4 without passing
+    through the validator at all — that is exactly what a remote build
+    server does when a canonical model arrives over the wire
+    (builder-pipeline.md §6).
+    """
 
 
 class ConfigErrorGroup(MCUHomeError):

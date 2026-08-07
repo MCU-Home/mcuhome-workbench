@@ -347,6 +347,6 @@ BOARDS: dict[str, BoardDef] = {
 
 PLANNED_BOARDS: dict[str, str] = {
     "nrf52840dk/nrf52840": "not brought up yet",
-    "nrf52840dongle/nrf52840": "builds the sample, but has no I2C bus broken out",
+    "nrf52840dongle/nrf52840": "brought up as a bare Matter node, but has no I2C bus broken out",
     "nrf54l15dk/nrf54l15/cpuapp": "not brought up yet",
 }
