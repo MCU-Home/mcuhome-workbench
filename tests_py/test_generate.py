@@ -512,6 +512,15 @@ def test_the_chip_project_config_wrapper_only_forwards_to_the_framework() -> Non
 #: is allowed to have its own version of it.
 _SHARED_CHIP_GLUE = (
     "list(APPEND ZEPHYR_EXTRA_MODULES ${CHIP_ROOT}/config/zephyr/chip-module)",
+    # The compiler-launcher hand-off into CHIP's GN sub-build. Raw string:
+    # the `\n` are literal two-character escapes CMake expands, not
+    # newlines — get that wrong and gn is handed one unparsable argument.
+    r"""if(NOT USE_CCACHE STREQUAL "0")
+    find_program(MCUHOME_CCACHE ccache)
+    if(MCUHOME_CCACHE)
+        set(MATTER_GN_ARGS "--arg-string\npw_command_launcher\nccache\n")
+    endif()
+endif()""",
     "include(${CHIP_ROOT}/src/app/chip_data_model.cmake)",
     "target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)",
     "target_include_directories(app PRIVATE\n    ${CHIP_ROOT}/zzz_generated/app-common)",

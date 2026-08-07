@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from mcuhome import container
 from mcuhome.cli import load_device_model
 from mcuhome.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model import DeviceModel
@@ -51,6 +52,27 @@ node:
           source: baro.temperature
           sampling: 10s
 """
+
+
+@pytest.fixture(autouse=True)
+def _no_docker(monkeypatch):
+    """Nothing in this suite is allowed to reach a container runtime.
+
+    A safety net, not a convenience: `mcuhome build` now defaults to the
+    container, so a test that forgets to stub stage 5 would otherwise
+    quietly start a real Matter build on the machine running pytest —
+    minutes of CPU and gigabytes of build directory, from a suite whose
+    whole promise is one second. Tests that want a working preflight
+    replace this with their own runner, which wins because their
+    monkeypatch is applied later.
+    """
+
+    def refuse(command, env):
+        raise AssertionError(
+            f"a test tried to run {command[0]!r}: stage 5 must be stubbed, see tests_py/README.md"
+        )
+
+    monkeypatch.setattr(container, "_run_quiet", refuse)
 
 
 def line_of(text: str, needle: str) -> int:

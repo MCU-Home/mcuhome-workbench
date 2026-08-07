@@ -214,5 +214,5 @@ Flags: `--native` (§5), `--keep-going` for CI, `-v`.
 | Build-server API details (auth, secrets transport) | Own design doc, pre-dashboard |
 | Flashing UX (CLI + browser) | Own design doc |
 | device-model.json schema versioning | Fixed with first dashboard consumption |
-| Builder image layout/registry | With first image build (ADR 0007 fixes the principle) |
+| Builder image layout/registry | Decided with the first image (`containers/builder/`): Debian 13 base, tools only, `ghcr.io/mcu-home/builder:zephyr-<line>-r<rev>` |
 | `mcuhome migrate` (ESPHome import) | Later milestone (ADR 0009) |

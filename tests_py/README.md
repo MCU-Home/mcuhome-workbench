@@ -29,14 +29,20 @@ second — they are the fast half of the strategy in
 | `test_examples.py` | the design examples in `docs/design/examples/` |
 | `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
-| `test_workspace.py` | stage 5's decisions: workspace discovery, prerequisites, the west command, the memory report |
+| `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the west command, the memory report |
+| `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
 | `test_cli.py` | command surface, exit codes, summary output |
 
-**No build ever runs here.** `test_workspace.py` and the `build` tests in
-`test_cli.py` cover everything stage 5 decides *before* the compiler
-starts and mock the subprocess itself. Compiling a Matter node takes
-minutes and a toolchain; that belongs to twister and to hardware
-verification, not to a suite whose whole value is running in a second.
+**No build ever runs here, and neither does docker.** `test_workspace.py`,
+`test_container.py` and the `build` tests in `test_cli.py` cover
+everything stage 5 decides *before* the compiler starts and mock the
+subprocess itself — `container.plan_build()` takes its process runner as
+an argument for exactly that reason, and an autouse fixture in
+`conftest.py` makes the real one raise, so a test that forgets to stub
+stage 5 fails instead of starting a Matter build. Compiling a Matter node takes
+minutes, a toolchain and a few gigabytes of image; that belongs to
+twister and to hardware verification, not to a suite whose whole value is
+running in a second.
 
 ## Golden files
 

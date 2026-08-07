@@ -6,15 +6,15 @@ Stage 4 (:mod:`mcuhome.generate`) writes a standalone Zephyr application.
 This module turns it into an image, by driving ``west build`` in the west
 workspace the builder itself lives in.
 
-**Native today, container tomorrow (ADR 0007).** The approved end state is
-that ``mcuhome build`` compiles inside a versioned builder image, with
-``--native`` as the escape hatch for people who already have a west
-workspace — MCUHome's own contributors. That image does not exist yet, so
-the escape hatch is what runs, and the seam is a flag rather than a
-refactor: everything below is reachable through one function,
-:func:`plan_build`, whose result is a command plus an environment. The
-container path executes a different command in a different environment and
-reuses the rest.
+**The escape hatch, not the normal path (ADR 0007).** ``mcuhome build``
+compiles inside the versioned builder image (:mod:`mcuhome.container`);
+``--native`` selects what is below, for people who already have a west
+workspace with a toolchain in it — MCUHome's own contributors. The two
+paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
+environment. The container path assembles a different command in a
+different environment — using :func:`west_build_command` for the inner
+half — and reuses everything after that, :func:`run_build`,
+:func:`artifacts` and :func:`parse_memory_report` included.
 
 **Nothing here knows the device model.** The inputs are a board name, a
 snippet list and two directories; whatever produced them is somebody
@@ -29,8 +29,8 @@ root-node data model from the framework's ``.zap``). And CHIP v1.5.1.0's
 release tarball is missing the ``python_path`` helper its codegen scripts
 import, which ``scripts/pyshim/`` stands in for — that one the builder can
 fix on its own, by putting the shim on ``PYTHONPATH``; the other two it
-can only check for and explain. The builder container will provide all
-three and this checking becomes a formality.
+can only check for and explain. The builder image provides all three,
+which is why this checking only happens on the ``--native`` path.
 """
 
 from __future__ import annotations
@@ -224,8 +224,9 @@ def _refuse_missing(tools: list[ToolNeed]) -> BuildError:
         lines.append(f"    {tool.name} — {tool.why}")
         lines.append(f"      from: {tool.source}")
     lines.append(
-        "None of this is needed with --generate-only, and none of it will be "
-        "needed once builds run in the MCUHome builder container."
+        "None of this is needed with --generate-only, and none of it is needed "
+        "in the MCUHome builder container — which is what compiles when you "
+        "leave --native off."
     )
     return BuildError(
         f"MCUHome cannot compile without {names}, which is not on your PATH."
@@ -283,13 +284,21 @@ def west_build_command(
 
 @dataclass(frozen=True)
 class BuildPlan:
-    """Everything stage 5 needs, decided before anything is executed."""
+    """Everything stage 5 needs, decided before anything is executed.
+
+    Shared by both paths: *command* is a ``west build`` invocation on the
+    native path and a ``docker run`` wrapped around one in the container,
+    and everything downstream treats it the same way. *image* is the one
+    thing that differs enough to be worth naming — ``None`` means the
+    build runs on this machine's own toolchain.
+    """
 
     topdir: Path
     app_dir: Path
     build_dir: Path
     command: list[str]
     env: dict[str, str]
+    image: str | None = None
 
 
 def plan_build(

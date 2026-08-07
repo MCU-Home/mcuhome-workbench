@@ -14,10 +14,9 @@ Pipeline (builder-pipeline.md §3), by module:
 :mod:`mcuhome.resolve`       stage 3: defaults and completion
 :mod:`mcuhome.model`         the canonical device model
 :mod:`mcuhome.generate`      stage 4: the per-device build tree
+:mod:`mcuhome.container`     stage 5: compile in the builder image
+:mod:`mcuhome.workspace`     stage 5: compile on the host (``--native``)
 ===========================  ======================================
-
-Stage 5 (compiling the generated application in the builder container) is
-not implemented yet; ``mcuhome build`` stops after stage 4 and says so.
 """
 
 __version__ = "0.1.0.dev0"

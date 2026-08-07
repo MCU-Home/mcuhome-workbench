@@ -69,8 +69,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Trap-fix Kconfig blocks (`snippets/matter/`, `snippets/debug-rtt/`) closing
   silent-failure modes found during hardware bring-up (entropy downgrade,
   undersized mbedTLS heap/stacks, RTT control-block re-init).
+- The builder image (`containers/builder/`, phase 2 block D): ADR 0007's
+  single build environment, carrying the Zephyr SDK (`arm-zephyr-eabi`
+  only), CMake/Ninja/dtc, west and Zephyr's Python requirements, `gn`,
+  `zap` and ccache — every version pinned and every download
+  checksum-verified. Tagged in lockstep with the Zephyr pin
+  (`ghcr.io/mcu-home/builder:zephyr-<version>-r<revision>`, never
+  `latest`), with `mcuhome/container.py` as the single source of truth
+  for the tag and `tests_py/` asserting it still matches `west.yml`.
+- Builds run in that image by default (`mcuhome/container.py`): the
+  workspace is bind-mounted at its own absolute path, the container runs
+  as the calling user so nothing is left behind owned by root, and the
+  ccache is a host directory that outlives it. `--image` and
+  `MCUHOME_BUILDER_IMAGE` select another image; a missing docker, an
+  unreachable daemon and a missing image are three separate refusals with
+  three separate fixes.
+- ccache now covers the Matter half of the build as well: the generated
+  application (and `samples/matter-node/CMakeLists.txt`, byte-identically)
+  hands Pigweed's `pw_command_launcher` GN argument into CHIP's inner GN
+  build, which Zephyr's own ccache wiring never reaches. Zephyr's
+  `USE_CCACHE=0` switches off both halves.
+- CI now runs the twister suites (`tests/`, `native_sim/native/64`) inside
+  the builder image, with the `matter` west group excluded because every
+  suite is CHIP-free by design, and publishes the image to ghcr.io when
+  its tag does not exist yet. This closes the workflow's `TODO(twister)`
+  block.
 
 ### Changed
+
+- `mcuhome build` compiles in the builder container by default; `--native`
+  is the escape hatch (ADR 0007). Host prerequisites for a compiling build
+  shrink to git and docker — the Zephyr SDK, `gn` and `zap` are only
+  needed on the `--native` path.
 
 - `app/` is no longer a placeholder application: `app/src/main.c` is the
   generic MCUHome application main that every generated device shares, and

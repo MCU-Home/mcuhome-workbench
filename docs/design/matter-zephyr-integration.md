@@ -127,10 +127,35 @@ upstream (NCS-only) and must be removed from configs.
 occurrence and has no effect.
 
 ### 10. ccache not wired into the inner GN build
-The Zephyr side of the build picks up ccache automatically; CHIP's inner
-GN build bypasses it. The builder must wire a compiler launcher into the
-GN args explicitly — recorded as a hard requirement for the MCUHome
-builder.
+The Zephyr side of the build picks up ccache automatically
+(`zephyr/cmake/modules/ccache.cmake` sets the global
+`RULE_LAUNCH_COMPILE` property); CHIP's inner GN build is a second build
+system and bypasses it.
+
+**Resolved (2026-08-07, builder phase 2 block D).** Pigweed declares the
+build argument `pw_command_launcher`
+(`third_party/pigweed/repo/pw_toolchain/toolchain_args.gni`), and
+`generate_toolchain.gni` turns it into the `command_launcher` of the
+`asm`/`cc`/`cxx` tools — reachable from the Zephyr sub-build because
+`config/zephyr/chip-gn/args.gni` sets `custom_toolchain` to a
+`gcc_toolchain()` that imports those templates. The value is handed over
+without patching CHIP: `config/common/cmake/chip_gn_args.cmake` keeps a
+non-empty `MATTER_GN_ARGS` and appends to it, so the application's
+`CMakeLists.txt` pre-seeds it before `find_package(Zephyr)` pulls the
+chip-module in:
+
+```cmake
+set(MATTER_GN_ARGS "--arg-string\npw_command_launcher\nccache\n")
+```
+
+(the `\n` form is the response-file syntax `make_gn_args.py` reads; the
+string must contain no semicolon, which CMake would turn into a list).
+Both the generated application and `samples/matter-node/CMakeLists.txt`
+carry it, guarded by `find_program(ccache)` and by Zephyr's own
+`USE_CCACHE=0` opt-out. Upstream's `config/nrfconnect/chip-module/
+CMakeLists.txt` does the same thing from inside the module, reading
+`RULE_LAUNCH_COMPILE`; `config/zephyr/` not doing so is an upstream gap
+worth reporting.
 
 ## Implications for MCUHome
 

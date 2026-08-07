@@ -33,9 +33,9 @@ construction, and now goes end to end: `mcuhome validate <device>`
 checks a configuration and prints what it resolves to, and `mcuhome
 build <device>` generates the Zephyr application for it and compiles it
 into a flashable image, reporting where the image is and what it costs
-in flash and RAM. What is still missing is the builder container
-([ADR 0007](docs/adr/0007-containerized-toolchain.md)), so a build
-currently needs a local west workspace.
+in flash and RAM. Compiling happens in the versioned builder image
+([ADR 0007](docs/adr/0007-containerized-toolchain.md)), so the host needs
+nothing but git and docker.
 The companion web interface lives in
 [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 
@@ -56,6 +56,7 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
 | `tests_py/` | pytest suite of the builder package |
+| `containers/builder/` | The builder image: the one build environment (ADR 0007) |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |
 
@@ -71,12 +72,15 @@ west init -l mcuhome
 west update
 ```
 
-Requirements: Python ≥ 3.11, `west`, and the Zephyr SDK matching the pinned
-Zephyr release (v4.4.0). See the
-[Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
-for toolchain setup. Building a Matter node additionally needs `gn` and
-`zap` on `PATH` — the builder names them if they are missing, and the
-builder container will eventually provide them.
+Requirements on your machine: **git, docker and Python ≥ 3.11** — no
+Zephyr SDK, no cross-compilers, no vendor tools. The toolchain lives in
+the MCUHome builder image
+([ADR 0007](docs/adr/0007-containerized-toolchain.md)), which is
+versioned in lockstep with the pinned Zephyr release:
+
+```sh
+docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r1
+```
 
 Then build a device from its YAML description:
 
@@ -87,9 +91,12 @@ mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
 ```
 
 That writes the generated Zephyr application to `build/bmp180-node/app`,
-compiles it, and prints the image path and its flash/RAM footprint.
-`--generate-only` stops after the generating half, which needs nothing
-but Python.
+compiles it in the container as your own user, and prints the image path
+and its flash/RAM footprint. `--generate-only` stops after the
+generating half, which needs nothing but Python; `--native` compiles on
+a host toolchain instead, for people working on MCUHome itself. Details,
+including how to build the image yourself, are in
+[containers/builder/README.md](containers/builder/README.md).
 
 To see the framework run without the builder in the picture, build the
 reference sample by hand:

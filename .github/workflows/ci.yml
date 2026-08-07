@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# First CI workflow, landing together with the first test suite
-# (tests/matter_tables/, ADR 0014) per repo policy: the pipeline must be
-# green from day one, so it starts minimal and grows deliberately instead
-# of shipping red.
+# CI for the MCUHome firmware framework. Two gates:
 #
-# Scope today: the same lint/licensing checks .pre-commit-config.yaml runs
-# locally (ruff, REUSE). The Zephyr/twister build is NOT here yet — it
-# needs a full west workspace (Zephyr + upstream CHIP + the Nordic HAL +
-# the Zephyr SDK toolchain), and the container strategy for that is a
-# separate decision. See the commented sketch at the bottom.
+#   lint     — the same ruff/REUSE checks .pre-commit-config.yaml runs
+#              locally. Needs nothing but Python.
+#   twister  — the Zephyr test suites in tests/, compiled and run inside
+#              the MCUHome builder image (ADR 0007). The image is the same
+#              one `mcuhome build` uses, which is the point of having one:
+#              "passes in CI" and "builds on my machine" mean the same
+#              thing or the container strategy is not worth its weight.
 #
 # All actions are pinned to commit SHAs, not tags (see dependabot.yml,
 # which keeps the pins current via its github-actions ecosystem entry).
@@ -52,26 +51,108 @@ jobs:
       - name: REUSE lint
         run: reuse lint
 
-# ---------------------------------------------------------------------------
-# TODO(twister): the real regression gate — not wired up yet. Sketch only:
-#
-#   twister:
-#     name: Twister (native_sim)
-#     runs-on: ubuntu-latest
-#     container: <mcuhome twister image: Zephyr SDK + a pre-populated west
-#                 workspace, pinned to the same Zephyr/CHIP revisions as
-#                 west.yml — CHIP's GN build is the expensive part>
-#     steps:
-#       - uses: actions/checkout@<pinned-sha>
-#         with:
-#           path: mcuhome
-#       - run: west init -l mcuhome && west update
-#       - run: >
-#           west twister -T mcuhome/tests --integration --inline-logs
-#           -p native_sim/native/64
-#
-# Blocked on: choosing/building the container image and deciding whether
-# it lives in this repo or a separate infra repo. Tracked for the builder
-# implementation phase; tests/matter_tables/ is CHIP-free by design (ADR
-# 0014) precisely so it does not have to wait for this.
-# ---------------------------------------------------------------------------
+  twister:
+    name: Twister (native_sim, in the builder image)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # For pushing the builder image to ghcr.io. The package inherits the
+      # repository's visibility, so it is private while the repository is.
+      packages: write
+    steps:
+      # The checkout goes one level down: this repository is the west
+      # manifest repository of a T2 workspace, and the workspace top
+      # directory (GITHUB_WORKSPACE, here) must not be a git repository.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome
+
+      # One source of truth for the image name, and it is the builder's:
+      # mcuhome/container.py carries the Zephyr line and the image
+      # revision, and the builder resolves the very same string when a
+      # developer runs `mcuhome build`. Importing it needs no third-party
+      # package — that module is standard library only, on purpose.
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          sys.path.insert(0, "mcuhome")
+          from mcuhome.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_LINE
+          print(f"reference={IMAGE}")
+          print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_LINE}")
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # "Has the image changed?" is answered by asking the registry, not by
+      # diffing the Dockerfile: the tag *is* the content identity
+      # (zephyr-<line>-r<revision>), so a tag that does not exist yet means
+      # containers/builder/ changed and its revision was bumped — and a
+      # bump that somebody forgot fails loudly here instead of quietly
+      # testing against a stale environment.
+      - name: Pull the builder image, or build it
+        id: builder
+        run: |
+          reference='${{ steps.image.outputs.reference }}'
+          if docker pull --quiet "$reference"; then
+            echo "Using the published image."
+          else
+            echo "::notice::$reference is not published yet — building it."
+            docker build --tag "$reference" mcuhome/containers/builder
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only from main: a pull request that changes the Dockerfile is built
+      # and tested with its own image, but does not get to publish one.
+      - name: Publish the builder image
+        if: steps.builder.outputs.built == 'true' && github.event_name == 'push'
+        run: |
+          reference='${{ steps.image.outputs.reference }}'
+          alias='${{ steps.image.outputs.alias }}'
+          docker push "$reference"
+          docker tag "$reference" "$alias"
+          docker push "$alias"
+
+      # Keyed on west.yml alone: that file is the complete description of
+      # what `west update` produces. Zephyr and the modules are fetched
+      # shallow and narrow, which is what keeps this cache small enough to
+      # be worth having.
+      - name: Restore the west workspace
+        id: west-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .west
+            zephyr
+            modules
+          key: west-${{ runner.os }}-${{ hashFiles('mcuhome/west.yml') }}
+
+      # Without the Matter SDK: every suite in tests/ is CHIP-free by
+      # design (ADR 0014, and the reason tests/matter_tables/ tests the
+      # table validator rather than the runtime). Skipping the `matter`
+      # group keeps a multi-gigabyte clone with submodules out of CI.
+      - name: Initialize the west workspace
+        if: steps.west-cache.outputs.cache-hit != 'true'
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:$PWD" --workdir "$PWD" \
+            '${{ steps.image.outputs.reference }}' \
+            sh -euc '
+              west init -l mcuhome
+              west config manifest.group-filter -- -matter
+              west update --narrow -o=--depth=1
+            '
+
+      - name: Run the Zephyr test suites
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:$PWD" --workdir "$PWD" \
+            '${{ steps.image.outputs.reference }}' \
+            west twister -T mcuhome/tests --integration --inline-logs -v -j 2

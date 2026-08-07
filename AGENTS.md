@@ -19,9 +19,9 @@ runs the front half of the pipeline (load → validate → resolve into the
 canonical device model), and `mcuhome build` goes all the way to a
 flashable image — stage 4 generates the per-device Zephyr application
 (tables, overlay, Kconfig fragment, CMakeLists) and stage 5 compiles it
-with `west build` in this workspace. What is still missing is the
-builder *container* (ADR 0007): builds run natively today, `--no-native`
-refuses and names the block. Note the consequence of ADR 0014:
+with `west build` inside the builder image (ADR 0007;
+`containers/builder/`), or on the host with `--native`. Note the
+consequence of ADR 0014:
 `samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
 and the pytest suite compares it byte for byte — never hand-edit it,
 regenerate it. Check `docs/adr/` before assuming any design decision.
@@ -42,6 +42,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | `lib/` | Portable, `native_sim`-testable libraries |
 | `tests/`, `samples/` | Twister suites and samples |
 | `tests_py/` | pytest suite of the builder package (kept apart from twister's `tests/`) |
+| `containers/builder/` | The builder image (ADR 0007) — the one build environment |
 | `scripts/` | Dev tooling, future custom west extension commands |
 | `docs/adr/` | Architecture decision records (MADR-style) |
 
@@ -103,11 +104,19 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir /tmp/bmp180-node --generate-only
 
 # Generate AND compile it (stages 4-5), from the workspace top directory.
+# Compiles in the builder image (ADR 0007) — pull it once:
+#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r1
 # Writes the application to build/<device>/app and the CMake tree to
 # build/<device>/build, then reports the image path and its footprint.
 # -S adds a snippet on top of the ones the configuration needs.
 mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node -S debug-rtt
+
+# The same, on the host toolchain instead of in the container
+mcuhome build … --native
+
+# Build the builder image from source (containers/builder/README.md)
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r1 containers/builder
 
 # Python lint/format
 ruff check --fix . && ruff format .
@@ -118,27 +127,36 @@ pre-commit run --all-files
 
 ### What a compiling build needs on the host
 
-`mcuhome validate` and `--generate-only` need nothing but Python. The
-compile step (stage 5) additionally needs a west workspace — this one —
-plus three things a Zephyr installation does not bring:
+**git and docker. That is the whole list** (ADR 0007). `mcuhome build`
+compiles inside the builder image, which carries the Zephyr SDK, west,
+`gn`, `zap` and ccache; the workspace is bind-mounted into it at its own
+absolute path, as the calling user, so nothing is left behind owned by
+root. `mcuhome validate` and `--generate-only` need even less — Python,
+and nothing else. See `containers/builder/README.md`.
+
+A missing docker, a stopped daemon and a missing image are three
+different refusals with three different fixes, all raised before the
+build starts.
+
+`--native` compiles on the host instead, which is what MCUHome's own
+contributors do in this workspace. That path needs a west workspace plus
+three things a Zephyr installation does not bring:
 
 | Requirement | Why | Provided by the builder? |
 |---|---|---|
-| `gn` on `PATH` | the Matter SDK builds its own libraries with GN | no — install it |
-| `zap`/`zap-cli` on `PATH`, or `ZAP_INSTALL_PATH` | generates the root-node data model from `components/matter/zap/` | no — install it |
+| `gn` on `PATH` | the Matter SDK builds its own libraries with GN | no — install it (the image has it) |
+| `zap`/`zap-cli` on `PATH`, or `ZAP_INSTALL_PATH` | generates the root-node data model from `components/matter/zap/` | no — install it (the image has it) |
 | `PYTHONPATH=<repo>/scripts/pyshim` | CHIP v1.5.1.0 ships without the `python_path` helper its codegen imports (upstream candidate C1) | **yes**, automatically |
 
 Missing tools are reported by name before the build starts, never as a
 compiler error ten minutes in. `ZEPHYR_BASE` is also filled in for the
 build (west does not export it, and the generated CMakeLists looks for
-the Matter SDK next to it) unless it is already set. The builder
-container (ADR 0007) will provide all of this; until then the list above
-is what the error message tells a user.
+the Matter SDK next to it) unless it is already set.
 
-CI (`.github/workflows/ci.yml`) runs the lint/licensing checks below on
-every push and PR. It landed together with the first test suite
-(`tests/matter_tables/`); the twister/Zephyr build itself is not wired
-into CI yet — see the TODO block in the workflow file.
+CI (`.github/workflows/ci.yml`) runs the lint/licensing checks below plus
+the twister suites, the latter inside the same builder image, with the
+`matter` west group excluded because every suite in `tests/` is CHIP-free
+by design (ADR 0014).
 
 ## Coding standards
 

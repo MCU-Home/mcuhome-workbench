@@ -10,7 +10,9 @@
 
 ``validate`` and ``build`` are what this milestone implements; ``clean``
 exists so the surface is stable and refuses cleanly rather than being
-missing.
+missing. ``build`` compiles in the MCUHome builder image (ADR 0007,
+:mod:`mcuhome.container`); ``--native`` compiles on the host toolchain
+instead (:mod:`mcuhome.workspace`).
 
 ``validate`` writes nothing at all. ``build`` writes only into its build
 directory, which is deliberately outside the configuration tree
@@ -26,8 +28,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from mcuhome import __version__, registry, workspace
-from mcuhome.errors import BuildError, MCUHomeError
+from mcuhome import __version__, container, registry, workspace
+from mcuhome.errors import MCUHomeError
 from mcuhome.generate import APP_DIR, write_tree
 from mcuhome.loader import load_config
 from mcuhome.model import DeviceModel
@@ -224,33 +226,29 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if args.generate_only:
         return 0
 
-    if not args.native:
-        raise BuildError(
-            "Building inside the MCUHome builder container is not implemented yet "
-            "(builder phase 2, block D).",
-            hint=(
-                "today MCUHome compiles natively, in the west workspace it is "
-                "installed in, which is what --native selects and what you get "
-                "by leaving the flag off entirely. Drop --no-native.\n"
-                "Everything generated above was written and is yours either way "
-                f"({out_dir / APP_DIR} is the application)."
-            ),
-        )
-
     snippets = _snippets_for(model, args.snippet)
-    plan = workspace.plan_build(
-        # Absolute from here on: the build runs with the workspace top
-        # directory as its working directory (that is how west finds the
-        # manifest), so a relative --build-dir would land somewhere else
-        # entirely for anyone who invoked the builder from a subdirectory.
-        out_dir=out_dir.resolve(),
-        app_subdir=APP_DIR,
-        board=model.device.board,
-        snippets=snippets,
-    )
+    # Absolute from here on: the build runs with the workspace top
+    # directory as its working directory (that is how west finds the
+    # manifest), so a relative --build-dir would land somewhere else
+    # entirely for anyone who invoked the builder from a subdirectory —
+    # and the container mounts host paths, which have to be real.
+    common = {
+        "out_dir": out_dir.resolve(),
+        "app_subdir": APP_DIR,
+        "board": model.device.board,
+        "snippets": snippets,
+    }
+    # ADR 0007: the container is the build environment, --native is the
+    # escape hatch for a contributor who already has a west workspace.
+    if args.native:
+        plan = workspace.plan_build(**common)
+    else:
+        plan = container.plan_build(**common, image=args.image)
 
     print()
     print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
+    if plan.image:
+        print(f"  in {plan.image}")
     print(f"  {' '.join(plan.command)}")
     print()
     # The build log is written by a subprocess to the same terminal; flush
@@ -349,18 +347,26 @@ def build_parser() -> argparse.ArgumentParser:
             "(repeatable); debug-rtt is the usual one during bring-up"
         ),
     )
-    # ADR 0007 wants the container to be the normal path and --native the
-    # escape hatch. The container does not exist yet, so the default is
-    # inverted for now and --no-native says why; when the image lands, the
-    # default flips here and nothing else about the surface changes.
+    # ADR 0007: the builder container is the build environment, --native
+    # is the escape hatch. This is the flag whose default flipped when the
+    # image landed (phase 2 block D); nothing else about the surface did.
     build_parser_.add_argument(
         "--native",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "compile in the west workspace MCUHome is installed in "
-            "(default; --no-native selects the builder container, which is "
-            "not implemented yet)"
+            "compile on this machine, in the west workspace MCUHome is installed "
+            "in, instead of in the builder container (needs a Zephyr toolchain, "
+            "gn and zap on the host)"
+        ),
+    )
+    build_parser_.add_argument(
+        "--image",
+        metavar="REF",
+        default=None,
+        help=(
+            f"builder image to compile in (default: {container.IMAGE}; the "
+            f"{container.IMAGE_VAR} environment variable sets it too)"
         ),
     )
     add_common_options(build_parser_)

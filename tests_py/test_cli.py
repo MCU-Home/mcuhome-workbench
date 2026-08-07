@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
 
-from mcuhome import __version__, workspace
+from mcuhome import __version__, container, workspace
 from mcuhome.cli import main
 from mcuhome.generate import APP_DIR
 
@@ -132,7 +133,7 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", fake_run)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 0
     out = capsys.readouterr().out
     assert "Generated 7 files for bmp180-node" in out
     assert "app/src/mcuhome_config.c" in out
@@ -156,7 +157,8 @@ def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
         "run_build",
         lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
     )
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "-S", "debug-rtt"]) == 0
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "-S", "debug-rtt"]
+    assert main(argv) == 0
     snippets = [seen[index + 1] for index, item in enumerate(seen) if item == "--snippet"]
     assert snippets == ["matter", "debug-rtt"]
 
@@ -171,7 +173,7 @@ def test_a_relative_build_dir_still_names_an_absolute_application(tmp_path, monk
         "run_build",
         lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
     )
-    assert main(["build", str(EXAMPLE), "--build-dir", "out"]) == 0
+    assert main(["build", str(EXAMPLE), "--build-dir", "out", "--native"]) == 0
     assert str((tmp_path / "out" / APP_DIR).resolve()) in seen
 
 
@@ -180,21 +182,66 @@ def test_build_reports_a_failed_compile_and_points_at_the_build_directory(
 ) -> None:
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (2, "boom\n"))
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 1
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 1
     err = capsys.readouterr().err
     assert "The firmware did not compile (west build exited with 2)." in err
     assert str(tmp_path / "build") in err
     assert "Traceback" not in err
 
 
-def test_build_in_the_container_refuses_and_names_the_block(tmp_path, capsys) -> None:
+def test_build_without_a_flag_compiles_in_the_container(tmp_path, capsys, monkeypatch) -> None:
+    """ADR 0007's default, as the command line sees it.
+
+    Nothing but the flag decides which of the two planners runs, and the
+    container is the one that runs when nobody says otherwise.
+    """
+    chosen: list[str] = []
+
+    def fake_plan(**kwargs) -> workspace.BuildPlan:
+        chosen.append("container")
+        plan = _planner(tmp_path)(**{k: v for k, v in kwargs.items() if k != "image"})
+        return replace(plan, image=kwargs["image"] or container.IMAGE)
+
+    monkeypatch.setattr(container, "plan_build", fake_plan)
+    monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (0, ""))
+    monkeypatch.setattr(
+        workspace, "plan_build", lambda **kwargs: pytest.fail("the native path ran by default")
+    )
+
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+    assert chosen == ["container"]
+    assert container.IMAGE in capsys.readouterr().out
+
+
+def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None:
+    def fake_plan(**kwargs) -> workspace.BuildPlan:
+        plan = _planner(tmp_path)(**{k: v for k, v in kwargs.items() if k != "image"})
+        return replace(plan, image=kwargs["image"] or container.IMAGE)
+
+    monkeypatch.setattr(container, "plan_build", fake_plan)
+    monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (0, ""))
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--image", "localhost/b:wip"]
+    assert main(argv) == 0
+    assert "in localhost/b:wip" in capsys.readouterr().out
+
+
+def test_a_missing_image_is_a_plain_refusal_after_a_finished_generation(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """Stage 4 output is worth keeping even when stage 5 cannot start."""
+    monkeypatch.setattr(
+        container, "_run_quiet", lambda command, env: 0 if "version" in command else 1
+    )
+    monkeypatch.setenv(container.CCACHE_DIR_VAR, str(tmp_path / "cache"))
+
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-native"]) == 1
     captured = capsys.readouterr()
-    # Generation still happened and is still worth having.
     assert "Generated 7 files for bmp180-node" in captured.out
     assert (tmp_path / "app" / "src" / "mcuhome_config.c").is_file()
-    assert "builder container is not implemented yet (builder phase 2, block D)" in captured.err
-    assert "--no-native" in captured.err
+    assert "is not on this machine" in captured.err
+    assert "docker pull" in captured.err
+    assert "--native" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_build_generate_only_succeeds(tmp_path, capsys) -> None:

@@ -68,6 +68,30 @@ endif()
 
 list(APPEND ZEPHYR_EXTRA_MODULES ${CHIP_ROOT}/config/zephyr/chip-module)
 
+# ccache for the Matter half of the build as well (builder-pipeline.md §5:
+# ccache is a hard requirement of the builder, not an optimization).
+# Zephyr finds ccache by itself and sets the global RULE_LAUNCH_COMPILE
+# property, but CHIP's inner GN build is a second build system that never
+# sees it — without the two lines below, every clean build directory
+# recompiles the whole Matter stack from source.
+#
+# Pigweed's toolchain templates take a compiler launcher as the GN
+# argument `pw_command_launcher` (third_party/pigweed/repo/pw_toolchain/
+# toolchain_args.gni), and CHIP's chip_gn_args.cmake appends to
+# MATTER_GN_ARGS instead of resetting it when it is already set. So
+# pre-seeding that variable here — before find_package(Zephyr) brings the
+# chip-module in — is the whole mechanism, with no patch to the SDK. The
+# `\n`-separated form is the response-file syntax make_gn_args.py reads;
+# it must not contain a semicolon, which CMake would turn into a list.
+#
+# USE_CCACHE=0 is Zephyr's own opt-out and switches off both halves.
+if(NOT USE_CCACHE STREQUAL "0")
+    find_program(MCUHOME_CCACHE ccache)
+    if(MCUHOME_CCACHE)
+        set(MATTER_GN_ARGS "--arg-string\npw_command_launcher\nccache\n")
+    endif()
+endif()
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(bmp180-node)
 
