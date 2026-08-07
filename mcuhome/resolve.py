@@ -397,6 +397,10 @@ def _resolve_build(
             "CONFIG_MBEDTLS=y",
             "CONFIG_MBEDTLS_PSA_CRYPTO_C=y",
         ]
+        # CONFIG_CHIP_PROJECT_CONFIG deliberately does NOT appear here: it
+        # names a file inside the generated application tree, which is a
+        # fact of stage 4's layout and not of the device. The prj.conf
+        # emitter appends it (mcuhome/generate.py).
         if endpoints:
             # ADR 0014: the CHIP-side dynamic endpoint count derives from
             # this symbol, so the builder only has to state the number of

@@ -8,16 +8,16 @@
     mcuhome build    <device>          # stages 1-5
     mcuhome clean    <device|--all>
 
-``validate`` and the generating half of ``build`` (stages 1-4) are what
-this milestone implements; compiling the generated application is the
-next block, so ``build`` stops after code generation and says so.
-``clean`` exists so the surface is stable and refuses cleanly rather than
-being missing.
+``validate`` and ``build`` are what this milestone implements; ``clean``
+exists so the surface is stable and refuses cleanly rather than being
+missing.
 
 ``validate`` writes nothing at all. ``build`` writes only into its build
 directory, which is deliberately outside the configuration tree
 (builder-pipeline.md §2): ``<tree root>/build/<device>/`` unless
-``--build-dir`` says otherwise.
+``--build-dir`` says otherwise. Inside it, the generated application is
+``app/`` and the compiler's working tree is ``build/`` — everything a
+human is meant to read on one side, machine spoil on the other.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from mcuhome import __version__, registry
-from mcuhome.errors import MCUHomeError
+from mcuhome import __version__, registry, workspace
+from mcuhome.errors import BuildError, MCUHomeError
 from mcuhome.generate import APP_DIR, write_tree
 from mcuhome.loader import load_config
 from mcuhome.model import DeviceModel
@@ -36,9 +36,13 @@ from mcuhome.schema import parse_config
 from mcuhome.tree import ConfigTree, resolve_device
 from mcuhome.validate import validate
 
-__all__ = ["BUILD_DIR", "format_summary", "load_device_model", "main"]
-
-_NOT_IMPLEMENTED = "is not implemented yet (builder phase 2, block C)"
+__all__ = [
+    "BUILD_DIR",
+    "format_build_summary",
+    "format_summary",
+    "load_device_model",
+    "main",
+]
 
 #: Directory the per-device build trees are created in, at the tree root.
 #: A sibling of ``devices/``, never inside it — build output must not turn
@@ -153,6 +157,27 @@ def format_summary(model: DeviceModel) -> str:
     return "\n".join(lines)
 
 
+def format_build_summary(
+    name: str,
+    *,
+    artifacts: list[Path],
+    regions: list[workspace.MemoryRegion],
+) -> str:
+    """What came out of stage 5: where the image is and what it costs."""
+    lines = [f"Built {name}."]
+    if artifacts:
+        lines.append("")
+        lines.append("Image")
+        for path in artifacts:
+            lines.append(f"  {path}")
+    if regions:
+        lines.append("")
+        lines.append("Memory")
+        for region in regions:
+            lines.append(f"  {region.describe()}")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------
 # Commands
 # --------------------------------------------------------------------------
@@ -170,6 +195,21 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _snippets_for(model: DeviceModel, extra: list[str] | None) -> tuple[str, ...]:
+    """The configuration's own snippets, then anything the caller added.
+
+    Order matters to Zephyr (later fragments override earlier ones), so
+    ``--snippet`` deliberately appends: a development transport must be
+    able to override what the configuration asks for, not the reverse.
+    Duplicates are dropped rather than refused — asking twice for the
+    snippet a device already needs is not a mistake worth stopping for.
+    """
+    ordered: dict[str, None] = {}
+    for snippet in [*model.build.snippets, *(extra or [])]:
+        ordered.setdefault(snippet, None)
+    return tuple(ordered)
+
+
 def _cmd_build(args: argparse.Namespace) -> int:
     tree, entry = resolve_device(args.device, config_root=args.config_root)
     model = load_device_model(entry, tree=tree)
@@ -184,25 +224,62 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if args.generate_only:
         return 0
 
+    if not args.native:
+        raise BuildError(
+            "Building inside the MCUHome builder container is not implemented yet "
+            "(builder phase 2, block D).",
+            hint=(
+                "today MCUHome compiles natively, in the west workspace it is "
+                "installed in, which is what --native selects and what you get "
+                "by leaving the flag off entirely. Drop --no-native.\n"
+                "Everything generated above was written and is yours either way "
+                f"({out_dir / APP_DIR} is the application)."
+            ),
+        )
+
+    snippets = _snippets_for(model, args.snippet)
+    plan = workspace.plan_build(
+        # Absolute from here on: the build runs with the workspace top
+        # directory as its working directory (that is how west finds the
+        # manifest), so a relative --build-dir would land somewhere else
+        # entirely for anyone who invoked the builder from a subdirectory.
+        out_dir=out_dir.resolve(),
+        app_subdir=APP_DIR,
+        board=model.device.board,
+        snippets=snippets,
+    )
+
     print()
-    # Both streams are read together by whoever runs this; flush so the
-    # refusal appears after the listing it refers to, not before it.
+    print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
+    print(f"  {' '.join(plan.command)}")
+    print()
+    # The build log is written by a subprocess to the same terminal; flush
+    # so the header above it is not still sitting in this process's buffer.
     sys.stdout.flush()
+
+    code, log = workspace.run_build(plan)
+    if code != 0:
+        raise workspace.refuse_failed_build(code, build_dir=plan.build_dir)
+
+    print()
     print(
-        f"Stopped after code generation: compiling the firmware {_NOT_IMPLEMENTED}.",
-        file=sys.stderr,
+        format_build_summary(
+            model.device.name,
+            artifacts=workspace.artifacts(plan.build_dir),
+            regions=workspace.parse_memory_report(log),
+        )
     )
-    print(
-        f"Everything above was written and is yours to inspect ({out_dir / APP_DIR} is the "
-        "application). Pass --generate-only to make stopping here the intended outcome.",
-        file=sys.stderr,
-    )
-    return 1
+    return 0
 
 
 def _cmd_clean(args: argparse.Namespace) -> int:
     del args
-    print(f"mcuhome clean {_NOT_IMPLEMENTED}.", file=sys.stderr)
+    print("mcuhome clean is not implemented yet.", file=sys.stderr)
+    print(
+        f"Build output is self-contained: delete the {BUILD_DIR}/ directory, or the "
+        "one --build-dir pointed at, and nothing else is affected.",
+        file=sys.stderr,
+    )
     return 1
 
 
@@ -262,6 +339,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="stop after writing the generated application, and succeed",
     )
+    build_parser_.add_argument(
+        "-S",
+        "--snippet",
+        action="append",
+        metavar="NAME",
+        help=(
+            "Zephyr snippet to apply on top of the ones the configuration needs "
+            "(repeatable); debug-rtt is the usual one during bring-up"
+        ),
+    )
+    # ADR 0007 wants the container to be the normal path and --native the
+    # escape hatch. The container does not exist yet, so the default is
+    # inverted for now and --no-native says why; when the image lands, the
+    # default flips here and nothing else about the surface changes.
+    build_parser_.add_argument(
+        "--native",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "compile in the west workspace MCUHome is installed in "
+            "(default; --no-native selects the builder container, which is "
+            "not implemented yet)"
+        ),
+    )
     add_common_options(build_parser_)
     build_parser_.set_defaults(func=_cmd_build)
 
@@ -283,6 +384,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except MCUHomeError as error:
+        # Both streams end up in the same terminal, and a command that
+        # printed progress before failing must not have its error appear
+        # above the output it refers to. Only stdout is buffered when it is
+        # a pipe, so flushing it here is what keeps the order right.
+        sys.stdout.flush()
         print(error.render(), file=sys.stderr)
         return 1
 

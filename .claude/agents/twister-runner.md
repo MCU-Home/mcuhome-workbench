@@ -13,8 +13,11 @@ directory) — do not try to create it yourself.
 
 Commands (run from the workspace top directory):
 
-- Quick build check: `west build -p -b native_sim mcuhome/app`
 - Test suites: `west twister -T mcuhome/tests --integration --inline-logs -v`
+- Builder test suite: `pytest` (from `mcuhome/`; needs no workspace)
+- Firmware build check: `west build -p -b nrf7002dk/nrf5340/cpuapp -S matter
+  -S debug-rtt mcuhome/samples/matter-node`. `mcuhome/app` is NOT buildable
+  — it is the generic application main, and building it refuses by design.
 
 Summarize compactly: pass/fail counts first, then each failure with the
 shortest reproducing command and the decisive log excerpt (not full logs).

@@ -42,6 +42,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   devicetree overlay, the Kconfig fragment and a `CMakeLists.txt` — behind
   `mcuhome build <device> [--generate-only]`. Output is deterministic and
   clang-format-clean by construction, and golden-file tested byte for byte.
+- Builder build orchestration (`mcuhome/workspace.py`, phase 2 block C):
+  `mcuhome build <device>` now compiles what it generates. It locates the
+  west workspace, arranges the environment CHIP's codegen needs
+  (`scripts/pyshim` on `PYTHONPATH`, `ZEPHYR_BASE`), refuses by name when
+  `gn` or `zap` is missing, runs `west build` with the board and snippets
+  from the device model, and reports the image path plus the flash/RAM
+  footprint. `-S/--snippet` adds a snippet (e.g. `debug-rtt`) on top of
+  the ones the configuration requires; `--no-native` selects the ADR 0007
+  builder container and refuses, which is block D.
+- The generated application is now buildable: `mcuhome/generate.py` emits
+  the Matter/CHIP/ZAP CMake glue (CHIP module registration, data-model
+  configuration from the framework `mcuhome-root.zap`) and the
+  `CHIPProjectConfig.h` wrapper CHIP resolves app-relative. The same glue
+  is carried byte-identically by `samples/matter-node/CMakeLists.txt`, and
+  the test suite asserts the two never diverge.
+- Board-scoped devicetree moved into the builder's board registry
+  (`BoardDef.overlay`), next to the board-scoped Kconfig that was already
+  there: a generated nRF5340 application now carries the netcore entropy
+  redirect it cannot boot Matter without.
 - `samples/matter-node/src/mcuhome_config.c` is now generator output rather
   than a hand-written stand-in, with a new `mcuhome_config.h` next to it
   (ADR 0014: the sample is the codegen regression fixture). `src/main.c`
@@ -51,8 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent-failure modes found during hardware bring-up (entropy downgrade,
   undersized mbedTLS heap/stacks, RTT control-block re-init).
 
+### Changed
+
+- `app/` is no longer a placeholder application: `app/src/main.c` is the
+  generic MCUHome application main that every generated device shares, and
+  `app/CMakeLists.txt` refuses at configure time with a message naming the
+  builder. `west build -p -b native_sim mcuhome/app`, previously
+  documented as the workspace smoke test, is therefore gone — build a
+  sample, or a generated device, instead.
+
 ### Removed
 
+- `app/prj.conf` and `app/VERSION`, which only the removed placeholder
+  application used.
 - `samples/matter-node` builds for `nrf7002dk/nrf5340/cpuapp` only. Generated
   tables reference the sensor's devicetree node directly, so the sample no
   longer carries the `DT_NODE_HAS_STATUS_OKAY()` guard that let it build for

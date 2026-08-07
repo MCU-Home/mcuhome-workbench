@@ -133,8 +133,9 @@ configuration is produced by the builder, so what is left is glue:
 |---|---|
 | `src/mcuhome_config.c`, `src/mcuhome_config.h` | **Generator output, committed.** Written by `mcuhome build` from [`00-bmp180-two-endpoints.yaml`](../../docs/design/examples/00-bmp180-two-endpoints.yaml): the device's Matter model as plain-C tables (`mcuhome_node_config`) plus the channel/sensor bindings that feed them. **Do not edit by hand** — `tests_py/test_generate.py` compares both files byte for byte against fresh generator output, which is what keeps the sample and the codegen contract in lockstep (ADR 0014). |
 | `src/main.c` | Application glue: LEDs, `mcuhome_matter_start()`, `mcuhome_sensor_start()`, and an override of the `mcuhome_matter_stage()` hook for LED status. Plain C — generated app glue never needs a C++ toolchain. Nothing here polls, converts, publishes or describes the device: that is the channel layer's and the generated tables' job. |
-| `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c` — the block the builder's overlay generator emits, node label included — plus the `zephyr,entropy` redirect to the framework's netcore-seeded entropy driver ([`drivers/entropy/`](../../drivers/entropy/)), which is board wiring the generator does not own. |
-| `include/CHIPProjectConfig.h` | One-line wrapper around the framework's `<mcuhome/matter/chip_project_config.h>`; exists only because CHIP resolves `CONFIG_CHIP_PROJECT_CONFIG` relative to the application directory. |
+| `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c` plus the `zephyr,entropy` redirect to the framework's netcore-seeded entropy driver ([`drivers/entropy/`](../../drivers/entropy/)) — both of them blocks the builder's overlay generator emits, the sensor node from the device configuration and the entropy node from the board registry. |
+| `include/CHIPProjectConfig.h` | One-line wrapper around the framework's `<mcuhome/matter/chip_project_config.h>`; exists only because CHIP resolves `CONFIG_CHIP_PROJECT_CONFIG` relative to the application directory. The builder generates the same wrapper into every device it builds. |
+| `CMakeLists.txt` | The Matter build glue, **byte-identical to what the builder emits** — CHIP module registration, the link-order fix, the app-common include and `chip_configure_data_model()`. `tests_py/test_generate.py` asserts the two never diverge: a mechanism found on the bench must not end up in only one of them. |
 
 **One board only.** Generated tables reference the sensor's devicetree
 node directly, so they cannot compile for a board that does not have that
@@ -151,7 +152,9 @@ belongs in `components/matter/` instead.
 ## Environment prerequisites
 
 CHIP's build runs code generators that a plain Zephyr environment does not
-provide:
+provide. This list applies to building the sample **by hand**; `mcuhome
+build` sets `PYTHONPATH` itself and names the other two by hand if they
+are missing, rather than letting them surface as a compiler error:
 
 | Requirement | Why |
 |---|---|
@@ -187,3 +190,12 @@ every entropy request. Commissioning fails loudly and says why in the
 log. It does not fall back to a weaker generator: the `matter` snippet
 sets `CONFIG_MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG_ALLOW_NON_CSPRNG=n`
 precisely to remove that path.
+
+The same dual-core coupling makes an **application-core-only reset
+unsafe** (`probe-rs reset --chip nRF5340_xxAA_APPONLY`): the freshly
+booted application core talks 802.15.4 spinel to a network core whose
+IPC state belongs to the previous boot, times out
+(`spinel_ipc_backend_rsp_ntf: No response within timeout`) and takes a
+kernel oops. Always reset both cores — `probe-rs reset --chip
+nRF5340_xxAA` — or power-cycle the board. Flashing only the application
+core is fine; it resets the whole chip afterwards.

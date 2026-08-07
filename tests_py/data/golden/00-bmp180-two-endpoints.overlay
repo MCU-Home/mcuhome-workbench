@@ -9,7 +9,30 @@
  * Devicetree description of this device's peripherals. Hardware belongs in devicetree, never in C
  * constants — which is also why a Zephyr sensor driver is enabled by its node here and not by a
  * Kconfig symbol in the fragment next to this file.
+ *
+ * The first block, if there is one, is board wiring rather than device configuration: what every
+ * MCUHome node on this board needs, whatever its YAML says.
  */
+
+/* Entropy. The nRF5340 application core has no RNG peripheral: the one on the die belongs to the
+ * network core. The board default points zephyr,entropy at the Bluetooth HCI entropy driver, which
+ * cannot work here because MCUHome runs this SoC Thread-only with Bluetooth off (ADR 0011).
+ * Redirect to the framework's IPC driver, which seeds a CTR-DRBG from the network core's real RNG
+ * over a second endpoint on the ipc0 instance the 802.15.4 spinel channel already uses.
+ * The network core must run mcuhome/samples/netcore-radio for this endpoint to exist; against the
+ * upstream 802154_rpmsg image the node comes up and then fails every entropy request with -EIO
+ * rather than falling back to a weaker generator. */
+/ {
+	netcore_entropy: netcore-entropy {
+		compatible = "mcuhome,entropy-ipc";
+		ipc = <&ipc0>;
+		status = "okay";
+	};
+
+	chosen {
+		zephyr,entropy = &netcore_entropy;
+	};
+};
 
 &arduino_i2c {
 	status = "okay";

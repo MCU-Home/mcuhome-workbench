@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 __all__ = [
+    "BuildError",
     "ConfigError",
     "ConfigErrorGroup",
     "ErrorCollector",
@@ -132,6 +133,19 @@ class GenerationError(ConfigError):
     through the validator at all — that is exactly what a remote build
     server does when a canonical model arrives over the wire
     (builder-pipeline.md §6).
+    """
+
+
+class BuildError(ConfigError):
+    """Stage 5 cannot run, or the compiler refused what stage 4 wrote.
+
+    Renders like a :class:`ConfigError` — same three questions, same
+    shape — but usually without a location, because the problem is not in
+    a configuration file: no west workspace around the builder, a missing
+    build-time tool, a compiler that stopped. The ``hint`` carries the fix
+    and is the whole value of the type: "the build failed" is not an
+    actionable message, "gn is not on your PATH, here is where it comes
+    from" is.
     """
 
 

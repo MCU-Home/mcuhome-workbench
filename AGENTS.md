@@ -16,13 +16,15 @@ channel layer, netcore entropy, BMP180 two-endpoint sample) is complete
 and hardware-verified against a production Home Assistant over Thread.
 Phase 2 (the Python YAML builder) is in progress: `mcuhome validate`
 runs the front half of the pipeline (load → validate → resolve into the
-canonical device model) and `mcuhome build` runs stage 4 on top of it,
-generating the per-device Zephyr application (tables, overlay, Kconfig
-fragment, CMakeLists) before refusing the compile step, which is the next
-block. Note the consequence of ADR 0014: `samples/matter-node/src/
-mcuhome_config.{c,h}` **is generator output** and the pytest suite
-compares it byte for byte — never hand-edit it, regenerate it. Check
-`docs/adr/` before assuming any design decision.
+canonical device model), and `mcuhome build` goes all the way to a
+flashable image — stage 4 generates the per-device Zephyr application
+(tables, overlay, Kconfig fragment, CMakeLists) and stage 5 compiles it
+with `west build` in this workspace. What is still missing is the
+builder *container* (ADR 0007): builds run natively today, `--no-native`
+refuses and names the block. Note the consequence of ADR 0014:
+`samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
+and the pytest suite compares it byte for byte — never hand-edit it,
+regenerate it. Check `docs/adr/` before assuming any design decision.
 
 ## Repository map
 
@@ -31,9 +33,9 @@ compares it byte for byte — never hand-edit it, regenerate it. Check
 | `west.yml` | West manifest (T2 topology) — Zephyr + modules, pinned revisions |
 | `zephyr/module.yml` | Makes this repo consumable as a Zephyr module |
 | `CMakeLists.txt`, `Kconfig` | Zephyr module build entry points |
-| `mcuhome/` | Python package: YAML validation, codegen, `mcuhome` CLI |
+| `mcuhome/` | Python package: YAML validation, codegen, build orchestration, `mcuhome` CLI |
 | `components/` | Components: Python schema + C sources side by side |
-| `app/` | Placeholder app (later the codegen target) |
+| `app/` | The generic application main every generated device shares — **not** a buildable app |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree hardware support |
 | `snippets/` | Connectivity variants (wifi, thread-sed, …) as Zephyr snippets |
 | `include/mcuhome/` | Public C API headers |
@@ -61,6 +63,15 @@ compares it byte for byte — never hand-edit it, regenerate it. Check
 - **Device-class variants are configuration, not code:** WiFi vs Thread FTD
   vs Thread SED is expressed via snippets/Kconfig fragments, never via
   parallel source trees.
+- **`app/` is not an application.** It holds the single generic
+  application main that `mcuhome build` compiles together with the device
+  configuration it generates; `west build mcuhome/app` refuses at CMake
+  configure time and says so. Anything device-, board- or
+  peripheral-specific is a contract violation there — see `app/README.md`.
+- **Two files carry the Matter build glue** — `samples/matter-node/
+  CMakeLists.txt` and the one `mcuhome/generate.py` emits — and
+  `tests_py/test_generate.py` asserts the shared blocks stay byte-equal.
+  A CMake fix found on the bench goes into both, in the same commit.
 
 ## Commands
 
@@ -71,8 +82,10 @@ mkdir mcuhome-workspace && cd mcuhome-workspace
 git clone https://github.com/mcu-home/mcuhome
 west init -l mcuhome && west update
 
-# Build the placeholder app (from the workspace top directory)
-west build -p -b native_sim mcuhome/app
+# Build the reference sample (from the workspace top directory).
+# `mcuhome/app` is NOT buildable — it is the generic main, see below.
+west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
+  mcuhome/samples/matter-node
 
 # Run the Zephyr test suites (tests/)
 west twister -T mcuhome/tests --integration --inline-logs -v
@@ -85,9 +98,16 @@ pytest
 # Check one device configuration with the builder
 mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
-# Generate the Zephyr application for it (stage 4; compiling is block C)
+# Generate the Zephyr application for it and stop (stage 4)
 mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir /tmp/bmp180-node --generate-only
+
+# Generate AND compile it (stages 4-5), from the workspace top directory.
+# Writes the application to build/<device>/app and the CMake tree to
+# build/<device>/build, then reports the image path and its footprint.
+# -S adds a snippet on top of the ones the configuration needs.
+mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+  --build-dir build/bmp180-node -S debug-rtt
 
 # Python lint/format
 ruff check --fix . && ruff format .
@@ -95,6 +115,25 @@ ruff check --fix . && ruff format .
 # All lint hooks
 pre-commit run --all-files
 ```
+
+### What a compiling build needs on the host
+
+`mcuhome validate` and `--generate-only` need nothing but Python. The
+compile step (stage 5) additionally needs a west workspace — this one —
+plus three things a Zephyr installation does not bring:
+
+| Requirement | Why | Provided by the builder? |
+|---|---|---|
+| `gn` on `PATH` | the Matter SDK builds its own libraries with GN | no — install it |
+| `zap`/`zap-cli` on `PATH`, or `ZAP_INSTALL_PATH` | generates the root-node data model from `components/matter/zap/` | no — install it |
+| `PYTHONPATH=<repo>/scripts/pyshim` | CHIP v1.5.1.0 ships without the `python_path` helper its codegen imports (upstream candidate C1) | **yes**, automatically |
+
+Missing tools are reported by name before the build starts, never as a
+compiler error ten minutes in. `ZEPHYR_BASE` is also filled in for the
+build (west does not export it, and the generated CMakeLists looks for
+the Matter SDK next to it) unless it is already set. The builder
+container (ADR 0007) will provide all of this; until then the list above
+is what the error message tells a user.
 
 CI (`.github/workflows/ci.yml`) runs the lint/licensing checks below on
 every push and PR. It landed together with the first test suite

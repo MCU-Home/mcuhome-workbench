@@ -331,6 +331,44 @@ class BoardDef:
     #: Board-scoped Kconfig, from the verified board configuration
     #: (samples/matter-node/boards/*.conf).
     kconfig: tuple[str, ...] = ()
+    #: Board-scoped devicetree, emitted above the peripherals every device
+    #: configuration describes for itself. This is board *wiring* — true of
+    #: every MCUHome device on this board, never of one configuration — so
+    #: it belongs to the board, exactly like ``kconfig`` above. Verbatim
+    #: devicetree; the generator only indents nothing and adds no syntax.
+    overlay: str = ""
+    #: Why :attr:`overlay` is there, rendered as its comment in the
+    #: generated file. Generic knowledge about the board, per the
+    #: generated-comments rule in :mod:`mcuhome.generate`.
+    overlay_note: str = ""
+
+
+#: Board wiring of the nRF5340 application core: it has no RNG peripheral
+#: of its own. See :data:`BOARDS`.
+_NRF5340_ENTROPY_NOTE = (
+    "Entropy. The nRF5340 application core has no RNG peripheral: the one on the die "
+    "belongs to the network core. The board default points zephyr,entropy at the "
+    "Bluetooth HCI entropy driver, which cannot work here because MCUHome runs this "
+    "SoC Thread-only with Bluetooth off (ADR 0011). Redirect to the framework's IPC "
+    "driver, which seeds a CTR-DRBG from the network core's real RNG over a second "
+    "endpoint on the ipc0 instance the 802.15.4 spinel channel already uses.\n"
+    "The network core must run mcuhome/samples/netcore-radio for this endpoint to "
+    "exist; against the upstream 802154_rpmsg image the node comes up and then fails "
+    "every entropy request with -EIO rather than falling back to a weaker generator."
+)
+
+_NRF5340_ENTROPY_OVERLAY = """\
+/ {
+\tnetcore_entropy: netcore-entropy {
+\t\tcompatible = "mcuhome,entropy-ipc";
+\t\tipc = <&ipc0>;
+\t\tstatus = "okay";
+\t};
+
+\tchosen {
+\t\tzephyr,entropy = &netcore_entropy;
+\t};
+};"""
 
 
 BOARDS: dict[str, BoardDef] = {
@@ -342,6 +380,8 @@ BOARDS: dict[str, BoardDef] = {
         name="nrf7002dk/nrf5340/cpuapp",
         transports=frozenset({"thread"}),
         kconfig=("CONFIG_BT=n", "CONFIG_ENTROPY_GENERATOR=y"),
+        overlay=_NRF5340_ENTROPY_OVERLAY,
+        overlay_note=_NRF5340_ENTROPY_NOTE,
     ),
 }
 

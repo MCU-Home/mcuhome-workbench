@@ -29,16 +29,23 @@ second — they are the fast half of the strategy in
 | `test_examples.py` | the design examples in `docs/design/examples/` |
 | `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
+| `test_workspace.py` | stage 5's decisions: workspace discovery, prerequisites, the west command, the memory report |
 | `test_cli.py` | command surface, exit codes, summary output |
+
+**No build ever runs here.** `test_workspace.py` and the `build` tests in
+`test_cli.py` cover everything stage 5 decides *before* the compiler
+starts and mock the subprocess itself. Compiling a Matter node takes
+minutes and a toolchain; that belongs to twister and to hardware
+verification, not to a suite whose whole value is running in a second.
 
 ## Golden files
 
 `data/golden/` holds the byte-exact expected device model, devicetree
-overlay, Kconfig fragment and application `CMakeLists.txt`. The two
-generated C files are not duplicated here: **the committed sample is the
-golden file** for those (ADR 0014), so `test_generate.py` compares fresh
-generator output against `samples/matter-node/src/mcuhome_config.{c,h}`
-directly.
+overlay, Kconfig fragment, application `CMakeLists.txt` and
+`CHIPProjectConfig.h` wrapper. The two generated C files are not
+duplicated here: **the committed sample is the golden file** for those
+(ADR 0014), so `test_generate.py` compares fresh generator output against
+`samples/matter-node/src/mcuhome_config.{c,h}` directly.
 
 Regenerate deliberately, never automatically — from the repository root:
 
@@ -60,6 +67,8 @@ cp /tmp/bmp180-node/app/CMakeLists.txt \
    tests_py/data/golden/00-bmp180-two-endpoints.CMakeLists.txt
 cp /tmp/bmp180-node/app/boards/nrf7002dk_nrf5340_cpuapp.overlay \
    tests_py/data/golden/00-bmp180-two-endpoints.overlay
+cp /tmp/bmp180-node/app/include/CHIPProjectConfig.h \
+   tests_py/data/golden/00-bmp180-two-endpoints.CHIPProjectConfig.h
 ```
 
 Regenerating the sample's C files is not optional bookkeeping: it is how

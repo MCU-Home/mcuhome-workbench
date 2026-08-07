@@ -8,7 +8,7 @@ reproducible by construction (§1.4) and golden-file testable byte for byte
 (§9), and it is also what lets a remote build server generate from a model
 that arrived over the wire (§6).
 
-Four artifacts, in the layout the pipeline design fixes::
+The layout the pipeline design fixes::
 
     <build dir>/
     ├── device-model.json          the canonical model, for inspection
@@ -16,9 +16,18 @@ Four artifacts, in the layout the pipeline design fixes::
         ├── CMakeLists.txt
         ├── prj.conf
         ├── boards/<board>.overlay
+        ├── include/
+        │   └── CHIPProjectConfig.h    (Matter devices only)
         └── src/
             ├── mcuhome_config.c
             └── mcuhome_config.h
+
+"Standalone" is meant literally: ``west build -b <board> -S <snippets>
+<build dir>/app`` from a west workspace produces the same image
+``mcuhome build`` does. That is why the CMakeLists carries the whole
+Matter build glue rather than a call into something the builder owns —
+and why the *only* thing it needs from the MCUHome module is the module
+directory Zephyr hands it, never a path this generator wrote down.
 
 **Thin codegen.** The C artifacts are *data*: struct initializers for the
 two runtime contracts, ``<mcuhome/matter_tables.h>`` (ADR 0014) and
@@ -65,6 +74,7 @@ from mcuhome.model import (
 
 __all__ = [
     "APP_DIR",
+    "CHIP_PROJECT_CONFIG_PATH",
     "CONFIG_BASENAME",
     "MODEL_FILE",
     "board_file_stem",
@@ -78,6 +88,12 @@ APP_DIR = "app"
 MODEL_FILE = "device-model.json"
 #: Stem of the two generated C files, in ``<app>/src/``.
 CONFIG_BASENAME = "mcuhome_config"
+#: Where the CHIP project-configuration wrapper goes, relative to the
+#: application directory. CHIP resolves ``CONFIG_CHIP_PROJECT_CONFIG``
+#: against the application source directory, so this path is both the
+#: file's location and the value of that Kconfig symbol
+#: (:mod:`mcuhome.resolve` emits it).
+CHIP_PROJECT_CONFIG_PATH = "include/CHIPProjectConfig.h"
 
 #: Column limit of the repository's ``.clang-format``.
 _COLUMNS = 100
@@ -268,6 +284,26 @@ _HEADER_INTRO = [
 ]
 
 
+def _c_string(text: str) -> str:
+    """Render *text* as a C string literal, or refuse if it cannot be one.
+
+    Only values that need no escaping at all are accepted. Everything that
+    reaches here has passed the schema, whose identifiers are plain text;
+    a value that still needs escaping means the schema changed and the
+    escaping rules were not thought through, which is worth a loud stop.
+    """
+    bad = [character for character in '"\\\n\t' if character in text]
+    if bad:
+        raise GenerationError(
+            f'The device name "{text}" cannot be written into the generated C header.',
+            hint=(
+                "device names are plain text — quotes, backslashes and line breaks "
+                "have no place in one"
+            ),
+        )
+    return f'"{text}"'
+
+
 def render_config_header(model: DeviceModel, *, config_name: str) -> str:
     """``mcuhome_config.h`` — what the application glue may refer to."""
     has_channels = bool(model.channels)
@@ -288,6 +324,9 @@ def render_config_header(model: DeviceModel, *, config_name: str) -> str:
         "#ifdef __cplusplus",
         'extern "C" {',
         "#endif",
+        "",
+        "/** This device's name, as its configuration spells it. */",
+        f"#define MCUHOME_DEVICE_NAME {_c_string(model.device.name)}",
         "",
         "/** This device's Matter data model: endpoints, clusters, attributes. */",
         "extern const struct mcuhome_matter_node mcuhome_node_config;",
@@ -592,13 +631,22 @@ _OVERLAY_INTRO = [
     "in devicetree, never in C constants — which is also why a Zephyr sensor "
     "driver is enabled by its node here and not by a Kconfig symbol in the "
     "fragment next to this file.",
+    "The first block, if there is one, is board wiring rather than device "
+    "configuration: what every MCUHome node on this board needs, whatever "
+    "its YAML says.",
 ]
 
 
 def render_overlay(model: DeviceModel, *, config_name: str) -> str:
-    """The board overlay: one node per configured peripheral."""
+    """The board overlay: board wiring, then one node per peripheral."""
     intro = [f"Board: {model.device.board}.", *_OVERLAY_INTRO]
     out = [_file_header("c", config_name, intro)]
+
+    board = registry.BOARDS.get(model.device.board)
+    if board is not None and board.overlay:
+        out.append("")
+        out += _comment(board.overlay_note, 0)
+        out.append(board.overlay)
 
     bus_ids = {bus.id for bus in model.hardware.buses}
     for peripheral in model.hardware.peripherals:
@@ -696,6 +744,17 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
         )
     out = [_file_header("hash", config_name, intro), ""]
     out += list(model.build.kconfig)
+    if model.network.matter_enabled:
+        # Not part of the device model on purpose: this symbol names a file
+        # inside the generated tree, so it is a fact of stage 4's layout
+        # rather than of the device. CHIP resolves the path against the
+        # application source directory.
+        out += [
+            "",
+            "# Framework-owned CHIP settings, reached through the wrapper stage 4",
+            f"# writes next to this file ({CHIP_PROJECT_CONFIG_PATH}).",
+            f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
+        ]
     return "\n".join(out) + "\n"
 
 
@@ -703,10 +762,98 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
 # CMakeLists.txt
 # --------------------------------------------------------------------------
 
+#: The Matter (CHIP) build glue, verbatim, exactly as
+#: ``samples/matter-node/CMakeLists.txt`` carries it. Two files state these
+#: mechanics — the hand-written sample and every generated application —
+#: and ``tests_py/test_generate.py`` asserts they stay identical, because a
+#: fix found on the bench must not live in only one of them.
+#:
+#: Split in two because everything up to and including the CHIP module
+#: registration has to run *before* ``find_package(Zephyr)``, and the rest
+#: only works after it.
+_CHIP_PRELUDE = """\
+# Matter (CHIP) is a Zephyr module the application registers, not one west
+# discovers: upstream connectedhomeip has no zephyr/module.yml at its root,
+# only the chip-module subdirectory below. It therefore has to be appended
+# to ZEPHYR_EXTRA_MODULES before find_package(Zephyr).
+#
+# CHIP_ROOT is searched for rather than written out, so this file names no
+# path belonging to the machine that generated it and keeps working
+# wherever the build tree is moved. What it looks for is the west T2
+# workspace layout MCUHome pins (west.yml). Three ways, in order:
+#
+#   1. -DCHIP_ROOT=... or the CHIP_ROOT environment variable — say it.
+#   2. next to ZEPHYR_BASE, when the environment has it. `west build` does
+#      NOT export ZEPHYR_BASE, so this is the path for environments that
+#      set it deliberately (the MCUHome builder is one).
+#   3. upwards from this file, for the normal case of a build directory
+#      inside the workspace it is built in.
+if(NOT DEFINED CHIP_ROOT)
+    if(DEFINED ENV{CHIP_ROOT})
+        set(CHIP_ROOT $ENV{CHIP_ROOT})
+    elseif(DEFINED ENV{ZEPHYR_BASE})
+        get_filename_component(CHIP_ROOT
+            "$ENV{ZEPHYR_BASE}/../modules/lib/connectedhomeip" REALPATH)
+    else()
+        set(_mcuhome_search ${CMAKE_CURRENT_SOURCE_DIR})
+        while(NOT DEFINED CHIP_ROOT)
+            if(EXISTS "${_mcuhome_search}/modules/lib/connectedhomeip")
+                set(CHIP_ROOT "${_mcuhome_search}/modules/lib/connectedhomeip")
+            endif()
+            get_filename_component(_parent ${_mcuhome_search} DIRECTORY)
+            if(_parent STREQUAL _mcuhome_search)
+                break()
+            endif()
+            set(_mcuhome_search ${_parent})
+        endwhile()
+        unset(_mcuhome_search)
+        unset(_parent)
+    endif()
+endif()
+
+if(NOT EXISTS "${CHIP_ROOT}/config/zephyr/chip-module")
+    message(FATAL_ERROR
+        "The Matter SDK (connectedhomeip) was not found.\\n"
+        "Looked for a west workspace containing modules/lib/connectedhomeip, "
+        "starting at ${CMAKE_CURRENT_SOURCE_DIR}; CHIP_ROOT resolved to "
+        "'${CHIP_ROOT}'.\\n"
+        "The SDK is in the optional west group `matter`, so a workspace that "
+        "was never updated with it has no copy:\\n"
+        "  west config manifest.group-filter +matter && west update\\n"
+        "If it lives somewhere else entirely, say so: -DCHIP_ROOT=<path>")
+endif()
+
+list(APPEND ZEPHYR_EXTRA_MODULES ${CHIP_ROOT}/config/zephyr/chip-module)"""
+
+_CHIP_GLUE = """\
+include(${CHIP_ROOT}/src/app/chip_data_model.cmake)
+
+# Link-order fix: the Matter libraries form their own --start/end-group,
+# placed after libkernel.a in the final link line, so k_msgq_* references
+# from libCHIP.a stay unresolved. Appending the kernel as a *file path*
+# (not the target — CMake would dedupe that against the earlier
+# occurrence) puts it after the group.
+target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)
+
+target_include_directories(app PRIVATE
+    ${CHIP_ROOT}/zzz_generated/app-common)"""
+
+#: The data-model call. Placed last in both files, after the application's
+#: own sources, and formatted identically in both for the same reason as
+#: the blocks above.
+_CHIP_DATA_MODEL = """\
+# Framework-owned data model: endpoint 0 (root node) only — every device
+# endpoint is registered at runtime (ADR 0014, native composed node).
+# ZCL_PATH must be passed explicitly: the zcl.json path stored inside the
+# .zap is relative to CHIP's own example directories, so it cannot resolve
+# for a .zap that lives outside the CHIP tree (documented escape hatch in
+# chip_data_model.cmake). The .matter IDL is inferred from the .zap name."""
+
 
 def render_cmakelists(model: DeviceModel, *, config_name: str) -> str:
     """The application skeleton: generated data plus the framework's main."""
     snippets = ", ".join(model.build.snippets) or "none"
+    matter = model.network.matter_enabled
     intro = [
         f'Zephyr application for device "{model.device.name}". The MCUHome '
         f"runtime is consumed as a Zephyr module, so this file only names the "
@@ -716,12 +863,30 @@ def render_cmakelists(model: DeviceModel, *, config_name: str) -> str:
         f"Building it for anything else is not a supported configuration: the "
         f"tables reference this board's devicetree nodes by name.",
     ]
+    if snippets != "none":
+        intro.append(
+            "Build it the way it was generated, from a west workspace that has "
+            "the MCUHome module:\n"
+            "  west build -b "
+            + model.device.board
+            + " "
+            + " ".join(f"-S {snippet}" for snippet in model.build.snippets)
+            + " <this directory>"
+        )
     out = [_file_header("hash", config_name, intro), ""]
+    out.append("cmake_minimum_required(VERSION 3.20.0)")
+    if matter:
+        out += ["", _CHIP_PRELUDE]
+    out += ["", "find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})"]
+    if matter:
+        # No LANGUAGES clause: chip_configure_data_model() adds CHIP's own
+        # C++ sources to the `app` target, so the project has to enable C++
+        # even though nothing MCUHome generates or ships as app glue is C++.
+        out.append(f"project({model.device.name})")
+        out += ["", _CHIP_GLUE]
+    else:
+        out.append(f"project({model.device.name} LANGUAGES C)")
     out += [
-        "cmake_minimum_required(VERSION 3.20.0)",
-        "",
-        "find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})",
-        f"project({model.device.name} LANGUAGES C)",
         "",
         "target_sources(app PRIVATE",
         "    ${ZEPHYR_MCUHOME_MODULE_DIR}/app/src/main.c",
@@ -729,6 +894,45 @@ def render_cmakelists(model: DeviceModel, *, config_name: str) -> str:
         ")",
         "",
         "target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)",
+    ]
+    if matter:
+        out += [
+            "",
+            _CHIP_DATA_MODEL,
+            "chip_configure_data_model(app",
+            "    ZAP_FILE ${ZEPHYR_MCUHOME_MODULE_DIR}/components/matter/zap/mcuhome-root.zap",
+            "    ZCL_PATH ${CHIP_ROOT}/src/app/zap-templates/zcl/zcl.json",
+            ")",
+        ]
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------
+# include/CHIPProjectConfig.h
+# --------------------------------------------------------------------------
+
+_CHIP_PROJECT_CONFIG_INTRO = [
+    "CHIP's project configuration is framework-owned: the values and the "
+    "reasoning behind them live in "
+    "<mcuhome/matter/chip_project_config.h>, one copy for every MCUHome "
+    "device ever built.",
+    "This wrapper exists only because CHIP resolves "
+    "CONFIG_CHIP_PROJECT_CONFIG relative to the application source "
+    "directory, so a generated application needs one file of its own at a "
+    "predictable app-relative path. Nothing device-specific belongs here — "
+    "if a value has to differ per device, it becomes a Kconfig symbol in "
+    "the fragment next to this file, not a line in this one.",
+]
+
+
+def render_chip_project_config(model: DeviceModel, *, config_name: str) -> str:
+    """The one-line wrapper CHIP's ``CONFIG_CHIP_PROJECT_CONFIG`` points at."""
+    del model
+    out = [_file_header("c", config_name, _CHIP_PROJECT_CONFIG_INTRO), ""]
+    out += [
+        "#pragma once",
+        "",
+        "#include <mcuhome/matter/chip_project_config.h>",
     ]
     return "\n".join(out) + "\n"
 
@@ -745,7 +949,7 @@ def generate(model: DeviceModel, *, config_name: str) -> dict[str, str]:
     same mapping. :func:`write_tree` is the thin part that puts it on disk.
     """
     board = board_file_stem(model.device.board)
-    return {
+    files = {
         MODEL_FILE: model.to_json(),
         f"{APP_DIR}/CMakeLists.txt": render_cmakelists(model, config_name=config_name),
         f"{APP_DIR}/prj.conf": render_prj_conf(model, config_name=config_name),
@@ -753,6 +957,11 @@ def generate(model: DeviceModel, *, config_name: str) -> dict[str, str]:
         f"{APP_DIR}/src/{CONFIG_BASENAME}.c": render_config_source(model, config_name=config_name),
         f"{APP_DIR}/src/{CONFIG_BASENAME}.h": render_config_header(model, config_name=config_name),
     }
+    if model.network.matter_enabled:
+        files[f"{APP_DIR}/{CHIP_PROJECT_CONFIG_PATH}"] = render_chip_project_config(
+            model, config_name=config_name
+        )
+    return files
 
 
 def write_tree(model: DeviceModel, *, out_dir: Path, config_name: str) -> list[Path]:

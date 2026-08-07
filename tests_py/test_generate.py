@@ -28,7 +28,14 @@ import pytest
 from conftest import EXAMPLES_DIR, GOLDEN_DIR, REPO_ROOT, resolve_file
 
 from mcuhome.errors import GenerationError
-from mcuhome.generate import APP_DIR, MODEL_FILE, board_file_stem, generate, write_tree
+from mcuhome.generate import (
+    APP_DIR,
+    CHIP_PROJECT_CONFIG_PATH,
+    MODEL_FILE,
+    board_file_stem,
+    generate,
+    write_tree,
+)
 from mcuhome.model import (
     BusModel,
     DeviceMeta,
@@ -40,11 +47,14 @@ from mcuhome.model import (
 )
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
-SAMPLE_SRC = REPO_ROOT / "samples" / "matter-node" / "src"
+SAMPLE_DIR = REPO_ROOT / "samples" / "matter-node"
+SAMPLE_SRC = SAMPLE_DIR / "src"
 
 OVERLAY_PATH = f"{APP_DIR}/boards/nrf7002dk_nrf5340_cpuapp.overlay"
 SOURCE_PATH = f"{APP_DIR}/src/mcuhome_config.c"
 HEADER_PATH = f"{APP_DIR}/src/mcuhome_config.h"
+CMAKE_PATH = f"{APP_DIR}/CMakeLists.txt"
+CHIP_CONFIG_PATH = f"{APP_DIR}/{CHIP_PROJECT_CONFIG_PATH}"
 
 
 def _example_files() -> dict[str, str]:
@@ -58,8 +68,9 @@ def _example_files() -> dict[str, str]:
 
 def test_the_tree_has_exactly_the_designed_artifacts() -> None:
     assert sorted(_example_files()) == [
-        f"{APP_DIR}/CMakeLists.txt",
+        CMAKE_PATH,
         OVERLAY_PATH,
+        CHIP_CONFIG_PATH,
         f"{APP_DIR}/prj.conf",
         SOURCE_PATH,
         HEADER_PATH,
@@ -113,7 +124,8 @@ def test_nothing_generated_mentions_the_host() -> None:
     [
         (OVERLAY_PATH, "00-bmp180-two-endpoints.overlay"),
         (f"{APP_DIR}/prj.conf", "00-bmp180-two-endpoints.prj.conf"),
-        (f"{APP_DIR}/CMakeLists.txt", "00-bmp180-two-endpoints.CMakeLists.txt"),
+        (CMAKE_PATH, "00-bmp180-two-endpoints.CMakeLists.txt"),
+        (CHIP_CONFIG_PATH, "00-bmp180-two-endpoints.CHIPProjectConfig.h"),
     ],
 )
 def test_artifact_matches_its_golden_file(artifact: str, golden: str) -> None:
@@ -390,6 +402,42 @@ def test_an_unwritable_build_directory_is_refused(tmp_path) -> None:
 # --------------------------------------------------------------------------
 
 
+def test_the_overlay_carries_the_boards_own_wiring_before_the_peripherals() -> None:
+    """Board wiring is the board's, not the configuration's (registry.BoardDef).
+
+    Without the entropy redirect the nRF5340 application core has no
+    random source at all — its RNG belongs to the network core — so a
+    generated image would build and then fail every commissioning attempt.
+    That is a property of the board, true of every device on it, which is
+    why it lives next to the board's Kconfig instead of in each YAML.
+    """
+    overlay = _example_files()[OVERLAY_PATH]
+    entropy = overlay.index('compatible = "mcuhome,entropy-ipc";')
+    assert "zephyr,entropy = &netcore_entropy;" in overlay
+    assert entropy < overlay.index("&arduino_i2c {")
+
+
+def test_a_board_without_wiring_gets_no_empty_block() -> None:
+    model = _hardware_model(HardwareModel())
+    object.__setattr__(model.device, "board", "some/unknown/board")
+    overlay = generate(model, config_name="main.yaml")[
+        f"{APP_DIR}/boards/some_unknown_board.overlay"
+    ]
+    assert overlay.rstrip().endswith("*/")
+
+
+def test_the_generated_header_names_the_device_for_the_generic_main() -> None:
+    """The one thing the shared main.c cannot know without being told."""
+    assert '#define MCUHOME_DEVICE_NAME "bmp180-node"' in _example_files()[HEADER_PATH]
+
+
+def test_a_device_name_that_cannot_be_a_c_string_is_refused() -> None:
+    model = _hardware_model(HardwareModel())
+    object.__setattr__(model.device, "name", 'odd"name')
+    error = _generate_failure(model)
+    assert error.message.startswith('The device name "odd"name" cannot be written')
+
+
 def test_the_overlay_extends_the_boards_own_bus_node() -> None:
     overlay = _example_files()[OVERLAY_PATH]
     assert "&arduino_i2c {" in overlay
@@ -423,9 +471,81 @@ def test_the_overlay_can_render_flags_frequencies_and_text() -> None:
     assert '\t\ta-name = "wide";\n' in overlay
 
 
-def test_the_kconfig_fragment_is_the_models_list_verbatim() -> None:
+def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> None:
+    """Everything about the *device* comes from the model, in model order.
+
+    The one exception is appended, not interleaved:
+    ``CONFIG_CHIP_PROJECT_CONFIG`` names a file inside the generated tree,
+    so it is stage 4's fact and deliberately absent from the canonical
+    model — a remote build server derives it from the same layout rule
+    rather than receiving it over the wire.
+    """
     model = resolve_file(EXAMPLE)
     fragment = _example_files()[f"{APP_DIR}/prj.conf"]
     body = [line for line in fragment.splitlines() if line and not line.startswith("#")]
-    assert body == model.build.kconfig
+    assert body[: len(model.build.kconfig)] == model.build.kconfig
+    assert body[len(model.build.kconfig) :] == [
+        f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"'
+    ]
+    assert not any(line.startswith("CONFIG_CHIP_PROJECT_CONFIG") for line in model.build.kconfig)
     assert "-S matter" in fragment  # the snippets the app has to be built with
+
+
+def test_the_chip_project_config_wrapper_only_forwards_to_the_framework() -> None:
+    """It is a wrapper because CHIP resolves the path app-relative — nothing more."""
+    text = _example_files()[CHIP_CONFIG_PATH]
+    body = [line for line in text.splitlines() if line and not line.startswith((" *", "/*"))]
+    assert body == [
+        "#pragma once",
+        "#include <mcuhome/matter/chip_project_config.h>",
+    ]
+
+
+# --------------------------------------------------------------------------
+# The application CMakeLists
+# --------------------------------------------------------------------------
+
+#: Blocks of the Matter build glue that both the generated application and
+#: the hand-written sample have to carry, byte for byte. Each is a
+#: mechanism that took hardware bring-up to find (see the comments in
+#: samples/matter-node/CMakeLists.txt), which is exactly why neither file
+#: is allowed to have its own version of it.
+_SHARED_CHIP_GLUE = (
+    "list(APPEND ZEPHYR_EXTRA_MODULES ${CHIP_ROOT}/config/zephyr/chip-module)",
+    "include(${CHIP_ROOT}/src/app/chip_data_model.cmake)",
+    "target_link_libraries(chip INTERFACE $<TARGET_FILE:kernel>)",
+    "target_include_directories(app PRIVATE\n    ${CHIP_ROOT}/zzz_generated/app-common)",
+    (
+        "chip_configure_data_model(app\n"
+        "    ZAP_FILE ${ZEPHYR_MCUHOME_MODULE_DIR}/components/matter/zap/mcuhome-root.zap\n"
+        "    ZCL_PATH ${CHIP_ROOT}/src/app/zap-templates/zcl/zcl.json\n"
+        ")"
+    ),
+)
+
+
+@pytest.mark.parametrize("block", _SHARED_CHIP_GLUE)
+def test_the_sample_and_the_generated_app_share_one_matter_build_glue(block: str) -> None:
+    """ADR 0014 makes the sample a generated device; its build must match one."""
+    sample = (SAMPLE_DIR / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert block in sample, "samples/matter-node/CMakeLists.txt drifted from the generator"
+    assert block in _example_files()[CMAKE_PATH]
+
+
+def test_the_generated_app_names_no_path_of_the_machine_that_wrote_it() -> None:
+    """The CHIP SDK is found from ZEPHYR_BASE, so a build tree can be moved."""
+    cmake = _example_files()[CMAKE_PATH]
+    assert '"$ENV{ZEPHYR_BASE}/../modules/lib/connectedhomeip" REALPATH' in cmake
+    assert str(REPO_ROOT) not in cmake
+
+
+def test_a_device_without_matter_gets_no_chip_glue_at_all() -> None:
+    files = generate(_hardware_model(HardwareModel()), config_name="main.yaml")
+    assert CHIP_CONFIG_PATH not in files
+    cmake = files[CMAKE_PATH]
+    assert "CHIP" not in cmake
+    assert "chip" not in cmake
+    # No CHIP means no CHIP-generated C++ in the app target, so the project
+    # can say what it is and keep the C++ toolchain out of the build.
+    assert "project(bench-node LANGUAGES C)" in cmake
+    assert "CONFIG_CHIP_PROJECT_CONFIG" not in files[f"{APP_DIR}/prj.conf"]

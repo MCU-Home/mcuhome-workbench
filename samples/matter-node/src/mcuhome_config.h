@@ -20,6 +20,9 @@
 extern "C" {
 #endif
 
+/** This device's name, as its configuration spells it. */
+#define MCUHOME_DEVICE_NAME "bmp180-node"
+
 /** This device's Matter data model: endpoints, clusters, attributes. */
 extern const struct mcuhome_matter_node mcuhome_node_config;
 

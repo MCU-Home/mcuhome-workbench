@@ -33,9 +33,23 @@ pre-commit install --hook-type commit-msg
 ## Building and testing
 
 ```sh
-west build -p -b native_sim mcuhome/app          # quick build check
-west twister -T mcuhome/tests --integration      # test suites
+west twister -T mcuhome/tests --integration      # C test suites (native_sim)
+pytest                                           # builder test suite (tests_py/)
 ```
+
+For a full firmware build, build a device from its YAML description — or
+a sample, if you want the framework without the builder in the picture:
+
+```sh
+mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+  --build-dir build/bmp180-node
+west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
+  mcuhome/samples/matter-node
+```
+
+`mcuhome/app` is not a buildable application: it holds the generic
+application main the builder compiles into every generated device, and
+building it directly is refused with a message saying so.
 
 ## Coding standards
 

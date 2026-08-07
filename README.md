@@ -29,10 +29,13 @@ channel layer, netcore entropy service, and a BMP180 two-endpoint sample
 — is implemented and hardware-verified: commissioned into a production
 Home Assistant instance over Thread (design record: see
 [docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is under
-construction: `mcuhome validate <device>` checks a configuration and
-prints what it resolves to, and `mcuhome build <device> --generate-only`
-writes the Zephyr application for it — compiling that application is the
-next step.
+construction, and now goes end to end: `mcuhome validate <device>`
+checks a configuration and prints what it resolves to, and `mcuhome
+build <device>` generates the Zephyr application for it and compiles it
+into a flashable image, reporting where the image is and what it costs
+in flash and RAM. What is still missing is the builder container
+([ADR 0007](docs/adr/0007-containerized-toolchain.md)), so a build
+currently needs a local west workspace.
 The companion web interface lives in
 [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 
@@ -45,9 +48,9 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 |---|---|
 | `west.yml` | West manifest pinning Zephyr and modules |
 | `zephyr/module.yml` | Zephyr module definition (boards, DTS, snippets roots) |
-| `mcuhome/` | Python package: YAML config validation, codegen, builder CLI |
+| `mcuhome/` | Python package: YAML config validation, codegen, build orchestration, builder CLI |
 | `components/` | MCUHome components (Python schema + C sources side by side) |
-| `app/` | Placeholder application (later: codegen target) |
+| `app/` | The generic application main every generated device shares |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree Zephyr hardware support |
 | `snippets/` | Connectivity/device-class variants (wifi, thread-sed, …) |
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
@@ -66,17 +69,30 @@ mkdir mcuhome-workspace && cd mcuhome-workspace
 git clone https://github.com/mcu-home/mcuhome
 west init -l mcuhome
 west update
-west build -b native_sim mcuhome/app
 ```
 
 Requirements: Python ≥ 3.11, `west`, and the Zephyr SDK matching the pinned
 Zephyr release (v4.4.0). See the
 [Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
-for toolchain setup.
+for toolchain setup. Building a Matter node additionally needs `gn` and
+`zap` on `PATH` — the builder names them if they are missing, and the
+builder container will eventually provide them.
 
-The `native_sim` build above is only a module smoke test — no hardware
-involved. To see the framework actually run a Matter node, build the
-real sample instead:
+Then build a device from its YAML description:
+
+```sh
+pip install -e mcuhome
+mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+  --build-dir build/bmp180-node
+```
+
+That writes the generated Zephyr application to `build/bmp180-node/app`,
+compiles it, and prints the image path and its flash/RAM footprint.
+`--generate-only` stops after the generating half, which needs nothing
+but Python.
+
+To see the framework run without the builder in the picture, build the
+reference sample by hand:
 
 ```sh
 west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt mcuhome/samples/matter-node
@@ -84,7 +100,9 @@ west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt mcuhome/samples
 
 The `matter` and `debug-rtt` snippets are mandatory, not optional. See
 [samples/matter-node/README.md](samples/matter-node/README.md) for
-hardware prerequisites and wiring.
+hardware prerequisites and wiring. Note that `mcuhome/app` is *not* a
+buildable application — it holds the generic main the builder compiles
+into every generated device ([app/README.md](app/README.md)).
 
 ## Relationship to ESPHome
 
