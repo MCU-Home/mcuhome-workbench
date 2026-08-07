@@ -35,7 +35,9 @@ from mcuhome.generate import (
     APP_DIR,
     BOOTLOADER_IMAGE,
     CHIP_PROJECT_CONFIG_PATH,
+    DETACHED_SIGNING_CMAKE,
     MODEL_FILE,
+    SYSBUILD_CMAKE,
     SYSBUILD_CONF,
     SYSBUILD_DIR,
     board_file_stem,
@@ -62,6 +64,8 @@ HEADER_PATH = f"{APP_DIR}/src/mcuhome_config.h"
 CMAKE_PATH = f"{APP_DIR}/CMakeLists.txt"
 CHIP_CONFIG_PATH = f"{APP_DIR}/{CHIP_PROJECT_CONFIG_PATH}"
 SYSBUILD_PATH = f"{APP_DIR}/{SYSBUILD_CONF}"
+SYSBUILD_CMAKE_PATH = f"{APP_DIR}/{SYSBUILD_CMAKE}"
+DETACHED_SIGNING_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{DETACHED_SIGNING_CMAKE}"
 MCUBOOT_CONF_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf"
 MCUBOOT_OVERLAY_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay"
 
@@ -85,6 +89,8 @@ def test_the_tree_has_exactly_the_designed_artifacts() -> None:
             SOURCE_PATH,
             HEADER_PATH,
             SYSBUILD_PATH,
+            SYSBUILD_CMAKE_PATH,
+            DETACHED_SIGNING_PATH,
             MCUBOOT_CONF_PATH,
             MCUBOOT_OVERLAY_PATH,
             MODEL_FILE,

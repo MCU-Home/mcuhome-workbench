@@ -164,6 +164,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **MCUboot's demo key is never used** — its private half is published,
   so signing with it only looks like a signature.
 
+- **The builder's interface contract** (dashboard ADR 0011 decision 4 —
+  "Block 0"): everything a program embedding the builder needs, and every
+  one of those things improves the plain CLI as well.
+  - `mcuhome.api`, the supported programmatic surface and the only part
+    of the package covered by the SemVer promise: `open_config_tree`,
+    `find_device`, `load_model`, `validate_device` (which reports *every*
+    problem instead of raising on the first), `registry_data`,
+    `config_json_schema`, `read_manifest`. Everything else in the package
+    is an implementation detail.
+  - `ConfigError.to_dict()` and `error_dicts()`: message, file (relative
+    to the configuration tree), line, column, dotted key, hint and error
+    kind, so a validation error can arrive in an editor's gutter as a
+    marker rather than in a log pane as a line of text.
+  - `build-manifest.json` in every build directory
+    (`mcuhome/manifest.py`, builder-pipeline.md §7): device, versions,
+    board, per-image role/path/size/SHA-256, the snippets and job count
+    the build ran with, and the `imgtool` parameters the application is
+    signed with. Deterministic apart from the sizes and hashes it
+    measures; no timestamps, no host paths.
+  - `--json` on `validate` and `build`: one machine-readable document on
+    stdout instead of the human rendering (the build log moves to
+    stderr), errors in the same shape, exit codes unchanged.
+  - `mcuhome new <device> --board <target>`: a complete starter
+    configuration with a commented, working hardware example. It does not
+    draw commissioning credentials — it names `mcuhome init-pairing` as
+    the next step, because those are drawn once and a scaffold must be
+    repeatable.
+  - `mcuhome schema [config|registry]`: a JSON Schema for `main.yaml`
+    (editor validation and autocomplete) and the registry as data —
+    boards with their update scheme and ADR 0016 bootstrap instructions,
+    drivers keyed by `compatible`, clusters, device types, and the
+    "planned" tables with their reasons. Both are golden-tested, so
+    adding a board changes what a dashboard offers with no dashboard
+    release.
+- **Detached signing** (ADR 0015 decision 8, the ADR's §8 refinement):
+  `mcuhome build --no-sign --public-key <file>` compiles the bootloader
+  with the public key compiled into it and leaves the application
+  unsigned, so no private key ever has to be on the machine that
+  compiles; `mcuhome sign <build-dir>` applies the signature afterwards,
+  reading the `imgtool` parameters back out of the build manifest and
+  running the same tool with the same arguments Zephyr's own
+  `cmake/mcuboot.cmake` would have used. `mcuhome public-key` writes the
+  half that may travel. A detached build leaves nothing behind that looks
+  flashable and is not: no `zephyr.signed.*`, and no combined hex (which
+  sysbuild would fill with the *unsigned* application). Verified on the
+  real toolchain: the bootloader built from the public key alone is
+  **byte-identical** to the one built from the private key, and an
+  inline-signed and a detached-signed application agree in header,
+  payload, protected TLVs, image digest and key hash — differing only in
+  the ECDSA signature, which is randomized by construction.
+
 ### Changed
 
 - `mcuhome build` builds two images, not one (ADR 0015 decision 1): stage

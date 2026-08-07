@@ -58,16 +58,26 @@ from mcuhome.errors import BuildError
 __all__ = [
     "KEY_FILE",
     "KEY_VAR",
+    "PUBLIC_KEY_FILE",
     "SigningKey",
     "default_key_path",
     "generate_key_pem",
     "looks_like_p256_key",
+    "looks_like_p256_public_key",
+    "public_key_pem",
     "resolve_key_path",
     "signing_key",
 ]
 
 #: File name under the configuration directory.
 KEY_FILE = "signing.key"
+
+#: Conventional file name of the *public* half — the only part of the key
+#: pair that ever leaves the machine it was generated on. A build server
+#: needs it (MCUboot verifies against a public key compiled into the
+#: bootloader) and must never see the other half (ADR 0015 decision 8),
+#: which is what ``mcuhome build --no-sign --public-key`` is for.
+PUBLIC_KEY_FILE = "signing.pub"
 
 #: Overrides where the key lives. ``--signing-key`` beats it, it beats the
 #: XDG default. This is the knob a dashboard or an add-on sets once.
@@ -184,6 +194,109 @@ def _pem(label: str, der: bytes) -> str:
     return "\n".join([f"-----BEGIN {label}-----", *lines, f"-----END {label}-----", ""])
 
 
+def _der_elements(data: bytes) -> list[tuple[int, bytes]]:
+    """One level of DER, as ``(tag, contents)`` pairs.
+
+    Enough of a parser to walk a key file and not one byte more: the two
+    private-key spellings this module accepts are three elements deep,
+    and anything malformed falls out as an empty list rather than as an
+    exception the caller would have to distinguish from a real one.
+    """
+    elements: list[tuple[int, bytes]] = []
+    index = 0
+    while index + 1 < len(data):
+        tag = data[index]
+        length = data[index + 1]
+        index += 2
+        if length & 0x80:
+            count = length & 0x7F
+            if count == 0 or index + count > len(data):
+                break
+            length = int.from_bytes(data[index : index + count], "big")
+            index += count
+        if index + length > len(data):
+            break
+        elements.append((tag, data[index : index + length]))
+        index += length
+    return elements
+
+
+def _private_scalar(der: bytes) -> int | None:
+    """The private scalar of a PKCS#8 or SEC1 EC key, or None.
+
+    Recomputing the public point from the scalar rather than reading the
+    optional public half stored next to it is deliberate: the stored copy
+    is optional in both spellings, and a key file that disagrees with
+    itself would otherwise produce a bootloader that rejects every image
+    the same file signs.
+    """
+    for tag, payload in _der_elements(der):
+        if tag != 0x30:  # SEQUENCE
+            continue
+        items = _der_elements(payload)
+        if len(items) >= 3 and items[0][0] == 0x02 and items[1][0] == 0x30 and items[2][0] == 0x04:
+            # RFC 5208 PrivateKeyInfo: the ECPrivateKey is inside the
+            # OCTET STRING.
+            return _private_scalar(items[2][1])
+        if len(items) >= 2 and items[0][0] == 0x02 and items[1][0] == 0x04:
+            # RFC 5915 ECPrivateKey: version, then the scalar.
+            return int.from_bytes(items[1][1], "big")
+    return None
+
+
+def _pem_der(text: str, labels: tuple[str, ...]) -> bytes | None:
+    """The DER inside the first PEM block of *text* carrying one of *labels*."""
+    for label in labels:
+        begin = f"-----BEGIN {label}-----"
+        end = f"-----END {label}-----"
+        if begin not in text or end not in text:
+            continue
+        body = text.split(begin, 1)[1].split(end, 1)[0]
+        try:
+            return base64.b64decode("".join(body.split()), validate=True)
+        except (binascii.Error, ValueError):
+            return None
+    return None
+
+
+def public_key_pem(private_pem: str) -> str:
+    """The public half of a P-256 private key, as SubjectPublicKeyInfo PEM.
+
+    The file a build server is given (ADR 0015 decision 8): MCUboot
+    compiles the public key into the bootloader, and a builder that never
+    signs never needs the private half. Byte-for-byte the format
+    ``imgtool getpub -k <key> --output <file>`` writes in PEM mode, and
+    what ``openssl ec -pubout`` writes, so the file is interchangeable
+    with both.
+    """
+    der = _pem_der(private_pem, _PEM_LABELS)
+    scalar = None if der is None else _private_scalar(der)
+    if scalar is None or not 1 <= scalar < p256.N:
+        raise ValueError("not an ECDSA P-256 private key in PEM form")
+    point = p256.generator_times(scalar)
+    assert point is not None  # noqa: S101 - scalar is in [1, n-1], so is scalar*G
+    x, y = point
+    public = b"\x04" + x.to_bytes(p256.COORD_BYTES, "big") + y.to_bytes(p256.COORD_BYTES, "big")
+    # RFC 5280 SubjectPublicKeyInfo.
+    spki = _der(
+        0x30,
+        _der(0x30, _EC_PUBLIC_KEY_OID_DER + _P256_OID_DER) + _der(0x03, b"\x00" + public),
+    )
+    return _pem("PUBLIC KEY", spki)
+
+
+def looks_like_p256_public_key(text: str) -> bool:
+    """Whether *text* is a PEM **public** key on the P-256 curve.
+
+    The counterpart of :func:`looks_like_p256_key`, and the check a
+    ``--public-key`` argument gets: handing a *private* key to a build
+    server is the one mistake this feature exists to prevent, so it is
+    worth catching by shape before the file is mounted anywhere.
+    """
+    der = _pem_der(text, ("PUBLIC KEY",))
+    return der is not None and _P256_OID_DER in der
+
+
 def looks_like_p256_key(text: str) -> bool:
     """Whether *text* is a PEM private key on the P-256 curve.
 
@@ -193,18 +306,8 @@ def looks_like_p256_key(text: str) -> bool:
     key, a text file — and it needs no ASN.1 parser. Anything subtler is
     caught by imgtool, loudly, before an image is signed with it.
     """
-    for label in _PEM_LABELS:
-        begin = f"-----BEGIN {label}-----"
-        end = f"-----END {label}-----"
-        if begin not in text or end not in text:
-            continue
-        body = text.split(begin, 1)[1].split(end, 1)[0]
-        try:
-            der = base64.b64decode("".join(body.split()), validate=True)
-        except (binascii.Error, ValueError):
-            return False
-        return _P256_OID_DER in der
-    return False
+    der = _pem_der(text, _PEM_LABELS)
+    return der is not None and _P256_OID_DER in der
 
 
 # --------------------------------------------------------------------------

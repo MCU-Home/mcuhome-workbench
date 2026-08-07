@@ -317,11 +317,15 @@ def docker_run_command(
     hundreds of short-lived children and PID 1 has to reap them.
 
     *read_only_mounts* are single files rather than trees, and there is
-    exactly one today: the firmware signing key. It is mounted because
-    imgtool runs inside the container and read-only because nothing in
-    there has any business writing a key — the file itself stays where
-    :mod:`mcuhome.signing` put it, outside every repository and every
-    build directory.
+    exactly one today: the key file the build is given. On a normal build
+    that is the firmware signing key, mounted because imgtool runs inside
+    the container and read-only because nothing in there has any business
+    writing a key — the file itself stays where :mod:`mcuhome.signing`
+    put it, outside every repository and every build directory. On a
+    ``--no-sign`` build it is the *public* half instead, which the
+    bootloader compiles in and which nothing can sign with; that is the
+    whole point of ADR 0015 decision 8, and it is why the mount is a
+    single named file rather than a directory in either case.
     """
     argv = [docker, "run", "--rm", "--init"]
     if user is not None:
@@ -356,6 +360,7 @@ def plan_build(
     snippets: tuple[str, ...] = (),
     bootloader_snippets: tuple[str, ...] = (),
     signing_key: Path | None = None,
+    detached_signing: bool = False,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
     jobs: int,
@@ -387,6 +392,7 @@ def plan_build(
         snippets=snippets,
         bootloader_snippets=bootloader_snippets,
         signing_key=signing_key,
+        detached_signing=detached_signing,
         jobs=jobs,
         pristine=workspace.pristine_mode(build_dir),
     )

@@ -34,7 +34,18 @@ second — they are the fast half of the strategy in
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
 | `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the sysbuild command, per-image artifacts and memory reports |
 | `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
-| `test_cli.py` | command surface, exit codes, summary output |
+| `test_cli.py` | command surface, exit codes, summary output, `--json`, `new`/`sign`/`public-key`/`schema` |
+| `test_api.py` | the supported programmatic surface (`mcuhome.api`) and the serialized shape of an error |
+| `test_manifest.py` | `build-manifest.json`: its fields, its determinism, and the signing parameters it states |
+| `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
+| `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
+| `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that init-pairing then validate works on it |
+
+The one test that runs an external program is the detached-signing
+equivalence proof in `test_imgtool.py`, which invokes `imgtool` over a
+few kilobytes of synthetic image and skips itself where imgtool is not
+installed. That is signing, not building: it takes milliseconds and needs
+no toolchain.
 
 **No build ever runs here, docker never runs, and no test touches the
 developer's own signing key.** An autouse fixture in `conftest.py` points
@@ -58,7 +69,9 @@ running in a second.
 `data/golden/` holds the byte-exact expected device model, devicetree
 overlay, Kconfig fragment, application `CMakeLists.txt`,
 `CHIPProjectConfig.h` wrapper and the three sysbuild artifacts
-(`sysbuild.conf` plus the bootloader image's `.conf` and `.overlay`). The two generated C files are not
+(`sysbuild.conf` plus the bootloader image's `.conf` and `.overlay`),
+plus the two documents the builder exports as its contract with the
+dashboard — `registry.json` and `main.schema.json`. The two generated C files are not
 duplicated here: **the committed sample is the golden file** for those
 (ADR 0014), so `test_generate.py` compares fresh generator output against
 `samples/matter-node/src/mcuhome_config.{c,h}` directly.
@@ -91,6 +104,10 @@ cp /tmp/bmp180-node/app/sysbuild/mcuboot.conf \
    tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.conf
 cp /tmp/bmp180-node/app/sysbuild/mcuboot.overlay \
    tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.overlay
+
+# the two exported contract documents
+mcuhome schema config   -o tests_py/data/golden/main.schema.json
+mcuhome schema registry -o tests_py/data/golden/registry.json
 ```
 
 Regenerating the sample's C files is not optional bookkeeping: it is how

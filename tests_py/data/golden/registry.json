@@ -1,0 +1,301 @@
+{
+  "registry_version": 1,
+  "builder_version": "0.1.0.dev0",
+  "model_version": 1,
+  "boards": [
+    {
+      "name": "nrf7002dk/nrf5340/cpuapp",
+      "transports": [
+        "thread"
+      ],
+      "update_scheme": {
+        "board_class": "A",
+        "mcuboot_mode": "swap-using-offset",
+        "staging": "external-flash",
+        "recovery": [
+          "serial-recovery",
+          "boot-mode",
+          "button"
+        ],
+        "erase_block_size": 4096,
+        "write_block_size": 4,
+        "header_size": 512,
+        "signature_type": "ecdsa-p256",
+        "partitions": [
+          {
+            "label": "boot_partition",
+            "fixed_label": "mcuboot",
+            "device": null,
+            "offset": 0,
+            "size": 81920
+          },
+          {
+            "label": "slot0_partition",
+            "fixed_label": "image-0",
+            "device": null,
+            "offset": 81920,
+            "size": 933888
+          },
+          {
+            "label": "storage_partition",
+            "fixed_label": "storage",
+            "device": null,
+            "offset": 1015808,
+            "size": 32768
+          },
+          {
+            "label": "slot1_partition",
+            "fixed_label": "image-1",
+            "device": "mx25r64",
+            "offset": 0,
+            "size": 933888
+          }
+        ],
+        "application_snippets": [
+          "boot-mode"
+        ],
+        "bootloader_snippets": [
+          "boot-mode"
+        ]
+      },
+      "bootstrap": {
+        "mechanism": "debug-probe",
+        "state": "standard",
+        "artifact": "merged",
+        "steps": [
+          "Connect the kit's USB port marked nRF USB to this machine; the on-board J-Link enumerates as a debug probe.",
+          "Flash the combined hex from the build (the merged artifact of the build manifest) \u2014 it carries MCUboot and the signed application at their own offsets, so one write brings the board into the MCUHome standard state.",
+          "After this the board never needs the probe again: updates arrive over USB through MCUboot's serial recovery, and over the air once the device is commissioned."
+        ]
+      }
+    }
+  ],
+  "planned_boards": [
+    {
+      "name": "nrf52840dk/nrf52840",
+      "reason": "not brought up yet"
+    },
+    {
+      "name": "nrf52840dongle/nrf52840",
+      "reason": "brought up as a bare Matter node, but has no I2C bus broken out"
+    },
+    {
+      "name": "nrf54l15dk/nrf54l15/cpuapp",
+      "reason": "not brought up yet"
+    }
+  ],
+  "drivers": [
+    {
+      "compatible": "bosch,bmp180",
+      "bus": "i2c",
+      "fixed_address": 119,
+      "channels": [
+        {
+          "name": "temperature",
+          "quantity": "temperature"
+        },
+        {
+          "name": "pressure",
+          "quantity": "pressure"
+        }
+      ],
+      "properties": {
+        "osr-press": "int"
+      },
+      "kconfig": []
+    }
+  ],
+  "planned_drivers": [
+    {
+      "name": "bosch,bme680",
+      "reason": "the BME680/BME688 component lands with the next component batch"
+    },
+    {
+      "name": "gpio-key",
+      "reason": "input components need the event path"
+    },
+    {
+      "name": "gpio-led",
+      "reason": "actuator components need the channel write path"
+    },
+    {
+      "name": "gpio-output",
+      "reason": "actuator components need the channel write path"
+    },
+    {
+      "name": "rohm,bh1750",
+      "reason": "light sensors land with the next component batch"
+    },
+    {
+      "name": "sensirion,scd41",
+      "reason": "CO2 sensors land with the air-quality component batch"
+    },
+    {
+      "name": "sensirion,sht4x",
+      "reason": "temperature/humidity sensors land with the next component batch"
+    },
+    {
+      "name": "voltage-divider",
+      "reason": "battery monitoring lands with the power-management phase"
+    }
+  ],
+  "clusters": [
+    {
+      "name": "temperature_measurement",
+      "id": 1026,
+      "revision": 4,
+      "feature_map": 0,
+      "quantity": "temperature",
+      "unit": "\u00b0C",
+      "raw_per_unit": [
+        100,
+        1
+      ],
+      "default_range": [
+        -40.0,
+        125.0
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "measured_value",
+          "role": "measured_value",
+          "type": "int16s",
+          "nullable": true,
+          "writable": false
+        },
+        {
+          "id": 1,
+          "name": "min_measured_value",
+          "role": "min_measured_value",
+          "type": "int16s",
+          "nullable": false,
+          "writable": false
+        },
+        {
+          "id": 2,
+          "name": "max_measured_value",
+          "role": "max_measured_value",
+          "type": "int16s",
+          "nullable": false,
+          "writable": false
+        }
+      ]
+    },
+    {
+      "name": "pressure_measurement",
+      "id": 1027,
+      "revision": 3,
+      "feature_map": 0,
+      "quantity": "pressure",
+      "unit": "hPa",
+      "raw_per_unit": [
+        1,
+        1
+      ],
+      "default_range": [
+        300.0,
+        1100.0
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "measured_value",
+          "role": "measured_value",
+          "type": "int16s",
+          "nullable": true,
+          "writable": false
+        },
+        {
+          "id": 1,
+          "name": "min_measured_value",
+          "role": "min_measured_value",
+          "type": "int16s",
+          "nullable": false,
+          "writable": false
+        },
+        {
+          "id": 2,
+          "name": "max_measured_value",
+          "role": "max_measured_value",
+          "type": "int16s",
+          "nullable": false,
+          "writable": false
+        }
+      ]
+    }
+  ],
+  "planned_clusters": [
+    {
+      "name": "carbon_dioxide_measurement",
+      "reason": "air-quality sensing lands with the next sensor components"
+    },
+    {
+      "name": "illuminance_measurement",
+      "reason": "light sensing lands with the next sensor components"
+    },
+    {
+      "name": "level_control",
+      "reason": "actuator clusters need the write path, which the channel contract v1 does not have"
+    },
+    {
+      "name": "on_off",
+      "reason": "actuator clusters need the write path, which the channel contract v1 does not have"
+    },
+    {
+      "name": "relative_humidity_measurement",
+      "reason": "humidity support lands with the next sensor components"
+    }
+  ],
+  "device_types": [
+    {
+      "name": "temperature_sensor",
+      "id": 770,
+      "revision": 3,
+      "mandatory_clusters": [
+        "temperature_measurement"
+      ]
+    },
+    {
+      "name": "pressure_sensor",
+      "id": 773,
+      "revision": 2,
+      "mandatory_clusters": [
+        "pressure_measurement"
+      ]
+    }
+  ],
+  "planned_device_types": [
+    {
+      "name": "air_quality_sensor",
+      "reason": "needs the air-quality cluster set"
+    },
+    {
+      "name": "contact_sensor",
+      "reason": "needs the boolean_state cluster"
+    },
+    {
+      "name": "humidity_sensor",
+      "reason": "needs the relative_humidity_measurement cluster"
+    },
+    {
+      "name": "light_sensor",
+      "reason": "needs the illuminance_measurement cluster"
+    },
+    {
+      "name": "on_off_light",
+      "reason": "needs the on_off cluster and the actuator write path"
+    },
+    {
+      "name": "on_off_plug_in_unit",
+      "reason": "needs the on_off cluster and the actuator write path"
+    }
+  ],
+  "attribute_sizes": {
+    "bool": 1,
+    "int16s": 2,
+    "int16u": 2,
+    "int32s": 4,
+    "int32u": 4
+  }
+}

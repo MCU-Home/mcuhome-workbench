@@ -4,16 +4,37 @@
 
 ::
 
+    mcuhome new          <device>      # scaffold a device folder
     mcuhome validate     <device>      # stages 1-3, prints a summary
     mcuhome build        <device>      # stages 1-5
+    mcuhome sign         <build-dir>   # apply the signature afterwards
     mcuhome init-pairing <device>      # draw commissioning credentials
+    mcuhome public-key                 # the public half of the signing key
+    mcuhome schema       [what]        # the schema and the registry, as JSON
     mcuhome clean        <device|--all>
 
-``validate``, ``build`` and ``init-pairing`` are what this milestone
-implements; ``clean`` exists so the surface is stable and refuses cleanly
-rather than being missing. ``build`` compiles in the MCUHome builder image
-(ADR 0007, :mod:`mcuhome.container`); ``--native`` compiles on the host
-toolchain instead (:mod:`mcuhome.workspace`).
+``clean`` exists so the surface is stable and refuses cleanly rather than
+being missing; everything else is implemented. ``build`` compiles in the
+MCUHome builder image (ADR 0007, :mod:`mcuhome.container`); ``--native``
+compiles on the host toolchain instead (:mod:`mcuhome.workspace`).
+
+``validate`` and ``build`` take ``--json``, which replaces the whole
+human rendering with one machine-readable document on stdout — the
+resolved model or the build manifest on success, the errors of
+:meth:`~mcuhome.errors.ConfigError.to_dict` on failure. Exit codes are the
+same either way, and the build log still goes to stderr, so redirecting
+stdout into a file leaves both halves intact.
+
+``validate --json`` carries the **whole** canonical model, commissioning
+credentials included, exactly as ``device-model.json`` does: it is the
+output of stages 1-3 and a caller that asked for the model gets the
+model. ``build --json`` carries the build manifest, which has none — a
+manifest describes artifacts. Neither prints the human commissioning
+block, which exists for a person holding a device they just built.
+
+**This module is not an API.** Programs embed :mod:`mcuhome.api`, which
+is the supported surface; everything here is a command line, free to
+change its internals between releases.
 
 ``validate`` writes nothing at all. ``build`` writes only into its build
 directory, which is deliberately outside the configuration tree
@@ -29,19 +50,29 @@ tree, and it writes into exactly one file: the device's own
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
-from mcuhome import __version__, container, pairing, provision, registry, signing, workspace
+from mcuhome import (
+    __version__,
+    api,
+    container,
+    export,
+    imgtool,
+    pairing,
+    provision,
+    registry,
+    scaffold,
+    signing,
+    workspace,
+)
+from mcuhome import manifest as manifest_module
 from mcuhome import tree as tree_module
-from mcuhome.errors import MCUHomeError
+from mcuhome.errors import BuildError, ConfigError, MCUHomeError
 from mcuhome.generate import APP_DIR, write_tree
-from mcuhome.loader import load_config
 from mcuhome.model import DeviceModel, PairingModel
-from mcuhome.resolve import resolve
-from mcuhome.schema import parse_config
 from mcuhome.tree import ConfigTree, resolve_device
-from mcuhome.validate import validate
 
 __all__ = [
     "BUILD_DIR",
@@ -59,11 +90,13 @@ BUILD_DIR = "build"
 
 
 def load_device_model(entry: Path, *, tree: ConfigTree) -> DeviceModel:
-    """Run stages 1-3 on one device configuration."""
-    data = load_config(entry, secrets_file=tree.secrets_file)
-    config = parse_config(data, file=entry)
-    validate(config)
-    return resolve(config)
+    """Run stages 1-3 on one device configuration.
+
+    Kept as a name because the CLI is written in terms of it; the
+    implementation is :func:`mcuhome.api.load_model`, which is the
+    supported one.
+    """
+    return api.load_model(entry, tree=tree)
 
 
 # --------------------------------------------------------------------------
@@ -244,13 +277,25 @@ def format_flash_layout(board: str) -> str:
 # --------------------------------------------------------------------------
 
 
+def _print_json(data: object) -> None:
+    """The one place ``--json`` writes, so every document is shaped alike."""
+    print(json.dumps(data, indent=2))
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     tree, entry = resolve_device(args.device, config_root=args.config_root)
-    model = load_device_model(entry, tree=tree)
-    print(format_summary(model))
+    args.json_root = tree.root
+    result = api.validate_device(entry, tree=tree)
+    if getattr(args, "json", False):
+        _print_json(result.to_dict())
+        return 0 if result.ok else 1
+    if not result.ok:
+        result.raise_errors()
+    assert result.model is not None  # noqa: S101 - ok means there is one
+    print(format_summary(result.model))
     if args.verbose:
         print()
-        print(model.to_json(), end="")
+        print(result.model.to_json(), end="")
     print()
     print(f"{entry} is valid.")
     return 0
@@ -286,34 +331,107 @@ def _snippets_for(model: DeviceModel, extra: list[str] | None) -> tuple[str, ...
     return tuple(ordered)
 
 
+def _resolve_build_key(args: argparse.Namespace) -> tuple[Path, signing.SigningKey | None]:
+    """Which key file the build gets, and whether it is the private one.
+
+    Two shapes of the same argument (ADR 0015 decision 8). Normally it is
+    the user's own private key, generated on first need; with
+    ``--no-sign`` it is the **public** half, which is all the bootloader
+    needs and all a machine that must not be able to sign may have.
+    Either way it is resolved *before* the build: a missing or unusable
+    key is a refusal a user should get in a second, not ten minutes into
+    a Matter compile.
+    """
+    if not args.no_sign:
+        key = signing.signing_key(args.signing_key)
+        return key.path, key
+    if args.public_key is None:
+        raise BuildError(
+            "--no-sign needs the public half of your signing key (--public-key).",
+            hint=(
+                "MCUboot verifies against a public key compiled into the "
+                "bootloader, so a build that does not sign still has to be told "
+                "which key the signature will come from. Write yours out and pass "
+                "it:\n"
+                f"    mcuhome public-key -o {signing.PUBLIC_KEY_FILE}\n"
+                f"    mcuhome build <device> --no-sign --public-key {signing.PUBLIC_KEY_FILE}\n"
+                "The private half stays where it is; mcuhome sign applies the "
+                "signature afterwards."
+            ),
+        )
+    path = Path(args.public_key).expanduser()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise BuildError(
+            f"MCUHome cannot read the public key {path}: {error.strerror}.",
+            hint=f"write one with: mcuhome public-key -o {path}",
+        ) from error
+    except UnicodeDecodeError as error:
+        raise BuildError(
+            f"{path} is not a PEM public key.",
+            hint=f"write one with: mcuhome public-key -o {path}",
+        ) from error
+    if signing.looks_like_p256_key(text):
+        raise BuildError(
+            f"{path} is a private key, and --public-key wants the public half.",
+            hint=(
+                "the whole point of --no-sign is that the private key never "
+                "reaches the machine that builds (ADR 0015 decision 8). Write the "
+                "public half out and pass that:\n"
+                f"    mcuhome public-key --signing-key {path} -o {signing.PUBLIC_KEY_FILE}"
+            ),
+        )
+    if not signing.looks_like_p256_public_key(text):
+        raise BuildError(
+            f"{path} is not an ECDSA P-256 public key in PEM form.",
+            hint=(
+                "MCUHome signs with ECDSA P-256 (ADR 0015 decision 8). Write the "
+                "public half of your key with: mcuhome public-key -o <file>"
+            ),
+        )
+    return path, None
+
+
 def _cmd_build(args: argparse.Namespace) -> int:
     tree, entry = resolve_device(args.device, config_root=args.config_root)
+    args.json_root = tree.root
+    as_json = getattr(args, "json", False)
     model = load_device_model(entry, tree=tree)
 
     out_dir = args.build_dir or tree.root / BUILD_DIR / model.device.name
     written = write_tree(model, out_dir=out_dir, config_name=entry.name)
+    generated = [str(path.relative_to(out_dir)) for path in written]
 
-    print(f"Generated {len(written)} files for {model.device.name} in {out_dir}:")
-    for path in written:
-        print(f"  {path.relative_to(out_dir)}")
+    if not as_json:
+        print(f"Generated {len(written)} files for {model.device.name} in {out_dir}:")
+        for name in generated:
+            print(f"  {name}")
 
     if args.generate_only:
+        if as_json:
+            _print_json(
+                {
+                    "ok": True,
+                    "device": model.device.name,
+                    "build_dir": str(out_dir),
+                    "generated": generated,
+                    "manifest": None,
+                }
+            )
+            return 0
         _print_commissioning(model)
         return 0
 
     snippets = _snippets_for(model, args.snippet)
     scheme = _update_scheme_of(model)
-    # Every image is signed with the user's own key, generated on first
-    # need outside every repository and build directory (ADR 0015
-    # decision 8). Resolved before the build rather than during it: a
-    # missing or unusable key is a refusal a user should get in a second,
-    # not ten minutes into a Matter compile.
-    key = signing.signing_key(args.signing_key)
+    key_path, key = _resolve_build_key(args)
     # The single resolution point (workspace.resolve_jobs): --jobs beats
     # MCUHOME_JOBS beats auto-detection. Resolved once, here, on the host —
     # the container path needs the same number for its own docker run, not
     # a second guess made from inside the container.
     resolved_jobs = workspace.resolve_jobs(cli_jobs=args.jobs)
+    bootloader_snippets = () if scheme is None else scheme.bootloader_snippets
     # Absolute from here on: the build runs with the workspace top
     # directory as its working directory (that is how west finds the
     # manifest), so a relative --build-dir would land somewhere else
@@ -324,8 +442,9 @@ def _cmd_build(args: argparse.Namespace) -> int:
         "app_subdir": APP_DIR,
         "board": model.device.board,
         "snippets": snippets,
-        "bootloader_snippets": () if scheme is None else scheme.bootloader_snippets,
-        "signing_key": key.path,
+        "bootloader_snippets": bootloader_snippets,
+        "signing_key": key_path,
+        "detached_signing": args.no_sign,
         "jobs": resolved_jobs.value,
     }
     # ADR 0007: the container is the build environment, --native is the
@@ -335,23 +454,58 @@ def _cmd_build(args: argparse.Namespace) -> int:
     else:
         plan = container.plan_build(**common, image=args.image)
 
-    print()
-    print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
-    if plan.image:
-        print(f"  in {plan.image}")
-    print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
-    print(_signing_key_note(key))
-    print(f"  {' '.join(plan.command)}")
-    print()
+    if not as_json:
+        print()
+        print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
+        if plan.image:
+            print(f"  in {plan.image}")
+        print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
+        print(_signing_key_note(key) if key is not None else _detached_key_note(key_path))
+        print(f"  {' '.join(plan.command)}")
+        print()
     # The build log is written by a subprocess to the same terminal; flush
     # so the header above it is not still sitting in this process's buffer.
     sys.stdout.flush()
 
-    code, log = workspace.run_build(plan)
+    # In --json mode the compiler's own output would break the document,
+    # so it goes to stderr — where a log belongs anyway, and where a
+    # caller redirecting stdout into a file still sees progress.
+    code, log = workspace.run_build(plan, stream=sys.stderr if as_json else None)
     if code != 0:
         raise workspace.refuse_failed_build(code, build_dir=plan.build_dir)
 
+    if args.no_sign:
+        _drop_unsigned_lookalikes(plan.build_dir, app_image=plan.app_dir.name)
+
     images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
+    merged = workspace.merged_image(plan.build_dir)
+    manifest = manifest_module.build_manifest(
+        model,
+        out_dir=out_dir.resolve(),
+        build_dir=plan.build_dir,
+        app_image=plan.app_dir.name,
+        images=images,
+        snippets=snippets,
+        bootloader_snippets=bootloader_snippets,
+        jobs=resolved_jobs.value,
+        signed_by_the_build=not args.no_sign,
+        merged=merged,
+    )
+    manifest_path = manifest_module.write_manifest(manifest, out_dir=out_dir.resolve())
+
+    if as_json:
+        _print_json(
+            {
+                "ok": True,
+                "device": model.device.name,
+                "build_dir": str(out_dir),
+                "generated": generated,
+                "manifest_path": str(manifest_path),
+                "manifest": manifest.to_dict(),
+            }
+        )
+        return 0
+
     print()
     print(
         format_build_summary(
@@ -360,15 +514,50 @@ def _cmd_build(args: argparse.Namespace) -> int:
             memory=workspace.parse_image_memory_report(
                 log, images=[image.name for image in images]
             ),
-            merged=workspace.merged_image(plan.build_dir),
+            merged=merged,
         )
     )
+    print(f"  {manifest_path}")
     layout = format_flash_layout(model.device.board)
     if layout:
         print()
         print(layout)
+    if args.no_sign:
+        print()
+        print(_detached_next_step(out_dir))
     _print_commissioning(model)
     return 0
+
+
+def _drop_unsigned_lookalikes(build_dir: Path, *, app_image: str) -> None:
+    """Remove files a detached build must not leave behind.
+
+    Two kinds, both named as though they were bootable and neither of
+    them signed: a ``zephyr.signed.*`` left over from an earlier inline
+    build of the same directory, and sysbuild's combined hex, which falls
+    back to the *unsigned* application when there is no signed one to
+    merge. Deleting them is not tidiness — it is the difference between
+    "no flashable file yet" and "a flashable file that bricks the boot",
+    and ``mcuhome sign`` is one command away from producing the real one.
+    """
+    output = build_dir / app_image / "zephyr"
+    for name in (
+        "zephyr.signed.bin",
+        "zephyr.signed.hex",
+        "zephyr.signed.confirmed.bin",
+        "zephyr.signed.confirmed.hex",
+    ):
+        (output / name).unlink(missing_ok=True)
+    for merged in build_dir.glob(workspace.MERGED_IMAGE_GLOB):
+        merged.unlink(missing_ok=True)
+
+
+def _detached_next_step(out_dir: Path) -> str:
+    return (
+        "This build is UNSIGNED, and MCUboot boots nothing it cannot verify.\n"
+        "Sign it where your private key is:\n"
+        f"    mcuhome sign {out_dir}"
+    )
 
 
 def _update_scheme_of(model: DeviceModel) -> registry.UpdateSchemeDef | None:
@@ -393,6 +582,15 @@ def _signing_key_note(key: signing.SigningKey) -> str:
         "               device bootstrapped with it only accepts firmware signed "
         "with it,\n"
         "               and replacing it means bootstrapping those devices again."
+    )
+
+
+def _detached_key_note(path: Path) -> str:
+    """Where the *public* key came from, and what it does not let happen."""
+    return (
+        f"  public key  {path}\n"
+        "              --no-sign: the bootloader gets this, the application is\n"
+        "              left unsigned, and no private key is anywhere near this build."
     )
 
 
@@ -434,6 +632,99 @@ def _pairing_model(credentials: pairing.Pairing) -> PairingModel:
         iterations=credentials.iterations,
         test_credentials=credentials.test_credentials,
     )
+
+
+def _cmd_new(args: argparse.Namespace) -> int:
+    created = scaffold.new_device(args.device, board=args.board, config_root=args.config_root)
+    if created.created_tree:
+        print(f"Started a configuration tree in {created.tree.root}.")
+    print(f"Wrote {created.entry}.")
+    print()
+    print("Next:")
+    print(f"  mcuhome init-pairing {created.name}    draw this device's commissioning codes")
+    print(f"  mcuhome validate {created.name}        see what it resolves to")
+    print(f"  mcuhome build {created.name}           compile it")
+    print()
+    print(
+        "The configuration has no hardware in it yet — the file carries a complete, "
+        "commented\nexample to uncomment and adjust."
+    )
+    return 0
+
+
+def _cmd_sign(args: argparse.Namespace) -> int:
+    plan = imgtool.sign_build(Path(args.target), key=args.signing_key)
+    data = manifest_module.record_signature(
+        manifest_module.read_manifest(plan.manifest_path),
+        out_dir=plan.out_dir,
+        files=plan.outputs,
+    )
+    manifest_module.dump_manifest(data, out_dir=plan.out_dir)
+    print(f"Signed the application image of {plan.out_dir} with {plan.key}:")
+    for path in plan.outputs:
+        print(f"  {path}")
+    print()
+    print(
+        f"imgtool sign --version {plan.parameters.version} "
+        f"--header-size {plan.parameters.header_size} "
+        f"--slot-size {plan.parameters.slot_size} --align {plan.parameters.align}\n"
+        "  — the parameters the build manifest states, which are the ones the build "
+        "would have\n    used itself."
+    )
+    if data.get("merged") is None:
+        print()
+        print(
+            "There is no combined hex for a full-chip flash: a --no-sign build does "
+            "not write\none, because sysbuild would fill it with the unsigned "
+            "application. Install the\nbootloader and the signed application above "
+            "separately, or build with signing on."
+        )
+    return 0
+
+
+def _cmd_public_key(args: argparse.Namespace) -> int:
+    key = signing.signing_key(args.signing_key, create=False)
+    pem = signing.public_key_pem(key.path.read_text(encoding="utf-8"))
+    if args.output is None:
+        print(pem, end="")
+        return 0
+    output = Path(args.output).expanduser()
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(pem, encoding="utf-8")
+    except OSError as error:
+        raise ConfigError(
+            f"MCUHome cannot write {output}: {error.strerror}.",
+            hint="pick a writable location",
+        ) from error
+    print(f"Wrote the public half of {key.path} to {output}.")
+    print("It is not a secret: it is what a build server needs and all it may have.")
+    return 0
+
+
+#: What ``mcuhome schema`` can emit, and what produces it.
+SCHEMA_EXPORTS = {
+    "config": export.config_json_schema,
+    "registry": export.registry_data,
+}
+
+
+def _cmd_schema(args: argparse.Namespace) -> int:
+    text = export.to_json(SCHEMA_EXPORTS[args.what]())
+    if args.output is None:
+        print(text, end="")
+        return 0
+    output = Path(args.output).expanduser()
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
+    except OSError as error:
+        raise ConfigError(
+            f"MCUHome cannot write {output}: {error.strerror}.",
+            hint="pick a writable location",
+        ) from error
+    print(f"Wrote the {args.what} document to {output}.")
+    return 0
 
 
 def _cmd_clean(args: argparse.Namespace) -> int:
@@ -480,12 +771,41 @@ def build_parser() -> argparse.ArgumentParser:
             help="also print the resolved device model",
         )
 
+    def add_json_option(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument(
+            "--json",
+            action="store_true",
+            help=(
+                "print one machine-readable document on stdout instead of the "
+                "human summary; errors come out the same way and exit codes do "
+                "not change (validate emits the resolved model, build the build "
+                "manifest; the build log goes to stderr)"
+            ),
+        )
+
+    new_parser = subparsers.add_parser(
+        "new", help="create a new device folder with a starter configuration"
+    )
+    new_parser.add_argument("device", help="device name; it becomes the folder and the hostname")
+    new_parser.add_argument(
+        "--board",
+        required=True,
+        metavar="TARGET",
+        help=(
+            "Zephyr board target this device runs on, verbatim "
+            f"(supported today: {', '.join(sorted(registry.BOARDS))})"
+        ),
+    )
+    add_common_options(new_parser)
+    new_parser.set_defaults(func=_cmd_new)
+
     validate_parser = subparsers.add_parser(
         "validate", help="check a device configuration and print what it resolves to"
     )
     validate_parser.add_argument(
         "device", help="device folder name, or the path of a device folder or YAML file"
     )
+    add_json_option(validate_parser)
     add_common_options(validate_parser)
     validate_parser.set_defaults(func=_cmd_validate)
 
@@ -547,6 +867,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     build_parser_.add_argument(
+        "--no-sign",
+        action="store_true",
+        help=(
+            "build the application UNSIGNED and record the signing parameters in "
+            "the build manifest, so that the private key never has to be on the "
+            "machine that compiles (ADR 0015 decision 8); needs --public-key, and "
+            "mcuhome sign applies the signature afterwards"
+        ),
+    )
+    build_parser_.add_argument(
+        "--public-key",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "public half of the signing key, compiled into the bootloader "
+            "(required with --no-sign; write one with mcuhome public-key)"
+        ),
+    )
+    build_parser_.add_argument(
         "--jobs",
         type=_positive_int,
         default=None,
@@ -557,8 +897,77 @@ def build_parser() -> argparse.ArgumentParser:
             "--jobs overrides both)"
         ),
     )
+    add_json_option(build_parser_)
     add_common_options(build_parser_)
     build_parser_.set_defaults(func=_cmd_build)
+
+    sign_parser = subparsers.add_parser(
+        "sign", help="sign the application image of a finished build"
+    )
+    sign_parser.add_argument(
+        "target",
+        help=f"build directory, or the {manifest_module.MANIFEST_FILE} inside one",
+    )
+    sign_parser.add_argument(
+        "--signing-key",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "ECDSA P-256 private key to sign with (default: "
+            f"{signing.default_key_path()}; the {signing.KEY_VAR} environment "
+            "variable sets it too). Never generated here: a build has to be signed "
+            "with the key its device's bootloader already carries."
+        ),
+    )
+    add_common_options(sign_parser)
+    sign_parser.set_defaults(func=_cmd_sign)
+
+    public_key_parser = subparsers.add_parser(
+        "public-key", help="print the public half of the firmware signing key"
+    )
+    public_key_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write it to a file instead of stdout",
+    )
+    public_key_parser.add_argument(
+        "--signing-key",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"which key to take the public half of (default: {signing.default_key_path()})",
+    )
+    add_common_options(public_key_parser)
+    public_key_parser.set_defaults(func=_cmd_public_key)
+
+    schema_parser = subparsers.add_parser(
+        "schema", help="print the configuration JSON Schema, or the registry, as JSON"
+    )
+    schema_parser.add_argument(
+        "what",
+        nargs="?",
+        default="config",
+        choices=sorted(SCHEMA_EXPORTS),
+        help=(
+            "config: a JSON Schema for main.yaml, for editor validation and "
+            "autocomplete. registry: the boards, drivers, clusters and device "
+            "types MCUHome knows, as data"
+        ),
+    )
+    schema_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write it to a file instead of stdout",
+    )
+    add_common_options(schema_parser)
+    schema_parser.set_defaults(func=_cmd_schema)
 
     init_parser = subparsers.add_parser(
         "init-pairing",
@@ -607,6 +1016,15 @@ def main(argv: list[str] | None = None) -> int:
         # above the output it refers to. Only stdout is buffered when it is
         # a pipe, so flushing it here is what keeps the order right.
         sys.stdout.flush()
+        if getattr(args, "json", False):
+            # The same document shape as a successful --json run, so a
+            # caller parses one thing and reads `ok`. The tree root, when
+            # the command got as far as resolving one, is what makes the
+            # file paths tree-relative rather than this machine's.
+            _print_json(
+                {"ok": False, "errors": error.to_dicts(root=getattr(args, "json_root", None))}
+            )
+            return 1
         print(error.render(), file=sys.stderr)
         return 1
 

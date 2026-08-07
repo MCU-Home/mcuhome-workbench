@@ -71,6 +71,12 @@ testpaths = ["tests_py"]
 # Domain vocabulary codespell would "correct" into errors: OTA Requestor
 # is the Matter specification's own cluster name, PASE/OT are protocol
 # names, rsource is Kconfig syntax.
+#
+# The generated .matter IDL is skipped: ZAP writes it from CHIP's own
+# cluster XML, spelling mistakes included, and it is regenerated per
+# release — so a fix here would be undone by the next regeneration and
+# belongs upstream instead.
 [tool.codespell]
 ignore-words-list = "requestor,pase,ot,rsource"
+skip = "./components/matter/zap/*.matter"
 

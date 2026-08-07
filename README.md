@@ -108,6 +108,77 @@ per job and never exceeds the core count) — `MCUHOME_JOBS=N` overrides
 the auto-detection, `--jobs N` overrides both, and it applies inside the
 builder container too, resolved on the host before `docker run`.
 
+### Starting a device from nothing
+
+```sh
+mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
+mcuhome init-pairing bedroom-climate      # this device's commissioning codes
+mcuhome validate bedroom-climate
+```
+
+`mcuhome new` writes `devices/bedroom-climate/main.yaml` — a complete
+configuration with a commented, working hardware example to uncomment.
+It never draws commissioning credentials itself: those are drawn once,
+by their own command, so that every build of a device is byte-identical
+(`docs/design/yaml-schema.md` §4.1).
+
+### Signing where the key is, building where the CPU is
+
+Every image is signed with your own key
+([ADR 0015](docs/adr/0015-update-and-partition-architecture.md) decision 8).
+Normally that happens during the build. When the machine that compiles
+is not the machine that owns the key — a build server, or the future
+dashboard's build App — the two are separated:
+
+```sh
+mcuhome public-key -o signing.pub          # the half that may travel
+mcuhome build <device> --no-sign --public-key signing.pub
+mcuhome sign build/<device>                # where the private key is
+```
+
+The unsigned build compiles the bootloader with the public key in it and
+leaves the application unsigned, and writes `build-manifest.json` stating
+the exact `imgtool` parameters (`--version`, `--header-size`,
+`--slot-size`, `--align`). `mcuhome sign` reads them back and runs the
+same tool with the same arguments — the result is the same image, and
+`--no-sign` deliberately leaves no file behind that looks flashable and
+is not.
+
+### Machine-readable output
+
+```sh
+mcuhome validate <device> --json    # the resolved model, or the errors
+mcuhome build    <device> --json    # the build manifest (log on stderr)
+mcuhome schema                      # JSON Schema for main.yaml
+mcuhome schema registry             # boards, drivers, clusters, device types
+```
+
+### Using the builder from Python
+
+`mcuhome.api` is the supported programmatic surface, and the only part of
+the package covered by the SemVer promise of
+[ADR 0005](docs/adr/0005-semver-and-conventional-commits.md):
+
+```python
+from mcuhome import api
+
+tree, entry = api.find_device("bedroom-climate", config_root=root)
+result = api.validate_device(entry, tree=tree)
+if result.ok:
+    model = result.model  # the canonical device model
+else:
+    # message, file, line, column, key, hint, kind
+    for problem in result.error_dicts():
+        print(problem["message"])
+```
+
+`validate_device` reports **every** problem rather than raising on the
+first, which is what lets an editor show a whole configuration's markers
+in one pass. `api.registry_data()` and `api.config_json_schema()` are the
+same documents `mcuhome schema` prints; `api.read_manifest()` loads a
+build manifest. Everything else in the package is an implementation
+detail and may change between releases.
+
 To see the framework run without the builder in the picture, build the
 reference sample by hand:
 

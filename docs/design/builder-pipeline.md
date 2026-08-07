@@ -194,10 +194,57 @@ sysbuild each image has its own sub-directory of the build tree
 | `build-manifest.json` | — | device model + versions + image hashes — consumed by the dashboard |
 | `memory-report.txt` | per image | ROM/RAM footprint — regression tracking |
 
+**`build-manifest.json` is implemented** (`mcuhome/manifest.py`). It sits
+at the top of the build directory next to `device-model.json`, and every
+path in it is relative to that directory, because a manifest crosses a
+network (§6). It carries the device name, board and model version, the
+builder's version, the snippets and job count the build ran with, one
+entry per image (role, files, size, SHA-256 per file), the combined hex,
+and a `signing` block: the `imgtool` arguments — `--version`,
+`--header-size`, `--slot-size`, `--align` — under imgtool's own option
+names, the input and output artifact of each format, and two booleans,
+`signed_by_the_build` (how the build ran, never changes) and `signed`
+(whether a signature exists in the directory now). Three of the four
+signing arguments come from the board's registry entry, which is the same
+partition table stage 4 rendered into the overlay; the fourth,
+`--version`, is read out of the built application's Kconfig. The document
+is deterministic apart from the sizes and hashes it measures: no
+timestamps, no host names, no absolute paths.
+
+`ota.bin` and `memory-report.txt` are still to come; the memory figures
+are reported to the terminal today and carried per image in the manifest
+as `flash_bytes`.
+
 The unsigned `zephyr.bin` is kept as well, and not only for the memory
 report: signing is a detached `imgtool` step over the finished binary, so
 a remote builder returns the unsigned image and the signature is applied
-where the key is (ADR 0015 decision 8).
+where the key is (ADR 0015 decision 8). **That path is implemented too**:
+`mcuhome build --no-sign --public-key <file>` gives sysbuild the public
+half of the key pair — enough for MCUboot, which compiles the public key
+in, and useless for signing — and the generated tree's `sysbuild.cmake`
+clears the application image's key setting, which makes Zephyr's
+`cmake/mcuboot.cmake` skip signing entirely rather than write an unsigned
+file with `signed` in its name. `mcuhome sign <build dir>` then runs
+`imgtool` with the manifest's parameters, wherever the private key is.
+Such a build deliberately leaves no `merged_*.hex` behind either:
+sysbuild fills it with the *unsigned* application when there is no signed
+one, which would be a file that looks flashable and bricks the boot.
+
+Equivalence between the two paths is "byte-identical image, different
+signature", and that is the strongest statement available: ECDSA draws a
+fresh random nonce per signature, so two signings of the same bytes with
+the same key differ in the signature TLV (occasionally in its length) and
+in nothing else. `tests_py/test_imgtool.py` asserts exactly that —
+header, payload, protected TLVs and the SHA-256 over all of them equal,
+signature different, both verifying.
+
+Measured once on the real toolchain (nRF7002-DK, the BMP180 example, one
+build directory built both ways): the **bootloader is byte-identical**
+whether sysbuild is given the private key or only its public half, and
+the two signed applications agree in header (512 B), payload
+(564,396 B), flags, protected TLVs, image digest and key hash, differing
+only in the ECDSA signature — 71 bytes against 72, which is the DER
+length of a random nonce.
 
 Flashing UX (`mcuhome flash`, browser-based flashing from the dashboard)
 is its own later design; the artifacts above are designed so both work.
@@ -205,9 +252,13 @@ is its own later design; the artifacts above are designed so both work.
 ## 8. CLI surface (v0.1)
 
 ```
+mcuhome new          <device>      # scaffold a device folder from a board
 mcuhome validate     <device>      # stages 1–3, prints resolved summary
 mcuhome build        <device>      # stages 1–5
+mcuhome sign         <build-dir>   # apply the signature detached (§7)
 mcuhome init-pairing <device>      # draw commissioning credentials, once
+mcuhome public-key                 # the public half of the signing key
+mcuhome schema       [config|registry]   # the contract, as JSON
 mcuhome clean        <device|--all>
 ```
 
@@ -225,6 +276,22 @@ the tree's `secrets.yaml` — and every build after that is deterministic
 input in, deterministic bytes out (yaml-schema.md §4.1).
 `validate`/`build` print the resulting pairing codes and store them
 nowhere.
+
+`new` is the other end of the same rule: it writes a device's first
+`main.yaml` and deliberately does *not* draw its credentials, so that
+re-running it after a mistake cannot silently invalidate every controller
+that already knows the device. It prints `init-pairing` as the next step
+instead.
+
+`validate` and `build` take `--json`, which replaces the human rendering
+with one machine-readable document on stdout — the canonical model or the
+build manifest, and on failure the errors of `ConfigError.to_dict()`
+(message, tree-relative file, line, column, dotted key, hint, kind). Exit
+codes do not change; the build log moves to stderr. `mcuhome schema`
+emits the two documents a consumer needs statically: a JSON Schema for
+`main.yaml` and the registry as data. All of it is also reachable in
+process through `mcuhome.api`, which is the supported programmatic
+surface (dashboard ADR 0011 decision 1).
 
 ## 9. Testing strategy
 
@@ -244,6 +311,6 @@ nowhere.
 | Dynamic endpoints vs ZAP fallback | Prototype first, then ADR (§4) |
 | Build-server API details (auth, secrets transport) | Own design doc, pre-dashboard |
 | Flashing UX (CLI + browser) | Own design doc |
-| device-model.json schema versioning | Fixed with first dashboard consumption |
+| device-model.json schema versioning | **Closed.** `MODEL_VERSION` is 1 and is a published contract: the dashboard sends one version, a build server advertises the range it supports, a mismatch is a refusal (dashboard ADR 0007 decision 4) |
 | Builder image layout/registry | Decided with the first image (`containers/builder/`): Debian 13 base, tools only, `ghcr.io/mcu-home/builder:zephyr-<line>-r<rev>` |
 | `mcuhome migrate` (ESPHome import) | Later milestone (ADR 0009) |

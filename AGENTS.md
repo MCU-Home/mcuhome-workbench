@@ -111,6 +111,19 @@ pytest
 # Check one device configuration with the builder
 mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
+# The machine-readable surface (dashboard ADR 0011 "Block 0"): --json on
+# validate/build, the registry and the main.yaml JSON Schema as data, and
+# a scaffold for a new device. `mcuhome.api` is the same thing in process.
+mcuhome validate <device> --json
+mcuhome schema registry
+mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
+
+# Detached signing (ADR 0015 decision 8): compile without the private key,
+# sign where the key is. build-manifest.json carries the imgtool parameters.
+mcuhome public-key -o signing.pub
+mcuhome build <device> --no-sign --public-key signing.pub
+mcuhome sign build/<device>
+
 # Generate the Zephyr application for it and stop (stage 4)
 mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir /tmp/bmp180-node --generate-only

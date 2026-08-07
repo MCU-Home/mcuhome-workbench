@@ -20,6 +20,22 @@ Rendered shape (stable; asserted by the test suite)::
 
 A user must never see a Python traceback: the CLI catches everything
 derived from :class:`MCUHomeError` and prints the rendering above.
+
+**Serialized shape (stable; part of the public API of** :mod:`mcuhome.api`
+**).** :meth:`ConfigError.to_dict` answers the same three questions as
+fields rather than as prose, for a caller that puts them in an editor's
+gutter instead of on a terminal::
+
+    {"message": ..., "file": ..., "line": ..., "column": ...,
+     "key": ..., "hint": ..., "kind": ...}
+
+``file`` is rendered **relative to the configuration tree** when a root
+is given, because that is how an editor addresses a file and because an
+absolute server-side path is more than a browser needs to know. ``kind``
+is the error class name, so a consumer can tell "your configuration is
+wrong" from "the build could not start" without parsing the message.
+:func:`error_dicts` flattens whatever was raised — one error or a whole
+:class:`ConfigErrorGroup` — into a list of them.
 """
 
 from __future__ import annotations
@@ -27,6 +43,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "BuildError",
@@ -36,6 +53,7 @@ __all__ = [
     "GenerationError",
     "Location",
     "MCUHomeError",
+    "error_dicts",
 ]
 
 
@@ -82,12 +100,54 @@ class Location:
     def sort_key(self) -> tuple[str, int, int]:
         return (str(self.file or ""), self.line or 0, self.column or 0)
 
+    def relative_file(self, root: Path | None = None) -> str | None:
+        """:attr:`file` as the configuration tree addresses it.
+
+        Inside *root* this is the tree-relative path — what an editor
+        opens a buffer by, and all a caller on the other side of a
+        network connection has any business learning about the server's
+        filesystem. Outside it (or without a root) the path is rendered
+        as it is, because a wrong-looking absolute path is still more
+        useful than ``None``.
+        """
+        if self.file is None:
+            return None
+        if root is not None:
+            try:
+                return str(Path(self.file).resolve().relative_to(Path(root).resolve()))
+            except (ValueError, OSError):
+                pass
+        return str(self.file)
+
 
 class MCUHomeError(Exception):
     """Base class for every error the CLI is allowed to show to a user."""
 
     def render(self) -> str:  # pragma: no cover - overridden everywhere
         return str(self)
+
+    def to_dict(self, *, root: Path | None = None) -> dict[str, Any]:
+        """This error as the serialized shape of the module docstring.
+
+        The base implementation is the "no location" case: an error the
+        builder raised without a configuration file to point at. It still
+        carries a message a user is meant to read, which is the whole
+        difference between this and a traceback.
+        """
+        del root  # nothing to make relative
+        return {
+            "message": str(self),
+            "file": None,
+            "line": None,
+            "column": None,
+            "key": None,
+            "hint": None,
+            "kind": type(self).__name__,
+        }
+
+    def to_dicts(self, *, root: Path | None = None) -> list[dict[str, Any]]:
+        """Every problem this exception carries, as dictionaries."""
+        return [self.to_dict(root=root)]
 
 
 class ConfigError(MCUHomeError):
@@ -113,6 +173,23 @@ class ConfigError(MCUHomeError):
         if self.hint:
             lines.append(f"  Fix: {self.hint}")
         return "\n".join(lines)
+
+    def to_dict(self, *, root: Path | None = None) -> dict[str, Any]:
+        """The three questions of this module, as fields.
+
+        ``message`` alone, deliberately: ``str(self)`` is the rendered
+        three-line form, which is the terminal's answer and not this
+        one's. A caller that wants the rendering calls :meth:`render`.
+        """
+        return {
+            "message": self.message,
+            "file": self.location.relative_file(root),
+            "line": self.location.line,
+            "column": self.location.column,
+            "key": self.location.key,
+            "hint": self.hint,
+            "kind": type(self).__name__,
+        }
 
     def __str__(self) -> str:
         return self.render()
@@ -167,8 +244,37 @@ class ConfigErrorGroup(MCUHomeError):
         noun = "problem" if count == 1 else "problems"
         return f"{body}\n\n{count} {noun} found."
 
+    def to_dicts(self, *, root: Path | None = None) -> list[dict[str, Any]]:
+        """Every problem in the group, in the file order it reports them in.
+
+        One pass, all markers — which is the point of collecting them
+        rather than stopping at the first, and the reason an editor can
+        show a whole configuration's problems at once.
+        """
+        return [error.to_dict(root=root) for error in self.errors]
+
+    def to_dict(self, *, root: Path | None = None) -> dict[str, Any]:
+        """The first problem of the group.
+
+        A group is a list, so :meth:`to_dicts` is what a caller wants.
+        This exists so that the single-error shape is defined for every
+        error type rather than for most of them.
+        """
+        return self.errors[0].to_dict(root=root)
+
     def __str__(self) -> str:
         return self.render()
+
+
+def error_dicts(exc: MCUHomeError, *, root: Path | None = None) -> list[dict[str, Any]]:
+    """Flatten whatever the builder raised into a list of diagnostics.
+
+    The group-flattening half of the serialized shape: validation
+    deliberately reports every problem it found rather than the first
+    (:class:`ConfigErrorGroup`), and a caller collecting diagnostics
+    wants one list either way.
+    """
+    return exc.to_dicts(root=root)
 
 
 @dataclass

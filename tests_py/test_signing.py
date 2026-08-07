@@ -21,6 +21,10 @@ import pytest
 from mcuhome import p256, signing
 from mcuhome.errors import BuildError
 
+#: One key the suite can compare bytes against, so nothing here draws a
+#: random one and nothing here goes near the developer's own.
+KNOWN_SCALAR = 0x0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20
+
 #: A foreign fixture, in the sense of tests_py/README.md: this is the
 #: literal output of ``imgtool keygen -t ecdsa-p256`` from the pinned
 #: MCUboot checkout, not of anything in this package. It is what makes
@@ -243,3 +247,54 @@ def test_no_refusal_ever_prints_the_key(tmp_path) -> None:
         signing.signing_key(path)
     rendered = caught.value.render()
     assert "MIGHAgEAMBMGByqGSM49" not in rendered
+
+
+# --------------------------------------------------------------------------
+# The public half (ADR 0015 decision 8, detached signing)
+# --------------------------------------------------------------------------
+
+
+def test_the_public_half_is_derived_from_the_scalar() -> None:
+    """Recomputed, never read out of the file's optional copy.
+
+    A key file that disagrees with itself would otherwise produce a
+    bootloader that rejects every image the same file signs.
+    """
+    pem = signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
+    assert pem.startswith("-----BEGIN PUBLIC KEY-----\n")
+    assert pem.endswith("-----END PUBLIC KEY-----\n")
+    assert signing.looks_like_p256_public_key(pem)
+
+
+def test_the_public_half_is_the_point_the_private_key_names() -> None:
+    point = p256.generator_times(KNOWN_SCALAR)
+    assert point is not None
+    x, y = point
+    expected = b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
+    pem = signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
+    body = pem.split("-----BEGIN PUBLIC KEY-----")[1].split("-----END PUBLIC KEY-----")[0]
+    assert expected in base64.b64decode("".join(body.split()))
+
+
+def test_the_public_half_is_stable() -> None:
+    first = signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
+    assert first == signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
+
+
+def test_a_private_key_is_not_a_public_key() -> None:
+    """--public-key has to be able to catch the one dangerous mix-up."""
+    private = signing.generate_key_pem(KNOWN_SCALAR)
+    assert signing.looks_like_p256_key(private)
+    assert not signing.looks_like_p256_public_key(private)
+    public = signing.public_key_pem(private)
+    assert signing.looks_like_p256_public_key(public)
+    assert not signing.looks_like_p256_key(public)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "not a key", "-----BEGIN PRIVATE KEY-----\n@@@\n-----END PRIVATE KEY-----\n"],
+)
+def test_deriving_from_something_that_is_not_a_key_refuses(text: str) -> None:
+    with pytest.raises(ValueError):
+        signing.public_key_pem(text)

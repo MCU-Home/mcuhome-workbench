@@ -4,15 +4,18 @@
 
 Stage 3 produces it, every generator consumes it, nothing downstream ever
 reads raw YAML (builder-pipeline.md §1.2). It is also the wire format for
-remote builds (§6) and the contract the dashboard will consume.
+remote builds (§6) and the contract the dashboard consumes.
 
-**PROVISIONAL — version 1.** builder-pipeline.md §10 lists
-"device-model.json schema versioning" as an open point, to be fixed with
-the first dashboard consumption. Until then :data:`MODEL_VERSION` is 1
-and the shape may still change; treat a mismatch as "rebuild", never as
-something to migrate. What is *not* provisional is the principle behind
-the shape: every field exists because a downstream artifact needs it, and
-the two runtime contracts decide what those fields mean —
+**Version 1, and no longer provisional** (dashboard ADR 0007 decision 4).
+Compatibility is negotiated rather than assumed: the dashboard sends
+exactly one :data:`MODEL_VERSION`, a build server advertises the range it
+supports, and a mismatch is a refusal that names both numbers — never a
+fallback. A bump is therefore a breaking change to a published contract
+and is treated as one, which also makes
+``tests_py/test_model_golden.py`` the test of that contract rather than
+an internal regression guard. The principle behind the shape is unchanged:
+every field exists because a downstream artifact needs it, and the two
+runtime contracts decide what those fields mean —
 
 * ``endpoints[]`` mirrors ``<mcuhome/matter_tables.h>`` (ADR 0014): the
   attribute types, sizes, flags and the ``store``/constant distinction
@@ -54,7 +57,9 @@ __all__ = [
     "ToolchainModel",
 ]
 
-#: Version of the canonical model format. See the provisional note above.
+#: Version of the canonical model format — a published contract, see the
+#: module docstring. Exported through :mod:`mcuhome.api` and stated in
+#: every build manifest.
 MODEL_VERSION = 1
 
 

@@ -89,7 +89,10 @@ __all__ = [
     "BOOTLOADER_IMAGE",
     "CHIP_PROJECT_CONFIG_PATH",
     "CONFIG_BASENAME",
+    "DETACHED_SIGNING_CMAKE",
+    "DETACHED_SIGNING_VAR",
     "MODEL_FILE",
+    "SYSBUILD_CMAKE",
     "SYSBUILD_CONF",
     "SYSBUILD_DIR",
     "board_file_stem",
@@ -109,6 +112,21 @@ BOOTLOADER_IMAGE = "mcuboot"
 SYSBUILD_DIR = "sysbuild"
 #: Sysbuild's own Kconfig fragment, relative to the app.
 SYSBUILD_CONF = "sysbuild.conf"
+#: Sysbuild includes this from the main application's directory, which is
+#: the one place an application can change how sysbuild configures its
+#: *images* rather than itself.
+SYSBUILD_CMAKE = "sysbuild.cmake"
+#: The image-configuration script :data:`SYSBUILD_CMAKE` appends, under
+#: :data:`SYSBUILD_DIR`. Sysbuild reads that directory by exact file name
+#: (``<image>.conf``, ``<image>.overlay``), so a third file with another
+#: name sits there without being picked up by accident.
+DETACHED_SIGNING_CMAKE = "mcuhome-detached-signing.cmake"
+#: CMake variable that turns detached signing on for one build
+#: (``mcuhome build --no-sign``). A plain ``-D`` variable rather than a
+#: sysbuild Kconfig symbol: it selects how *this* build runs, it is not a
+#: property of the device, and nothing about the generated tree changes
+#: with it — the same tree signs inline when the flag is absent.
+DETACHED_SIGNING_VAR = "MCUHOME_DETACHED_SIGNING"
 #: The canonical model, written next to the app for inspection (§1.3).
 MODEL_FILE = "device-model.json"
 #: Stem of the two generated C files, in ``<app>/src/``.
@@ -918,6 +936,89 @@ def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def render_sysbuild_cmake(model: DeviceModel, *, config_name: str) -> str:
+    """``sysbuild.cmake`` — the one hook an application has into sysbuild.
+
+    It does nothing on its own. All it does is append
+    :data:`DETACHED_SIGNING_CMAKE` to the application image's
+    configuration scripts, so that the script runs *after* Zephyr's own
+    ``MAIN_image_default.cmake`` and can therefore have the last word on
+    a symbol that file also sets. Order is the whole mechanism: sysbuild
+    turns the accumulated settings into one forced Kconfig fragment, and
+    in a fragment the last assignment wins.
+    """
+    del model
+    intro = [
+        "Sysbuild hook for the generated application. Sysbuild includes this file "
+        "from the application directory before it configures any image, which is "
+        "the only place an application can influence how its own image is "
+        "configured.",
+        f"Everything it does is behind {DETACHED_SIGNING_VAR}, which mcuhome build "
+        "--no-sign passes and nothing else sets: a normal build reads this file, "
+        "appends one script, and that script does nothing. That is deliberate — "
+        "the generated tree is the same tree whether the image is signed during "
+        "the build or afterwards, so the two paths cannot drift apart.",
+    ]
+    return "\n".join(
+        [
+            _file_header("hash", config_name, intro),
+            "",
+            "# Appended, not assigned: Zephyr's own MAIN_image_default.cmake is",
+            "# already in this property, and this script has to run after it to",
+            "# override a symbol that file sets.",
+            "set_property(TARGET ${DEFAULT_IMAGE} APPEND PROPERTY IMAGE_CONF_SCRIPT",
+            f"             ${{CMAKE_CURRENT_LIST_DIR}}/{SYSBUILD_DIR}/{DETACHED_SIGNING_CMAKE})",
+            "",
+        ]
+    )
+
+
+def render_detached_signing_cmake(model: DeviceModel, *, config_name: str) -> str:
+    """The image-configuration script that leaves the application unsigned.
+
+    ADR 0015 decision 8 in one file. Sysbuild derives the application's
+    ``CONFIG_MCUBOOT_SIGNATURE_KEY_FILE`` from the one key file it is
+    given, and that file is a *private* key — which is exactly what must
+    not exist on a build server (ADR 0007). So a detached build is given
+    the **public** half instead: the bootloader compiles it in, unchanged
+    and byte-identical to what the private key would have produced, and
+    the application's copy of the setting is cleared here.
+
+    Clearing it rather than switching to Zephyr's
+    ``CONFIG_MCUBOOT_GENERATE_UNSIGNED_IMAGE`` is the deliberate half:
+    with an empty key file and unsigned-image generation off, Zephyr's
+    ``cmake/mcuboot.cmake`` warns and skips the signing step entirely, so
+    the build produces no ``zephyr.signed.*`` at all. The alternative
+    would have produced files with ``signed`` in their names and no
+    signature in them, which is worse than producing nothing.
+    """
+    del model
+    intro = [
+        "Detached signing (ADR 0015 decision 8): leave the application unsigned so "
+        "that the private key never has to be where the build runs. mcuhome sign "
+        "applies the signature afterwards, wherever the key is, using the "
+        "parameters the build manifest states.",
+        "The bootloader is unaffected. It is given the public half of the same key "
+        "pair and compiles it in exactly as it would the public half of the private "
+        "key, so a detached build and an inline build produce the same bootloader.",
+    ]
+    return "\n".join(
+        [
+            _file_header("hash", config_name, intro),
+            "",
+            f"if(NOT {DETACHED_SIGNING_VAR})",
+            "  return()",
+            "endif()",
+            "",
+            "# An empty key file with unsigned-image generation left off is what",
+            "# makes Zephyr's cmake/mcuboot.cmake skip signing altogether instead",
+            "# of writing an unsigned file called zephyr.signed.bin.",
+            'set_config_string(${ZCMAKE_APPLICATION} CONFIG_MCUBOOT_SIGNATURE_KEY_FILE "")',
+            "",
+        ]
+    )
+
+
 def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
     """``sysbuild/mcuboot.conf`` — Kconfig for the bootloader image.
 
@@ -1253,6 +1354,10 @@ def generate(model: DeviceModel, *, config_name: str) -> dict[str, str]:
     }
     if _scheme_of(model) is not None:
         files[f"{APP_DIR}/{SYSBUILD_CONF}"] = render_sysbuild_conf(model, config_name=config_name)
+        files[f"{APP_DIR}/{SYSBUILD_CMAKE}"] = render_sysbuild_cmake(model, config_name=config_name)
+        files[f"{APP_DIR}/{SYSBUILD_DIR}/{DETACHED_SIGNING_CMAKE}"] = render_detached_signing_cmake(
+            model, config_name=config_name
+        )
         files[f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf"] = render_bootloader_conf(
             model, config_name=config_name
         )

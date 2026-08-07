@@ -1,0 +1,202 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+"""The registry and the configuration schema, as exported data.
+
+Both documents are a contract with a consumer that is not in this
+repository (dashboard ADR 0011): a board picker populates itself from
+one, an editor validates against the other. They are therefore
+golden-tested byte for byte — a change to either is a change a human
+approves, not one that happens.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+from conftest import GOLDEN_DIR
+
+from mcuhome import __version__, export, registry, schema
+from mcuhome.model import MODEL_VERSION
+
+REGISTRY_GOLDEN = GOLDEN_DIR / "registry.json"
+SCHEMA_GOLDEN = GOLDEN_DIR / "main.schema.json"
+
+#: Placeholder the goldens carry where the builder's own version would
+#: be. A golden that pinned the version would have to be regenerated on
+#: every release, which would train a reviewer to regenerate goldens.
+VERSION_PLACEHOLDER = "0.1.0.dev0"
+
+
+def _stable(text: str) -> str:
+    return text.replace(f'"{__version__}"', f'"{VERSION_PLACEHOLDER}"')
+
+
+# --------------------------------------------------------------------------
+# Golden
+# --------------------------------------------------------------------------
+
+
+def test_the_registry_export_is_what_it_was() -> None:
+    assert _stable(export.to_json(export.registry_data())) == REGISTRY_GOLDEN.read_text("utf-8")
+
+
+def test_the_config_schema_is_what_it_was() -> None:
+    assert _stable(export.to_json(export.config_json_schema())) == SCHEMA_GOLDEN.read_text("utf-8")
+
+
+def test_both_documents_are_deterministic() -> None:
+    """Same process, same bytes — twice, so nothing leaks in from a set."""
+    assert export.to_json(export.registry_data()) == export.to_json(export.registry_data())
+    assert export.to_json(export.config_json_schema()) == export.to_json(
+        export.config_json_schema()
+    )
+
+
+# --------------------------------------------------------------------------
+# The registry says what the registry knows
+# --------------------------------------------------------------------------
+
+
+def test_every_board_is_exported_with_its_update_scheme() -> None:
+    data = export.registry_data()
+    assert [board["name"] for board in data["boards"]] == list(registry.BOARDS)
+    for board in data["boards"]:
+        scheme = board["update_scheme"]
+        assert scheme is not None, board["name"]
+        assert scheme["signature_type"] == registry.SIGNATURE_TYPE
+        labels = [entry["fixed_label"] for entry in scheme["partitions"]]
+        assert "mcuboot" in labels and "storage" in labels
+
+
+def test_every_board_carries_its_bootstrap_instructions() -> None:
+    """ADR 0016: the bootstrap path is registry data, instructions included."""
+    for board in export.registry_data()["boards"]:
+        bootstrap = board["bootstrap"]
+        assert bootstrap is not None, board["name"]
+        assert bootstrap["state"] in ("standard", "coexistence")
+        assert bootstrap["steps"], board["name"]
+
+
+def test_drivers_are_keyed_by_compatible() -> None:
+    """One name for one thing: the YAML, the model and the export agree."""
+    data = export.registry_data()
+    assert [driver["compatible"] for driver in data["drivers"]] == list(registry.DRIVERS)
+    assert all("driver" not in driver for driver in data["drivers"])
+
+
+def test_clusters_carry_the_conversion_a_consumer_needs() -> None:
+    cluster = next(
+        entry
+        for entry in export.registry_data()["clusters"]
+        if entry["name"] == "temperature_measurement"
+    )
+    assert cluster["id"] == 0x0402
+    assert cluster["unit"] == "°C"
+    assert cluster["raw_per_unit"] == [100, 1]
+    assert any(attr["role"] == "measured_value" for attr in cluster["attributes"])
+
+
+def test_device_types_name_their_mandatory_clusters() -> None:
+    data = export.registry_data()
+    known = {cluster["name"] for cluster in data["clusters"]}
+    for device_type in data["device_types"]:
+        assert set(device_type["mandatory_clusters"]) <= known
+
+
+def test_the_planned_tables_come_with_their_reasons() -> None:
+    """ "Not supported yet" and why — the same message the validator gives."""
+    planned = export.registry_data()["planned_boards"]
+    assert {entry["name"] for entry in planned} == set(registry.PLANNED_BOARDS)
+    assert all(entry["reason"] for entry in planned)
+
+
+def test_the_export_states_the_model_version() -> None:
+    assert export.registry_data()["model_version"] == MODEL_VERSION
+
+
+# --------------------------------------------------------------------------
+# The schema describes the configuration the parser accepts
+# --------------------------------------------------------------------------
+
+
+def test_the_schema_offers_the_boards_the_registry_has() -> None:
+    device = export.config_json_schema()["properties"]["device"]
+    assert device["properties"]["board"]["enum"] == sorted(registry.BOARDS)
+    assert device["required"] == ["name", "board"]
+
+
+def test_the_schema_offers_the_drivers_clusters_and_device_types() -> None:
+    document = export.config_json_schema()
+    peripherals = document["properties"]["hardware"]["properties"]["peripherals"]
+    assert peripherals["additionalProperties"]["properties"]["driver"]["enum"] == sorted(
+        registry.DRIVERS
+    )
+    endpoint = document["properties"]["node"]["properties"]["endpoints"]["items"]
+    assert endpoint["properties"]["device_type"]["enum"] == sorted(registry.DEVICE_TYPES)
+    assert endpoint["properties"]["clusters"]["propertyNames"]["enum"] == sorted(registry.CLUSTERS)
+
+
+def test_the_schema_rejects_a_section_the_parser_rejects() -> None:
+    """`additionalProperties: false` mirrors the parser's reject_unknown."""
+    document = export.config_json_schema()
+    assert document["additionalProperties"] is False
+    assert document["properties"]["device"]["additionalProperties"] is False
+
+
+def test_peripheral_properties_stay_open() -> None:
+    """Driver properties are per-driver; only the validator can check them."""
+    peripherals = export.config_json_schema()["properties"]["hardware"]["properties"]["peripherals"]
+    assert peripherals["additionalProperties"]["additionalProperties"] is True
+
+
+@pytest.mark.parametrize(
+    ("text", "accepted"),
+    [
+        ("10s", True),
+        ("500ms", True),
+        ("5min", True),
+        ("1.5h", True),
+        ("10", False),
+        ("10 seconds", False),
+    ],
+)
+def test_the_duration_pattern_agrees_with_the_parser(text: str, accepted: bool) -> None:
+    """An editor that underlines what the builder accepts is a liar."""
+    assert bool(re.match(export._DURATION_PATTERN, text)) is accepted
+    assert bool(schema._DURATION_RE.match(text)) is accepted
+
+
+@pytest.mark.parametrize(
+    ("text", "accepted"),
+    [("400kHz", True), ("100KHZ", True), ("1mhz", True), ("400", False), ("400 k", False)],
+)
+def test_the_frequency_pattern_agrees_with_the_parser(text: str, accepted: bool) -> None:
+    assert bool(re.match(export._FREQUENCY_PATTERN, text)) is accepted
+    assert bool(schema._FREQUENCY_RE.match(text)) is accepted
+
+
+@pytest.mark.parametrize(("text", "accepted"), [("gpio0.26", True), ("P0.26", False)])
+def test_the_pin_pattern_agrees_with_the_parser(text: str, accepted: bool) -> None:
+    assert bool(re.match(export._PIN_PATTERN, text)) is accepted
+    assert bool(schema._PIN_RE.match(text)) is accepted
+
+
+def test_the_device_name_pattern_is_the_parsers_own() -> None:
+    name = export.config_json_schema()["properties"]["device"]["properties"]["name"]
+    assert name["pattern"] == schema.DEVICE_NAME_RE.pattern
+    assert name["maxLength"] == schema.DEVICE_NAME_MAX
+
+
+def test_the_schema_validates_the_example_when_a_validator_is_installed() -> None:
+    """Optional: jsonschema is not a builder dependency, only a check."""
+    jsonschema = pytest.importorskip("jsonschema")
+    from conftest import EXAMPLES_DIR
+
+    from mcuhome.loader import load_yaml_file
+
+    document = export.config_json_schema()
+    jsonschema.Draft202012Validator.check_schema(document)
+    data = load_yaml_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
+    jsonschema.Draft202012Validator(document).validate(json.loads(json.dumps(data, default=str)))

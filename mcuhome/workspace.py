@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import TextIO
 
 from mcuhome.errors import BuildError
-from mcuhome.generate import BOOTLOADER_IMAGE
+from mcuhome.generate import BOOTLOADER_IMAGE, DETACHED_SIGNING_VAR
 
 __all__ = [
     "BOOTLOADER_IMAGE",
@@ -459,6 +459,7 @@ def west_build_command(
     snippets: tuple[str, ...] = (),
     bootloader_snippets: tuple[str, ...] = (),
     signing_key: Path | None = None,
+    detached_signing: bool = False,
     jobs: int,
     pristine: str = "auto",
 ) -> list[str]:
@@ -477,6 +478,14 @@ def west_build_command(
     it out is not an error to sysbuild: MCUboot's default is its own demo
     key, whose private half is published. :mod:`mcuhome.signing` is what
     makes sure there is a real one to pass.
+
+    **Detached signing passes the same argument with a different file.**
+    With *detached_signing* the key handed to sysbuild is the *public*
+    half — enough for the bootloader, which compiles the public key in,
+    and useless for signing, which is the point (ADR 0015 decision 8).
+    The generated tree's ``sysbuild.cmake`` reads the variable set here
+    and clears the application's copy of the setting, so no signing step
+    runs at all (:func:`~mcuhome.generate.render_detached_signing_cmake`).
     """
     command = [
         "west",
@@ -508,6 +517,13 @@ def west_build_command(
         # symbol at MCUboot's default, which is the demo key. Do not rely
         # on that: quote it.
         options.append(f'-D{SIGNING_KEY_OPTION}="{signing_key}"')
+    # Always stated, never only when true. It lands in the sysbuild
+    # CMake cache, so a build directory that was once built with
+    # --no-sign would keep answering "yes" to every later build in it —
+    # and that build would produce an unsigned image while its manifest
+    # said it had signed one. Passing the answer every time is what makes
+    # the flag describe *this* build instead of the last one.
+    options.append(f"-D{DETACHED_SIGNING_VAR}={'y' if detached_signing else 'n'}")
     if options:
         command.append("--")
         command += options
@@ -541,6 +557,7 @@ def plan_build(
     snippets: tuple[str, ...] = (),
     bootloader_snippets: tuple[str, ...] = (),
     signing_key: Path | None = None,
+    detached_signing: bool = False,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
     jobs: int,
@@ -577,6 +594,7 @@ def plan_build(
             snippets=snippets,
             bootloader_snippets=bootloader_snippets,
             signing_key=signing_key,
+            detached_signing=detached_signing,
             jobs=jobs,
             pristine=pristine_mode(build_dir),
         ),

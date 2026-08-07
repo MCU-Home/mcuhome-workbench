@@ -11,9 +11,10 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
 
-from mcuhome import __version__, container, workspace
+from mcuhome import __version__, container, imgtool, signing, workspace
 from mcuhome.cli import main
 from mcuhome.generate import APP_DIR
+from mcuhome.manifest import MANIFEST_FILE
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -54,6 +55,7 @@ def _planner(out_dir: Path):
                 snippets=kwargs["snippets"],
                 bootloader_snippets=kwargs.get("bootloader_snippets", ()),
                 signing_key=kwargs.get("signing_key"),
+                detached_signing=kwargs.get("detached_signing", False),
                 jobs=kwargs["jobs"],
             ),
             env={},
@@ -149,7 +151,7 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 0
     out = capsys.readouterr().out
-    assert "Generated 10 files for bmp180-node" in out
+    assert "Generated 12 files for bmp180-node" in out
     assert "app/src/mcuhome_config.c" in out
     assert "app/sysbuild.conf" in out
     # The application it generated is the application it built.
@@ -326,7 +328,7 @@ def test_a_missing_image_is_a_plain_refusal_after_a_finished_generation(
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-native"]) == 1
     captured = capsys.readouterr()
-    assert "Generated 10 files for bmp180-node" in captured.out
+    assert "Generated 12 files for bmp180-node" in captured.out
     assert (tmp_path / "app" / "src" / "mcuhome_config.c").is_file()
     assert "is not on this machine" in captured.err
     assert "docker pull" in captured.err
@@ -354,7 +356,7 @@ def test_build_defaults_to_a_build_dir_at_the_tree_root(tmp_path, capsys) -> Non
     assert list((tree / "devices" / "bench-node").iterdir()) == [
         tree / "devices" / "bench-node" / "main.yaml"
     ]
-    assert "Generated 10 files for bench-node" in capsys.readouterr().out
+    assert "Generated 12 files for bench-node" in capsys.readouterr().out
 
 
 def test_build_reports_configuration_problems_and_writes_nothing(tmp_path, capsys) -> None:
@@ -397,7 +399,7 @@ def test_the_published_test_credentials_are_called_out(capsys) -> None:
 def test_build_prints_the_pairing_codes_last(tmp_path, capsys) -> None:
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only"]) == 0
     out = capsys.readouterr().out
-    assert out.index("Commissioning") > out.index("Generated 10 files")
+    assert out.index("Commissioning") > out.index("Generated 12 files")
     assert "MT:Y.K90AFN00KA0648G00" in out
 
 
@@ -439,3 +441,335 @@ def test_init_pairing_with_secrets_writes_two_files(tmp_path, capsys) -> None:
     assert str(tmp_path / "secrets.yaml") in out
     assert "!secret bench_node_passcode" in entry.read_text("utf-8")
     assert main(["validate", str(entry)]) == 0
+
+
+# --------------------------------------------------------------------------
+# --json (dashboard ADR 0011 decision 4)
+# --------------------------------------------------------------------------
+
+
+def test_validate_json_prints_the_resolved_model(capsys) -> None:
+    assert main(["validate", str(EXAMPLE), "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is True
+    assert document["errors"] == []
+    assert document["model"]["device"]["name"] == "bmp180-node"
+    assert document["file"] == EXAMPLE.name
+
+
+def test_validate_json_suppresses_the_human_summary(capsys) -> None:
+    main(["validate", str(EXAMPLE), "--json"])
+    out = capsys.readouterr().out
+    assert "Commissioning" not in out
+    assert "is valid." not in out
+
+
+def test_validate_json_reports_every_problem_with_a_relative_path(tmp_path, capsys) -> None:
+    tree = tmp_path / "config"
+    entry = tree / "devices" / "bench-node" / "main.yaml"
+    entry.parent.mkdir(parents=True)
+    entry.write_text(VALID_CONFIG.replace("nrf7002dk/nrf5340/cpuapp", "nrf99dk"), "utf-8")
+
+    assert main(["validate", "bench-node", "--config-root", str(tree), "--json"]) == 1
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is False
+    assert document["model"] is None
+    problem = document["errors"][0]
+    assert problem["file"] == "devices/bench-node/main.yaml"
+    assert problem["kind"] == "ConfigError"
+    assert problem["line"] and problem["hint"]
+
+
+def test_a_refusal_before_the_tree_is_resolved_is_still_json(capsys) -> None:
+    """Exit codes do not change with --json, and neither does the stream."""
+    assert main(["validate", "no-such-device", "--config-root", "/nope", "--json"]) == 1
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is False
+    assert document["errors"][0]["kind"] == "ConfigError"
+
+
+def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "--json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is True
+    assert document["device"] == "bmp180-node"
+    assert document["manifest"]["signing"]["signed_by_the_build"] is True
+    assert json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8")) == document["manifest"]
+
+
+def test_generate_only_json_says_there_is_no_manifest(tmp_path, capsys) -> None:
+    assert (
+        main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only", "--json"])
+        == 0
+    )
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is True
+    assert document["manifest"] is None
+    assert f"{APP_DIR}/prj.conf" in document["generated"]
+
+
+# --------------------------------------------------------------------------
+# The build manifest lands in the build directory
+# --------------------------------------------------------------------------
+
+
+def _fake_build_run(plan, stream=None) -> tuple[int, str]:
+    """Stage 5 without a compiler: the files a real build leaves behind."""
+    for image in ("mcuboot", APP_DIR):
+        output = plan.build_dir / image / "zephyr"
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "zephyr.elf").write_bytes(b"\x7fELF")
+        (output / "zephyr.hex").write_text(":00000001FF\n", "utf-8")
+        (output / "zephyr.bin").write_bytes(bytes(1024))
+    app_output = plan.build_dir / APP_DIR / "zephyr"
+    app_output.joinpath(".config").write_text(
+        'CONFIG_ROM_START_OFFSET=0x200\nCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="0.0.0+0"\n', "utf-8"
+    )
+    if "-DMCUHOME_DETACHED_SIGNING=y" not in plan.command:
+        app_output.joinpath("zephyr.signed.bin").write_bytes(bytes(1600))
+        app_output.joinpath("zephyr.signed.hex").write_text(":00000001FF\n", "utf-8")
+    (plan.build_dir / "merged_nrf7002dk_nrf5340_cpuapp.hex").write_text(":00000001FF\n", "utf-8")
+    return 0, MEMORY_LOG
+
+
+def test_a_build_writes_its_manifest(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 0
+    assert str(tmp_path / MANIFEST_FILE) in capsys.readouterr().out
+    document = json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8"))
+    assert document["device"]["name"] == "bmp180-node"
+    assert document["build"]["snippets"] == ["matter", "boot-mode"]
+    assert document["signing"]["arguments"]["slot-size"] == 912 * 1024
+
+
+# --------------------------------------------------------------------------
+# Detached signing (ADR 0015 decision 8)
+# --------------------------------------------------------------------------
+
+
+def _public_key(tmp_path: Path) -> Path:
+    private = tmp_path / "signing.key"
+    private.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    public = tmp_path / "signing.pub"
+    public.write_text(signing.public_key_pem(private.read_text("utf-8")), "utf-8")
+    return public
+
+
+def test_no_sign_without_a_public_key_is_a_refusal(tmp_path, capsys) -> None:
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 1
+    err = capsys.readouterr().err
+    assert "mcuhome public-key" in err
+
+
+def test_no_sign_refuses_a_private_key_as_the_public_one(tmp_path, capsys) -> None:
+    """The one mistake the feature exists to prevent."""
+    private = tmp_path / "signing.key"
+    private.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path / "out"),
+                "--no-sign",
+                "--public-key",
+                str(private),
+            ]
+        )
+        == 1
+    )
+    assert "is a private key" in capsys.readouterr().err
+
+
+def test_no_sign_builds_unsigned_and_says_what_is_next(tmp_path, capsys, monkeypatch) -> None:
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(out_dir),
+                "--native",
+                "--no-sign",
+                "--public-key",
+                str(_public_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "public key" in out
+    assert f"mcuhome sign {out_dir}" in out
+
+    document = json.loads((out_dir / MANIFEST_FILE).read_text("utf-8"))
+    assert document["signing"]["signed_by_the_build"] is False
+    assert document["signing"]["signed"] is False
+    assert document["signing"]["arguments"]["header-size"] == 512
+    # Nothing in the directory may look bootable: no signed image, and no
+    # combined hex, which sysbuild fills with the *unsigned* application.
+    assert not (out_dir / "build" / APP_DIR / "zephyr" / "zephyr.signed.bin").exists()
+    assert not list((out_dir / "build").glob(workspace.MERGED_IMAGE_GLOB))
+    assert document["merged"] is None
+
+
+def test_the_detached_build_command_carries_the_public_key(tmp_path, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+
+    def capture(plan, stream=None):
+        seen["command"] = plan.command
+        return _fake_build_run(plan, stream)
+
+    monkeypatch.setattr(workspace, "run_build", capture)
+    public = _public_key(tmp_path)
+    main(
+        [
+            "build",
+            str(EXAMPLE),
+            "--build-dir",
+            str(tmp_path / "out"),
+            "--native",
+            "--no-sign",
+            "--public-key",
+            str(public),
+        ]
+    )
+    command = seen["command"]
+    assert f'-D{workspace.SIGNING_KEY_OPTION}="{public}"' in command
+    assert "-DMCUHOME_DETACHED_SIGNING=y" in command
+
+
+def test_sign_applies_the_manifests_parameters(tmp_path, capsys, monkeypatch) -> None:
+    out_dir = tmp_path / "out"
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+    main(
+        [
+            "build",
+            str(EXAMPLE),
+            "--build-dir",
+            str(out_dir),
+            "--native",
+            "--no-sign",
+            "--public-key",
+            str(_public_key(tmp_path)),
+        ]
+    )
+    capsys.readouterr()
+
+    commands: list[list[str]] = []
+
+    def fake_imgtool(command: list[str]) -> tuple[int, str]:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"signed")
+        return 0, ""
+
+    monkeypatch.setattr(imgtool, "_run", fake_imgtool)
+    assert main(["sign", str(out_dir), "--signing-key", str(tmp_path / "signing.key")]) == 0
+
+    out = capsys.readouterr().out
+    assert "Signed the application image" in out
+    assert len(commands) == 2  # one per artifact format
+    for command in commands:
+        assert command[command.index("--slot-size") + 1] == str(912 * 1024)
+        assert command[command.index("--header-size") + 1] == "512"
+        assert command[command.index("--align") + 1] == "4"
+
+    document = json.loads((out_dir / MANIFEST_FILE).read_text("utf-8"))
+    assert document["signing"]["signed"] is True
+    assert document["signing"]["signed_by_the_build"] is False
+    application = next(image for image in document["images"] if image["name"] == APP_DIR)
+    assert any(entry["path"].endswith("zephyr.signed.bin") for entry in application["files"])
+
+
+# --------------------------------------------------------------------------
+# new, public-key, schema
+# --------------------------------------------------------------------------
+
+
+def test_new_scaffolds_a_device_and_names_the_next_step(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "bench-node", "--board", "nrf7002dk/nrf5340/cpuapp"]) == 0
+    out = capsys.readouterr().out
+    assert "mcuhome init-pairing bench-node" in out
+    assert (tmp_path / "devices" / "bench-node" / "main.yaml").is_file()
+
+
+def test_new_refuses_an_existing_device(tmp_path, capsys) -> None:
+    assert (
+        main(
+            [
+                "new",
+                "bench-node",
+                "--board",
+                "nrf7002dk/nrf5340/cpuapp",
+                "--config-root",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "new",
+                "bench-node",
+                "--board",
+                "nrf7002dk/nrf5340/cpuapp",
+                "--config-root",
+                str(tmp_path),
+            ]
+        )
+        == 1
+    )
+    assert "already a device" in capsys.readouterr().err
+
+
+def test_new_refuses_a_board_nobody_brought_up(tmp_path, capsys) -> None:
+    assert main(["new", "bench-node", "--board", "nrf99dk", "--config-root", str(tmp_path)]) == 1
+    assert "nrf7002dk/nrf5340/cpuapp" in capsys.readouterr().err
+
+
+def test_public_key_writes_the_public_half(tmp_path, capsys, monkeypatch) -> None:
+    key = tmp_path / "signing.key"
+    key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    monkeypatch.setenv(signing.KEY_VAR, str(key))
+
+    assert main(["public-key"]) == 0
+    printed = capsys.readouterr().out
+    assert printed.startswith("-----BEGIN PUBLIC KEY-----")
+    assert signing.looks_like_p256_public_key(printed)
+
+    assert main(["public-key", "-o", str(tmp_path / "signing.pub")]) == 0
+    assert (tmp_path / "signing.pub").read_text("utf-8") == printed
+
+
+def test_public_key_never_creates_a_key(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+    assert main(["public-key"]) == 1
+    assert "no such file" in capsys.readouterr().err
+
+
+def test_schema_prints_the_configuration_schema(capsys) -> None:
+    assert main(["schema"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["$id"].endswith("main.schema.json")
+    assert "device" in document["properties"]
+
+
+def test_schema_registry_prints_the_registry(tmp_path, capsys) -> None:
+    assert main(["schema", "registry", "-o", str(tmp_path / "registry.json")]) == 0
+    assert "registry" in capsys.readouterr().out
+    document = json.loads((tmp_path / "registry.json").read_text("utf-8"))
+    assert document["boards"][0]["name"] == "nrf7002dk/nrf5340/cpuapp"

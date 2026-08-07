@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome import workspace
+from mcuhome import generate, workspace
 from mcuhome.errors import BuildError
 
 _GIB = 1024**3
@@ -296,6 +296,7 @@ def test_the_command_says_board_directories_snippets_and_parallelism() -> None:
         "-Dapp_SNIPPET=matter;debug-rtt",
         "-Dmcuboot_SNIPPET=boot-mode",
         '-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="/home/someone/.config/mcuhome/signing.key"',
+        "-DMCUHOME_DETACHED_SIGNING=n",
     ]
 
 
@@ -339,7 +340,23 @@ def test_no_signing_key_means_no_signing_option_at_all() -> None:
         app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=2
     )
     assert not any(item.startswith(f"-D{workspace.SIGNING_KEY_OPTION}") for item in command)
-    assert "--" not in command
+
+
+def test_the_detached_signing_answer_is_always_stated() -> None:
+    """It lives in the CMake cache, so leaving it out inherits the last build.
+
+    A build directory that was once built with --no-sign would otherwise
+    keep answering "yes" — producing an unsigned image under a manifest
+    that says it signed one. Found on hardware, not in review.
+    """
+    signed = workspace.west_build_command(
+        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=2
+    )
+    detached = workspace.west_build_command(
+        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=2, detached_signing=True
+    )
+    assert f"-D{generate.DETACHED_SIGNING_VAR}=n" in signed
+    assert f"-D{generate.DETACHED_SIGNING_VAR}=y" in detached
 
 
 def test_a_fresh_build_directory_builds_incrementally(tmp_path) -> None:

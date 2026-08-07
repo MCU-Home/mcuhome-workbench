@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.mcuhome.org/schema/main.schema.json",
+  "title": "MCUHome device configuration",
+  "description": "One MCUHome device, as devices/<name>/main.yaml. Generated from the MCUHome builder 0.1.0.dev0; the builder is the authority, this file is its shape.",
+  "type": "object",
+  "required": [
+    "device"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "device": {
+      "type": "object",
+      "description": "Who this device is and what it runs on.",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "board"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Device name, lowercase letters, digits and dashes; it becomes the node's hostname.",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "maxLength": 32
+        },
+        "friendly_name": {
+          "type": "string",
+          "description": "Name a controller shows to a human."
+        },
+        "board": {
+          "type": "string",
+          "description": "Zephyr board target, verbatim.",
+          "enum": [
+            "nrf7002dk/nrf5340/cpuapp"
+          ]
+        },
+        "power": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "type": "string",
+              "description": "What powers the device; battery selects the low-power transport defaults.",
+              "enum": [
+                "battery",
+                "mains"
+              ]
+            }
+          }
+        },
+        "blob_usage": {
+          "type": "string",
+          "description": "Whether binary blobs may be integrated at all (ADR 0013).",
+          "enum": [
+            "auto",
+            "none"
+          ]
+        },
+        "zephyr_version": {
+          "type": "string",
+          "description": "Zephyr release line, \"auto\" (recommended) or \"latest\".",
+          "pattern": "^(auto|latest|\\d+\\.\\d+)$"
+        },
+        "blobs": {
+          "type": "object",
+          "description": "Per-blob opt-in, by blob name (ADR 0013).",
+          "additionalProperties": {
+            "enum": [
+              "enabled",
+              "disabled",
+              "auto"
+            ]
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "description": "Transport and Matter. A device without it is standalone.",
+      "additionalProperties": false,
+      "properties": {
+        "thread": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "device_role": {
+              "type": "string",
+              "description": "Thread role. ftd routes, mtd/sed/ssed sleep.",
+              "enum": [
+                "ftd",
+                "mtd",
+                "sed",
+                "ssed"
+              ]
+            },
+            "poll_interval": {
+              "type": "string",
+              "description": "How often a sleepy device polls its parent.",
+              "pattern": "^(\\d+(?:\\.\\d+)?)\\s*(ms|s|min|h|d)$"
+            }
+          }
+        },
+        "wifi": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ssid": {
+              "type": "string",
+              "description": "Network name."
+            },
+            "password": {
+              "type": "string",
+              "description": "Network password. Use !secret rather than a literal."
+            }
+          }
+        },
+        "matter": {
+          "type": "object",
+          "description": "Commissioning identity. Written by mcuhome init-pairing \u2014 drawn once, so that every build of this device is byte-identical.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "discriminator": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4095
+            },
+            "passcode": {
+              "type": "integer"
+            },
+            "salt": {
+              "type": "string",
+              "description": "Base64 SPAKE2+ salt."
+            },
+            "use_test_pairing": {
+              "type": "boolean",
+              "description": "Use the credentials published with the Matter SDK. Bench use only: anyone who knows them can commission the device."
+            }
+          }
+        }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "description": "Buses and the peripherals on them.",
+      "additionalProperties": false,
+      "properties": {
+        "buses": {
+          "type": "object",
+          "description": "Buses this device uses, by id (e.g. i2c0).",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "controller": {
+                "type": "string",
+                "description": "Board connector or devicetree node label the bus is on, e.g. arduino_i2c."
+              },
+              "sda": {
+                "type": "string",
+                "description": "Data pin, as gpio<port>.<pin>.",
+                "pattern": "^gpio\\d+\\.\\d+$"
+              },
+              "scl": {
+                "type": "string",
+                "description": "Clock pin, as gpio<port>.<pin>.",
+                "pattern": "^gpio\\d+\\.\\d+$"
+              },
+              "frequency": {
+                "type": "string",
+                "description": "Bus frequency, e.g. 400kHz.",
+                "pattern": "^(\\d+(?:\\.\\d+)?)\\s*([kKmM]?[hH][zZ])$"
+              }
+            }
+          }
+        },
+        "peripherals": {
+          "type": "object",
+          "description": "Peripherals, by the id the clusters refer to.",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "driver"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "driver": {
+                "type": "string",
+                "description": "Devicetree compatible string of the part.",
+                "enum": [
+                  "bosch,bmp180"
+                ]
+              },
+              "bus": {
+                "type": "string",
+                "description": "Id of the bus above that this part sits on."
+              },
+              "address": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Bus address, where the part has one."
+              }
+            }
+          }
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "description": "What this device looks like to a Matter controller.",
+      "additionalProperties": false,
+      "required": [
+        "endpoints"
+      ],
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "description": "One Matter endpoint: a device type and the clusters serving it.",
+            "additionalProperties": false,
+            "required": [
+              "device_type"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Endpoint number. Endpoint 0 is the root node and is synthesized by the framework; devices start at 1."
+              },
+              "alias": {
+                "type": "string",
+                "description": "Name for this endpoint in generated code and in the summary."
+              },
+              "device_type": {
+                "type": "string",
+                "description": "Matter device type this endpoint implements.",
+                "enum": [
+                  "pressure_sensor",
+                  "temperature_sensor"
+                ]
+              },
+              "clusters": {
+                "type": "object",
+                "description": "Server clusters on this endpoint, by cluster name.",
+                "additionalProperties": false,
+                "propertyNames": {
+                  "enum": [
+                    "pressure_measurement",
+                    "temperature_measurement"
+                  ]
+                },
+                "properties": {
+                  "pressure_measurement": {
+                    "type": "object",
+                    "description": "One Matter server cluster on this endpoint, keyed by cluster name. The value says where its measured value comes from and how often.",
+                    "additionalProperties": false,
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "description": "Channel that feeds this cluster, as <peripheral>.<channel>, e.g. baro.temperature."
+                      },
+                      "target": {
+                        "type": "string",
+                        "description": "Channel this cluster writes to (actuators; not in v0.1 yet)."
+                      },
+                      "sampling": {
+                        "type": "string",
+                        "description": "How often the source is read, as a duration: 10s, 500ms, 5min.",
+                        "pattern": "^(\\d+(?:\\.\\d+)?)\\s*(ms|s|min|h|d)$"
+                      },
+                      "report": {
+                        "type": "object",
+                        "description": "When a new reading is reported to the controller.",
+                        "additionalProperties": false,
+                        "properties": {
+                          "delta": {
+                            "type": "number",
+                            "description": "Report only when the value moved by at least this much, in the cluster's own unit."
+                          },
+                          "max_interval": {
+                            "type": "string",
+                            "description": "Report at least this often even without a change.",
+                            "pattern": "^(\\d+(?:\\.\\d+)?)\\s*(ms|s|min|h|d)$"
+                          }
+                        }
+                      },
+                      "range": {
+                        "type": "object",
+                        "description": "Operating range a controller shows for this sensor, in the cluster's own unit. Defaults to the cluster's broad range; narrow it to the part's datasheet.",
+                        "additionalProperties": false,
+                        "required": [
+                          "min",
+                          "max"
+                        ],
+                        "properties": {
+                          "min": {
+                            "type": "number"
+                          },
+                          "max": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "temperature_measurement": {
+                    "type": "object",
+                    "description": "One Matter server cluster on this endpoint, keyed by cluster name. The value says where its measured value comes from and how often.",
+                    "additionalProperties": false,
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "description": "Channel that feeds this cluster, as <peripheral>.<channel>, e.g. baro.temperature."
+                      },
+                      "target": {
+                        "type": "string",
+                        "description": "Channel this cluster writes to (actuators; not in v0.1 yet)."
+                      },
+                      "sampling": {
+                        "type": "string",
+                        "description": "How often the source is read, as a duration: 10s, 500ms, 5min.",
+                        "pattern": "^(\\d+(?:\\.\\d+)?)\\s*(ms|s|min|h|d)$"
+                      },
+                      "report": {
+                        "type": "object",
+                        "description": "When a new reading is reported to the controller.",
+                        "additionalProperties": false,
+                        "properties": {
+                          "delta": {
+                            "type": "number",
+                            "description": "Report only when the value moved by at least this much, in the cluster's own unit."
+                          },
+                          "max_interval": {
+                            "type": "string",
+                            "description": "Report at least this often even without a change.",
+                            "pattern": "^(\\d+(?:\\.\\d+)?)\\s*(ms|s|min|h|d)$"
+                          }
+                        }
+                      },
+                      "range": {
+                        "type": "object",
+                        "description": "Operating range a controller shows for this sensor, in the cluster's own unit. Defaults to the cluster's broad range; narrow it to the part's datasheet.",
+                        "additionalProperties": false,
+                        "required": [
+                          "min",
+                          "max"
+                        ],
+                        "properties": {
+                          "min": {
+                            "type": "number"
+                          },
+                          "max": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "automations": {
+      "type": "array",
+      "description": "Automations. Not implemented in v0.1.",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

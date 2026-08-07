@@ -46,8 +46,10 @@ __all__ = [
     "PLANNED_CLUSTERS",
     "PLANNED_DEVICE_TYPES",
     "PLANNED_DRIVERS",
+    "SIGNATURE_TYPE",
     "AttrDef",
     "BoardDef",
+    "BootstrapDef",
     "ClusterDef",
     "DeviceTypeDef",
     "DriverChannelDef",
@@ -325,6 +327,21 @@ MCUBOOT_MODE_SYMBOLS: dict[str, str] = {
     "swap-using-offset": "SB_CONFIG_MCUBOOT_MODE_SWAP_USING_OFFSET",
 }
 
+#: The one signature scheme MCUHome images use (ADR 0015 decision 8), as
+#: the name a manifest and a schema export speak. The sysbuild symbol it
+#: renders to is ``SB_CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256``. It is a
+#: constant rather than per-board data because a device that needed a
+#: different one would need a different key custody story with it — that
+#: re-opens ADR 0015, which is exactly what a registry row must not do.
+SIGNATURE_TYPE = "ecdsa-p256"
+
+#: MCUboot modes whose upgrade slot is the *secondary* one, and which
+#: therefore size an image against ``slot1_partition``. Zephyr's
+#: ``cmake/mcuboot.cmake`` makes the same distinction to pick imgtool's
+#: ``--slot-size``; :attr:`UpdateSchemeDef.imgtool_slot` mirrors it so the
+#: build manifest can state the parameter without a build having run.
+_SECONDARY_SLOT_MODES = frozenset({"swap-using-offset"})
+
 
 @dataclass(frozen=True)
 class PartitionDef:
@@ -388,6 +405,21 @@ class UpdateSchemeDef:
     #: Written to *both* images: the bootloader and the application have
     #: to agree on the flash map byte for byte.
     partition_overlay: str
+    #: Smallest writable unit of the SoC's **internal** flash, in bytes,
+    #: which is what an MCUboot image trailer has to be aligned to and
+    #: therefore imgtool's ``--align``. Internal even on a board whose
+    #: secondary slot lives on another part: Zephyr's
+    #: ``cmake/mcuboot.cmake`` reads the ``zephyr,flash`` chosen node for
+    #: it, so this field states what the build does rather than what a
+    #: reading of the layout might suggest.
+    write_block_size: int = 4
+    #: Offset of the MCUboot image header inside a slot, in bytes —
+    #: imgtool's ``--header-size``, and the ``CONFIG_ROM_START_OFFSET``
+    #: the application is linked with. 0x200 is Zephyr's default for
+    #: every Cortex-M target with ``CONFIG_BOOTLOADER_MCUBOOT=y``; a
+    #: board that needs another value states it here rather than
+    #: anywhere in the builder.
+    header_size: int = 0x200
     #: Kconfig for the MCUboot image beyond what sysbuild derives from
     #: the mode, e.g. drivers for an external staging part. Occasionally a
     #: bare ``#`` comment line explaining the group of symbols after it —
@@ -416,6 +448,23 @@ class UpdateSchemeDef:
         raise KeyError(label)
 
     @property
+    def imgtool_slot(self) -> PartitionDef:
+        """The partition whose size imgtool pads a signed image to.
+
+        Zephyr's ``cmake/mcuboot.cmake`` uses ``slot1_partition`` for
+        every mode that has one and ``slot0_partition`` for the
+        single-slot modes. The two are equal in size on a swap layout by
+        construction, so this rarely changes a number — it changes which
+        number the manifest is *stating*, and detached signing
+        (:mod:`mcuhome.imgtool`) has to state the one the inline build
+        would have used, not one that happens to match today.
+        """
+        label = (
+            "slot1_partition" if self.mcuboot_mode in _SECONDARY_SLOT_MODES else "slot0_partition"
+        )
+        return self.partition(label)
+
+    @property
     def max_image_sectors(self) -> int:
         """Sectors MCUboot has to be able to track per slot.
 
@@ -432,6 +481,39 @@ class UpdateSchemeDef:
 # --------------------------------------------------------------------------
 # Boards
 # --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BootstrapDef:
+    """How a board reaches the MCUHome standard state (ADR 0016 decision 2).
+
+    A device is bootstrapped **once, ever**: the vendor bootloader is
+    replaced by MCUHome's MCUboot, after which every board behaves
+    identically — same recovery entrance, same transport, same signing,
+    same partition rules. ADR 0016 makes this a per-board ``BoardDef``
+    property on purpose ("a new board declares how it is bootstrapped; it
+    does not add a code path"), and this is that property.
+
+    :attr:`steps` is the user-facing instruction list the dashboard shows
+    on its first rung (dashboard ADR 0010) and the CLI can print. It is
+    prose *data*: the builder never parses it, and a board whose
+    procedure changes changes a table row.
+    """
+
+    #: ``"debug-probe"`` (SWD, which every development kit has),
+    #: ``"front-door-replacement"`` (the vendor's own DFU mechanism
+    #: accepts a bootloader update — the mechanism of record for boards
+    #: without a probe) or ``"coexistence"`` (the vendor bootloader is
+    #: kept and MCUboot is installed as its application).
+    mechanism: str
+    #: The state the board ends up in: ``"standard"`` or
+    #: ``"coexistence"``. ADR 0016 supports both; only the first is the
+    #: target.
+    state: str
+    #: Which build artifact the bootstrap writes, by manifest role.
+    artifact: str
+    #: What the user does, in order, in their own words.
+    steps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -466,6 +548,9 @@ class BoardDef:
     #: so that a test fixture can describe a board without repeating a
     #: flash layout it does not exercise.
     update_scheme: UpdateSchemeDef | None = None
+    #: How this board reaches the MCUHome standard state (ADR 0016
+    #: decision 2). Optional for the same reason as :attr:`update_scheme`.
+    bootstrap: BootstrapDef | None = None
 
 
 #: Board wiring of the nRF5340 application core: it has no RNG peripheral
@@ -653,6 +738,10 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
     # this problem, so it never carries this fix. bootloader_overlay_note
     # is emitted verbatim too, so it carries no date either.
     bootloader_overlay='&uart0 {\n\tstatus = "disabled";\n};',
+    # The nRF5340's internal flash writes in 4-byte words (nordic,nrf53-flash-
+    # controller, write-block-size = <4>), and Zephyr reads the *internal*
+    # controller for imgtool's --align even though slot1 is on the MX25R64.
+    write_block_size=4,
     bootloader_overlay_note=(
         "Dead UART. MCUBOOT_SERIAL selects SERIAL and UART_INTERRUPT_DRIVEN "
         "unconditionally, regardless of which serial-recovery transport is chosen "
@@ -660,6 +749,29 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         "BOOT_SERIAL_CDC_ACM as the transport here, that links in a UART driver "
         "the bootloader never opens. Disabling the node it would bind to drops "
         "it: measured -1.30 KiB."
+    ),
+)
+
+
+#: The nRF7002-DK is a development kit with an on-board J-Link, so its
+#: bootstrap is the easy case ADR 0016 decision 2 explicitly does not have
+#: to design around: one full-chip flash of the combined hex over SWD
+#: writes MCUboot and the application together, and the board is in the
+#: standard state afterwards. The front-door replacement mechanism the ADR
+#: makes the mechanism of record is for the boards that have no probe.
+_NRF7002DK_BOOTSTRAP = BootstrapDef(
+    mechanism="debug-probe",
+    state="standard",
+    artifact="merged",
+    steps=(
+        "Connect the kit's USB port marked nRF USB to this machine; the on-board "
+        "J-Link enumerates as a debug probe.",
+        "Flash the combined hex from the build (the merged artifact of the build "
+        "manifest) — it carries MCUboot and the signed application at their own "
+        "offsets, so one write brings the board into the MCUHome standard state.",
+        "After this the board never needs the probe again: updates arrive over "
+        "USB through MCUboot's serial recovery, and over the air once the device "
+        "is commissioned.",
     ),
 )
 
@@ -676,6 +788,7 @@ BOARDS: dict[str, BoardDef] = {
         overlay=_NRF5340_ENTROPY_OVERLAY,
         overlay_note=_NRF5340_ENTROPY_NOTE,
         update_scheme=_CLASS_A_EXTERNAL_STAGING,
+        bootstrap=_NRF7002DK_BOOTSTRAP,
     ),
 }
 

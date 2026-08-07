@@ -16,7 +16,16 @@ Pipeline (builder-pipeline.md §3), by module:
 :mod:`mcuhome.generate`      stage 4: the per-device build tree
 :mod:`mcuhome.container`     stage 5: compile in the builder image
 :mod:`mcuhome.workspace`     stage 5: compile on the host (``--native``)
+:mod:`mcuhome.manifest`      what came out: ``build-manifest.json``
+:mod:`mcuhome.imgtool`       signing the image afterwards (ADR 0015 §8)
+:mod:`mcuhome.export`        the registry and the YAML schema, as data
+:mod:`mcuhome.scaffold`      a new device's first configuration file
 ===========================  ======================================
+
+**Importing this package from another program?** Use :mod:`mcuhome.api`
+and nothing else. It is the supported surface and the only part covered
+by the project's SemVer promise (ADR 0005); every module listed above may
+change shape between releases.
 """
 
 __version__ = "0.1.0.dev0"
