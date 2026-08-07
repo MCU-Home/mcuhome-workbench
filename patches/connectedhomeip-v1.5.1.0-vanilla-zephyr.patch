@@ -1,3 +1,36 @@
+diff --git a/config/common/cmake/chip_gn.cmake b/config/common/cmake/chip_gn.cmake
+index fa59d96ae1..2176d38e3b 100644
+--- a/config/common/cmake/chip_gn.cmake
++++ b/config/common/cmake/chip_gn.cmake
+@@ -121,6 +121,19 @@ macro(matter_build target)
+         "${MATTER_LIB_DIR}/lib\\1.a"
+     )
+ 
++    # --- MCUHome prototype patch: cap the inner ninja invocation ---------
++    # Upstream always runs a bare `ninja` below, so the nested Matter
++    # build runs at ninja's own default (nproc+2) no matter what job
++    # count the outer west/ninja build was given (e.g. `-o=-j2`). On
++    # RAM-constrained targets (Home Assistant add-on class hardware) that
++    # is an OOM risk. Honor MCUHOME_CHIP_JOBS from the environment when
++    # set; unset/empty keeps the upstream default behavior.
++    set(MCUHOME_CHIP_NINJA_ARGS "")
++    if(DEFINED ENV{MCUHOME_CHIP_JOBS} AND NOT "$ENV{MCUHOME_CHIP_JOBS}" STREQUAL "")
++        set(MCUHOME_CHIP_NINJA_ARGS -j $ENV{MCUHOME_CHIP_JOBS})
++    endif()
++    # -----------------------------------------------------------------------
++
+     # ==============================================================================
+     # Define 'chip-gn' target that builds CHIP library(ies) with GN build system
+     # ==============================================================================
+@@ -143,7 +156,7 @@ macro(matter_build target)
+                                     --script-executable=${Python3_EXECUTABLE}
+                                     gen --check --fail-on-unused-args --add-export-compile-commands=*
+                                     ${CMAKE_CURRENT_BINARY_DIR}
+-        COMMAND                 ninja
++        COMMAND                 ninja ${MCUHOME_CHIP_NINJA_ARGS}
+         COMMAND                 ${CMAKE_COMMAND} -E echo "Matter library build complete"
+         INSTALL_COMMAND         ""
+         # Byproducts are removed by the clean target removing config and .ninja_deps
 diff --git a/config/zephyr/chip-gn/args.gni b/config/zephyr/chip-gn/args.gni
 index f49cfb708e..7f0b5bc9f5 100644
 --- a/config/zephyr/chip-gn/args.gni

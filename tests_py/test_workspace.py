@@ -99,6 +99,19 @@ def test_the_callers_environment_is_not_modified() -> None:
     assert original == {"PYTHONPATH": "/x"}
 
 
+def test_the_chip_gn_sub_build_gets_the_same_job_cap_by_default() -> None:
+    """The vendored CHIP GN sub-build otherwise ignores `-o=-j{JOBS}` entirely.
+
+    (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
+    config/common/cmake/chip_gn.cmake.)
+    """
+    assert workspace.build_environment({})[workspace.CHIP_JOBS_VAR] == str(workspace.JOBS)
+
+
+def test_an_explicit_jobs_override_reaches_the_chip_gn_sub_build_too() -> None:
+    assert workspace.build_environment({}, jobs=4)[workspace.CHIP_JOBS_VAR] == "4"
+
+
 # --------------------------------------------------------------------------
 # Prerequisites
 # --------------------------------------------------------------------------
@@ -212,6 +225,7 @@ def test_the_plan_puts_the_build_tree_next_to_the_application(tmp_path, monkeypa
     assert plan.app_dir == out_dir / "app"
     assert plan.build_dir == out_dir / "build"
     assert plan.env["PYTHONPATH"] == str(workspace.PYSHIM_DIR)
+    assert plan.env[workspace.CHIP_JOBS_VAR] == str(workspace.JOBS)
 
 
 def test_zephyr_base_is_filled_in_because_west_does_not_export_it(tmp_path, monkeypatch) -> None:

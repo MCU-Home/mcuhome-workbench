@@ -123,3 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Removed the insecure prototype entropy source now that the netcore entropy
   service provides a real CSPRNG path.
+- The vendored CHIP GN sub-build always ran its inner `ninja` unparallelized
+  from the outer job cap (`config/common/cmake/chip_gn.cmake`, upstream
+  `ExternalProject_Add` calls a bare `ninja`), so it used nproc+2 regardless
+  of `-o=-j2` — an OOM risk on RAM-constrained targets such as the
+  Home-Assistant-add-on class hardware in ADR 0007. New patch hunk in
+  `patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch` honors
+  `MCUHOME_CHIP_JOBS` from the environment; `mcuhome/workspace.py` and
+  `mcuhome/container.py` now set it alongside `-o=-j{JOBS}`, both paths
+  reading the same constant.

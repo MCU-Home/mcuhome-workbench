@@ -186,7 +186,23 @@ def test_the_container_environment_is_composed_not_inherited(tmp_path) -> None:
         "HOME": container.CONTAINER_HOME,
         "CCACHE_DIR": container.CONTAINER_CCACHE_DIR,
         "CCACHE_BASEDIR": str(tmp_path / "ws"),
+        workspace.CHIP_JOBS_VAR: str(workspace.JOBS),
     }
+
+
+def test_the_container_environment_caps_the_chip_gn_sub_build_too(tmp_path) -> None:
+    """The inner CHIP GN/ninja build otherwise ignores the outer job cap.
+
+    (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
+    config/common/cmake/chip_gn.cmake.)
+    """
+    env = container.container_environment(topdir=tmp_path / "ws")
+    assert env[workspace.CHIP_JOBS_VAR] == str(workspace.JOBS)
+
+
+def test_an_explicit_jobs_override_reaches_the_chip_gn_sub_build(tmp_path) -> None:
+    env = container.container_environment(topdir=tmp_path / "ws", jobs=4)
+    assert env[workspace.CHIP_JOBS_VAR] == "4"
 
 
 def test_the_run_command_mounts_paths_onto_themselves(tmp_path) -> None:
@@ -344,6 +360,16 @@ def test_the_plan_is_a_west_build_inside_a_docker_run(tmp_path, monkeypatch) -> 
         board="nrf7002dk/nrf5340/cpuapp",
         snippets=(),
     )
+
+
+def test_the_plan_caps_the_chip_gn_sub_build_in_the_container_too(tmp_path, monkeypatch) -> None:
+    """Same OOM risk as the native path, one process tree down.
+
+    (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
+    config/common/cmake/chip_gn.cmake.)
+    """
+    _, plan = _plan(tmp_path, monkeypatch)
+    assert f"{workspace.CHIP_JOBS_VAR}={workspace.JOBS}" in plan.command
 
 
 def test_the_plan_needs_no_toolchain_on_the_host(tmp_path, monkeypatch) -> None:

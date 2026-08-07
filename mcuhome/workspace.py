@@ -48,6 +48,7 @@ from mcuhome.errors import BuildError
 
 __all__ = [
     "BUILD_SUBDIR",
+    "CHIP_JOBS_VAR",
     "JOBS",
     "MODULE_DIR",
     "PYSHIM_DIR",
@@ -91,6 +92,16 @@ BUILD_SUBDIR = "build"
 #: OOM kill rather than a faster build. Overridable per invocation once
 #: there is evidence that a fixed number is the wrong answer somewhere.
 JOBS = 2
+
+#: Environment variable the vendored CHIP GN sub-build reads to cap its own
+#: inner ``ninja`` invocation (patch hunk in
+#: ``patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch``, applied to
+#: ``config/common/cmake/chip_gn.cmake``). Upstream always runs a bare
+#: ``ninja`` there, so without this the outer ``-o=-j{JOBS}`` above is
+#: invisible to it and the Matter sub-build regenerates ninja's default of
+#: nproc+2 — the exact OOM risk :data:`JOBS` exists to avoid, just one
+#: process tree down.
+CHIP_JOBS_VAR = "MCUHOME_CHIP_JOBS"
 
 #: What the west workspace top directory is recognized by.
 _WEST_MARKER = Path(".west") / "config"
@@ -197,7 +208,7 @@ def require_topdir(*starts: Path) -> Path:
 # --------------------------------------------------------------------------
 
 
-def build_environment(env: dict[str, str] | None = None) -> dict[str, str]:
+def build_environment(env: dict[str, str] | None = None, *, jobs: int = JOBS) -> dict[str, str]:
     """*env* plus what the Matter build needs, without mutating the input."""
     prepared = dict(os.environ if env is None else env)
     existing = prepared.get("PYTHONPATH", "")
@@ -208,6 +219,10 @@ def build_environment(env: dict[str, str] | None = None) -> dict[str, str]:
     for entry in entries:
         seen.setdefault(entry, None)
     prepared["PYTHONPATH"] = os.pathsep.join(seen)
+    # Same job count as the outer `-o=-j{jobs}` (west_build_command): the
+    # vendored CHIP GN sub-build otherwise ignores it entirely, see
+    # CHIP_JOBS_VAR.
+    prepared[CHIP_JOBS_VAR] = str(jobs)
     return prepared
 
 
@@ -318,7 +333,7 @@ def plan_build(
     without a toolchain.
     """
     topdir = require_topdir(MODULE_DIR, cwd or Path.cwd())
-    prepared = build_environment(env)
+    prepared = build_environment(env, jobs=jobs)
     # ``west build`` does not export ZEPHYR_BASE (it resolves Zephyr through
     # the manifest and the CMake package registry), yet CMake code outside
     # Zephyr's own — the generated application's search for the Matter SDK,
