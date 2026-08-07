@@ -98,6 +98,12 @@ a host toolchain instead, for people working on MCUHome itself. Details,
 including how to build the image yourself, are in
 [containers/builder/README.md](containers/builder/README.md).
 
+Build parallelism is auto-detected from CPU count and available RAM (a
+Matter compile unit peaks around 1-1.5 GiB, so the formula budgets 2 GiB
+per job and never exceeds the core count) — `MCUHOME_JOBS=N` overrides
+the auto-detection, `--jobs N` overrides both, and it applies inside the
+builder container too, resolved on the host before `docker run`.
+
 To see the framework run without the builder in the picture, build the
 reference sample by hand:
 

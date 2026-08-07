@@ -22,6 +22,8 @@ import pytest
 from mcuhome import workspace
 from mcuhome.errors import BuildError
 
+_GIB = 1024**3
+
 
 def _fake_workspace(root: Path) -> Path:
     (root / ".west").mkdir(parents=True)
@@ -75,40 +77,140 @@ def test_no_workspace_is_refused_with_both_ways_out(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
+# How many jobs to run in parallel
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "available_gib", "expected"),
+    [
+        # This development machine: 4 cores, 15 GiB.
+        (4, 15, 4),
+        # A 24-thread/24-GiB WSL machine.
+        (24, 24, 12),
+        # Plenty of RAM, few cores: the CPU count is the ceiling.
+        (2, 64, 2),
+        # Plenty of cores, little RAM: the RAM budget is the ceiling.
+        (16, 6, 3),
+        # A single core: never ask for more than one job, however much RAM
+        # the max(2, ...) floor would otherwise suggest.
+        (1, 15, 1),
+        # A RAM-starved multi-core machine still gets the floor of 2, not 0
+        # or 1: max(2, ...) always wins over a floor-dividing-to-zero RAM
+        # budget.
+        (8, 1, 2),
+    ],
+)
+def test_auto_jobs_boundary_cases(cpu_count: int, available_gib: int, expected: int) -> None:
+    assert workspace.auto_jobs(cpu_count, available_gib * _GIB) == expected
+
+
+def test_available_ram_reads_memavailable(tmp_path) -> None:
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "MemTotal:       16384000 kB\nMemAvailable:    8192000 kB\nSwapTotal:             0 kB\n",
+        "utf-8",
+    )
+    assert workspace.available_ram_bytes(meminfo) == 8192000 * 1024
+
+
+def test_available_ram_falls_back_to_half_of_memtotal_without_memavailable(tmp_path) -> None:
+    """An old kernel's /proc/meminfo has MemTotal but not MemAvailable."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       16384000 kB\n", "utf-8")
+    assert workspace.available_ram_bytes(meminfo) == (16384000 * 1024) // 2
+
+
+def test_available_ram_is_zero_when_meminfo_has_neither_key(tmp_path) -> None:
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("VmallocTotal:   34359738367 kB\n", "utf-8")
+    assert workspace.available_ram_bytes(meminfo) == 0
+
+
+def test_available_ram_is_zero_without_proc_meminfo_at_all(tmp_path) -> None:
+    """Non-Linux, or any other reason the file just is not there."""
+    assert workspace.available_ram_bytes(tmp_path / "does-not-exist") == 0
+
+
+def test_detect_jobs_wires_cpu_count_and_available_ram_together(monkeypatch) -> None:
+    monkeypatch.setattr(os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(workspace, "available_ram_bytes", lambda: 12 * _GIB)
+    assert workspace.detect_jobs() == 6
+
+
+def test_detect_jobs_survives_an_unknown_cpu_count(monkeypatch) -> None:
+    """`os.cpu_count()` returns None where the count is indeterminable."""
+    monkeypatch.setattr(os, "cpu_count", lambda: None)
+    monkeypatch.setattr(workspace, "available_ram_bytes", lambda: 64 * _GIB)
+    assert workspace.detect_jobs() == 1
+
+
+def test_a_command_line_flag_beats_everything(monkeypatch) -> None:
+    monkeypatch.setenv(workspace.JOBS_VAR, "6")
+    resolved = workspace.resolve_jobs(cli_jobs=3)
+    assert (resolved.value, resolved.source) == (3, "flag")
+
+
+def test_the_environment_variable_beats_auto_detection(monkeypatch) -> None:
+    monkeypatch.setattr(workspace, "detect_jobs", lambda: pytest.fail("auto-detection ran"))
+    resolved = workspace.resolve_jobs(cli_jobs=None, env={workspace.JOBS_VAR: "6"})
+    assert (resolved.value, resolved.source) == (6, "env")
+
+
+def test_neither_flag_nor_environment_falls_back_to_auto_detection(monkeypatch) -> None:
+    monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
+    resolved = workspace.resolve_jobs(cli_jobs=None, env={})
+    assert (resolved.value, resolved.source) == (5, "auto")
+
+
+def test_a_nonsense_environment_value_is_treated_as_unset(monkeypatch) -> None:
+    """A typo in a shell rc file falls back to auto rather than breaking every build."""
+    monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
+    resolved = workspace.resolve_jobs(cli_jobs=None, env={workspace.JOBS_VAR: "not-a-number"})
+    assert (resolved.value, resolved.source) == (5, "auto")
+
+
+def test_a_zero_environment_value_is_also_treated_as_unset(monkeypatch) -> None:
+    monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
+    resolved = workspace.resolve_jobs(cli_jobs=None, env={workspace.JOBS_VAR: "0"})
+    assert (resolved.value, resolved.source) == (5, "auto")
+
+
+# --------------------------------------------------------------------------
 # The environment
 # --------------------------------------------------------------------------
 
 
 def test_the_codegen_shim_goes_on_pythonpath_in_front() -> None:
-    env = workspace.build_environment({"PYTHONPATH": "/somewhere/else"})
+    env = workspace.build_environment({"PYTHONPATH": "/somewhere/else"}, jobs=2)
     assert env["PYTHONPATH"].split(os.pathsep) == [str(workspace.PYSHIM_DIR), "/somewhere/else"]
 
 
 def test_pythonpath_is_set_even_when_there_was_none() -> None:
-    assert workspace.build_environment({})["PYTHONPATH"] == str(workspace.PYSHIM_DIR)
+    assert workspace.build_environment({}, jobs=2)["PYTHONPATH"] == str(workspace.PYSHIM_DIR)
 
 
 def test_running_the_builder_inside_its_own_environment_does_not_grow_pythonpath() -> None:
-    once = workspace.build_environment({})
-    assert workspace.build_environment(once)["PYTHONPATH"] == once["PYTHONPATH"]
+    once = workspace.build_environment({}, jobs=2)
+    assert workspace.build_environment(once, jobs=2)["PYTHONPATH"] == once["PYTHONPATH"]
 
 
 def test_the_callers_environment_is_not_modified() -> None:
     original = {"PYTHONPATH": "/x"}
-    workspace.build_environment(original)
+    workspace.build_environment(original, jobs=2)
     assert original == {"PYTHONPATH": "/x"}
 
 
-def test_the_chip_gn_sub_build_gets_the_same_job_cap_by_default() -> None:
-    """The vendored CHIP GN sub-build otherwise ignores `-o=-j{JOBS}` entirely.
+def test_the_chip_gn_sub_build_gets_the_same_job_cap() -> None:
+    """The vendored CHIP GN sub-build otherwise ignores `-o=-j{jobs}` entirely.
 
     (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
     config/common/cmake/chip_gn.cmake.)
     """
-    assert workspace.build_environment({})[workspace.CHIP_JOBS_VAR] == str(workspace.JOBS)
+    assert workspace.build_environment({}, jobs=2)[workspace.CHIP_JOBS_VAR] == "2"
 
 
-def test_an_explicit_jobs_override_reaches_the_chip_gn_sub_build_too() -> None:
+def test_an_explicit_jobs_value_reaches_the_chip_gn_sub_build_too() -> None:
     assert workspace.build_environment({}, jobs=4)[workspace.CHIP_JOBS_VAR] == "4"
 
 
@@ -174,6 +276,7 @@ def test_the_command_says_board_directories_snippets_and_parallelism() -> None:
         build_dir=Path("/w/build/node/build"),
         board="nrf7002dk/nrf5340/cpuapp",
         snippets=("matter", "debug-rtt"),
+        jobs=2,
     )
     assert command == [
         "west",
@@ -193,23 +296,27 @@ def test_the_command_says_board_directories_snippets_and_parallelism() -> None:
     ]
 
 
-def test_parallelism_is_capped_and_attached_with_an_equals_sign() -> None:
-    """`-o -j2` would be read as two options; `-o=-j2` is one.
-
-    The cap itself is a machine limit, not a preference: Matter's compile
-    units peak above a gigabyte each, so -j$(nproc) is how a four-core
-    laptop OOMs instead of building.
-    """
+def test_parallelism_is_attached_with_an_equals_sign() -> None:
+    """`-o -j4` would be read as two options; `-o=-j4` is one."""
     command = workspace.west_build_command(
-        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=workspace.JOBS
+        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=4
     )
-    assert workspace.JOBS == 2
-    assert "-o=-j2" in command
-    assert "-j2" not in [item for item in command if not item.startswith("-o=")]
+    assert "-o=-j4" in command
+    assert "-j4" not in [item for item in command if not item.startswith("-o=")]
+
+
+def test_the_command_uses_whatever_job_count_it_is_given() -> None:
+    """The resolved value flows straight through, not a machine constant."""
+    command = workspace.west_build_command(
+        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=12
+    )
+    assert "-o=-j12" in command
 
 
 def test_a_device_without_snippets_gets_none() -> None:
-    command = workspace.west_build_command(app_dir=Path("app"), build_dir=Path("b"), board="x")
+    command = workspace.west_build_command(
+        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=2
+    )
     assert "--snippet" not in command
 
 
@@ -219,13 +326,13 @@ def test_the_plan_puts_the_build_tree_next_to_the_application(tmp_path, monkeypa
     monkeypatch.setattr(workspace, "require_tools", lambda env: None)
     out_dir = top / "build" / "node"
 
-    plan = workspace.plan_build(out_dir=out_dir, app_subdir="app", board="x", env={})
+    plan = workspace.plan_build(out_dir=out_dir, app_subdir="app", board="x", env={}, jobs=2)
 
     assert plan.topdir == top
     assert plan.app_dir == out_dir / "app"
     assert plan.build_dir == out_dir / "build"
     assert plan.env["PYTHONPATH"] == str(workspace.PYSHIM_DIR)
-    assert plan.env[workspace.CHIP_JOBS_VAR] == str(workspace.JOBS)
+    assert plan.env[workspace.CHIP_JOBS_VAR] == "2"
 
 
 def test_zephyr_base_is_filled_in_because_west_does_not_export_it(tmp_path, monkeypatch) -> None:
@@ -234,7 +341,7 @@ def test_zephyr_base_is_filled_in_because_west_does_not_export_it(tmp_path, monk
     monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     monkeypatch.setattr(workspace, "require_tools", lambda env: None)
 
-    plan = workspace.plan_build(out_dir=top / "out", app_subdir="app", board="x", env={})
+    plan = workspace.plan_build(out_dir=top / "out", app_subdir="app", board="x", env={}, jobs=2)
     assert plan.env["ZEPHYR_BASE"] == str(top / "zephyr")
 
 
@@ -250,6 +357,7 @@ def test_a_zephyr_base_someone_set_on_purpose_is_left_alone(tmp_path, monkeypatc
         app_subdir="app",
         board="x",
         env={"ZEPHYR_BASE": "/elsewhere/zephyr"},
+        jobs=2,
     )
     assert plan.env["ZEPHYR_BASE"] == "/elsewhere/zephyr"
 
@@ -259,7 +367,7 @@ def test_the_plan_refuses_before_it_decides_anything_else(tmp_path, monkeypatch)
     monkeypatch.setattr(workspace, "MODULE_DIR", _fake_workspace(tmp_path / "ws"))
     with pytest.raises(BuildError) as caught:
         workspace.plan_build(
-            out_dir=tmp_path / "out", app_subdir="app", board="x", env={"PATH": ""}
+            out_dir=tmp_path / "out", app_subdir="app", board="x", env={"PATH": ""}, jobs=2
         )
     assert "cannot compile without" in caught.value.message
 

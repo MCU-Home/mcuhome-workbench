@@ -49,15 +49,19 @@ from mcuhome.errors import BuildError
 __all__ = [
     "BUILD_SUBDIR",
     "CHIP_JOBS_VAR",
-    "JOBS",
+    "JOBS_VAR",
     "MODULE_DIR",
     "PYSHIM_DIR",
     "TOOLS",
     "BuildPlan",
     "MemoryRegion",
+    "ResolvedJobs",
     "ToolNeed",
     "artifacts",
+    "auto_jobs",
+    "available_ram_bytes",
     "build_environment",
+    "detect_jobs",
     "find_topdir",
     "missing_tools",
     "parse_memory_report",
@@ -65,6 +69,7 @@ __all__ = [
     "refuse_failed_build",
     "require_tools",
     "require_topdir",
+    "resolve_jobs",
     "run_build",
     "west_build_command",
 ]
@@ -86,21 +91,21 @@ PYSHIM_DIR = MODULE_DIR / "scripts" / "pyshim"
 #: can be deleted at any time.
 BUILD_SUBDIR = "build"
 
-#: Parallelism handed to the build tool. Deliberately not the CPU count:
-#: a Matter build peaks at well over a gigabyte per compiler process, and
-#: on the 4-core/15-GB machines this is developed on, ``-j$(nproc)`` is an
-#: OOM kill rather than a faster build. Overridable per invocation once
-#: there is evidence that a fixed number is the wrong answer somewhere.
-JOBS = 2
+#: Environment variable that overrides job-count auto-detection outright
+#: (see :func:`resolve_jobs`) — the escape hatch for a machine
+#: :func:`auto_jobs` still guesses wrong for, e.g. a container with a
+#: cgroup memory limit ``/proc/meminfo`` does not reflect. ``--jobs`` on
+#: the command line beats it; it beats auto-detection.
+JOBS_VAR = "MCUHOME_JOBS"
 
 #: Environment variable the vendored CHIP GN sub-build reads to cap its own
 #: inner ``ninja`` invocation (patch hunk in
 #: ``patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch``, applied to
 #: ``config/common/cmake/chip_gn.cmake``). Upstream always runs a bare
-#: ``ninja`` there, so without this the outer ``-o=-j{JOBS}`` above is
+#: ``ninja`` there, so without this the outer ``-o=-j{jobs}`` above is
 #: invisible to it and the Matter sub-build regenerates ninja's default of
-#: nproc+2 — the exact OOM risk :data:`JOBS` exists to avoid, just one
-#: process tree down.
+#: nproc+2 — the exact OOM risk the resolved job count (:func:`resolve_jobs`)
+#: exists to avoid, just one process tree down.
 CHIP_JOBS_VAR = "MCUHOME_CHIP_JOBS"
 
 #: What the west workspace top directory is recognized by.
@@ -204,11 +209,129 @@ def require_topdir(*starts: Path) -> Path:
 
 
 # --------------------------------------------------------------------------
+# How many jobs to run in parallel
+# --------------------------------------------------------------------------
+
+#: Bytes in a gibibyte, for the RAM half of :func:`auto_jobs`.
+_GIB = 1024**3
+
+#: Where Linux publishes live memory figures. A parameter on
+#: :func:`available_ram_bytes` rather than a hardcoded path only inside
+#: it, so the test suite can point it at a fixture file instead of
+#: monkeypatching the standard library.
+_MEMINFO_PATH = Path("/proc/meminfo")
+
+
+def available_ram_bytes(path: Path | None = None) -> int:
+    """Best-effort available RAM right now, without a psutil dependency.
+
+    Reads ``MemAvailable`` from ``/proc/meminfo`` — Linux (kernel >= 3.14)
+    already discounts reclaimable page cache from it, which is closer to
+    "usable before swapping starts" than ``MemFree``. Where that key is
+    missing — an old kernel, or *path* pointing nowhere, which is every
+    non-Linux platform — this falls back to half of ``MemTotal``, a rough
+    "assume something else already claimed half of it" heuristic that
+    needs no new dependency. Where neither key is readable at all, this
+    assumes nothing is available, which drives :func:`auto_jobs` to its
+    floor of 2 rather than guessing high on a machine it cannot see.
+    """
+    meminfo = _MEMINFO_PATH if path is None else path
+    try:
+        text = meminfo.read_text("utf-8")
+    except OSError:
+        text = ""
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        name, _, rest = line.partition(":")
+        if name not in ("MemAvailable", "MemTotal"):
+            continue
+        fields = rest.strip().split()
+        if fields and fields[0].isdigit():
+            values[name] = int(fields[0])  # kB, per proc(5)
+    if "MemAvailable" in values:
+        return values["MemAvailable"] * 1024
+    if "MemTotal" in values:
+        return (values["MemTotal"] * 1024) // 2
+    return 0
+
+
+def auto_jobs(cpu_count: int, available_ram_bytes: int) -> int:
+    """Parallelism this hardware can sustain without swapping.
+
+    ``min(cpu_count, max(2, available_ram_gb // 2))``. Measured CHIP C++
+    compiles peak around 1-1.5 GiB per job; the final link spikes higher,
+    but only one link runs at a time (ninja serializes it), so it does not
+    change the per-job budget. Budgeting 2 GiB per job keeps a no-swap
+    machine safe with headroom, and ``cpu_count`` remains the hard ceiling
+    underneath that — more jobs than cores never builds faster. This
+    development machine (4 cores / 15 GiB) resolves to 4; a 24-thread /
+    24 GiB WSL machine resolves to 12. The floor of 2 matches the
+    previous static default, so even a RAM-starved machine can still
+    overlap one compile with the next.
+
+    :param cpu_count: usually ``os.cpu_count()``.
+    :param available_ram_bytes: usually :func:`available_ram_bytes`.
+    """
+    ram_gb = available_ram_bytes // _GIB
+    return min(cpu_count, max(2, ram_gb // 2))
+
+
+def detect_jobs() -> int:
+    """:func:`auto_jobs`, fed this machine's live CPU count and free RAM."""
+    return auto_jobs(os.cpu_count() or 1, available_ram_bytes())
+
+
+@dataclass(frozen=True)
+class ResolvedJobs:
+    """A job count together with why it was chosen — for the build summary."""
+
+    value: int
+    #: ``"flag"`` (``--jobs``), ``"env"`` (:data:`JOBS_VAR`), or ``"auto"``
+    #: (:func:`detect_jobs`).
+    source: str
+
+
+def resolve_jobs(*, cli_jobs: int | None = None, env: dict[str, str] | None = None) -> ResolvedJobs:
+    """The parallelism this build uses, and why — the single resolution point.
+
+    Precedence, most specific wins: ``--jobs`` on the command line, then
+    :data:`JOBS_VAR` in the environment, then :func:`detect_jobs`. This
+    runs once, on the host, before a container build even starts docker —
+    the container would see the host's CPU count either way, but its RAM
+    budget is the host's (or the WSL VM's), not a figure guessed at from
+    inside a container that may itself be memory-limited by a cgroup.
+    Everything downstream then takes the resulting number as given rather
+    than resolving it again: the outer ``-o=-jN`` (:func:`west_build_command`),
+    :data:`CHIP_JOBS_VAR` for the inner CHIP GN sub-build
+    (:func:`build_environment`), and the container path
+    (:mod:`mcuhome.container`), which receives it as a plain ``jobs``
+    argument like the native path does.
+
+    A :data:`JOBS_VAR` that is not a positive whole number is treated as
+    unset rather than refused: a typo in a shell rc file should not be
+    able to break every build until someone finds it, and auto-detection
+    is always a reasonable answer.
+    """
+    if cli_jobs is not None:
+        return ResolvedJobs(cli_jobs, "flag")
+    environment = os.environ if env is None else env
+    raw = environment.get(JOBS_VAR)
+    if raw:
+        try:
+            parsed = int(raw)
+        except ValueError:
+            parsed = 0
+        if parsed >= 1:
+            return ResolvedJobs(parsed, "env")
+    return ResolvedJobs(detect_jobs(), "auto")
+
+
+# --------------------------------------------------------------------------
 # Environment and prerequisites
 # --------------------------------------------------------------------------
 
 
-def build_environment(env: dict[str, str] | None = None, *, jobs: int = JOBS) -> dict[str, str]:
+def build_environment(env: dict[str, str] | None = None, *, jobs: int) -> dict[str, str]:
     """*env* plus what the Matter build needs, without mutating the input."""
     prepared = dict(os.environ if env is None else env)
     existing = prepared.get("PYTHONPATH", "")
@@ -269,7 +392,7 @@ def west_build_command(
     build_dir: Path,
     board: str,
     snippets: tuple[str, ...] = (),
-    jobs: int = JOBS,
+    jobs: int,
 ) -> list[str]:
     """The ``west build`` invocation for one generated application.
 
@@ -324,7 +447,7 @@ def plan_build(
     snippets: tuple[str, ...] = (),
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
-    jobs: int = JOBS,
+    jobs: int,
 ) -> BuildPlan:
     """Resolve workspace, environment and command, or refuse with a reason.
 

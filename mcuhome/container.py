@@ -264,7 +264,7 @@ def container_environment(
     *,
     topdir: Path,
     pyshim_dir: Path | None = None,
-    jobs: int = workspace.JOBS,
+    jobs: int,
 ) -> dict[str, str]:
     """What the build needs set inside the container, and nothing else.
 
@@ -287,9 +287,11 @@ def container_environment(
         # one cache serves several build directories — and, because the
         # mount is path-identical, the same cache serves a --native build.
         "CCACHE_BASEDIR": str(topdir),
-        # Same job count as the outer `-o=-j{jobs}` (workspace.JOBS /
-        # workspace.west_build_command): the vendored CHIP GN sub-build
-        # otherwise ignores it entirely, see workspace.CHIP_JOBS_VAR.
+        # Same job count as the outer `-o=-j{jobs}`
+        # (workspace.west_build_command) — resolved once on the host
+        # (workspace.resolve_jobs) and passed in here rather than
+        # recomputed: the vendored CHIP GN sub-build otherwise ignores it
+        # entirely, see workspace.CHIP_JOBS_VAR.
         workspace.CHIP_JOBS_VAR: str(jobs),
     }
 
@@ -342,7 +344,7 @@ def plan_build(
     snippets: tuple[str, ...] = (),
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
-    jobs: int = workspace.JOBS,
+    jobs: int,
     image: str | None = None,
     runner: Runner | None = None,
 ) -> workspace.BuildPlan:

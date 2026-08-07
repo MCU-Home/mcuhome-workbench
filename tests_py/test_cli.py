@@ -46,6 +46,7 @@ def _planner(out_dir: Path):
                 build_dir=build_dir,
                 board=kwargs["board"],
                 snippets=kwargs["snippets"],
+                jobs=kwargs["jobs"],
             ),
             env={},
         )
@@ -175,6 +176,69 @@ def test_a_relative_build_dir_still_names_an_absolute_application(tmp_path, monk
     )
     assert main(["build", str(EXAMPLE), "--build-dir", "out", "--native"]) == 0
     assert str((tmp_path / "out" / APP_DIR).resolve()) in seen
+
+
+def test_build_uses_the_jobs_flag_and_reports_its_source(tmp_path, capsys, monkeypatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(
+        workspace,
+        "run_build",
+        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
+    )
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "--jobs", "3"]
+    assert main(argv) == 0
+    assert "-o=-j3" in seen
+    assert "jobs 3 (flag)" in capsys.readouterr().out
+
+
+def test_build_uses_the_environment_variable_when_no_flag_is_given(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(
+        workspace,
+        "run_build",
+        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
+    )
+    monkeypatch.setenv(workspace.JOBS_VAR, "5")
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
+    assert main(argv) == 0
+    assert "-o=-j5" in seen
+    assert "jobs 5 (env)" in capsys.readouterr().out
+
+
+def test_build_auto_detects_when_neither_flag_nor_environment_is_given(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
+    monkeypatch.setattr(
+        workspace,
+        "run_build",
+        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
+    )
+    monkeypatch.delenv(workspace.JOBS_VAR, raising=False)
+    monkeypatch.setattr(workspace, "detect_jobs", lambda: 7)
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
+    assert main(argv) == 0
+    assert "-o=-j7" in seen
+    assert "jobs 7 (auto)" in capsys.readouterr().out
+
+
+def test_jobs_zero_is_a_plain_language_refusal(capsys) -> None:
+    with pytest.raises(SystemExit) as caught:
+        main(["build", str(EXAMPLE), "--jobs", "0"])
+    assert caught.value.code == 2
+    assert "--jobs must be at least 1" in capsys.readouterr().err
+
+
+def test_jobs_garbage_is_a_plain_language_refusal(capsys) -> None:
+    with pytest.raises(SystemExit) as caught:
+        main(["build", str(EXAMPLE), "--jobs", "nope"])
+    assert caught.value.code == 2
+    assert "whole number of parallel build jobs" in capsys.readouterr().err
 
 
 def test_build_reports_a_failed_compile_and_points_at_the_build_directory(

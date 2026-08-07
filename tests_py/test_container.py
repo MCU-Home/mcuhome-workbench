@@ -58,6 +58,7 @@ def _plan(tmp_path: Path, monkeypatch, **kwargs):
     monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     environment = {container.CCACHE_DIR_VAR: str(tmp_path / "cache")}
     environment.update(kwargs.pop("env", {}))
+    kwargs.setdefault("jobs", 2)
     return top, container.plan_build(
         out_dir=kwargs.pop("out_dir", top / "build" / "node"),
         app_subdir="app",
@@ -179,14 +180,16 @@ def test_the_container_environment_is_composed_not_inherited(tmp_path) -> None:
     Only what depends on where the workspace is gets passed in; the SDK,
     the toolchain variant and the tool paths belong to the image.
     """
-    env = container.container_environment(topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim")
+    env = container.container_environment(
+        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=2
+    )
     assert env == {
         "PYTHONPATH": str(tmp_path / "shim"),
         "ZEPHYR_BASE": str(tmp_path / "ws" / "zephyr"),
         "HOME": container.CONTAINER_HOME,
         "CCACHE_DIR": container.CONTAINER_CCACHE_DIR,
         "CCACHE_BASEDIR": str(tmp_path / "ws"),
-        workspace.CHIP_JOBS_VAR: str(workspace.JOBS),
+        workspace.CHIP_JOBS_VAR: "2",
     }
 
 
@@ -196,11 +199,11 @@ def test_the_container_environment_caps_the_chip_gn_sub_build_too(tmp_path) -> N
     (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
     config/common/cmake/chip_gn.cmake.)
     """
-    env = container.container_environment(topdir=tmp_path / "ws")
-    assert env[workspace.CHIP_JOBS_VAR] == str(workspace.JOBS)
+    env = container.container_environment(topdir=tmp_path / "ws", jobs=2)
+    assert env[workspace.CHIP_JOBS_VAR] == "2"
 
 
-def test_an_explicit_jobs_override_reaches_the_chip_gn_sub_build(tmp_path) -> None:
+def test_a_different_jobs_value_reaches_the_chip_gn_sub_build_too(tmp_path) -> None:
     env = container.container_environment(topdir=tmp_path / "ws", jobs=4)
     assert env[workspace.CHIP_JOBS_VAR] == "4"
 
@@ -328,6 +331,7 @@ def test_the_process_runner_is_resolved_at_call_time(tmp_path, monkeypatch) -> N
         app_subdir="app",
         board="x",
         env={container.CCACHE_DIR_VAR: str(tmp_path / "cache")},
+        jobs=2,
     )
     assert [command[1] for command in calls] == ["version", "image"]
 
@@ -359,6 +363,7 @@ def test_the_plan_is_a_west_build_inside_a_docker_run(tmp_path, monkeypatch) -> 
         build_dir=plan.build_dir,
         board="nrf7002dk/nrf5340/cpuapp",
         snippets=(),
+        jobs=2,
     )
 
 
@@ -369,7 +374,19 @@ def test_the_plan_caps_the_chip_gn_sub_build_in_the_container_too(tmp_path, monk
     config/common/cmake/chip_gn.cmake.)
     """
     _, plan = _plan(tmp_path, monkeypatch)
-    assert f"{workspace.CHIP_JOBS_VAR}={workspace.JOBS}" in plan.command
+    assert f"{workspace.CHIP_JOBS_VAR}=2" in plan.command
+
+
+def test_a_resolved_job_count_reaches_both_the_outer_and_inner_ninja(tmp_path, monkeypatch) -> None:
+    """Both the outer west build and CHIP's inner GN sub-build agree.
+
+    The host resolves jobs once; the container sees that same number for
+    both — not a figure guessed at from inside the container, which may
+    see a cgroup-limited view of the host's memory.
+    """
+    _, plan = _plan(tmp_path, monkeypatch, jobs=6)
+    assert "-o=-j6" in plan.command
+    assert f"{workspace.CHIP_JOBS_VAR}=6" in plan.command
 
 
 def test_the_plan_needs_no_toolchain_on_the_host(tmp_path, monkeypatch) -> None:
@@ -429,6 +446,7 @@ def test_the_plan_refuses_before_it_decides_anything_else(tmp_path, monkeypatch)
             board="x",
             env={container.CCACHE_DIR_VAR: str(tmp_path / "cache")},
             runner=_Runner(0, 1),
+            jobs=2,
         )
     assert "is not on this machine" in caught.value.message
     # Nothing was created for a build that was never going to happen.

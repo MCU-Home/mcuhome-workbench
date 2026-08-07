@@ -143,6 +143,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Build parallelism is auto-detected instead of a static `-j2`:
+  `mcuhome.workspace.auto_jobs` computes
+  `min(cpu_count, max(2, available_ram_gb // 2))` from live CPU count and
+  `/proc/meminfo` `MemAvailable` (`mcuhome.workspace.detect_jobs`),
+  budgeting ~2 GiB per job — measured CHIP C++ compiles peak around
+  1-1.5 GiB per job, and links, though they spike higher, are serialized.
+  `mcuhome build --jobs N` overrides it; failing that, `MCUHOME_JOBS=N`
+  does; failing that, auto-detection runs
+  (`mcuhome.workspace.resolve_jobs`, the single resolution point — the
+  build summary states which of the three decided). Resolved once on the
+  host before a container build starts docker, since the container's RAM
+  budget is the host's (or the WSL VM's), not one guessed at from inside
+  a possibly cgroup-limited container. `MCUHOME_CHIP_JOBS`, which caps
+  the vendored CHIP GN sub-build's own inner `ninja`, now carries this
+  resolved value instead of the previous fixed `2`.
 - `mcuhome build` compiles in the builder container by default; `--native`
   is the escape hatch (ADR 0007). Host prerequisites for a compiling build
   shrink to git and docker — the Zephyr SDK, `gn` and `zap` are only

@@ -235,6 +235,21 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_int(text: str) -> int:
+    """``--jobs``'s type=: a whole number of parallel build jobs, at least 1."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--jobs wants a whole number of parallel build jobs, not {text!r}."
+        ) from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(
+            f"--jobs must be at least 1 ({value} would build nothing at all)."
+        )
+    return value
+
+
 def _snippets_for(model: DeviceModel, extra: list[str] | None) -> tuple[str, ...]:
     """The configuration's own snippets, then anything the caller added.
 
@@ -266,6 +281,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
         return 0
 
     snippets = _snippets_for(model, args.snippet)
+    # The single resolution point (workspace.resolve_jobs): --jobs beats
+    # MCUHOME_JOBS beats auto-detection. Resolved once, here, on the host —
+    # the container path needs the same number for its own docker run, not
+    # a second guess made from inside the container.
+    resolved_jobs = workspace.resolve_jobs(cli_jobs=args.jobs)
     # Absolute from here on: the build runs with the workspace top
     # directory as its working directory (that is how west finds the
     # manifest), so a relative --build-dir would land somewhere else
@@ -276,6 +296,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         "app_subdir": APP_DIR,
         "board": model.device.board,
         "snippets": snippets,
+        "jobs": resolved_jobs.value,
     }
     # ADR 0007: the container is the build environment, --native is the
     # escape hatch for a contributor who already has a west workspace.
@@ -288,6 +309,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
     if plan.image:
         print(f"  in {plan.image}")
+    print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
     print(f"  {' '.join(plan.command)}")
     print()
     # The build log is written by a subprocess to the same terminal; flush
@@ -447,6 +469,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             f"builder image to compile in (default: {container.IMAGE}; the "
             f"{container.IMAGE_VAR} environment variable sets it too)"
+        ),
+    )
+    build_parser_.add_argument(
+        "--jobs",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=(
+            "parallel build jobs (default: auto-detected from CPU count and "
+            f"available RAM; {workspace.JOBS_VAR} overrides the auto-detection, "
+            "--jobs overrides both)"
         ),
     )
     add_common_options(build_parser_)
