@@ -14,9 +14,11 @@ separate repository ([mcu-home/dashboard](https://github.com/mcu-home/dashboard)
 **Current phase.** Phase 1 (firmware runtime: tables-contract framework,
 channel layer, netcore entropy, BMP180 two-endpoint sample) is complete
 and hardware-verified against a production Home Assistant over Thread.
-The Python YAML builder (phase 2) is not yet implemented — `mcuhome
-build` does not exist yet. Check `docs/adr/` before assuming any design
-decision.
+Phase 2 (the Python YAML builder) is in progress: `mcuhome validate`
+runs the front half of the pipeline (load → validate → resolve into the
+canonical device model). Code generation and the container build are not
+implemented — `mcuhome build` refuses. Check `docs/adr/` before assuming
+any design decision.
 
 ## Repository map
 
@@ -33,6 +35,7 @@ decision.
 | `include/mcuhome/` | Public C API headers |
 | `lib/` | Portable, `native_sim`-testable libraries |
 | `tests/`, `samples/` | Twister suites and samples |
+| `tests_py/` | pytest suite of the builder package (kept apart from twister's `tests/`) |
 | `scripts/` | Dev tooling, future custom west extension commands |
 | `docs/adr/` | Architecture decision records (MADR-style) |
 
@@ -67,8 +70,16 @@ west init -l mcuhome && west update
 # Build the placeholder app (from the workspace top directory)
 west build -p -b native_sim mcuhome/app
 
-# Run test suites
+# Run the Zephyr test suites (tests/)
 west twister -T mcuhome/tests --integration --inline-logs -v
+
+# Builder (Python): install once, then run its tests (tests_py/) — no
+# Zephyr and no west workspace needed, ~1 s
+pip install -e '.[dev]'
+pytest
+
+# Check one device configuration with the builder
+mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
 # Python lint/format
 ruff check --fix . && ruff format .

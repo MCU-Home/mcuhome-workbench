@@ -1,0 +1,209 @@
+{
+  "model_version": 1,
+  "device": {
+    "name": "bmp180-node",
+    "friendly_name": "BMP180 Two-Endpoint Node",
+    "board": "nrf7002dk/nrf5340/cpuapp",
+    "power_source": "mains"
+  },
+  "network": {
+    "transport": "thread",
+    "matter_enabled": true,
+    "thread": {
+      "device_role": "ftd",
+      "poll_interval_ms": null
+    }
+  },
+  "toolchain": {
+    "zephyr_line": "4.4",
+    "blob_usage": "auto",
+    "blobs": {}
+  },
+  "hardware": {
+    "buses": [
+      {
+        "id": "i2c0",
+        "kind": "i2c",
+        "controller": "arduino_i2c",
+        "sda": null,
+        "scl": null,
+        "frequency_hz": null
+      }
+    ],
+    "peripherals": [
+      {
+        "id": "baro",
+        "compatible": "bosch,bmp180",
+        "bus": "i2c0",
+        "reg": 119,
+        "properties": {
+          "osr-press": 1
+        }
+      }
+    ]
+  },
+  "endpoints": [
+    {
+      "id": 1,
+      "parent_id": 0,
+      "alias": "temperature",
+      "device_types": [
+        {
+          "id": 770,
+          "revision": 3,
+          "name": "temperature_sensor"
+        }
+      ],
+      "clusters": [
+        {
+          "id": 1026,
+          "name": "temperature_measurement",
+          "feature_map": 0,
+          "cluster_revision": 4,
+          "attrs": [
+            {
+              "id": 0,
+              "name": "measured_value",
+              "type": "int16s",
+              "size": 2,
+              "flags": [
+                "nullable"
+              ],
+              "store": "ep1_temperature_measurement_measured_value",
+              "default": 0
+            },
+            {
+              "id": 1,
+              "name": "min_measured_value",
+              "type": "int16s",
+              "size": 2,
+              "flags": [],
+              "store": null,
+              "default": -4000
+            },
+            {
+              "id": 2,
+              "name": "max_measured_value",
+              "type": "int16s",
+              "size": 2,
+              "flags": [],
+              "store": null,
+              "default": 8500
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "parent_id": 0,
+      "alias": "pressure",
+      "device_types": [
+        {
+          "id": 773,
+          "revision": 2,
+          "name": "pressure_sensor"
+        }
+      ],
+      "clusters": [
+        {
+          "id": 1027,
+          "name": "pressure_measurement",
+          "feature_map": 0,
+          "cluster_revision": 3,
+          "attrs": [
+            {
+              "id": 0,
+              "name": "measured_value",
+              "type": "int16s",
+              "size": 2,
+              "flags": [
+                "nullable"
+              ],
+              "store": "ep2_pressure_measurement_measured_value",
+              "default": 0
+            },
+            {
+              "id": 1,
+              "name": "min_measured_value",
+              "type": "int16s",
+              "size": 2,
+              "flags": [],
+              "store": null,
+              "default": 300
+            },
+            {
+              "id": 2,
+              "name": "max_measured_value",
+              "type": "int16s",
+              "size": 2,
+              "flags": [],
+              "store": null,
+              "default": 1100
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "channels": [
+    {
+      "store": "ep1_temperature_measurement_measured_value",
+      "type": "int16s",
+      "endpoint_id": 1,
+      "cluster_id": 1026,
+      "attr_id": 0,
+      "sample_period_ms": 10000,
+      "report_delta": 10,
+      "source": {
+        "peripheral": "baro",
+        "channel": "baro.temperature",
+        "fetch_channel": "SENSOR_CHAN_ALL",
+        "zephyr_channel": "SENSOR_CHAN_DIE_TEMP",
+        "scale_num": 100,
+        "scale_den": 1,
+        "offset": 0
+      }
+    },
+    {
+      "store": "ep2_pressure_measurement_measured_value",
+      "type": "int16s",
+      "endpoint_id": 2,
+      "cluster_id": 1027,
+      "attr_id": 0,
+      "sample_period_ms": 10000,
+      "report_delta": 1,
+      "source": {
+        "peripheral": "baro",
+        "channel": "baro.pressure",
+        "fetch_channel": "SENSOR_CHAN_ALL",
+        "zephyr_channel": "SENSOR_CHAN_PRESS",
+        "scale_num": 10,
+        "scale_den": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "build": {
+    "snippets": [
+      "matter"
+    ],
+    "kconfig": [
+      "CONFIG_BT=n",
+      "CONFIG_CHIP=y",
+      "CONFIG_CHIP_DEVICE_PRODUCT_ID=32768",
+      "CONFIG_CHIP_ENABLE_PAIRING_AUTOSTART=y",
+      "CONFIG_ENTROPY_GENERATOR=y",
+      "CONFIG_MBEDTLS=y",
+      "CONFIG_MBEDTLS_PSA_CRYPTO_C=y",
+      "CONFIG_MCUHOME=y",
+      "CONFIG_MCUHOME_MATTER=y",
+      "CONFIG_MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS=2",
+      "CONFIG_MCUHOME_MATTER_THREAD_ROUTER=y",
+      "CONFIG_MCUHOME_SENSOR=y",
+      "CONFIG_NET_L2_OPENTHREAD=y",
+      "CONFIG_SENSOR=y",
+      "CONFIG_STD_CPP17=y"
+    ]
+  }
+}

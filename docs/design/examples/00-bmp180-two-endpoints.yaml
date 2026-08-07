@@ -1,0 +1,110 @@
+# =========================================================================
+# Example 0 — BMP180 two-endpoint node (the hardware-verified reference)
+# =========================================================================
+# This is the ONE example the builder can fully process today: it is the
+# YAML form of samples/matter-node, the node that was commissioned into a
+# production Home Assistant over Thread on 2026-08-04. Its resolved model
+# is the golden fixture of the builder test suite, so this file and
+# samples/matter-node/src/{mcuhome_config.c,main.c} must keep saying the
+# same thing.
+#
+# nRF7002-DK (nRF5340 application core), one Bosch BMP180 on the Arduino
+# header's I2C bus, exposed as two independent sensor endpoints — the
+# normal MCUHome shape, since Matter has no "combined sensor" device type
+# and a controller expects one endpoint per measured quantity.
+#
+# Two constructs here are more explicit than the other examples, because
+# the schema design left them open and the generated tables need them.
+# Both are noted at the line where they appear:
+#   * `controller:` naming a board bus node instead of `sda:`/`scl:` pins
+#   * `range:` under a measurement cluster
+# =========================================================================
+
+device:
+  name: bmp180-node
+  friendly_name: BMP180 Two-Endpoint Node
+  board: nrf7002dk/nrf5340/cpuapp
+  power:
+    source: mains               # a DK on USB: always-on receiver
+
+network:
+  thread:
+    device_role: ftd            # Router — mains-powered, no sleep budget
+  matter:
+    enabled: true               # default when a transport exists
+
+hardware:
+  buses:
+    i2c0:
+      # The board already routes this bus: `arduino_i2c` is the
+      # nRF7002-DK's own label for i2c1, whose pinctrl group puts SDA on
+      # P1.02 and SCL on P1.03 — the dedicated SDA/SCL pins of the
+      # Arduino UNO R3 shield header (D14/D15). Naming the board's bus
+      # node is the schema's `controller:` key (§5, "optional: pick a
+      # specific SoC controller"); `sda:`/`scl:` would ask the builder to
+      # assign pins, which it cannot do yet.
+      controller: arduino_i2c
+
+  peripherals:
+    baro:
+      driver: bosch,bmp180      # devicetree compatible string, verbatim
+      bus: i2c0
+      address: 0x77             # fixed in silicon: the chip has no
+                                # address-select pin
+      # Devicetree property of the Zephyr binding, spelled exactly as the
+      # binding spells it (schema §5: "devicetree-aligned"). osr-press 1
+      # is "standard" oversampling (2 samples, ~7.5 ms). The datasheet's
+      # ~0.06 hPa RMS noise is an order of magnitude below this
+      # endpoint's 1 hPa quantization, so higher modes would buy
+      # resolution the Matter attribute cannot carry.
+      osr-press: 1
+
+node:
+  endpoints:
+    - id: 1
+      alias: temperature
+      device_type: temperature_sensor      # Matter 0x0302
+      clusters:
+        temperature_measurement:           # Matter 0x0402
+          # The BMP180 reports its die temperature; in this part the die
+          # IS the reference thermometer for the pressure compensation
+          # and the package has no self-heating load worth speaking of,
+          # so it tracks ambient. A ±2 °C part: good enough to prove the
+          # path, not good enough to sell as a room thermometer.
+          source: baro.temperature
+          sampling: 10s         # fast enough to watch the value move
+                                # while breathing on the sensor
+          report:
+            delta: 0.1          # °C — below the part's accuracy, above
+                                # the noise of a still room
+          # Min/MaxMeasuredValue, the two constant attributes of the
+          # cluster. The schema design does not name this key (§6 says
+          # the builder "fills mandatory boilerplate attributes with sane
+          # defaults"), so `range:` is the explicit form MCUHome uses,
+          # in the same unit the rest of the cluster speaks.
+          #
+          # BMP180 datasheet (BST-BMP180-DS000, §1 "Operating range"):
+          # -40...+85 °C. Like the pressure cluster below, the device
+          # advertises the sensor's own range — a controller uses it to
+          # size gauges and sanity-check readings.
+          range:
+            min: -40.0
+            max: 85.0
+
+    - id: 2
+      alias: pressure
+      device_type: pressure_sensor         # Matter 0x0305
+      clusters:
+        pressure_measurement:              # Matter 0x0403
+          source: baro.pressure
+          sampling: 10s
+          report:
+            delta: 1            # hPa — roughly an hour of weather, or
+                                # 8 m of altitude
+          # BMP180 datasheet (BST-BMP180-DS000, §1 "Operating range"):
+          # 300...1100 hPa. A controller uses this to size gauges and to
+          # sanity-check readings, so it advertises the sensor's range,
+          # not the cluster's.
+          range:
+            min: 300
+            max: 1100

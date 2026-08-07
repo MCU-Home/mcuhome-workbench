@@ -28,6 +28,16 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Home Automation",
 ]
+# One runtime dependency, on purpose: ruamel.yaml is the only YAML parser
+# that keeps line/column information on the parsed tree, and every
+# validation error in this builder points at a line. Everything else
+# (CLI, validation) is the standard library plus hand-written checks —
+# error messages are user interface here, and a schema library's generic
+# wording does not meet that bar.
+dependencies = ["ruamel.yaml>=0.18"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/mcu-home/mcuhome"
@@ -43,6 +53,18 @@ packages = ["mcuhome"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Design documents are prose; the Python sketches inside them illustrate
+# an idea and are not source. `ruff format` reformats fenced code blocks
+# in Markdown, which would silently rewrite approved design records.
+extend-exclude = ["docs/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# Python tests live in tests_py/, not in tests/: tests/ holds Zephyr
+# twister suites (testcase.yaml per directory) and twister recurses into
+# whatever it is pointed at. Two runners, two roots, no overlap — see
+# tests_py/README.md.
+[tool.pytest.ini_options]
+testpaths = ["tests_py"]
+

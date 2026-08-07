@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/entropy_ipc/`).
 - First CI workflow (`.github/workflows/ci.yml`): lint and licensing checks
   (ruff, REUSE), landed together with the first test suite.
+- Builder front half (`mcuhome/`, phase 2 block A): config-tree discovery,
+  YAML load with `!secret`, the three validation stages and the canonical
+  device model behind `mcuhome validate <device>`, with a pytest suite in
+  `tests_py/` that asserts every rejection message and a golden device model
+  for `docs/design/examples/00-bmp180-two-endpoints.yaml`.
 - Trap-fix Kconfig blocks (`snippets/matter/`, `snippets/debug-rtt/`) closing
   silent-failure modes found during hardware bring-up (entropy downgrade,
   undersized mbedTLS heap/stacks, RTT control-block re-init).

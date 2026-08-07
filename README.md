@@ -28,9 +28,10 @@ controller out of the box — no custom integration required.
 channel layer, netcore entropy service, and a BMP180 two-endpoint sample
 — is implemented and hardware-verified: commissioned into a production
 Home Assistant instance over Thread (design record: see
-[docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is not yet
-implemented — `mcuhome build` does not exist yet. The companion web
-interface lives in
+[docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is under
+construction: `mcuhome validate <device>` already checks a configuration
+and prints what it resolves to, while `mcuhome build` does not exist yet.
+The companion web interface lives in
 [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 
 ## Repository layout
@@ -49,6 +50,7 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 | `snippets/` | Connectivity/device-class variants (wifi, thread-sed, …) |
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
+| `tests_py/` | pytest suite of the builder package |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |
 

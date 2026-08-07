@@ -1,0 +1,46 @@
+# tests_py/
+
+Python tests for the builder package (`mcuhome/`), run with pytest:
+
+```sh
+pip install -e '.[dev]'
+pytest
+```
+
+**Why not `tests/`?** That directory holds Zephyr twister suites
+(`testcase.yaml` per subdirectory) and twister recurses into whatever it
+is pointed at, so a Python test tree living there would be walked by
+twister and a C suite would be collected by pytest. Two runners, two
+roots, no overlap. `pyproject.toml` pins pytest to this directory
+(`testpaths`), so a bare `pytest` from the repo root does the right
+thing.
+
+These tests need neither Zephyr nor a west workspace and run in about a
+second — they are the fast half of the strategy in
+[`docs/design/builder-pipeline.md`](../docs/design/builder-pipeline.md)
+§9.
+
+| File | Covers |
+|---|---|
+| `test_tree.py` | config-root discovery, device resolution (name, folder, bare file) |
+| `test_loader.py` | YAML parsing and `!secret` resolution, including their error messages |
+| `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
+| `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
+| `test_examples.py` | the design examples in `docs/design/examples/` |
+| `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
+| `test_cli.py` | command surface, exit codes, summary output |
+
+`data/golden/` holds the byte-exact expected device model. Regenerate it
+deliberately, never automatically:
+
+```sh
+python -c "from pathlib import Path; from mcuhome.cli import load_device_model; \
+from mcuhome.tree import ConfigTree; \
+p = Path('docs/design/examples/00-bmp180-two-endpoints.yaml').resolve(); \
+print(load_device_model(p, tree=ConfigTree(root=p.parent, discovered=False)).to_json(), end='')" \
+  > tests_py/data/golden/00-bmp180-two-endpoints.device-model.json
+```
+
+Error **text** is asserted on purpose: validation messages are user
+interface (builder-pipeline.md §9). If a message changes, that is a
+deliberate UX change and the test is where it gets reviewed.
