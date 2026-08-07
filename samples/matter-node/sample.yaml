@@ -4,9 +4,9 @@
 sample:
   name: MCUHome Matter node sample
   description: >
-    Minimal Matter node on vanilla Zephyr with one dynamically registered
-    temperature endpoint, evaluating the dynamic-endpoint path of the
-    MCUHome builder pipeline against upstream CHIP.
+    Matter node on vanilla Zephyr with two runtime-registered endpoints
+    (temperature EP1, pressure EP2, fed by a BMP180), exercising the
+    MCUHome generated-tables contract against upstream CHIP.
 common:
   tags:
     - matter

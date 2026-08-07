@@ -322,6 +322,45 @@ static int validate_bindings(const struct mcuhome_sensor_binding *b, size_t n)
 	return 0;
 }
 
+/**
+ * Cross-check every binding's (endpoint, cluster, attr) path against the
+ * Matter registry's own tables.
+ *
+ * The path and the store cell are stated twice today — once in the
+ * generated Matter tables (<mcuhome/matter_tables.h>), once in this
+ * component's own binding table (<mcuhome/channel.h>) — until the builder
+ * emits both from one YAML source (ADR 0014). Nothing but convention keeps
+ * them in sync in the meantime, so a typo'd ID here would silently publish
+ * into the wrong attribute, or into an attribute nobody reads. Refuse to
+ * start rather than let that drift run silently.
+ */
+static int validate_registry_match(const struct mcuhome_sensor_binding *b, size_t n)
+{
+	for (size_t i = 0; i < n; i++) {
+		const struct mcuhome_channel *ch = b[i].channel;
+		const struct mcuhome_attr_store *registered = mcuhome_matter_attr_store_lookup(
+			ch->endpoint_id, ch->cluster_id, ch->attr_id);
+
+		if (registered == NULL) {
+			LOG_ERR("binding %u: ep%u/0x%04x/0x%04x is not a known store-backed "
+				"Matter attribute",
+				(unsigned int)i, ch->endpoint_id, (unsigned int)ch->cluster_id,
+				(unsigned int)ch->attr_id);
+			return -EINVAL;
+		}
+		if (registered != ch->store) {
+			LOG_ERR("binding %u: ep%u/0x%04x/0x%04x resolves to a different store "
+				"cell than this binding's channel - table and binding have "
+				"drifted apart",
+				(unsigned int)i, ch->endpoint_id, (unsigned int)ch->cluster_id,
+				(unsigned int)ch->attr_id);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 int mcuhome_sensor_start(const struct mcuhome_sensor_binding *b, size_t n)
 {
 	static const struct k_work_queue_config workq_cfg = {
@@ -343,6 +382,11 @@ int mcuhome_sensor_start(const struct mcuhome_sensor_binding *b, size_t n)
 	}
 
 	rc = validate_bindings(b, n);
+	if (rc != 0) {
+		return rc;
+	}
+
+	rc = validate_registry_match(b, n);
 	if (rc != 0) {
 		return rc;
 	}

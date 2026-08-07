@@ -4,7 +4,7 @@
 config MCUHOME_RTT_REINIT
 	bool "Re-initialize the RTT control block at boot"
 	depends on USE_SEGGER_RTT
-	default y if LOG_BACKEND_RTT && MCUHOME
+	default y if LOG_BACKEND_RTT
 	help
 	  Log-only RTT builds never re-initialize the RTT control block: the
 	  log backend writes through the NoLock API, which skips SEGGER's lazy

@@ -85,6 +85,35 @@ int mcuhome_matter_start(const struct mcuhome_matter_node *node);
 void mcuhome_matter_attr_changed(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attr_id);
 
 /**
+ * @brief Look up the store cell the registry has for one attribute path.
+ *
+ * Framework-side half of the channel/table cross-validation guard
+ * (<mcuhome/channel.h>): until the builder generates both the Matter
+ * tables and the component binding tables from one YAML source, the same
+ * (endpoint, cluster, attribute) path and the same store cell are stated
+ * twice — once in the generated tables (<mcuhome/matter_tables.h>), once
+ * in a component's own binding table (for example
+ * @ref mcuhome_sensor_binding) — and nothing stops them from drifting
+ * apart. A component that independently knows a path can call this at
+ * startup and compare the result against the store cell it was about to
+ * use, instead of trusting the ID match silently.
+ *
+ * Safe to call at any time; simply returns NULL before
+ * mcuhome_matter_start() has registered a node.
+ *
+ * @param endpoint_id Endpoint to look up.
+ * @param cluster_id  Cluster to look up.
+ * @param attr_id     Attribute to look up.
+ *
+ * @return The attribute's registered store cell. NULL if the path is
+ *         unknown to the registry, the attribute is not store-backed (a
+ *         constant attribute, `store == NULL` in the table), or no node
+ *         has been registered yet.
+ */
+const struct mcuhome_attr_store *
+mcuhome_matter_attr_store_lookup(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attr_id);
+
+/**
  * @brief Bring-up progress hook.
  *
  * Called by mcuhome_matter_start() once per stage *outcome*, after the

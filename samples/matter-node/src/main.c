@@ -169,7 +169,7 @@ int main(void)
 	gpio_pin_configure_dt(&led_red, GPIO_OUTPUT_INACTIVE);
 	gpio_pin_set_dt(&led_green, 1); /* solid green: initializing */
 
-	printk("mcuhome: boot, image c1-channels\n");
+	printk("mcuhome: boot, matter-node sample\n");
 
 	err = mcuhome_matter_start(&mcuhome_node_config);
 	if (err != 0) {
@@ -181,11 +181,15 @@ int main(void)
 	 * immediately and the reporting path has to exist by then. */
 #if DT_NODE_HAS_STATUS_OKAY(SAMPLE_BMP180)
 	err = mcuhome_sensor_start(sample_bindings, ARRAY_SIZE(sample_bindings));
+	mcuhome_matter_stage("SensorStart", err);
 	if (err != 0) {
-		/* A malformed binding table, not a missing sensor — an absent
-		 * sensor is handled inside the poller and reports null. */
+		/* A malformed binding table or a binding/table ID mismatch
+		 * (mcuhome_matter_attr_store_lookup(), <mcuhome/channel.h>) —
+		 * not a missing sensor, which the poller handles internally
+		 * and reports as null. Visible (LED + log) but not fatal: the
+		 * node must stay commissionable even with broken sensor
+		 * wiring, so endpoints 1/2 simply keep reporting null. */
 		printk("mcuhome: sensor channels failed to start: %d\n", err);
-		return err;
 	}
 #else
 	printk("mcuhome: no sensor peripheral on this board - endpoints report null\n");

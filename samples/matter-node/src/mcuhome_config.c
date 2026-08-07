@@ -16,7 +16,7 @@
  * and a controller expects one endpoint per measured quantity.
  *   EP1, parent 0 (directly under the root node — MCUHome nodes are native
  *   composed nodes, never bridges), device type Temperature Sensor
- *   (0x0302, revision 1), Temperature Measurement cluster (0x0402).
+ *   (0x0302, revision 3), Temperature Measurement cluster (0x0402).
  *   EP2, parent 0, device type Pressure Sensor (0x0305, revision 2),
  *   Pressure Measurement cluster (0x0403).
  *
@@ -34,6 +34,11 @@
  * in both cases) and for the Pressure Sensor device type (3 vs 2). Those
  * are the numbers a CHIP release will grow into, not the ones its current
  * code implements. Re-check both on every SDK bump.
+ *
+ * EP1's Temperature Sensor device type revision was corrected to 3
+ * (matter-devices.xml:1849) from the prototype-era hardcoded 1 — the same
+ * sourcing rule above, just not applied yet when that endpoint was first
+ * written.
  *
  * The Descriptor cluster and the global attributes FeatureMap (0xFFFC) and
  * ClusterRevision (0xFFFD) are deliberately absent: the framework appends
@@ -100,7 +105,7 @@ static const struct mcuhome_matter_cluster ep1_clusters[] = {
 static const struct mcuhome_matter_device_type ep1_device_types[] = {
 	{
 		.id = 0x0302, /* Matter Temperature Sensor */
-		.revision = 1,
+		.revision = 3,
 	},
 };
 

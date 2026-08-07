@@ -44,6 +44,10 @@ if MCUHOME_MATTER
 config MCUHOME_MATTER_PSA_WANTS
 	bool
 	default y if MBEDTLS
+	# MCUHOME_MATTER_PSA_WANTS itself has no prompt and is never `depends
+	# on`ed, `select`ed by name elsewhere, or read from code — it exists
+	# solely as a select-cascade carrier: a symbol for the `select`s below
+	# to hang off, enabled automatically via `default y if MBEDTLS`.
 	# The PSA_WANT_* symbols are promptless while MBEDTLS_PROMPTLESS is
 	# active — plain prj.conf assignments are silently dropped. An app
 	# Kconfig `select` is the supported way to force them on. CHIP needs

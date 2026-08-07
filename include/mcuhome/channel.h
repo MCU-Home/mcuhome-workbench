@@ -89,7 +89,18 @@ struct mcuhome_channel {
 	 * start (see the scope note at the top of this file).
 	 */
 	enum mcuhome_attr_type type;
-	/** Endpoint of the bound attribute, for change notification. */
+	/**
+	 * Endpoint of the bound attribute, for change notification.
+	 *
+	 * Together with `cluster_id`/`attr_id` below, this path and `store`
+	 * must match the same attribute in the generated Matter tables
+	 * (<mcuhome/matter_tables.h>) — today two independent statements of
+	 * the same fact, until the builder emits both from one YAML source
+	 * (ADR 0014). mcuhome_sensor_start() enforces the match at startup
+	 * via mcuhome_matter_attr_store_lookup() (<mcuhome/matter.h>) and
+	 * refuses to start on a mismatch rather than publish into the wrong
+	 * attribute, or into one nobody reads.
+	 */
 	uint16_t endpoint_id;
 	/** Cluster of the bound attribute, for change notification. */
 	uint32_t cluster_id;

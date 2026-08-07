@@ -39,6 +39,7 @@ config MCUHOME_SENSOR_MAX_BINDINGS
 config MCUHOME_SENSOR_WORKQ_STACK_SIZE
 	int "Sensor poller workqueue stack size"
 	default 2048
+	range 1024 16384
 	help
 	  Stack for the poller thread. It has to cover the deepest Zephyr
 	  sensor driver call in the node's binding array, including the

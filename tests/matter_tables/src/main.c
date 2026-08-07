@@ -135,6 +135,17 @@ ZTEST(matter_tables, test_null_node_rejected)
 	zassert_equal(mcuhome_matter_validate_node(NULL, &generous_limits), -EINVAL);
 }
 
+ZTEST(matter_tables, test_null_endpoints_array_rejected)
+{
+	struct mcuhome_matter_node node = valid_node;
+
+	/* node itself is non-NULL, but its endpoints array is - the other
+	 * half of the guard at the top of mcuhome_matter_validate_node(). */
+	node.endpoints = NULL;
+
+	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EINVAL);
+}
+
 /* --- Node-level checks ----------------------------------------------------- */
 
 ZTEST(matter_tables, test_tables_version_mismatch_rejected)
@@ -173,6 +184,34 @@ ZTEST(matter_tables, test_endpoint_id_zero_rejected)
 	/* Collides with the static root endpoint range, not a plain -EINVAL
 	 * (table_validate.c, MCUHOME_MATTER_ROOT_ENDPOINT_COUNT). */
 	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EEXIST);
+}
+
+ZTEST(matter_tables, test_endpoint_id_invalid_marker_rejected)
+{
+	struct mcuhome_matter_endpoint endpoint = valid_endpoints[0];
+	struct mcuhome_matter_node node = valid_node;
+
+	endpoint.endpoint_id = 0xFFFF;
+	node.endpoints = &endpoint;
+	node.endpoint_count = 1;
+
+	/* Mirrors chip::kInvalidEndpointId (table_validate.c,
+	 * MCUHOME_MATTER_INVALID_ENDPOINT_ID) - reserved, and above the static
+	 * root range, so this is the plain -EINVAL branch, not the -EEXIST one
+	 * endpoint 0 takes above. */
+	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EINVAL);
+}
+
+ZTEST(matter_tables, test_zero_device_types_rejected)
+{
+	struct mcuhome_matter_endpoint endpoint = valid_endpoints[0];
+	struct mcuhome_matter_node node = valid_node;
+
+	endpoint.device_type_count = 0;
+	node.endpoints = &endpoint;
+	node.endpoint_count = 1;
+
+	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EINVAL);
 }
 
 ZTEST(matter_tables, test_null_device_types_with_count_rejected)
@@ -228,6 +267,28 @@ ZTEST(matter_tables, test_duplicate_cluster_ids_rejected)
 	node.endpoint_count = 1;
 
 	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EEXIST);
+}
+
+ZTEST(matter_tables, test_descriptor_cluster_declared_rejected)
+{
+	const struct mcuhome_matter_cluster clusters[] = {
+		{
+			.id = 0x001D, /* Descriptor - framework-appended, never declared */
+			.feature_map = 0,
+			.cluster_revision = 1,
+			.attrs = valid_attrs,
+			.attr_count = ARRAY_SIZE(valid_attrs),
+		},
+	};
+	struct mcuhome_matter_endpoint endpoint = valid_endpoints[0];
+	struct mcuhome_matter_node node = valid_node;
+
+	endpoint.clusters = clusters;
+	endpoint.cluster_count = ARRAY_SIZE(clusters);
+	node.endpoints = &endpoint;
+	node.endpoint_count = 1;
+
+	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EINVAL);
 }
 
 /* --- Attribute-level checks -------------------------------------------------- */
@@ -302,6 +363,73 @@ ZTEST(matter_tables, test_writable_attr_without_store_rejected)
 			.type = MCUHOME_ATTR_TYPE_INT16S,
 			.size = 2,
 			.flags = MCUHOME_ATTR_F_WRITABLE,
+			.store = NULL,
+			.def = 0,
+		},
+	};
+	const struct mcuhome_matter_cluster clusters[] = {
+		{
+			.id = 0x0402,
+			.feature_map = 0,
+			.cluster_revision = 1,
+			.attrs = attrs,
+			.attr_count = ARRAY_SIZE(attrs),
+		},
+	};
+	struct mcuhome_matter_endpoint endpoint = valid_endpoints[0];
+	struct mcuhome_matter_node node = valid_node;
+
+	endpoint.clusters = clusters;
+	endpoint.cluster_count = ARRAY_SIZE(clusters);
+	node.endpoints = &endpoint;
+	node.endpoint_count = 1;
+
+	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EINVAL);
+}
+
+ZTEST(matter_tables, test_unknown_attr_type_rejected)
+{
+	const struct mcuhome_matter_attr attrs[] = {
+		{
+			.id = 0x0000,
+			/* Not one of enum mcuhome_attr_type's enumerators -
+			 * attr_type_size()'s switch falls through with no
+			 * match (table_validate.c). */
+			.type = (enum mcuhome_attr_type)99,
+			.size = 2,
+			.flags = 0,
+			.store = NULL,
+			.def = 0,
+		},
+	};
+	const struct mcuhome_matter_cluster clusters[] = {
+		{
+			.id = 0x0402,
+			.feature_map = 0,
+			.cluster_revision = 1,
+			.attrs = attrs,
+			.attr_count = ARRAY_SIZE(attrs),
+		},
+	};
+	struct mcuhome_matter_endpoint endpoint = valid_endpoints[0];
+	struct mcuhome_matter_node node = valid_node;
+
+	endpoint.clusters = clusters;
+	endpoint.cluster_count = ARRAY_SIZE(clusters);
+	node.endpoints = &endpoint;
+	node.endpoint_count = 1;
+
+	zassert_equal(mcuhome_matter_validate_node(&node, &generous_limits), -EINVAL);
+}
+
+ZTEST(matter_tables, test_attr_size_type_mismatch_rejected)
+{
+	const struct mcuhome_matter_attr attrs[] = {
+		{
+			.id = 0x0000,
+			.type = MCUHOME_ATTR_TYPE_INT16S, /* wire size 2 */
+			.size = 4,                        /* declared size disagrees */
+			.flags = 0,
 			.store = NULL,
 			.def = 0,
 		},

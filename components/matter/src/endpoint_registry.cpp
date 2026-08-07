@@ -42,6 +42,7 @@
 #include <lib/support/Span.h>
 #include <platform/CHIPDeviceLayer.h>
 
+#include <mcuhome/matter.h>
 #include <mcuhome/matter_tables.h>
 
 #include "matter_internal.h"
@@ -580,6 +581,34 @@ int mcuhome_matter_registry_register(const struct mcuhome_matter_node *node)
 
 	return 0;
 }
+
+/* --- Public lookup API (<mcuhome/matter.h>) ----------------------------- */
+
+const struct mcuhome_attr_store *
+mcuhome_matter_attr_store_lookup(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attr_id)
+{
+	const struct mcuhome_matter_endpoint *ep = FindEndpoint(endpoint_id);
+
+	if (ep == nullptr) {
+		return nullptr;
+	}
+
+	const struct mcuhome_matter_cluster *cluster = FindCluster(ep, cluster_id);
+
+	if (cluster == nullptr) {
+		return nullptr;
+	}
+
+	const struct mcuhome_matter_attr *attr = FindAttr(cluster, attr_id);
+
+	if (attr == nullptr) {
+		return nullptr;
+	}
+
+	return attr->store;
+}
+
+/* --- Framework-internal entry points ----------------------------------- */
 
 void mcuhome_matter_registry_report(uint16_t endpoint_id, uint32_t cluster_id, uint32_t attr_id)
 {

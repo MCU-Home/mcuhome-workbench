@@ -46,6 +46,7 @@ if MCUHOME_ENTROPY_IPC
 config MCUHOME_ENTROPY_RESEED_INTERVAL_S
 	int "Seconds between CTR-DRBG reseeds"
 	default 300
+	range 0 86400
 	help
 	  Wall-clock interval after which fresh entropy is fetched from the
 	  peer and folded into the DRBG. The request is issued
@@ -66,6 +67,7 @@ config MCUHOME_ENTROPY_RESEED_INTERVAL_S
 config MCUHOME_ENTROPY_SEED_TIMEOUT_S
 	int "Seconds a caller waits for the first seed"
 	default 10
+	range 1 300
 	help
 	  How long entropy_get_entropy() blocks before giving up on the peer
 	  and returning -EIO. Sized for the worst case where the peer core

@@ -363,6 +363,22 @@ ZTEST(entropy_ipc, test_short_delivery_rejected)
 	zassert_equal(mcuhome_entropy_core_get(&core, buf, sizeof(buf)), -EIO);
 }
 
+ZTEST(entropy_ipc, test_oversized_delivery_rejected)
+{
+	uint8_t oversized[MCUHOME_ENTROPY_SEED_BYTES + 1U] = {0};
+	uint8_t buf[16];
+
+	setup_core(300U, 1U, false);
+
+	/* mcuhome_entropy_core_stage() checks len != MCUHOME_ENTROPY_SEED_BYTES,
+	 * so a delivery longer than the DRBG's seed size is rejected exactly
+	 * like a short one - never partially consumed.
+	 */
+	zassert_equal(mcuhome_entropy_core_stage(&core, oversized, sizeof(oversized)), -EINVAL);
+	zassert_false(mcuhome_entropy_core_is_seeded(&core));
+	zassert_equal(mcuhome_entropy_core_get(&core, buf, sizeof(buf)), -EIO);
+}
+
 ZTEST(entropy_ipc, test_rejects_empty_requests)
 {
 	uint8_t buf[8];

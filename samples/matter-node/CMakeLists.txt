@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# MCUHome Matter sample node (ADR 0006 / builder-pipeline §4 evaluation):
-# upstream CHIP v1.5.1.0 as Zephyr module on vanilla Zephyr v4.4.0,
-# nRF7002-DK, one dynamically registered temperature endpoint.
+# MCUHome Matter sample node (ADR 0006 / ADR 0014): upstream CHIP
+# v1.5.1.0 as Zephyr module on vanilla Zephyr v4.4.0, nRF7002-DK, two
+# runtime-registered endpoints (temperature + pressure, BMP180).
 
 cmake_minimum_required(VERSION 3.20.0)
 
@@ -13,7 +13,7 @@ get_filename_component(CHIP_ROOT
 list(APPEND ZEPHYR_EXTRA_MODULES ${CHIP_ROOT}/config/zephyr/chip-module)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(mcuhome-matter-proto)
+project(mcuhome-matter-node)
 
 include(${CHIP_ROOT}/src/app/chip_data_model.cmake)
 

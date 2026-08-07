@@ -28,6 +28,11 @@
 
 #include "table_validate.h"
 
+/* Deliberately its own log module name, not MCUHOME_MATTER_LOG_MODULE
+ * (matter_internal.h): this file is compiled standalone into the
+ * native_sim test app (tests/matter_tables/), without the rest of the
+ * component and without matter_internal.h, so it must self-register
+ * instead of sharing the framework's module. */
 LOG_MODULE_REGISTER(mcuhome_matter_tables, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* Endpoint IDs below this count collide with the statically compiled

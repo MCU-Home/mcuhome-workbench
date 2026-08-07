@@ -134,13 +134,23 @@ int mcuhome_matter_start(const struct mcuhome_matter_node *node)
 	 * NOT_FOUND and the node is never discoverable for on-network
 	 * commissioning. */
 	MCUHOME_STAGE("InitThreadStack", chip::DeviceLayer::ThreadStackMgr().InitThreadStack());
-	MCUHOME_STAGE(
-		"SetThreadDeviceType",
-		chip::DeviceLayer::ConnectivityMgr().SetThreadDeviceType(
-			IS_ENABLED(CONFIG_MCUHOME_MATTER_THREAD_ROUTER)
-				? chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_Router
-				: chip::DeviceLayer::ConnectivityManager::
-					  kThreadDeviceType_MinimalEndDevice));
+
+/* Explicit chain, not a ternary on IS_ENABLED(): MCUHOME_MATTER_THREAD_ROLE
+ * is a Kconfig choice (components/matter/Kconfig) and a two-way ternary
+ * silently maps any future choice member (e.g. a Sleepy End Device) onto
+ * MinimalEndDevice instead of failing the build. #error instead. */
+#if defined(CONFIG_MCUHOME_MATTER_THREAD_ROUTER)
+	MCUHOME_STAGE("SetThreadDeviceType",
+		      chip::DeviceLayer::ConnectivityMgr().SetThreadDeviceType(
+			      chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_Router));
+#elif defined(CONFIG_MCUHOME_MATTER_THREAD_MED)
+	MCUHOME_STAGE("SetThreadDeviceType",
+		      chip::DeviceLayer::ConnectivityMgr().SetThreadDeviceType(
+			      chip::DeviceLayer::ConnectivityManager::
+				      kThreadDeviceType_MinimalEndDevice));
+#else
+#error "unhandled MCUHOME_MATTER_THREAD_ROLE choice member"
+#endif
 #endif /* CONFIG_NET_L2_OPENTHREAD */
 
 	static chip::CommonCaseDeviceServerInitParams initParams;
