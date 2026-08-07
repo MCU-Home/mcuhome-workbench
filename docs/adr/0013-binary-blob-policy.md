@@ -130,3 +130,17 @@ switch is the wrong resolution granularity. Refined model:
   entries that have become redundant or now only restrict (e.g. a
   parked `nrf_cryptocell: auto` after the vendor caught up) produce an
   info-level hint recommending their removal.
+
+## Amendment: v0.1 staging (2026-08-07, product owner)
+
+The builder's v0.1 implements the **schema and the seam, not the
+machinery**: all keys above are accepted and validated, but resolution
+is trivial — exactly one Zephyr line ("4.4") exists and no blobs are
+integrated yet, so `enabled` produces a plain-language refusal naming
+this ADR, while `disabled`/`auto` are accepted as no-ops. The full
+resolution machinery (automatically extracted availability matrix,
+per-blob resolution, recommendation-drift check, two-line maintenance)
+is built when it first has real inputs: the first integrated blob or
+the second supported Zephyr line, whichever comes first (expected with
+the MPSL/cc3xx feasibility analysis, ADR 0011 path B). The seam lives
+in the builder's `toolchain.py`.
