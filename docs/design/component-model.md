@@ -175,18 +175,48 @@ picks the cheapest tier that covers the configuration:
 1. **Predefined filters** (`offset`, `range`, later moving average,
    deadband, …) — declarative registry entries. Everything *stateful*
    lives here, with its state owned by the C framework.
-2. **Expressions** (`x * 1.02 + 3.7`) — pure math, one value in, one
-   value out; side-effect-free by construction (no loops, no state, no
-   system access). A stack evaluator for this is KiB-class with no
-   heap and no GC. The expression grammar is defined as a subset of
-   the scripting language's, so tier 2 → 3 is copy-paste, not
-   relearning.
+2. **Expressions** — deliberately more than arithmetic (PO scope call,
+   2026-08-07: end users should normally not need tier 3): variables,
+   the ternary conditional, null coalescing (pairs naturally with the
+   nullable "sensor not ready yet" semantics of the attribute stores),
+   and read-only value access to other channels through a fixed method
+   surface — e.g.
+   `humidity_kitchen.value() > 30 ? temp_kitchen.value()
+   : temp_kitchen.value() * 0.7 + temp_living.value() * 0.3`.
+   Symfony's ExpressionLanguage marks the intended scope. The hard
+   line stays: an expression is a single side-effect-free value — no
+   statements, no loops, no user-defined functions, no state — so
+   evaluation needs no heap and no GC, and cross-channel references
+   form a static dependency graph the builder validates (recompute
+   order, cycles rejected at validate time). This tier is small
+   enough that MCUHome owns its implementation.
 3. **Scripting engine** — stateful logic, `on_boot`-style hooks,
    timers, actions (e.g. `trigger_measurement()`), user automations.
-   Candidate of record: **Berry** (MIT, MCU-native, Tasmota
-   precedent); second: Lua. Evaluated and behind: Toit (LGPL VM,
-   ESP-IDF-bound, host-compile deploys), Wren (dormant since 0.4.0,
-   double-precision-only numbers on single-precision-FPU targets).
+   For genuinely complex processing (an AMG8833 8×8 thermal grid,
+   say) the engine's footprint is a fair price — though known-complex
+   sensors can also land as C components (§2), shrinking how often
+   tier 3 is needed at all. Two candidate tracks, decided by the
+   automation-phase ADR:
+   - **Adopt: Berry** (MIT, MCU-native, Tasmota precedent); second
+     choice Lua. Evaluated and behind: Toit (LGPL VM, ESP-IDF-bound),
+     Wren (dormant since 0.4.0, double-precision-only numbers on
+     single-precision-FPU targets).
+   - **Grow our own** from the tier-2 core (PO wish, to be evaluated
+     honestly): one language whose grammar's expression subset IS
+     tier 2; host-side compilation to a compact bytecode (the builder
+     is always in the loop, unlike Tasmota's on-device console — a
+     device-side parser buys us nothing), so the MCU carries only a
+     bytecode VM; the VM assembled from feature modules (arithmetic,
+     functions, classes, …) so an expression-only device links an
+     expression-only VM; and the language kept statically analyzable
+     enough that the LIVE mode can transpile scripts to C instead of
+     shipping the VM. Each element is individually proven prior art
+     (Lua `luac` / MicroPython `.mpy` / Berry solidification;
+     trimmed-library builds; DSL-to-C transpilers) — the risk is not
+     buildability but a decade of ownership: first-class diagnostics,
+     documentation, a bytecode verifier (pushed bytecode must never
+     crash a node), and format stability across firmware versions.
+     Berry remains the safety net if this track stalls.
 
 **DEV/LIVE split.** A freshly set-up device runs in DEV mode: YAML
 filters are lowered to *script* and pushed without recompiling —
