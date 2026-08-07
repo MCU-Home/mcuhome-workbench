@@ -10,4 +10,10 @@ Device-class variants are configuration, not directory structure: the MCUHome
 builder composes snippets, Kconfig fragments and board overlays — it does not
 generate per-variant source trees.
 
-Empty until the first snippet is defined.
+Current snippets:
+
+| Snippet | Purpose |
+|---|---|
+| `matter/` | The numeric/choice Kconfig values the Matter stack needs (mbedTLS heap, stack sizing, p256-m + bignum assembly, picolibc) plus nRF53 802.15.4 workqueue sizing — mandatory for Matter builds (`-S matter`) |
+| `debug-rtt/` | RTT log transport (LOG/printk/OpenThread/CHIP over RTT, drop mode, boot-time control-block re-init) — for boards/setups without a free UART (`-S debug-rtt`) |
+

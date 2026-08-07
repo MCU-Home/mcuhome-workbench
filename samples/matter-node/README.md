@@ -136,7 +136,7 @@ the shape the builder will generate:
 |---|---|
 | `src/mcuhome_config.c` | **Golden file.** The device's Matter model as plain-C tables (`mcuhome_node_config`): two endpoints, one cluster each, three attributes each. Its *shape* is the contract for builder phase-2 codegen, and it doubles as that phase's regression fixture — keep it in lockstep with `include/mcuhome/matter_tables.h`. |
 | `src/main.c` | Application glue: LEDs, `mcuhome_matter_start()`, the channel/binding tables handed to `mcuhome_sensor_start()`, and an override of the `mcuhome_matter_stage()` hook for LED status. Plain C — generated app glue never needs a C++ toolchain. Nothing here polls, converts or publishes: that is the channel layer's job. |
-| `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c`, plus the prototype entropy source. Hardware belongs in DTS, never in C constants. |
+| `boards/nrf7002dk_nrf5340_cpuapp.overlay` | The BMP180 devicetree node on `arduino_i2c`, plus the `zephyr,entropy` redirect to the framework's netcore-seeded entropy driver ([`drivers/entropy/`](../../drivers/entropy/)). Hardware belongs in DTS, never in C constants. |
 | `include/CHIPProjectConfig.h` | One-line wrapper around the framework's `<mcuhome/matter/chip_project_config.h>`; exists only because CHIP resolves `CONFIG_CHIP_PROJECT_CONFIG` relative to the application directory. |
 
 The `nrf52840dongle/nrf52840` build has no sensor: `src/main.c` guards the

@@ -1,6 +1,6 @@
 # 0006 — Matter SDK source: upstream CHIP vs. Nordic fork
 
-- Status: deferred
+- Status: accepted (resolved 2026-08-04)
 - Date: 2026-08-02
 
 ## Context
@@ -45,4 +45,5 @@ addition on top of vanilla Zephyr — not as a fork of it.
   checkouts until hunks are upstreamed (candidates tracked outside the
   repo); the builder automates this.
 - CHIP's GN build adds gn + zap-cli as build-time tools — provisioned
-  by the builder image, never by contributors manually.
+  by the builder image once it exists (ADR 0007); until then they sit
+  on the developer's PATH (see components/matter/zap/README.md).

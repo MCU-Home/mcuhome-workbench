@@ -31,7 +31,8 @@ image).
    commissioning then runs over the operational network. BLE stays
    disabled in v0.1 firmware. Limitation, accepted: v0.1 devices are
    onboarded through MCUHome tooling, not via phone/QR-code BLE flow.
-3. **Standard BLE commissioning is added later** by integrating Nordic's
+3. **Standard BLE commissioning is added later** ("path B" — the label
+   ADRs 0012 and 0013 use for this item) by integrating Nordic's
    multiprotocol libraries (sdk-nrfxlib: MPSL + SoftDevice Controller +
    802.15.4 service layer) on top of vanilla Zephyr — **subject to a
    dedicated feasibility and effort analysis before implementation**

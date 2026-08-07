@@ -103,9 +103,13 @@ cluster is code-driven (`ServerClusterInterface`) there — its values
 always come from the endpoint/cluster metadata, but the cluster is
 only *instantiated* for endpoints whose registered cluster list
 contains a Descriptor server entry. The framework therefore appends a
-minimal Descriptor cluster entry (empty attribute list — the four
-list attributes the prototype declared are vestigial) to every
-dynamic endpoint, and derives the registry sizing
+minimal Descriptor cluster entry (no ZAP-authored list attributes —
+only the automatically provided ClusterRevision slot; the four list
+attributes the prototype declared are vestigial
+[correction, 2026-08-06: this originally said "empty attribute list",
+which was factually wrong — the auto-appended entry carries exactly one
+declared attribute, `MCUHOME_MATTER_DESCRIPTOR_ATTR_COUNT` = 1]) to
+every dynamic endpoint, and derives the registry sizing
 (`CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT`) from the same Kconfig
 symbol that sizes its own pools, because an undersized registry drops
 Descriptor registration silently upstream.

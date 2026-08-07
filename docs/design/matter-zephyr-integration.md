@@ -2,7 +2,7 @@
 
 > **Status:** Prototype findings backing ADR 0006 and builder-pipeline
 > design §4. Compile/link-level result achieved; hardware verification
-> (DFU flash + BLE commissioning advertising) in progress.
+> succeeded end-to-end on 2026-08-04 — see Addenda 2 and 3 below.
 
 ## Summary
 
@@ -280,6 +280,8 @@ at a time by instrumenting the vendored sources.
    application's own Kconfig. (`PSA_CRYPTO_ENABLE_ALL` is not a
    substitute — it enables every ECC curve, which collides with the
    p256-m partial acceleration and overflows CHIP's Spake2p context.)
+   Since generalized out of app Kconfig into the framework itself:
+   `MCUHOME_MATTER_PSA_WANTS` in `components/matter/Kconfig`.
 6. **DNS-SD advertising is never retried on the OpenThread platform.**
    `kDnssdInitialized`/`kDnssdRestartNeeded` are posted only from WiFi
    code, so an advertisement that fails at `ServerInit` (normal with a

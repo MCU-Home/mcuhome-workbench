@@ -103,6 +103,10 @@ network:
 - Thread credentials come via Matter commissioning, not from the YAML
   (secrets never end up in git-managed configs; `!secret` covers the
   rest).
+- `device_role: sed` above is target schema, not current capability: the
+  runtime offers Router (FTD) and Minimal End Device (MED) only today.
+  SED support is not offered yet — it lands with the power-management
+  phase (ICD configuration, poll period, Matter LIT/SIT semantics).
 
 ## 5. `hardware:` — devicetree-shaped hardware description
 

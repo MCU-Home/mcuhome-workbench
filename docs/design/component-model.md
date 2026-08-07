@@ -29,6 +29,10 @@ clusters publish, and the automation engine reads/writes. Channel types
 are checked at validation time (a `temperature_measurement` cluster
 refuses a channel that isn't `temperature/°C`).
 
+This richer model is the YAML-level design target; the current runtime
+contract the builder will map onto is narrower and already implemented
+— see `include/mcuhome/channel.h` and §9 below.
+
 ## 3. Component folder layout
 
 ```
@@ -132,7 +136,17 @@ v0.1 — the contract is deliberately kept free of in-tree assumptions
 
 | Topic | Status |
 |---|---|
-| Channel type registry (canonical types/units) | Fixed with first component batch |
+| Channel type registry (canonical types/units) | Contract v1 implemented — see note below |
 | Actuator channels (write-path semantics) | With first actuator components (`on_off`) |
 | Out-of-tree component packaging | Own design doc after v0.1 (§8) |
 | Component versioning vs core version | Coupled until out-of-tree exists |
+
+**Channel contract v1 note:** `include/mcuhome/channel.h` implements a
+deliberately narrow first cut, hardware-verified in phase 1: integer-only
+values, expressed in the target Matter attribute's raw unit (no separate
+float/unit/quality/timestamp fields), with a direct `(endpoint, cluster,
+attr)` binding. The richer model of §2 remains the design target for the
+YAML-level abstraction; the builder will map it onto this v1 contract,
+with scale/offset conversion happening in the sensor binding, not the
+channel itself. Any richer channel fields land as a contract-version
+bump per ADR 0014.

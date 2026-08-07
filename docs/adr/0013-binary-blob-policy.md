@@ -38,7 +38,10 @@ images redistribute nothing.
 1. **Blob policy: "no blobs where reasonably avoidable" with an explicit
    allow-list.** Allowed: Espressif WiFi/BLE, Nordic MPSL/SDC, Nordic
    nrf_cc3xx. Anything else needs a new PO decision.
-2. **Two build profiles, chosen per device config:**
+2. **Two build profiles, chosen per device config** *(refined below:
+   the 2026-08-05 amendment replaces the all-or-nothing profile switch
+   with per-blob granularity; BLE commissioning additionally stays gated
+   behind the ADR 0011 path-B feasibility work and is off in v0.1)*:
    - `standard` (default): uses the allow-listed blobs available for the
      target. Full feature set — BLE commissioning, hardware crypto.
    - `open`: no blobs at all. Fully auditable; functional consequences
@@ -69,10 +72,10 @@ images redistribute nothing.
      latest + one blob-pin line); each maps to its own container image
      (ADR 0007) and patch series.
    - Validation UX: if a user forces a combination that cannot work
-     (e.g. `zephyr_version: latest` + `blob_usage: standard` on a board
+     (e.g. `zephyr_version: latest` + `blob_usage: auto` on a board
      whose blobs lag), the builder rejects it with a plain-language
      message that states MCUHome's recommendation (drop the pin — `auto`
-     picks the best version) and the alternative (`blob_usage: open`),
+     picks the best version) and the alternative (`blob_usage: none`),
      with a docs link. No raw technical detail in the error itself.
 
 ## Consequences
@@ -80,7 +83,7 @@ images redistribute nothing.
 - ADR 0008 gets a cross-reference; its 6-monthly bump task now includes
   re-testing the blob glue and moving/retiring the pin line.
 - The YAML schema gains `device.zephyr_version` (default `auto`) and
-  `device.blob_usage` (`standard` | `open`, default `standard`); the
+  `device.blob_usage` (`auto` | `none`, default `auto`); the
   builder's canonical device model carries the resolved Zephyr line and
   profile so the dashboard can display both.
 - The v0.1 entropy plan is unchanged: netcore boot-seed + DRBG is built

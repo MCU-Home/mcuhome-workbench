@@ -111,10 +111,13 @@ integration prototype (2026-08-04, see
 (nRF5340, upstream CHIP v1.5.1.0): endpoints register from tables via
 `emberAfSetDynamicEndpoint`, with a static ZAP-generated data model only
 for the fixed root endpoint — generated once per MCUHome release, not
-per device config. Requirements the builder owns:
-`CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT` sizing via the project
-config header, zap-cli/gn provisioning, and the vanilla-Zephyr patch set
-([../../patches/](../../patches/)).
+per device config. `CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT` sizing is
+resolved (ADR 0014): it derives automatically from
+`CONFIG_MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS`
+(`include/mcuhome/matter/chip_project_config.h`), so the builder's
+remaining job there is at most a Kconfig passthrough. Requirements the
+builder still owns: zap-cli/gn provisioning and the vanilla-Zephyr patch
+set ([../../patches/](../../patches/)).
 
 ## 5. Build execution (per ADR 0007)
 

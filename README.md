@@ -1,7 +1,7 @@
 # MCUHome
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-red.svg)](#project-status)
+[![Status: phase 1 complete](https://img.shields.io/badge/status-phase_1_complete-yellow.svg)](#project-status)
 
 **MCUHome turns YAML device descriptions into Zephyr-based smart home
 firmware — built on standard protocols instead of a custom API.**
@@ -24,10 +24,13 @@ controller out of the box — no custom integration required.
 
 ## Project status
 
-**Pre-alpha.** This repository is a scaffold: the architecture is being
-designed in the open (see [docs/adr/](docs/adr/)), and nothing is functional
-yet. Do not expect building firmware to work at this stage. The companion
-web interface lives in
+**Phase 1 complete.** The firmware runtime — tables-contract framework,
+channel layer, netcore entropy service, and a BMP180 two-endpoint sample
+— is implemented and hardware-verified: commissioned into a production
+Home Assistant instance over Thread (design record: see
+[docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is not yet
+implemented — `mcuhome build` does not exist yet. The companion web
+interface lives in
 [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 
 ## Repository layout
@@ -66,6 +69,18 @@ Requirements: Python ≥ 3.11, `west`, and the Zephyr SDK matching the pinned
 Zephyr release (v4.4.0). See the
 [Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
 for toolchain setup.
+
+The `native_sim` build above is only a module smoke test — no hardware
+involved. To see the framework actually run a Matter node, build the
+real sample instead:
+
+```sh
+west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt mcuhome/samples/matter-node
+```
+
+The `matter` and `debug-rtt` snippets are mandatory, not optional. See
+[samples/matter-node/README.md](samples/matter-node/README.md) for
+hardware prerequisites and wiring.
 
 ## Relationship to ESPHome
 

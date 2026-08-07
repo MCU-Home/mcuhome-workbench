@@ -11,9 +11,12 @@ uses CoAP and Matter (no custom API protocol); transports are WiFi and
 Thread, including Sleepy End Devices (SED). The web interface lives in a
 separate repository ([mcu-home/dashboard](https://github.com/mcu-home/dashboard)).
 
-**Current phase: pre-alpha scaffold.** The architecture is being designed;
-there is no functional code yet. Check `docs/adr/` before assuming any
-design decision.
+**Current phase.** Phase 1 (firmware runtime: tables-contract framework,
+channel layer, netcore entropy, BMP180 two-endpoint sample) is complete
+and hardware-verified against a production Home Assistant over Thread.
+The Python YAML builder (phase 2) is not yet implemented — `mcuhome
+build` does not exist yet. Check `docs/adr/` before assuming any design
+decision.
 
 ## Repository map
 
@@ -44,7 +47,8 @@ design decision.
   (`zephyr/`, `modules/`, `.west/`).
 - **Pinning policy:** Zephyr and all modules are pinned to tags/SHAs in
   `west.yml`. Bump deliberately, never to `main`. Matter (CHIP) and Zephyr
-  versions must be bumped as a matched pair once CHIP is added (ADR 0006).
+  versions are bumped as a matched pair (ADR 0006) — currently CHIP
+  v1.5.1.0 pinned against Zephyr v4.4.0.
 - **Python codegen and C runtime version in lockstep** — that is why they
   share this repo (ESPHome learned this the hard way).
 - **Device-class variants are configuration, not code:** WiFi vs Thread FTD
@@ -63,7 +67,7 @@ west init -l mcuhome && west update
 # Build the placeholder app (from the workspace top directory)
 west build -p -b native_sim mcuhome/app
 
-# Run test suites (once they exist)
+# Run test suites
 west twister -T mcuhome/tests --integration --inline-logs -v
 
 # Python lint/format

@@ -34,7 +34,7 @@ pre-commit install --hook-type commit-msg
 
 ```sh
 west build -p -b native_sim mcuhome/app          # quick build check
-west twister -T mcuhome/tests --integration      # test suites (once they exist)
+west twister -T mcuhome/tests --integration      # test suites
 ```
 
 ## Coding standards
