@@ -77,13 +77,17 @@ static const struct mcuhome_matter_attr ep1_temperature_attrs[] = {
 		.def = -4000,
 	},
 	{
-		/* MaxMeasuredValue: constant (store == NULL), 125.00 °C. */
+		/* MaxMeasuredValue: constant (store == NULL), 85.00 °C.
+		 * BMP180 datasheet (BST-BMP180-DS000, §1 "Operating range"):
+		 * -40...+85 °C. The device advertises the sensor's range,
+		 * matching how the pressure cluster below sources its own
+		 * Min/MaxMeasuredValue from the datasheet. */
 		.id = 0x0002,
 		.type = MCUHOME_ATTR_TYPE_INT16S,
 		.size = 2,
 		.flags = 0,
 		.store = NULL,
-		.def = 12500,
+		.def = 8500,
 	},
 };
 
