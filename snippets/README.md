@@ -16,4 +16,5 @@ Current snippets:
 |---|---|
 | `matter/` | The numeric/choice Kconfig values the Matter stack needs (mbedTLS heap, stack sizing, p256-m + bignum assembly, picolibc) plus nRF53 802.15.4 workqueue sizing — mandatory for Matter builds (`-S matter`) |
 | `debug-rtt/` | RTT log transport (LOG/printk/OpenThread/CHIP over RTT, drop mode, boot-time control-block re-init) — for boards/setups without a free UART (`-S debug-rtt`) |
+| `boot-mode/` | The `zephyr,boot-mode` retention area in GPREGRET1 for the two boards whose upstream devicetree lacks one (nRF7002-DK, nRF52840 dongle) — buttonless entry into bootloader recovery. Devicetree only; applies to the application and the MCUboot image alike (`-S boot-mode`, `-Dmcuboot_SNIPPET=boot-mode`) |
 

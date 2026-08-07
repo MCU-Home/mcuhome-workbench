@@ -44,6 +44,16 @@ manifest:
           - segger         # RTT (debugger-channel logging), SystemView
           - open-amp       # RPMsg inter-core IPC (nRF53 app<->net core)
           - libmetal       # HW abstraction used by open-amp
+          - mcuboot        # Secure bootloader; sysbuild builds it as the
+                           # second image (MCUBOOT_MODE_*). Zephyr puts it
+                           # in the `bootloader` group, which its own
+                           # group-filter leaves enabled, so no group-filter
+                           # change is needed on our side.
+          - zcbor          # CBOR codec. Not optional next to mcuboot:
+                           # MCUboot's serial recovery (MCUBOOT_SERIAL) and
+                           # every mcumgr/SMP transport select it, and a
+                           # `select` on a module that the manifest did not
+                           # pull fails the build at Kconfig time.
 
     # Matter SDK (upstream CHIP, prototype pin — ADR 0006 evaluation).
     # CHIP vendors its dependencies as git submodules, hence the explicit
