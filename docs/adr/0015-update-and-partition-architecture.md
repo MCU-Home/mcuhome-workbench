@@ -1,6 +1,6 @@
 # 0015 — Update and partition architecture per board class
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-07
 
 ## Context
@@ -294,13 +294,20 @@ Two invariants keep that door open:
 
 **One real signing key per user.** Each MCUHome user is their own
 firmware vendor: the builder generates an ECDSA P-256 key pair on first
-use and stores it outside every repository and every build directory
-(the exact location is a builder implementation detail, decided with
-the implementation). There is no central MCUHome signing key, no key in
-CI, and **MCUboot's demo key is never used** — its private half is
-published in the MCUboot tree, so signing with it verifies against a
-key the whole world holds. That is theatre, and shipping it would be
-worse than shipping nothing, because it looks like a signature.
+use and stores it outside every repository and every build directory.
+The key lives **where the user's controlling instance runs, never on a
+build server** (PO refinement, 2026-08-07): the future dashboard
+generates it on first need and keeps it in its own state (in a Home
+Assistant add-on: a path of the shape `/config/mcuhome/signing.key`);
+a user who already owns a key simply places or overwrites the file
+there. This works because MCUboot signing is a detached post-build
+step — `imgtool` over the finished binary — so a remote builder
+returns an *unsigned* image and signing happens wherever the key is.
+There is no central MCUHome signing key, no key in CI, and **MCUboot's
+demo key is never used** — its private half is published in the
+MCUboot tree, so signing with it verifies against a key the whole
+world holds. That is theatre, and shipping it would be worse than
+shipping nothing, because it looks like a signature.
 
 Key rotation is a bootloader replacement, not a firmware update: the
 public key is compiled into MCUboot, so rotating it means running the

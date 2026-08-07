@@ -1,6 +1,6 @@
 # 0016 — Device onboarding, the MCUHome standard state, and flash transport
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-07
 
 ## Context
