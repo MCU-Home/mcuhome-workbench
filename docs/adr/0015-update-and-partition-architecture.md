@@ -458,3 +458,43 @@ re-commissioning risk. `mcuhome/registry.py`'s `PartitionDef` sizes, the
 default the way 64 KiB was) and `CONFIG_BOOT_MAX_IMG_SECTORS` carry these
 numbers; both size levers are registry data on the same scheme, per
 decision 2.
+
+## Amendment: fault-driven health monitoring and automatic rollback (2026-08-07, product owner)
+
+Recorded now, implemented with the update/OTA block — deliberately
+written down so neither half can be forgotten:
+
+**Mandatory for every application image:** fatal errors REBOOT, never
+halt (`CONFIG_RESET_ON_FATAL_ERROR=y`), and the hardware watchdog is
+enabled and fed by the application. A device built into a wall cannot
+be power-cycled by hand; a board hanging in a fault state is never
+acceptable, and only a reboot lets MCUboot's revert machinery act.
+
+On top of MCUboot's native test/confirm revert (an image that faults
+before confirming is swapped back automatically on the next boot), the
+product owner specified a fault-counting model for failures that
+appear *after* confirmation:
+
+- Two persistent counters, both filtered by **reset cause** (hwinfo):
+  only fault-class resets count — watchdog and fatal-error reboots.
+  Power-on, brownout and pin resets never increment anything ("boot
+  counter" would be the wrong name; these are fault-reset counters).
+- The new image confirms itself to MCUboot after ~30 s of healthy
+  uptime.
+- A long-run counter increments once a boot exceeds a long-run
+  threshold of uptime (the PO sketch named 10 and 30 minutes in
+  different places; the exact values are fixed as named configurable
+  constants at implementation).
+- **If fault-resets > 5 while long-runs ≤ 2, the application marks
+  itself bad** and requests the swap back to the previous image —
+  which still sits in the staging slot until a newer download
+  replaces it. An image can do this actively at any time; before
+  confirmation, simply not confirming plus a reboot is sufficient.
+- Rationale: a device that keeps faulting without accumulating real
+  uptime is unreachable over the air — automatic revert is the only
+  way out. A fault that only appears after long uptime leaves ample
+  time to deliver a fixed image via OTA and must not trigger revert.
+
+Class-B note: single-slot boards have no previous image to revert to;
+what the counters do there (at most: drop to serial recovery) is
+specified at implementation.
