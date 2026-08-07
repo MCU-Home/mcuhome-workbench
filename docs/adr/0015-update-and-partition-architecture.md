@@ -395,3 +395,66 @@ mapping has to be fixed before the first image is published, not after.
   (shared key-custody question), ADR 0014 (the ZAP that gains cluster
   0x002A is the framework's, not the device's), and ADR 0016, which
   fixes how a board reaches the state this ADR partitions.
+
+## Amendment: class-A boot partition 80 KiB + bootloader size levers (2026-08-07, product owner)
+
+Decision 3's own text called this out: "there is no comfortable margin
+left in this partition; the next feature that lands in the bootloader
+moves the boundary at `slot0_partition`, and moving it is a re-bootstrap
+of every device already in the field." That prompted a size audit before
+anything else landed in the bootloader.
+
+**Measured, 2026-08-07:**
+
+| Question | Answer |
+|---|---:|
+| How full is the original 64 KiB partition? | 63.1 KiB — **98.6 %** |
+| Does `-Oz` (aggressive size) beat the `-Os` the build already uses? | No — byte-identical image, a null lever |
+| Cost of link-time optimization, this image only (`CONFIG_LTO=y`, `CONFIG_LTO_SINGLE_THREADED=y`, `CONFIG_ISR_TABLES_LOCAL_DECLARATION=y`) | **-7.55 KiB** |
+| Cost of dropping the dead UART driver `MCUBOOT_SERIAL` links in regardless of the selected serial-recovery transport (upstream imprecision, workspace `UPSTREAM-BUGS.md` entry M2), via `&uart0 { status = "disabled"; };` in the bootloader-only overlay | **-1.30 KiB** |
+| Combined | **55.4 KiB** |
+
+Both levers are real, orthogonal savings, and combined they are enough
+on their own to clear a 15 %-free bar at the *original* 64 KiB
+partition — no partition growth required. Shipping them and leaving the
+partition where it was would have been a defensible, cheaper close to
+the size question decision 3 opened.
+
+**The product owner's call is to grow the boot partition to 80 KiB
+anyway**, and take both levers on top of that. The argument is headroom,
+not need: 80 KiB at 55.4 KiB measured is 69 % full, with 24.6 KiB free
+for whatever lands in the bootloader next (a signature scheme change, a
+second recovery transport, anything decision 8 revisits at 1.0) — well
+past what either partition size needed to clear the 15 %-free bar. That
+headroom is worth more than reclaiming 16 KiB into `slot0_partition`,
+where it would buy one more percent of an application slot that is
+nowhere near full.
+
+Crucially, this decision **predates any bootstrapped device** — v0.x has
+shipped no board through the ADR 0016 standard-state procedure yet, so
+unlike the "next feature is a re-bootstrap" framing decision 3 used to
+argue for restraint, moving this boundary now re-bootstraps nothing. It
+costs exactly the 16 KiB of `slot0_partition` it takes and nothing else.
+That asymmetry — cheap today, a field re-bootstrap after the first
+device ships — is also the argument for taking the headroom now rather
+than deferring the question to the next feature that actually needs it.
+
+The class-A layout of decision 3, as amended:
+
+| Region | Where | Size |
+|---|---|---:|
+| boot (MCUboot, LTO + dead-UART levers) | internal `0x00000` | 80 KiB |
+| slot0 (application) | internal `0x14000` | 912 KiB |
+| storage (settings/NVS) | internal `0xF8000` | 32 KiB |
+| slot1 (staging) | MX25R64 `0x00000` | 912 KiB |
+
+`slot0`/`slot1` shrink together, by construction (decision 3's own
+"swap needs one sector layout across both slots" — the two stay equal
+by definition, not by a second measurement); `storage_partition` is
+untouched, so this amendment carries none of decision 3's
+re-commissioning risk. `mcuhome/registry.py`'s `PartitionDef` sizes, the
+`nrf7002dk/nrf5340/cpuapp` partition overlay (now restating
+`boot_partition` too, since 80 KiB is no longer the board's upstream
+default the way 64 KiB was) and `CONFIG_BOOT_MAX_IMG_SECTORS` carry these
+numbers; both size levers are registry data on the same scheme, per
+decision 2.

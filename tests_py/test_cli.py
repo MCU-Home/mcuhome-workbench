@@ -168,7 +168,7 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     assert "memory: RAM 191.7 KiB of 448.0 KiB (42.8%)" in out
     # And the layout those images were built against.
     assert "Flash layout (class A, MCUboot swap-using-offset, staging: external-flash)" in out
-    assert "image-0  internal 0x010000..0x0f8000   928 KiB" in out
+    assert "image-0  internal 0x014000..0x0f8000   912 KiB" in out
 
 
 def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(

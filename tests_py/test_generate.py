@@ -653,7 +653,37 @@ def test_no_generated_file_carries_a_signing_key_or_a_path_to_one() -> None:
 def test_the_bootloader_fragment_states_the_sector_count_itself() -> None:
     conf = _example_files()[MCUBOOT_CONF_PATH]
     assert "CONFIG_BOOT_MAX_IMG_SECTORS_AUTO=n" in conf
-    assert "CONFIG_BOOT_MAX_IMG_SECTORS=232" in conf
+    assert "CONFIG_BOOT_MAX_IMG_SECTORS=228" in conf
+
+
+def test_the_bootloader_fragment_carries_its_own_lto() -> None:
+    """ADR 0015 amendment (2026-08-07): LTO is strictly per-image.
+
+    The symbols land in the bootloader's Kconfig fragment and nowhere
+    else — the application's fragment comes from a wholly separate model
+    field, but this asserts the negative directly rather than trusting
+    that.
+    """
+    files = _example_files()
+    conf = files[MCUBOOT_CONF_PATH]
+    assert "CONFIG_ISR_TABLES_LOCAL_DECLARATION=y" in conf
+    assert "CONFIG_LTO=y" in conf
+    assert "CONFIG_LTO_SINGLE_THREADED=y" in conf
+    prj_conf = files[f"{APP_DIR}/prj.conf"]
+    assert "CONFIG_LTO" not in prj_conf
+
+
+def test_the_bootloader_overlay_drops_the_dead_uart_and_the_app_keeps_it() -> None:
+    """ADR 0015 amendment (2026-08-07): MCUboot's dead UART, not the app's.
+
+    ``&uart0`` only ever appears where MCUBOOT_SERIAL's upstream
+    imprecision (UPSTREAM-BUGS.md M2) puts dead weight — the bootloader
+    image. The application overlay never names it.
+    """
+    files = _example_files()
+    overlay = files[MCUBOOT_OVERLAY_PATH]
+    assert '&uart0 {\n\tstatus = "disabled";\n};' in overlay
+    assert "&uart0" not in files[OVERLAY_PATH]
 
 
 def test_the_build_command_in_the_cmakelists_names_the_snippets_per_image() -> None:

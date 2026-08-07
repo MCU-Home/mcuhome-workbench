@@ -221,6 +221,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   builder. `west build -p -b native_sim mcuhome/app`, previously
   documented as the workspace smoke test, is therefore gone — build a
   sample, or a generated device, instead.
+- Class-A boot partition grown 64 KiB -> 80 KiB on the nRF7002-DK (ADR 0015
+  amendment, 2026-08-07), a deliberate headroom choice rather than a size
+  requirement: two measured, strictly per-image levers (link-time
+  optimization — `CONFIG_LTO=y`, `CONFIG_LTO_SINGLE_THREADED=y`,
+  `CONFIG_ISR_TABLES_LOCAL_DECLARATION=y`, -7.55 KiB — and dropping the UART
+  driver `MCUBOOT_SERIAL` links in regardless of the selected serial-recovery
+  transport, `&uart0 { status = "disabled"; };` in the bootloader-only
+  overlay, -1.30 KiB; upstream imprecision, `UPSTREAM-BUGS.md` M2) already
+  brought the bootloader to 55.4 KiB, clearing a 15 %-free bar at the
+  original 64 KiB on their own. `slot0`/`slot1` shrink together to 912 KiB
+  to match (928 previously); `storage_partition` is untouched. The
+  application's Kconfig fragment and overlay never see either lever — both
+  are scoped to `sysbuild/mcuboot.{conf,overlay}` alone.
 
 ### Removed
 

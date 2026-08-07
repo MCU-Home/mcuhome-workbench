@@ -27,13 +27,13 @@ from mcuhome import registry
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 SCHEME = registry.BOARDS[BOARD].update_scheme
 
-#: The layout of ADR 0015 decision 3, transcribed from the ADR's own
-#: table rather than from the code it is checking.
+#: The layout of ADR 0015 decision 3 as amended 2026-08-07, transcribed
+#: from the ADR's own table rather than from the code it is checking.
 ADR_CLASS_A_LAYOUT = [
-    ("mcuboot", None, 0x00000, 64 * 1024),
-    ("image-0", None, 0x10000, 928 * 1024),
+    ("mcuboot", None, 0x00000, 80 * 1024),
+    ("image-0", None, 0x14000, 912 * 1024),
     ("storage", None, 0xF8000, 32 * 1024),
-    ("image-1", "mx25r64", 0x00000, 928 * 1024),
+    ("image-1", "mx25r64", 0x00000, 912 * 1024),
 ]
 
 
@@ -94,13 +94,15 @@ def test_the_overlay_states_the_same_numbers_as_the_table() -> None:
     in_overlay = {
         (int(offset, 16), int(size, 16)) for offset, size in _REG.findall(SCHEME.partition_overlay)
     }
-    # Only the partitions the overlay has to change appear in it: the
-    # boot partition and storage are already right in the board's own
-    # devicetree, which is the whole reason they are not restated.
+    # Only the partitions the overlay has to change appear in it: storage
+    # is already right in the board's own devicetree, which is the whole
+    # reason it is not restated. The boot partition is restated too, as
+    # of the 2026-08-07 amendment — 80 KiB is no longer the upstream
+    # default, unlike the original 64 KiB.
     changed = {
         (entry.offset, entry.size)
         for entry in SCHEME.partitions
-        if entry.fixed_label in ("image-0", "image-1")
+        if entry.fixed_label in ("mcuboot", "image-0", "image-1")
     }
     assert in_overlay == changed
     assert "/delete-node/ &slot1_partition;" in SCHEME.partition_overlay
@@ -109,7 +111,7 @@ def test_the_overlay_states_the_same_numbers_as_the_table() -> None:
 def test_the_sector_count_covers_the_larger_slot() -> None:
     """CONFIG_BOOT_MAX_IMG_SECTORS, which AUTO derives wrongly for us."""
     assert SCHEME is not None
-    assert SCHEME.max_image_sectors == (928 * 1024) // 4096 == 232
+    assert SCHEME.max_image_sectors == (912 * 1024) // 4096 == 228
 
 
 def test_the_mode_names_a_symbol_sysbuild_knows() -> None:
@@ -123,8 +125,8 @@ def test_class_a_keeps_the_usb_rescue_path() -> None:
     Rollback is what class A adds; it does not replace serial recovery,
     which is the only transport that reaches an uncommissioned node and
     the only one left when an update went wrong in a way rollback cannot
-    see. The 64 KiB boot partition of decision 3 is sized for exactly
-    this configuration.
+    see. The 80 KiB boot partition of decision 3 (amended 2026-08-07) is
+    sized for exactly this configuration.
     """
     assert SCHEME is not None
     assert "serial-recovery" in SCHEME.recovery
@@ -148,6 +150,23 @@ def test_an_external_slot_brings_its_driver_and_its_erase_unit() -> None:
         f"CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE={SCHEME.erase_block_size}"
         in SCHEME.bootloader_kconfig
     )
+
+
+def test_the_bootloader_gets_size_levers_the_application_never_sees() -> None:
+    """ADR 0015 amendment (2026-08-07): LTO and a dropped UART driver.
+
+    Both are per-image by construction — :attr:`bootloader_kconfig` and
+    :attr:`bootloader_overlay` only ever reach ``sysbuild/mcuboot.*``, and
+    ``application_snippets``/the device model are what the app build
+    reads instead — so nothing here needs to prove the application side
+    stays clean; the generator wiring already guarantees it.
+    """
+    assert SCHEME is not None
+    assert "CONFIG_LTO=y" in SCHEME.bootloader_kconfig
+    assert "CONFIG_LTO_SINGLE_THREADED=y" in SCHEME.bootloader_kconfig
+    assert "CONFIG_ISR_TABLES_LOCAL_DECLARATION=y" in SCHEME.bootloader_kconfig
+    assert SCHEME.bootloader_overlay == '&uart0 {\n\tstatus = "disabled";\n};'
+    assert SCHEME.bootloader_overlay_note != ""
 
 
 # --------------------------------------------------------------------------

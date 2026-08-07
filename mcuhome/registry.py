@@ -389,13 +389,24 @@ class UpdateSchemeDef:
     #: to agree on the flash map byte for byte.
     partition_overlay: str
     #: Kconfig for the MCUboot image beyond what sysbuild derives from
-    #: the mode, e.g. drivers for an external staging part.
+    #: the mode, e.g. drivers for an external staging part. Occasionally a
+    #: bare ``#`` comment line explaining the group of symbols after it —
+    #: this is emitted verbatim, so it reads in the generated file exactly
+    #: as it reads here.
     bootloader_kconfig: tuple[str, ...] = ()
     #: Snippets the MCUboot image is built with.
     bootloader_snippets: tuple[str, ...] = ()
     #: Snippets the application image is built with on top of the ones
     #: its own configuration asks for.
     application_snippets: tuple[str, ...] = ()
+    #: Devicetree written *only* to the bootloader image's overlay, after
+    #: :attr:`partition_overlay` — never to the application's, which does
+    #: not carry the bootloader's dead-weight problems (e.g. a serial
+    #: driver MCUboot links unconditionally, ADR 0015 amendment 2026-08-07).
+    bootloader_overlay: str = ""
+    #: Why :attr:`bootloader_overlay` is there, rendered as its generated
+    #: comment (mirrors :attr:`BoardDef.overlay_note`).
+    bootloader_overlay_note: str = ""
 
     def partition(self, label: str) -> PartitionDef:
         """The partition with this node label, or a KeyError."""
@@ -485,24 +496,26 @@ _NRF5340_ENTROPY_OVERLAY = """\
 };"""
 
 
-#: nRF7002-DK flash layout, ADR 0015 decision 3 (board class A).
+#: nRF7002-DK flash layout, ADR 0015 decision 3 (board class A), boot
+#: partition size amended 2026-08-07 (see the ADR's amendment section).
 #:
 #: ``storage_partition`` keeps the address and the size the board's own
 #: devicetree gives it (``0xF8000``, 32 KiB), which is what makes an
 #: update not a re-commissioning: the Matter fabric credentials and the
-#: Thread dataset are in it. ``boot_partition`` is also the upstream
-#: default. What changes is ``slot0_partition``, which grows into the
-#: space the upstream second slot occupied, and ``slot1_partition``,
-#: which moves to the external part entirely.
+#: Thread dataset are in it. ``boot_partition`` is no longer the upstream
+#: default as of the amendment — it grew from the 64 KiB upstream ships to
+#: 80 KiB — so the overlay below restates it alongside ``slot0_partition``,
+#: which shrinks to match, and ``slot1_partition``, which moves to the
+#: external part entirely.
 _NRF7002DK_PARTITIONS = (
-    PartitionDef(label="boot_partition", fixed_label="mcuboot", offset=0x00000, size=64 * 1024),
-    PartitionDef(label="slot0_partition", fixed_label="image-0", offset=0x10000, size=928 * 1024),
+    PartitionDef(label="boot_partition", fixed_label="mcuboot", offset=0x00000, size=80 * 1024),
+    PartitionDef(label="slot0_partition", fixed_label="image-0", offset=0x14000, size=912 * 1024),
     PartitionDef(label="storage_partition", fixed_label="storage", offset=0xF8000, size=32 * 1024),
     PartitionDef(
         label="slot1_partition",
         fixed_label="image-1",
         offset=0x00000,
-        size=928 * 1024,
+        size=912 * 1024,
         device="mx25r64",
     ),
 )
@@ -510,8 +523,12 @@ _NRF7002DK_PARTITIONS = (
 _NRF7002DK_PARTITION_OVERLAY = """\
 /delete-node/ &slot1_partition;
 
+&boot_partition {
+\treg = <0x00000000 0x00014000>;
+};
+
 &slot0_partition {
-\treg = <0x00010000 0x000e8000>;
+\treg = <0x00014000 0x000e4000>;
 };
 
 &mx25r64 {
@@ -524,25 +541,36 @@ _NRF7002DK_PARTITION_OVERLAY = """\
 
 \t\tslot1_partition: partition@0 {
 \t\t\tlabel = "image-1";
-\t\t\treg = <0x00000000 0x000e8000>;
+\t\t\treg = <0x00000000 0x000e4000>;
 \t\t};
 \t};
 };"""
 
 #: The class-A scheme of ADR 0015 decision 3, as the nRF7002-DK runs it.
 #:
-#: **The 64 KiB boot partition is nearly full, and that is measured, not
-#: feared.** ADR 0015 decision 3 sized it from a single-slot bootloader
-#: with serial recovery and the boot mode (52.2 KiB) and left the swap
-#: state machine on top of that as the number this bring-up owed. It is
-#: ~12 KiB: the first build of this configuration overflowed the
-#: partition by **108 bytes**. What bought the room back was dropping the
-#: logging subsystem and the console, which on this board have no backend
-#: once serial recovery takes the port — see ``CONFIG_LOG`` below. There
-#: is no comfortable margin left in this partition; the next feature that
-#: lands in the bootloader moves the boundary at ``slot0_partition``, and
-#: moving it is a re-bootstrap of every device already in the field
-#: (ADR 0016 decision 2), not a firmware update.
+#: **The original 64 KiB boot partition was nearly full, and that was
+#: measured, not feared.** ADR 0015 decision 3 sized it from a
+#: single-slot bootloader with serial recovery and the boot mode
+#: (52.2 KiB) and left the swap state machine on top of that as the
+#: number this bring-up owed. It was ~12 KiB: the first build of this
+#: configuration overflowed the partition by **108 bytes**. What bought
+#: the room back was dropping the logging subsystem and the console,
+#: which on this board have no backend once serial recovery takes the
+#: port — see ``CONFIG_LOG`` below.
+#:
+#: **Amended 2026-08-07 (ADR 0015 amendment, product owner).** At 64 KiB
+#: the bootloader measured 63.1 KiB — 98.6 % full. Two independent size
+#: levers were measured against it: link-time optimization, strictly
+#: per-image (``CONFIG_LTO`` below; -7.55 KiB), and dropping the UART
+#: driver ``MCUBOOT_SERIAL`` links in regardless of the selected serial
+#: transport (``bootloader_overlay`` below; -1.30 KiB; upstream
+#: imprecision, workspace ``UPSTREAM-BUGS.md`` entry M2). Combined,
+#: 55.4 KiB — enough on its own to clear a 15 %-free bar at 64 KiB. The
+#: product owner's call was to grow the partition to 80 KiB anyway:
+#: future headroom was valued above reclaiming those 16 KiB into
+#: ``slot0_partition``, and the decision predates any bootstrapped
+#: device, so — unlike the "next feature is a re-bootstrap" framing
+#: above — it costs nothing beyond the 16 KiB it takes from slot0.
 _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
     board_class="A",
     mcuboot_mode="swap-using-offset",
@@ -601,9 +629,38 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         # than left to the default, because the default is what would
         # change under us. Revisit at 1.0, with readback protection.
         "CONFIG_MCUBOOT_DOWNGRADE_PREVENTION=n",
+        # LTO size lever (ADR 0015 amendment, 2026-08-07 — the date stays
+        # out of the comment below, which is emitted into the generated
+        # mcuboot.conf verbatim like every string in this tuple, and
+        # generated output carries no timestamps by construction).
+        "",
+        "# LTO, this image only (measured -7.55 KiB). Strictly per-image:",
+        "# sysbuild gives every image its own Kconfig fragment, so the",
+        "# application build is untouched by design.",
+        "CONFIG_ISR_TABLES_LOCAL_DECLARATION=y",
+        "CONFIG_LTO=y",
+        "CONFIG_LTO_SINGLE_THREADED=y",
     ),
     bootloader_snippets=("boot-mode",),
     application_snippets=("boot-mode",),
+    # Dead UART (measured -1.30 KiB; ADR 0015 amendment, 2026-08-07).
+    # MCUBOOT_SERIAL selects SERIAL and UART_INTERRUPT_DRIVEN
+    # unconditionally, regardless of which serial-recovery transport is
+    # chosen (upstream imprecision, workspace UPSTREAM-BUGS.md entry M2)
+    # — with BOOT_SERIAL_CDC_ACM as the transport here, that links in a
+    # UART driver the bootloader never opens. Disabling the node it would
+    # bind to drops it. Bootloader-only: the application never carries
+    # this problem, so it never carries this fix. bootloader_overlay_note
+    # is emitted verbatim too, so it carries no date either.
+    bootloader_overlay='&uart0 {\n\tstatus = "disabled";\n};',
+    bootloader_overlay_note=(
+        "Dead UART. MCUBOOT_SERIAL selects SERIAL and UART_INTERRUPT_DRIVEN "
+        "unconditionally, regardless of which serial-recovery transport is chosen "
+        "— an upstream imprecision (workspace UPSTREAM-BUGS.md entry M2). With "
+        "BOOT_SERIAL_CDC_ACM as the transport here, that links in a UART driver "
+        "the bootloader never opens. Disabling the node it would bind to drops "
+        "it: measured -1.30 KiB."
+    ),
 )
 
 

@@ -38,15 +38,19 @@
  * what makes an update not a re-commissioning: the Matter fabric credentials and the Thread dataset
  * live there, and every layout in ADR 0015 preserves them.
  *
- *   mcuboot  internal 0x000000..0x010000    64 KiB
- *   image-0  internal 0x010000..0x0f8000   928 KiB
+ *   mcuboot  internal 0x000000..0x014000    80 KiB
+ *   image-0  internal 0x014000..0x0f8000   912 KiB
  *   storage  internal 0x0f8000..0x100000    32 KiB
- *   image-1  mx25r64  0x000000..0x0e8000   928 KiB
+ *   image-1  mx25r64  0x000000..0x0e4000   912 KiB
  */
 /delete-node/ &slot1_partition;
 
+&boot_partition {
+	reg = <0x00000000 0x00014000>;
+};
+
 &slot0_partition {
-	reg = <0x00010000 0x000e8000>;
+	reg = <0x00014000 0x000e4000>;
 };
 
 &mx25r64 {
@@ -59,7 +63,15 @@
 
 		slot1_partition: partition@0 {
 			label = "image-1";
-			reg = <0x00000000 0x000e8000>;
+			reg = <0x00000000 0x000e4000>;
 		};
 	};
+};
+
+/* Dead UART. MCUBOOT_SERIAL selects SERIAL and UART_INTERRUPT_DRIVEN unconditionally, regardless of
+ * which serial-recovery transport is chosen — an upstream imprecision (workspace UPSTREAM-BUGS.md
+ * entry M2). With BOOT_SERIAL_CDC_ACM as the transport here, that links in a UART driver the
+ * bootloader never opens. Disabling the node it would bind to drops it: measured -1.30 KiB. */
+&uart0 {
+	status = "disabled";
 };

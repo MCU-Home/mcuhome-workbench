@@ -1005,6 +1005,8 @@ def render_bootloader_overlay(model: DeviceModel, *, config_name: str) -> str:
     if "serial-recovery" in scheme.recovery:
         out += ["", _BOOTLOADER_CDC_ACM]
     out += ["", *_layout_comment(scheme, _PARTITION_NOTE), scheme.partition_overlay]
+    if scheme.bootloader_overlay:
+        out += ["", *_comment(scheme.bootloader_overlay_note, 0), scheme.bootloader_overlay]
     return "\n".join(out) + "\n"
 
 
