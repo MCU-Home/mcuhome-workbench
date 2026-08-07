@@ -217,6 +217,16 @@ picks the cheapest tier that covers the configuration:
      documentation, a bytecode verifier (pushed bytecode must never
      crash a node), and format stability across firmware versions.
      Berry remains the safety net if this track stalls.
+     **If this track is chosen, the engine is a fully standalone
+     project** (PO decision, 2026-08-07): own repository, a cleanly
+     versioned C API toward MCUHome, and MCUHome pinning a concrete
+     engine release exactly as it pins Zephyr and the Matter SDK —
+     the engine evolves independently, MCUHome follows deliberately
+     once a release is proven. Generally useful to other projects by
+     design; license chosen at project creation (Apache-2.0 vs MIT —
+     adoption argument, deliberately left open). The tier-2 expression
+     engine is built with this API discipline from day one, so it can
+     be promoted into the standalone project rather than rewritten.
 
 **DEV/LIVE split.** A freshly set-up device runs in DEV mode: YAML
 filters are lowered to *script* and pushed without recompiling —
