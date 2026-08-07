@@ -68,3 +68,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests_py"]
 
+# Domain vocabulary codespell would "correct" into errors: OTA Requestor
+# is the Matter specification's own cluster name, PASE/OT are protocol
+# names, rsource is Kconfig syntax.
+[tool.codespell]
+ignore-words-list = "requestor,pase,ot,rsource"
+

@@ -25,3 +25,5 @@ dashboard-specific decisions live in
 | [0012](0012-device-attestation-strategy.md) | Device attestation (DAC) strategy for user-built devices | accepted |
 | [0013](0013-binary-blob-policy.md) | Binary blob policy, build profiles, and per-device Zephyr pinning | accepted |
 | [0014](0014-generated-tables-contract.md) | Generated-tables contract and native composed-node topology | accepted |
+| [0015](0015-update-and-partition-architecture.md) | Update and partition architecture per board class | proposed |
+| [0016](0016-device-onboarding-and-flash-transport.md) | Device onboarding, the MCUHome standard state, and flash transport | proposed |

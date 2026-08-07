@@ -124,6 +124,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Verifier, QR payload and manual code are golden-tested against the
   vectors in the pinned connectedhomeip checkout, including the two codes
   the hardware-verified nRF7002-DK was commissioned with.
+- MCUboot and zcbor in the west manifest at Zephyr 4.4.0's pinned
+  revisions, and a `boot-mode` snippet supplying the GPREGRET retention
+  node for buttonless reboot-into-recovery on the nRF7002-DK and the
+  nRF52840 dongle.
+- Update and partition architecture fixed per board class (ADR 0015):
+  MCUboot on every target via sysbuild, swap with the secondary slot in
+  external flash where a second part exists, single slot plus CDC-ACM
+  serial recovery on 1 MiB-internal boards, the scheme and partition table
+  as per-board registry data, one real signing key per user, and the
+  SemVer to Matter `SoftwareVersion` mapping. Sized from measured images,
+  not estimates.
+- Device onboarding fixed (ADR 0016): no SWD is the design assumption, one
+  board-specific bootstrap step brings any board into the same "MCUHome
+  standard state" by replacing the vendor bootloader through the vendor's
+  own update mechanism, and browser flashing goes over Web Serial with an
+  SMP client MCUHome writes itself.
 
 ### Changed
 
