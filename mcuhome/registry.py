@@ -41,6 +41,7 @@ __all__ = [
     "CLUSTERS",
     "DEVICE_TYPES",
     "DRIVERS",
+    "MCUBOOT_MODE_SYMBOLS",
     "PLANNED_BOARDS",
     "PLANNED_CLUSTERS",
     "PLANNED_DEVICE_TYPES",
@@ -51,6 +52,8 @@ __all__ = [
     "DeviceTypeDef",
     "DriverChannelDef",
     "DriverDef",
+    "PartitionDef",
+    "UpdateSchemeDef",
 ]
 
 # --------------------------------------------------------------------------
@@ -310,6 +313,112 @@ PLANNED_DRIVERS: dict[str, str] = {
 
 
 # --------------------------------------------------------------------------
+# Update scheme and flash layout (ADR 0015)
+# --------------------------------------------------------------------------
+
+#: Sysbuild symbol per MCUboot mode name. The names on the left are what
+#: :class:`UpdateSchemeDef` speaks; the symbols on the right are what
+#: ``sysbuild.conf`` carries. A board names a mode, never a symbol —
+#: nothing in the builder may branch on a board (ADR 0015 decision 2).
+MCUBOOT_MODE_SYMBOLS: dict[str, str] = {
+    "single-app": "SB_CONFIG_MCUBOOT_MODE_SINGLE_APP",
+    "swap-using-offset": "SB_CONFIG_MCUBOOT_MODE_SWAP_USING_OFFSET",
+}
+
+
+@dataclass(frozen=True)
+class PartitionDef:
+    """One region of the board's flash, as the builder fixes it.
+
+    Sizes and offsets are the ADR 0015 layout tables, not the board's
+    upstream defaults — those cannot hold an MCUHome image (ADR 0015,
+    Consequences). :attr:`device` says which part it lives on.
+    """
+
+    #: Devicetree node label, e.g. ``slot0_partition``.
+    label: str
+    #: The ``label`` property inside the node, e.g. ``image-0``. This is
+    #: what ``FIXED_PARTITION_ID()`` and MCUboot's flash map resolve.
+    fixed_label: str
+    offset: int
+    size: int
+    #: Devicetree node label of the flash part, or ``None`` for the SoC's
+    #: internal flash.
+    device: str | None = None
+
+    @property
+    def end(self) -> int:
+        return self.offset + self.size
+
+    def describe(self) -> str:
+        where = self.device or "internal"
+        return (
+            f"{self.fixed_label:<8} {where:<8} "
+            f"{self.offset:#08x}..{self.end:#08x}  {self.size // 1024:>4} KiB"
+        )
+
+
+@dataclass(frozen=True)
+class UpdateSchemeDef:
+    """How one board takes a firmware update, and what that costs in flash.
+
+    ADR 0015 decision 2: this is registry *data*. A new board is a row
+    plus a bring-up; a board needing a scheme that does not exist yet is
+    what re-opens the ADR.
+    """
+
+    #: Board class of ADR 0015, ``"A"`` (external staging flash) or
+    #: ``"B"`` (1 MiB internal only). Descriptive — nothing branches on it.
+    board_class: str
+    #: Key of :data:`MCUBOOT_MODE_SYMBOLS`.
+    mcuboot_mode: str
+    #: Where the second copy of an image lives: ``"external-flash"`` or
+    #: ``"none"``.
+    staging: str
+    #: How a user reaches the bootloader's recovery path, in the order
+    #: they would try them.
+    recovery: tuple[str, ...]
+    partitions: tuple[PartitionDef, ...]
+    #: Smallest erasable unit of every slot, in bytes. MCUboot's swap
+    #: needs one sector layout across both slots, so this is one number
+    #: per board rather than one per partition — a board whose two parts
+    #: disagree needs a different scheme, not a second field.
+    erase_block_size: int
+    #: Devicetree that puts :attr:`partitions` on the board, verbatim.
+    #: Written to *both* images: the bootloader and the application have
+    #: to agree on the flash map byte for byte.
+    partition_overlay: str
+    #: Kconfig for the MCUboot image beyond what sysbuild derives from
+    #: the mode, e.g. drivers for an external staging part.
+    bootloader_kconfig: tuple[str, ...] = ()
+    #: Snippets the MCUboot image is built with.
+    bootloader_snippets: tuple[str, ...] = ()
+    #: Snippets the application image is built with on top of the ones
+    #: its own configuration asks for.
+    application_snippets: tuple[str, ...] = ()
+
+    def partition(self, label: str) -> PartitionDef:
+        """The partition with this node label, or a KeyError."""
+        for entry in self.partitions:
+            if entry.label == label:
+                return entry
+        raise KeyError(label)
+
+    @property
+    def max_image_sectors(self) -> int:
+        """Sectors MCUboot has to be able to track per slot.
+
+        ``CONFIG_BOOT_MAX_IMG_SECTORS_AUTO`` derives this itself — but it
+        reads slot0's flash node and applies its block size to slot1,
+        which is wrong the moment the two slots live on different parts
+        (ADR 0015 decision 3; upstream bug candidate). Every scheme here
+        therefore states the number, and this is where it comes from.
+        """
+        slots = [entry for entry in self.partitions if entry.fixed_label.startswith("image-")]
+        return max(entry.size for entry in slots) // self.erase_block_size
+
+
+# --------------------------------------------------------------------------
 # Boards
 # --------------------------------------------------------------------------
 
@@ -341,6 +450,11 @@ class BoardDef:
     #: generated file. Generic knowledge about the board, per the
     #: generated-comments rule in :mod:`mcuhome.generate`.
     overlay_note: str = ""
+    #: How this board boots and takes updates (ADR 0015 decision 2).
+    #: Every board MCUHome builds for has one; the field is optional only
+    #: so that a test fixture can describe a board without repeating a
+    #: flash layout it does not exercise.
+    update_scheme: UpdateSchemeDef | None = None
 
 
 #: Board wiring of the nRF5340 application core: it has no RNG peripheral
@@ -371,6 +485,128 @@ _NRF5340_ENTROPY_OVERLAY = """\
 };"""
 
 
+#: nRF7002-DK flash layout, ADR 0015 decision 3 (board class A).
+#:
+#: ``storage_partition`` keeps the address and the size the board's own
+#: devicetree gives it (``0xF8000``, 32 KiB), which is what makes an
+#: update not a re-commissioning: the Matter fabric credentials and the
+#: Thread dataset are in it. ``boot_partition`` is also the upstream
+#: default. What changes is ``slot0_partition``, which grows into the
+#: space the upstream second slot occupied, and ``slot1_partition``,
+#: which moves to the external part entirely.
+_NRF7002DK_PARTITIONS = (
+    PartitionDef(label="boot_partition", fixed_label="mcuboot", offset=0x00000, size=64 * 1024),
+    PartitionDef(label="slot0_partition", fixed_label="image-0", offset=0x10000, size=928 * 1024),
+    PartitionDef(label="storage_partition", fixed_label="storage", offset=0xF8000, size=32 * 1024),
+    PartitionDef(
+        label="slot1_partition",
+        fixed_label="image-1",
+        offset=0x00000,
+        size=928 * 1024,
+        device="mx25r64",
+    ),
+)
+
+_NRF7002DK_PARTITION_OVERLAY = """\
+/delete-node/ &slot1_partition;
+
+&slot0_partition {
+\treg = <0x00010000 0x000e8000>;
+};
+
+&mx25r64 {
+\tstatus = "okay";
+
+\tpartitions {
+\t\tcompatible = "fixed-partitions";
+\t\t#address-cells = <1>;
+\t\t#size-cells = <1>;
+
+\t\tslot1_partition: partition@0 {
+\t\t\tlabel = "image-1";
+\t\t\treg = <0x00000000 0x000e8000>;
+\t\t};
+\t};
+};"""
+
+#: The class-A scheme of ADR 0015 decision 3, as the nRF7002-DK runs it.
+#:
+#: **The 64 KiB boot partition is nearly full, and that is measured, not
+#: feared.** ADR 0015 decision 3 sized it from a single-slot bootloader
+#: with serial recovery and the boot mode (52.2 KiB) and left the swap
+#: state machine on top of that as the number this bring-up owed. It is
+#: ~12 KiB: the first build of this configuration overflowed the
+#: partition by **108 bytes**. What bought the room back was dropping the
+#: logging subsystem and the console, which on this board have no backend
+#: once serial recovery takes the port — see ``CONFIG_LOG`` below. There
+#: is no comfortable margin left in this partition; the next feature that
+#: lands in the bootloader moves the boundary at ``slot0_partition``, and
+#: moving it is a re-bootstrap of every device already in the field
+#: (ADR 0016 decision 2), not a firmware update.
+_CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
+    board_class="A",
+    mcuboot_mode="swap-using-offset",
+    staging="external-flash",
+    recovery=("serial-recovery", "boot-mode", "button"),
+    partitions=_NRF7002DK_PARTITIONS,
+    erase_block_size=4096,
+    partition_overlay=_NRF7002DK_PARTITION_OVERLAY,
+    bootloader_kconfig=(
+        # Serial recovery over CDC-ACM: ADR 0016 decision 2 makes it the
+        # permanent debugger-free rescue path of every supported board,
+        # and ADR 0015 decision 6 makes USB/SMP the one transport that
+        # reaches an uncommissioned or half-updated node. The three
+        # symbols are MCUboot's own usb_cdc_acm_recovery.conf.
+        "CONFIG_MCUBOOT_SERIAL=y",
+        "CONFIG_BOOT_SERIAL_CDC_ACM=y",
+        "CONFIG_UART_CONSOLE=n",
+        # And with the console gone, so is every backend the bootloader's
+        # log could reach: this board has no RTT console out of the box,
+        # so CONFIG_LOG=y would compile a logging subsystem whose output
+        # nothing receives. MCUboot's own CDC-ACM board fragment
+        # (boot/zephyr/boards/nrf52840dongle_nrf52840.conf) drops both for
+        # exactly this reason. Measured here: without them the bootloader
+        # overflows its 64 KiB partition by 108 bytes — see the size note
+        # above this scheme.
+        "CONFIG_LOG=n",
+        "CONFIG_CONSOLE=n",
+        # Buttonless entrance (ADR 0016 decision 3): MCUboot reads the
+        # retention area the boot-mode snippet puts in GPREGRET1. The
+        # physical button entrance stays on — it is what is left when the
+        # application no longer boots far enough to write a register.
+        "CONFIG_RETAINED_MEM=y",
+        "CONFIG_RETENTION=y",
+        "CONFIG_RETENTION_BOOT_MODE=y",
+        "CONFIG_BOOT_SERIAL_BOOT_MODE=y",
+        # The secondary slot is on the MX25R64, which hangs off SPI4 —
+        # QSPI carries the nRF7002 Wi-Fi companion — so the driver is
+        # SPI_NOR and not NORDIC_QSPI_NOR. MCUboot's own board fragment
+        # switches SPI_NOR off for this board, which is right for a
+        # bootloader with no external slot and wrong for this one.
+        "CONFIG_SPI=y",
+        "CONFIG_SPI_NOR=y",
+        # Its driver polls, so the bootloader needs a scheduler.
+        "CONFIG_MULTITHREADING=y",
+        # The layout page size decides the erase unit MCUboot's flash map
+        # sees on the external part. Its default is the 64 KiB block
+        # erase, which would give the two slots different sector layouts
+        # — and swap needs one layout across both.
+        "CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE=4096",
+        # No downgrade prevention in v0.x (ADR 0015 decision 8). Rolling
+        # a device back to a known-good image is a normal act during
+        # development, and these layouts set no readback protection, so
+        # an attacker with the board in hand can erase and re-provision
+        # the part outright — this would raise the cost of the
+        # developer's operation and not the attacker's. Stated rather
+        # than left to the default, because the default is what would
+        # change under us. Revisit at 1.0, with readback protection.
+        "CONFIG_MCUBOOT_DOWNGRADE_PREVENTION=n",
+    ),
+    bootloader_snippets=("boot-mode",),
+    application_snippets=("boot-mode",),
+)
+
+
 BOARDS: dict[str, BoardDef] = {
     # nRF7002-DK, application core. Thread-only: BLE is deliberately off
     # (ADR 0011 — vanilla Zephyr has no combined BLE + 802.15.4 netcore
@@ -382,6 +618,7 @@ BOARDS: dict[str, BoardDef] = {
         kconfig=("CONFIG_BT=n", "CONFIG_ENTROPY_GENERATOR=y"),
         overlay=_NRF5340_ENTROPY_OVERLAY,
         overlay_note=_NRF5340_ENTROPY_NOTE,
+        update_scheme=_CLASS_A_EXTERNAL_STAGING,
     ),
 }
 

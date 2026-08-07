@@ -32,7 +32,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from mcuhome import __version__, container, pairing, provision, registry, workspace
+from mcuhome import __version__, container, pairing, provision, registry, signing, workspace
 from mcuhome import tree as tree_module
 from mcuhome.errors import MCUHomeError
 from mcuhome.generate import APP_DIR, write_tree
@@ -200,21 +200,42 @@ def format_summary(model: DeviceModel) -> str:
 def format_build_summary(
     name: str,
     *,
-    artifacts: list[Path],
-    regions: list[workspace.MemoryRegion],
+    images: list[workspace.ImageArtifacts],
+    memory: dict[str, list[workspace.MemoryRegion]],
+    merged: Path | None = None,
 ) -> str:
-    """What came out of stage 5: where the image is and what it costs."""
+    """What came out of stage 5: which images, where, and what they cost.
+
+    Two images, not one, since ADR 0015: a bootloader and an application
+    signed for it. Both are reported, because "the firmware" is now both
+    of them and a user installing only the second one has a brick.
+    """
     lines = [f"Built {name}."]
-    if artifacts:
+    for image in images:
         lines.append("")
-        lines.append("Image")
-        for path in artifacts:
+        lines.append(image.describe())
+        for path in image.files:
             lines.append(f"  {path}")
-    if regions:
+        for region in memory.get(image.name, []):
+            lines.append(f"  memory: {region.describe()}")
+    if merged is not None:
         lines.append("")
-        lines.append("Memory")
-        for region in regions:
-            lines.append(f"  {region.describe()}")
+        lines.append("Combined (every image at its own offset, for a full-chip flash)")
+        lines.append(f"  {merged}")
+    return "\n".join(lines)
+
+
+def format_flash_layout(board: str) -> str:
+    """The partition table the images were built against (ADR 0015)."""
+    definition = registry.BOARDS.get(board)
+    if definition is None or definition.update_scheme is None:
+        return ""
+    scheme = definition.update_scheme
+    lines = [
+        f"Flash layout (class {scheme.board_class}, MCUboot {scheme.mcuboot_mode}, "
+        f"staging: {scheme.staging})"
+    ]
+    lines += [f"  {entry.describe()}" for entry in scheme.partitions]
     return "\n".join(lines)
 
 
@@ -281,6 +302,13 @@ def _cmd_build(args: argparse.Namespace) -> int:
         return 0
 
     snippets = _snippets_for(model, args.snippet)
+    scheme = _update_scheme_of(model)
+    # Every image is signed with the user's own key, generated on first
+    # need outside every repository and build directory (ADR 0015
+    # decision 8). Resolved before the build rather than during it: a
+    # missing or unusable key is a refusal a user should get in a second,
+    # not ten minutes into a Matter compile.
+    key = signing.signing_key(args.signing_key)
     # The single resolution point (workspace.resolve_jobs): --jobs beats
     # MCUHOME_JOBS beats auto-detection. Resolved once, here, on the host —
     # the container path needs the same number for its own docker run, not
@@ -296,6 +324,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         "app_subdir": APP_DIR,
         "board": model.device.board,
         "snippets": snippets,
+        "bootloader_snippets": () if scheme is None else scheme.bootloader_snippets,
+        "signing_key": key.path,
         "jobs": resolved_jobs.value,
     }
     # ADR 0007: the container is the build environment, --native is the
@@ -310,6 +340,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if plan.image:
         print(f"  in {plan.image}")
     print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
+    print(_signing_key_note(key))
     print(f"  {' '.join(plan.command)}")
     print()
     # The build log is written by a subprocess to the same terminal; flush
@@ -320,16 +351,49 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if code != 0:
         raise workspace.refuse_failed_build(code, build_dir=plan.build_dir)
 
+    images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
     print()
     print(
         format_build_summary(
             model.device.name,
-            artifacts=workspace.artifacts(plan.build_dir),
-            regions=workspace.parse_memory_report(log),
+            images=images,
+            memory=workspace.parse_image_memory_report(
+                log, images=[image.name for image in images]
+            ),
+            merged=workspace.merged_image(plan.build_dir),
         )
     )
+    layout = format_flash_layout(model.device.board)
+    if layout:
+        print()
+        print(layout)
     _print_commissioning(model)
     return 0
+
+
+def _update_scheme_of(model: DeviceModel) -> registry.UpdateSchemeDef | None:
+    board = registry.BOARDS.get(model.device.board)
+    return None if board is None else board.update_scheme
+
+
+def _signing_key_note(key: signing.SigningKey) -> str:
+    """Where the signing key is, and — loudly — when it is brand new.
+
+    A new key is not a detail: MCUboot verifies against the public half
+    compiled into the bootloader already on the device, so firmware
+    signed with a key that was just generated is firmware an already
+    bootstrapped device will refuse.
+    """
+    if not key.created:
+        return f"  signing key {key.path}"
+    return (
+        f"  signing key {key.path}\n"
+        "               NEW — MCUHome had none and generated one just now. Keep "
+        "it: every\n"
+        "               device bootstrapped with it only accepts firmware signed "
+        "with it,\n"
+        "               and replacing it means bootstrapping those devices again."
+    )
 
 
 def _print_commissioning(model: DeviceModel) -> None:
@@ -469,6 +533,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             f"builder image to compile in (default: {container.IMAGE}; the "
             f"{container.IMAGE_VAR} environment variable sets it too)"
+        ),
+    )
+    build_parser_.add_argument(
+        "--signing-key",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "ECDSA P-256 private key to sign the firmware with (default: "
+            f"{signing.default_key_path()}, generated on first use; the "
+            f"{signing.KEY_VAR} environment variable sets it too)"
         ),
     )
     build_parser_.add_argument(

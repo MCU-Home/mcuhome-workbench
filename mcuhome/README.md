@@ -26,13 +26,15 @@ pytest                           # the suite in ../tests_py/
 | `schema.py` | 2a | typed model of the raw configuration; shape errors |
 | `validate.py` | 2b | cross-references, v0.1 scope gates, Matter conformance |
 | `resolve.py` | 3 | defaults, device-type completion, endpoint numbering, unit conversion |
-| `generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists |
+| `generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists, the sysbuild half |
 | `container.py` | 5 | the builder image: which one, which mounts, the `docker run` around the build |
-| `workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build` invocation, the memory report |
+| `workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build --sysbuild` invocation, per-image artifacts and memory reports |
 | `pairing.py` | — | commissioning credentials: SPAKE2+ verifier, QR and manual code, the atomic Kconfig group |
+| `signing.py` | — | the per-user firmware signing key: where it lives, generating one, refusing anything else |
+| `p256.py` | — | the curve arithmetic `pairing.py` and `signing.py` share, and nothing more |
 | `provision.py` | — | `init-pairing`: draws credentials once and edits them into the device's YAML |
 | `model.py` | — | the canonical device model and its JSON form |
-| `registry.py` | — | static tables: clusters, device types, drivers, boards |
+| `registry.py` | — | static tables: clusters, device types, drivers, boards, per-board update scheme and flash layout |
 | `toolchain.py` | — | Zephyr line and blob resolution — the ADR 0013 seam |
 | `errors.py` | — | the error type and its plain-language rendering |
 
@@ -42,14 +44,20 @@ pytest                           # the suite in ../tests_py/
 <build dir>/                 default: <tree root>/build/<device>/
 ├── device-model.json        the canonical model, for inspection
 ├── app/                     stage 4: a standalone Zephyr application
-└── build/                   stage 5: the CMake/ninja tree, images under zephyr/
+└── build/                   stage 5: the CMake/ninja tree, one directory per image
+    ├── mcuboot/zephyr/      the bootloader
+    ├── app/zephyr/          the application, signed and unsigned
+    └── merged.hex           both, each at its own offset
 ```
 
 Everything outside `build/` is meant to be read by a human
 (builder-pipeline.md §1.3); everything inside it is machine spoil and can
 be deleted at any time. The application is standalone: `west build -b
-<board> -S <snippets> <build dir>/app` from a west workspace does exactly
+<board> --sysbuild <build dir>/app` from a west workspace does exactly
 what `mcuhome build` does, which is the property that keeps stage 5 thin.
+The one argument that cannot travel in the tree is the signing key, which
+is a per-user secret and is passed on the command line
+(`-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE=…`, ADR 0015 decision 8).
 
 Stage 5 runs in the **builder image** (ADR 0007,
 [../containers/builder/](../containers/builder/README.md)): the host
@@ -60,9 +68,11 @@ for MCUHome's own contributors.
 
 The two paths meet at `BuildPlan`: a command plus an environment.
 `container.plan_build()` wraps `workspace.west_build_command()` in a
-`docker run` and reuses `run_build`, `artifacts` and
-`parse_memory_report` unchanged, so there is one build orchestration and
-two ways of reaching a compiler.
+`docker run` and reuses `run_build`, `build_images` and
+`parse_image_memory_report` unchanged, so there is one build
+orchestration and two ways of reaching a compiler. The container mounts
+the signing key as a single read-only file, because `imgtool` runs inside
+it and nothing in there should be able to write a key.
 
 ## Three rules worth knowing before changing anything here
 
@@ -77,6 +87,13 @@ naming the source of every number. Matter revisions come from CHIP's own
 implementation data model, never from the specification scrape shipped
 next to it — the sourcing rule is spelled out at the top of that file
 and, generated from it, at the top of every emitted table set.
+
+**A board is a table row, not a branch.** ADR 0015 decision 2 puts the
+update scheme, the recovery entrance and the whole partition table into
+`BoardDef`, and `test_registry.py` reads the source of every other module
+to prove none of them names a board. The moment one does, "supporting a
+new board is a table row plus a bring-up" stops being true, and nobody
+finds out until the second board.
 
 **The commissioning identity is one call, never seven lines.**
 `pairing.kconfig_lines()` is the only place in the package that names

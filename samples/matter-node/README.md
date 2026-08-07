@@ -123,6 +123,56 @@ Leaving `-S matter` out is refused at CMake configure time by
 backstop. Without that guard the image compiles fine and then dies at
 runtime with no console to explain why.
 
+### With a bootloader, the way a real device is built
+
+The command above builds **one image, with no bootloader**, which links
+over the whole part and cannot be updated without a debugger. That is
+fine for a sample on a development kit and it is deliberately kept
+working — it is the shortest path to a running node, it is what
+`sample.yaml` gives twister, and it is what everyone's fingers already
+type.
+
+It is **not** how MCUHome builds a device. ADR 0015 puts MCUboot under
+every image and fixes the flash layout per board, and vanilla Zephyr
+builds a bootloader only under sysbuild:
+
+```sh
+# from the west workspace top directory; --sysbuild adds the MCUboot image
+west build -p -b nrf7002dk/nrf5340/cpuapp --sysbuild mcuhome/samples/matter-node -- \
+    -Dmatter-node_SNIPPET="matter;debug-rtt;boot-mode" \
+    -Dmcuboot_SNIPPET="boot-mode" \
+    -DSB_CONFIG_BOOTLOADER_MCUBOOT=y \
+    -DSB_CONFIG_MCUBOOT_MODE_SWAP_USING_OFFSET=y \
+    -DSB_CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y \
+    -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="$HOME/.config/mcuhome/signing.key"
+```
+
+Three things about that command are worth reading rather than copying:
+
+- **Snippets are named per image.** Sysbuild hands a bare `-S` to *every*
+  image, and `-S matter` in MCUboot's Kconfig is an assignment to symbols
+  it has never heard of, which stops the build. `<image>_SNIPPET` is the
+  per-image form, and the main image is named after its directory.
+- **The signing key is yours** (ADR 0015 decision 8). Without that last
+  argument the build succeeds and signs with MCUboot's demo key, whose
+  private half is published in the MCUboot repository. `mcuhome build`
+  generates a real one on first use; `imgtool keygen -t ecdsa-p256`
+  does the same by hand.
+- **The partition table is missing from this sample.** The command above
+  builds against the board's upstream two-slot layout, which gives the
+  application 464 KiB and therefore does not fit — the layout of ADR 0015
+  is registry data that `mcuhome build` emits, not something this
+  hand-written sample carries. To build this sample *with* a bootloader,
+  generate the equivalent device instead:
+
+  ```sh
+  mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+      --build-dir build/bmp180-node
+  ```
+
+  which is the same device — `src/mcuhome_config.{c,h}` here are that
+  command's output, byte for byte (ADR 0014).
+
 ## What this sample still contains
 
 Almost nothing — which is the point of ADR 0014. The Matter runtime moved

@@ -10,9 +10,44 @@
  * constants — which is also why a Zephyr sensor driver is enabled by its node here and not by a
  * Kconfig symbol in the fragment next to this file.
  *
- * The first block, if there is one, is board wiring rather than device configuration: what every
- * MCUHome node on this board needs, whatever its YAML says.
+ * The blocks before the peripherals are board wiring rather than device configuration: the flash
+ * layout and whatever every MCUHome node on this board needs, whatever its YAML says.
  */
+
+/* Flash layout (ADR 0015). MCUHome fixes the partition table itself rather than inheriting the
+ * board's, because no upstream default holds an MCUHome image: the two-slot table this board ships
+ * with gives the application 464 KiB, and a commissioned Matter node is over 550 KiB.
+ * The storage partition keeps the address and size the board's own devicetree gives it. That is
+ * what makes an update not a re-commissioning: the Matter fabric credentials and the Thread dataset
+ * live there, and every layout in ADR 0015 preserves them.
+ * The bootloader image is given the same table, in sysbuild/mcuboot.overlay: the two have to agree
+ * on the flash map byte for byte.
+ *
+ *   mcuboot  internal 0x000000..0x010000    64 KiB
+ *   image-0  internal 0x010000..0x0f8000   928 KiB
+ *   storage  internal 0x0f8000..0x100000    32 KiB
+ *   image-1  mx25r64  0x000000..0x0e8000   928 KiB
+ */
+/delete-node/ &slot1_partition;
+
+&slot0_partition {
+	reg = <0x00010000 0x000e8000>;
+};
+
+&mx25r64 {
+	status = "okay";
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		slot1_partition: partition@0 {
+			label = "image-1";
+			reg = <0x00000000 0x000e8000>;
+		};
+	};
+};
 
 /* Entropy. The nRF5340 application core has no RNG peripheral: the one on the die belongs to the
  * network core. The board default points zephyr,entropy at the Bluetooth HCI entropy driver, which

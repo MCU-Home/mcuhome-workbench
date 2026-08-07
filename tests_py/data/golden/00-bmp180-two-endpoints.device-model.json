@@ -193,7 +193,8 @@
   ],
   "build": {
     "snippets": [
-      "matter"
+      "matter",
+      "boot-mode"
     ],
     "kconfig": [
       "CONFIG_BT=n",

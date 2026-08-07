@@ -27,12 +27,20 @@ second — they are the fast half of the strategy in
 | `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
 | `test_pairing.py` | commissioning: the CHIP vectors, the atomic Kconfig group, `init-pairing` |
+| `test_registry.py` | the per-board update scheme and flash layout, and that no module branches on a board name (ADR 0015) |
+| `test_signing.py` | the per-user signing key: where it is, what it is, and how the refusals read (ADR 0015 §8) |
 | `test_examples.py` | the design examples in `docs/design/examples/` |
 | `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
-| `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the west command, the memory report |
+| `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the sysbuild command, per-image artifacts and memory reports |
 | `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
 | `test_cli.py` | command surface, exit codes, summary output |
+
+**No build ever runs here, docker never runs, and no test touches the
+developer's own signing key.** An autouse fixture in `conftest.py` points
+`XDG_CONFIG_HOME` at `tmp_path`, because `mcuhome build` generates a real
+private key on first need and a suite that reached the real one would
+either read a secret or create one outside a temporary directory.
 
 **No build ever runs here, and neither does docker.** `test_workspace.py`,
 `test_container.py` and the `build` tests in `test_cli.py` cover
@@ -48,8 +56,9 @@ running in a second.
 ## Golden files
 
 `data/golden/` holds the byte-exact expected device model, devicetree
-overlay, Kconfig fragment, application `CMakeLists.txt` and
-`CHIPProjectConfig.h` wrapper. The two generated C files are not
+overlay, Kconfig fragment, application `CMakeLists.txt`,
+`CHIPProjectConfig.h` wrapper and the three sysbuild artifacts
+(`sysbuild.conf` plus the bootloader image's `.conf` and `.overlay`). The two generated C files are not
 duplicated here: **the committed sample is the golden file** for those
 (ADR 0014), so `test_generate.py` compares fresh generator output against
 `samples/matter-node/src/mcuhome_config.{c,h}` directly.
@@ -76,6 +85,12 @@ cp /tmp/bmp180-node/app/boards/nrf7002dk_nrf5340_cpuapp.overlay \
    tests_py/data/golden/00-bmp180-two-endpoints.overlay
 cp /tmp/bmp180-node/app/include/CHIPProjectConfig.h \
    tests_py/data/golden/00-bmp180-two-endpoints.CHIPProjectConfig.h
+cp /tmp/bmp180-node/app/sysbuild.conf \
+   tests_py/data/golden/00-bmp180-two-endpoints.sysbuild.conf
+cp /tmp/bmp180-node/app/sysbuild/mcuboot.conf \
+   tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.conf
+cp /tmp/bmp180-node/app/sysbuild/mcuboot.overlay \
+   tests_py/data/golden/00-bmp180-two-endpoints.mcuboot.overlay
 ```
 
 Regenerating the sample's C files is not optional bookkeeping: it is how

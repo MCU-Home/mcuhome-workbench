@@ -14,7 +14,13 @@ paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
 environment. The container path assembles a different command in a
 different environment — using :func:`west_build_command` for the inner
 half — and reuses everything after that, :func:`run_build`,
-:func:`artifacts` and :func:`parse_memory_report` included.
+:func:`build_images` and :func:`parse_image_memory_report` included.
+
+**Two images, since ADR 0015.** Every MCUHome device boots through
+MCUboot, and vanilla Zephyr builds a bootloader only under sysbuild, so
+what this module drives is ``west build --sysbuild``: one build directory
+with one sub-directory per image, a signed application, and a bootloader
+that verifies it against the user's own key (:mod:`mcuhome.signing`).
 
 **Nothing here knows the device model.** The inputs are a board name, a
 snippet list and two directories; whatever produced them is somebody
@@ -40,20 +46,27 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
 from mcuhome.errors import BuildError
+from mcuhome.generate import BOOTLOADER_IMAGE
 
 __all__ = [
+    "BOOTLOADER_IMAGE",
     "BUILD_SUBDIR",
     "CHIP_JOBS_VAR",
+    "CMAKE_JOBS_VAR",
     "JOBS_VAR",
+    "MERGED_IMAGE_GLOB",
     "MODULE_DIR",
     "PYSHIM_DIR",
+    "SIGNING_KEY_OPTION",
     "TOOLS",
     "BuildPlan",
+    "ImageArtifacts",
     "MemoryRegion",
     "ResolvedJobs",
     "ToolNeed",
@@ -61,11 +74,15 @@ __all__ = [
     "auto_jobs",
     "available_ram_bytes",
     "build_environment",
+    "build_images",
     "detect_jobs",
     "find_topdir",
+    "merged_image",
     "missing_tools",
+    "parse_image_memory_report",
     "parse_memory_report",
     "plan_build",
+    "pristine_mode",
     "refuse_failed_build",
     "require_tools",
     "require_topdir",
@@ -107,6 +124,31 @@ JOBS_VAR = "MCUHOME_JOBS"
 #: nproc+2 — the exact OOM risk the resolved job count (:func:`resolve_jobs`)
 #: exists to avoid, just one process tree down.
 CHIP_JOBS_VAR = "MCUHOME_CHIP_JOBS"
+
+#: CMake's own cap on ``cmake --build`` parallelism. Under sysbuild the
+#: ``-o=-j{jobs}`` below only reaches the *outer* ninja: each image is an
+#: ExternalProject whose build step is a fresh ``cmake --build .``, and
+#: nothing of the outer invocation is inherited by it. Without this the
+#: inner ninja falls back to its own default of nproc+2, which is the
+#: exact OOM the resolved job count exists to prevent. Images do not build
+#: concurrently (sysbuild puts their build steps in ninja's ``console``
+#: pool), so one cap serves the whole run.
+CMAKE_JOBS_VAR = "CMAKE_BUILD_PARALLEL_LEVEL"
+
+#: Sysbuild Kconfig symbol naming the MCUboot signing key. Passed on the
+#: command line and never written into the generated tree: it is the path
+#: of a per-user secret (ADR 0015 decision 8, :mod:`mcuhome.signing`).
+SIGNING_KEY_OPTION = "SB_CONFIG_BOOT_SIGNATURE_KEY_FILE"
+
+#: Sysbuild's combined image, at the top of the build directory: every
+#: image at its own offset in one file, which is what a full-chip flash
+#: over a debug probe wants. Sysbuild writes one per board target and
+#: names it after that target, hence a pattern rather than a name.
+MERGED_IMAGE_GLOB = "merged_*.hex"
+
+#: Written by sysbuild and by nothing else. Its presence is how a build
+#: directory says which kind of build made it (see :func:`pristine_mode`).
+_DOMAINS_FILE = "domains.yaml"
 
 #: What the west workspace top directory is recognized by.
 _WEST_MARKER = Path(".west") / "config"
@@ -344,8 +386,10 @@ def build_environment(env: dict[str, str] | None = None, *, jobs: int) -> dict[s
     prepared["PYTHONPATH"] = os.pathsep.join(seen)
     # Same job count as the outer `-o=-j{jobs}` (west_build_command): the
     # vendored CHIP GN sub-build otherwise ignores it entirely, see
-    # CHIP_JOBS_VAR.
+    # CHIP_JOBS_VAR — and so does each sysbuild image's own inner ninja,
+    # see CMAKE_JOBS_VAR.
     prepared[CHIP_JOBS_VAR] = str(jobs)
+    prepared[CMAKE_JOBS_VAR] = str(jobs)
     return prepared
 
 
@@ -386,20 +430,53 @@ def require_tools(env: dict[str, str]) -> None:
 # --------------------------------------------------------------------------
 
 
+def pristine_mode(build_dir: Path) -> str:
+    """``"auto"``, or ``"always"`` for a build directory of the wrong kind.
+
+    ``auto`` is what a normal rebuild wants: west re-runs CMake from
+    scratch when the board or the application directory changed and keeps
+    the object files otherwise, which is the difference between a
+    ten-minute and a ten-second edit cycle on the Matter tree.
+
+    It cannot cover one case, and that case is a migration every existing
+    build directory hits exactly once: a directory built before ADR 0015
+    holds a single-image CMake tree whose source directory is the
+    application, and sysbuild's is Zephyr's own ``share/sysbuild``. CMake
+    refuses that with a message about the source directory not matching,
+    which is true and unhelpful. Sysbuild writes :data:`_DOMAINS_FILE` and
+    a single-image build does not, so the two are told apart by looking.
+    """
+    if not (build_dir / "CMakeCache.txt").is_file():
+        return "auto"
+    return "auto" if (build_dir / _DOMAINS_FILE).is_file() else "always"
+
+
 def west_build_command(
     *,
     app_dir: Path,
     build_dir: Path,
     board: str,
     snippets: tuple[str, ...] = (),
+    bootloader_snippets: tuple[str, ...] = (),
+    signing_key: Path | None = None,
     jobs: int,
+    pristine: str = "auto",
 ) -> list[str]:
-    """The ``west build`` invocation for one generated application.
+    """The ``west build --sysbuild`` invocation for one generated application.
 
-    ``--pristine=auto`` rather than always-pristine: west re-runs CMake
-    from scratch when the board or the application directory changed and
-    keeps the object files otherwise, which is the difference between a
-    ten-minute and a ten-second edit cycle on the Matter tree.
+    **Snippets are named per image, never once.** Sysbuild hands a bare
+    ``SNIPPET`` down to every image it builds, and an application's
+    snippets do not merely fail to apply in a bootloader — ``-S matter``
+    puts CHIP's heap sizing and a symbol MCUboot has never heard of into
+    MCUboot's Kconfig, and an assignment to an undefined symbol stops the
+    build. So the application's list goes to ``<app>_SNIPPET`` (sysbuild
+    names the main image after its directory) and the bootloader's to
+    ``mcuboot_SNIPPET``, and the global name is left unset.
+
+    **The signing key is an argument, not a file in the tree.** Leaving
+    it out is not an error to sysbuild: MCUboot's default is its own demo
+    key, whose private half is published. :mod:`mcuhome.signing` is what
+    makes sure there is a real one to pass.
     """
     command = [
         "west",
@@ -409,14 +486,31 @@ def west_build_command(
         "--build-dir",
         str(build_dir),
         "--pristine",
-        "auto",
+        pristine,
+        "--sysbuild",
     ]
-    for snippet in snippets:
-        command += ["--snippet", snippet]
     # `-o=` and not `-o `: the value starts with a dash, and argparse reads
     # a separate token starting with a dash as the next option.
     command.append(f"-o=-j{jobs}")
     command.append(str(app_dir))
+
+    options: list[str] = []
+    if snippets:
+        options.append(f"-D{app_dir.name}_SNIPPET={';'.join(snippets)}")
+    if bootloader_snippets:
+        options.append(f"-D{BOOTLOADER_IMAGE}_SNIPPET={';'.join(bootloader_snippets)}")
+    if signing_key is not None:
+        # The quotes are part of the value, not shell syntax: CMake writes
+        # this straight into a Kconfig fragment, where an unquoted string
+        # assignment is a "malformed string literal ... Assignment
+        # ignored" warning. Zephyr turns Kconfig warnings into errors, so
+        # today that stops the build rather than silently leaving the
+        # symbol at MCUboot's default, which is the demo key. Do not rely
+        # on that: quote it.
+        options.append(f'-D{SIGNING_KEY_OPTION}="{signing_key}"')
+    if options:
+        command.append("--")
+        command += options
     return command
 
 
@@ -445,6 +539,8 @@ def plan_build(
     app_subdir: str,
     board: str,
     snippets: tuple[str, ...] = (),
+    bootloader_snippets: tuple[str, ...] = (),
+    signing_key: Path | None = None,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
     jobs: int,
@@ -479,7 +575,10 @@ def plan_build(
             build_dir=build_dir,
             board=board,
             snippets=snippets,
+            bootloader_snippets=bootloader_snippets,
+            signing_key=signing_key,
             jobs=jobs,
+            pristine=pristine_mode(build_dir),
         ),
         env=prepared,
     )
@@ -530,8 +629,9 @@ def refuse_failed_build(code: int, *, build_dir: Path) -> BuildError:
         f"The firmware did not compile (west build exited with {code}).",
         hint=(
             "the build log above says what went wrong; the full CMake output "
-            f"is in {build_dir}. If the failure is in generated code rather "
-            "than in your configuration, that is a builder bug worth reporting."
+            f"is in {build_dir}, one sub-directory per image. If the failure is "
+            "in generated code rather than in your configuration, that is a "
+            "builder bug worth reporting."
         ),
     )
 
@@ -540,17 +640,91 @@ def refuse_failed_build(code: int, *, build_dir: Path) -> BuildError:
 # What came out
 # --------------------------------------------------------------------------
 
-#: Image formats Zephyr writes that MCUHome has a use for today. Order is
-#: the order they are reported in: the ELF first because that is what a
-#: debugger and ``west flash`` want, the hex because that is what a
-#: standalone flashing tool wants.
-_ARTIFACT_NAMES = ("zephyr.elf", "zephyr.hex", "zephyr.bin", "zephyr.uf2")
+#: Image formats Zephyr writes that MCUHome has a use for today, in
+#: reporting order: the ELF first because that is what a debugger wants,
+#: then the raw forms, then the signed ones. The signed forms only exist
+#: for images MCUboot chain-loads — the bootloader itself is not signed,
+#: it *is* the trust anchor.
+_ARTIFACT_NAMES = (
+    "zephyr.elf",
+    "zephyr.hex",
+    "zephyr.bin",
+    "zephyr.signed.hex",
+    "zephyr.signed.bin",
+    "zephyr.signed.confirmed.hex",
+    "zephyr.signed.confirmed.bin",
+    "zephyr.uf2",
+)
+
+#: The file each image is reported by size on. Zephyr's own end-of-build
+#: ``Memory region / FLASH / Used Size`` is byte-identical to the size of
+#: this file, which makes it the one number available for every image of a
+#: multi-image build regardless of what survived in the log.
+_FLASH_ARTIFACT = "zephyr.bin"
+
+#: Human-readable role per sysbuild image name. Anything else is reported
+#: under its own name without a role, which is what a future third image
+#: (a firmware loader, a network-core image) should do until it is named
+#: here on purpose.
+_IMAGE_ROLES = {BOOTLOADER_IMAGE: "bootloader"}
 
 
 def artifacts(build_dir: Path) -> list[Path]:
-    """The images *build_dir* actually contains, in reporting order."""
+    """The images one image directory contains, in reporting order."""
     output = build_dir / "zephyr"
     return [output / name for name in _ARTIFACT_NAMES if (output / name).is_file()]
+
+
+@dataclass(frozen=True)
+class ImageArtifacts:
+    """Everything one image of a sysbuild build produced."""
+
+    #: Sysbuild's name for the image, which is also its sub-directory.
+    name: str
+    #: ``"bootloader"``, ``"application"``, or the image name again.
+    role: str
+    files: list[Path]
+    #: Size of ``zephyr.bin``, i.e. what the linker put in flash, or None
+    #: for an image that produced no raw binary.
+    flash_bytes: int | None
+
+    def describe(self) -> str:
+        size = "" if self.flash_bytes is None else f"  {self.flash_bytes / 1024:.1f} KiB"
+        return f"{self.name} ({self.role}){size}"
+
+
+def build_images(build_dir: Path, *, app_image: str) -> list[ImageArtifacts]:
+    """One entry per sysbuild image that produced something, bootloader first.
+
+    Order is boot order, which is also install order and the order the
+    two things a user does with them happen in.
+    """
+    found: list[ImageArtifacts] = []
+    for name in (BOOTLOADER_IMAGE, app_image):
+        files = artifacts(build_dir / name)
+        if not files:
+            continue
+        binary = build_dir / name / "zephyr" / _FLASH_ARTIFACT
+        found.append(
+            ImageArtifacts(
+                name=name,
+                role=_IMAGE_ROLES.get(name, "application" if name == app_image else name),
+                files=files,
+                flash_bytes=binary.stat().st_size if binary.is_file() else None,
+            )
+        )
+    return found
+
+
+def merged_image(build_dir: Path) -> Path | None:
+    """Sysbuild's every-image-in-one-file hex, when it wrote one.
+
+    One per board target, and MCUHome builds one board target per device,
+    so more than one match means something changed upstream — reported as
+    none rather than as an arbitrary pick.
+    """
+    merged = sorted(build_dir.glob(MERGED_IMAGE_GLOB))
+    return merged[0] if len(merged) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -603,3 +777,52 @@ def parse_memory_report(log: str) -> list[MemoryRegion]:
             )
         )
     return regions
+
+
+#: ``[1/2] Performing build step for 'mcuboot'`` — what the outer ninja
+#: prints when it hands over to one image's own build. It is the only
+#: marker in a sysbuild log that says whose output follows; Zephyr's
+#: memory report itself names no image.
+_IMAGE_STEP = re.compile(r"Performing build step for '(?P<image>[^']+)'")
+
+
+def parse_image_memory_report(log: str, *, images: Sequence[str]) -> dict[str, list[MemoryRegion]]:
+    """The footprint table of each image, by sysbuild image name.
+
+    A sysbuild build prints one report per image, and nothing in the
+    report says which image it belongs to — so the reports are attributed
+    by the build-step banner that precedes them. An incremental build
+    that relinked only one image reports only that one, which is correct
+    rather than incomplete: the other image did not change.
+
+    *images* is required and is not a convenience: the same banner is
+    printed for every nested ExternalProject, and the Matter build has
+    one — ``chip-gn``, which runs inside the application's build and
+    would otherwise be credited with the application's footprint.
+    Banners for anything not named here are ignored, so what follows them
+    still belongs to the image whose build they are part of.
+
+    Output ordering follows the log, which is the order sysbuild happened
+    to build in and deliberately not something the caller should rely on.
+    """
+    known = set(images)
+    by_image: dict[str, list[MemoryRegion]] = {}
+    current: str | None = None
+    for line in log.splitlines():
+        step = _IMAGE_STEP.search(line)
+        if step is not None:
+            if step["image"] in known:
+                current = step["image"]
+            continue
+        match = _REGION.match(line)
+        if match is None or current is None:
+            continue
+        by_image.setdefault(current, []).append(
+            MemoryRegion(
+                name=match["name"],
+                used=int(match["used"]) * _UNITS[match["used_unit"]],
+                total=int(match["total"]) * _UNITS[match["total_unit"]],
+                percent=float(match["percent"]),
+            )
+        )
+    return by_image

@@ -17,8 +17,14 @@ from mcuhome.generate import APP_DIR
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
-#: The tail of a Zephyr build log, as the linker prints it.
+#: A sysbuild build log: one linker report per image, each preceded by the
+#: only line that says whose output follows.
 MEMORY_LOG = """\
+[1/2] Performing build step for 'mcuboot'
+Memory region         Used Size  Region Size  %age Used
+           FLASH:       57344 B        64 KB      87.50%
+             RAM:       29424 B       448 KB       6.41%
+[2/2] Performing build step for 'app'
 Memory region         Used Size  Region Size  %age Used
            FLASH:      859672 B         1 MB      81.99%
              RAM:      196296 B       448 KB      42.79%
@@ -46,6 +52,8 @@ def _planner(out_dir: Path):
                 build_dir=build_dir,
                 board=kwargs["board"],
                 snippets=kwargs["snippets"],
+                bootloader_snippets=kwargs.get("bootloader_snippets", ()),
+                signing_key=kwargs.get("signing_key"),
                 jobs=kwargs["jobs"],
             ),
             env={},
@@ -84,7 +92,7 @@ def test_validate_by_file_path(capsys) -> None:
     assert "temperature_measurement (0x0402 rev 4, 3 attributes)" in out
     assert "baro.temperature -> endpoint 1 0x0402/0x0000, every 10 s" in out
     assert "report on 0.1 °C change" in out
-    assert "snippets: matter" in out
+    assert "snippets: matter, boot-mode" in out
 
 
 def test_validate_writes_nothing(tmp_path, monkeypatch) -> None:
@@ -126,9 +134,14 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     def fake_run(plan, stream=None) -> tuple[int, str]:
         seen["command"] = plan.command
         seen["cwd"] = plan.topdir
-        (plan.build_dir / "zephyr").mkdir(parents=True)
-        (plan.build_dir / "zephyr" / "zephyr.elf").write_text("", "utf-8")
-        (plan.build_dir / "zephyr" / "zephyr.hex").write_text("", "utf-8")
+        for image in ("mcuboot", APP_DIR):
+            output = plan.build_dir / image / "zephyr"
+            output.mkdir(parents=True)
+            (output / "zephyr.elf").write_text("", "utf-8")
+            (output / "zephyr.hex").write_text("", "utf-8")
+            (output / "zephyr.bin").write_text("x" * 1024, "utf-8")
+        (plan.build_dir / APP_DIR / "zephyr" / "zephyr.signed.bin").write_text("", "utf-8")
+        (plan.build_dir / "merged_nrf7002dk_nrf5340_cpuapp.hex").write_text("", "utf-8")
         return 0, MEMORY_LOG
 
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
@@ -136,20 +149,32 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 0
     out = capsys.readouterr().out
-    assert "Generated 7 files for bmp180-node" in out
+    assert "Generated 10 files for bmp180-node" in out
     assert "app/src/mcuhome_config.c" in out
+    assert "app/sysbuild.conf" in out
     # The application it generated is the application it built.
     assert str(tmp_path / "app") in " ".join(seen["command"])  # type: ignore[arg-type]
     assert "--board nrf7002dk/nrf5340/cpuapp" in " ".join(seen["command"])  # type: ignore[arg-type]
     assert "Built bmp180-node." in out
-    assert str(tmp_path / "build" / "zephyr" / "zephyr.hex") in out
-    assert "FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
-    assert "RAM 191.7 KiB of 448.0 KiB (42.8%)" in out
+    # Both images, each under its own sysbuild sub-directory, and the
+    # signed application next to the raw one.
+    assert "mcuboot (bootloader)  1.0 KiB" in out
+    assert "app (application)  1.0 KiB" in out
+    assert str(tmp_path / "build" / "mcuboot" / "zephyr" / "zephyr.hex") in out
+    assert str(tmp_path / "build" / APP_DIR / "zephyr" / "zephyr.signed.bin") in out
+    assert str(tmp_path / "build" / "merged_nrf7002dk_nrf5340_cpuapp.hex") in out
+    assert "memory: FLASH 56.0 KiB of 64.0 KiB (87.5%)" in out
+    assert "memory: FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
+    assert "memory: RAM 191.7 KiB of 448.0 KiB (42.8%)" in out
+    # And the layout those images were built against.
+    assert "Flash layout (class A, MCUboot swap-using-offset, staging: external-flash)" in out
+    assert "image-0  internal 0x010000..0x0f8000   928 KiB" in out
 
 
 def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
     tmp_path, monkeypatch
 ) -> None:
+    """Per image, because sysbuild would otherwise give them to both."""
     seen: list[str] = []
 
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
@@ -160,8 +185,9 @@ def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
     )
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "-S", "debug-rtt"]
     assert main(argv) == 0
-    snippets = [seen[index + 1] for index, item in enumerate(seen) if item == "--snippet"]
-    assert snippets == ["matter", "debug-rtt"]
+    assert "--snippet" not in seen
+    assert f"-D{APP_DIR}_SNIPPET=matter;boot-mode;debug-rtt" in seen
+    assert "-Dmcuboot_SNIPPET=boot-mode" in seen
 
 
 def test_a_relative_build_dir_still_names_an_absolute_application(tmp_path, monkeypatch) -> None:
@@ -300,7 +326,7 @@ def test_a_missing_image_is_a_plain_refusal_after_a_finished_generation(
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-native"]) == 1
     captured = capsys.readouterr()
-    assert "Generated 7 files for bmp180-node" in captured.out
+    assert "Generated 10 files for bmp180-node" in captured.out
     assert (tmp_path / "app" / "src" / "mcuhome_config.c").is_file()
     assert "is not on this machine" in captured.err
     assert "docker pull" in captured.err
@@ -328,7 +354,7 @@ def test_build_defaults_to_a_build_dir_at_the_tree_root(tmp_path, capsys) -> Non
     assert list((tree / "devices" / "bench-node").iterdir()) == [
         tree / "devices" / "bench-node" / "main.yaml"
     ]
-    assert "Generated 7 files for bench-node" in capsys.readouterr().out
+    assert "Generated 10 files for bench-node" in capsys.readouterr().out
 
 
 def test_build_reports_configuration_problems_and_writes_nothing(tmp_path, capsys) -> None:
@@ -371,7 +397,7 @@ def test_the_published_test_credentials_are_called_out(capsys) -> None:
 def test_build_prints_the_pairing_codes_last(tmp_path, capsys) -> None:
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only"]) == 0
     out = capsys.readouterr().out
-    assert out.index("Commissioning") > out.index("Generated 7 files")
+    assert out.index("Commissioning") > out.index("Generated 10 files")
     assert "MT:Y.K90AFN00KA0648G00" in out
 
 

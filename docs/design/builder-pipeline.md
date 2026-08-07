@@ -83,14 +83,23 @@ devices/<name>/main.yaml
   │  3 resolve     defaults, device-type completion, endpoint 0 synthesis
   ▼                → device-model.json  (canonical model)
   │  4 generate    from the model only:
-  │                  ├─ app/boards/<board>.overlay   (from hardware:)
+  │                  ├─ app/boards/<board>.overlay   (board wiring + flash layout + hardware:)
   │                  ├─ app/prj.conf fragments       (from network:/power:/components)
   │                  ├─ mcuhome_config.c/.h          (endpoint/cluster/automation tables)
-  │                  └─ app/CMakeLists.txt           (generated app skeleton)
-  │  5 build       west build (sysbuild) inside the builder container
+  │                  ├─ app/CMakeLists.txt           (generated app skeleton)
+  │                  ├─ app/sysbuild.conf            (bootloader, mode, signature type)
+  │                  └─ app/sysbuild/mcuboot.{conf,overlay}   (the bootloader image)
+  │  5 build       west build --sysbuild inside the builder container
   ▼
-artifacts: firmware.hex/.uf2, OTA image, build-manifest.json, memory report
+artifacts, per image: MCUboot + the signed application, plus the combined
+hex, build-manifest.json and the memory report
 ```
+
+The flash layout and the bootloader configuration are **per-board
+registry data** (ADR 0015 decision 2), not generator logic: stage 4
+renders `BoardDef.update_scheme` into the two devicetree overlays and the
+two Kconfig fragments above, and nothing in the builder branches on a
+board name.
 
 - Stages are separately invocable (`mcuhome validate`, `mcuhome build`);
   stage 4's output is a complete, standalone Zephyr application that
@@ -171,12 +180,24 @@ now, even though v0.1 only ships "local"):
 
 ## 7. Artifacts
 
-| Artifact | Purpose |
-|---|---|
-| `firmware.hex` / `.uf2` | Wired flashing (debug probe / bootloader drag-drop) |
-| `ota.bin` | Matter OTA image (header + signed payload) |
-| `build-manifest.json` | Device model + versions + image hashes — consumed by the dashboard |
-| `memory-report.txt` | ROM/RAM footprint (Zephyr rom/ram_report) — regression tracking |
+Since ADR 0015 a build produces **a set per image**, not one file. Under
+sysbuild each image has its own sub-directory of the build tree
+(`<build>/mcuboot/`, `<build>/<app>/`):
+
+| Artifact | Image | Purpose |
+|---|---|---|
+| `zephyr.hex` / `.bin` / `.elf` | MCUboot | the bootloader, installed once per device by the ADR 0016 bootstrap |
+| `zephyr.signed.hex` / `.bin` | application | what MCUboot chain-loads, and what an update carries |
+| `merged.hex` | — | every image at its own offset, for a full-chip flash over a debug probe |
+| `zephyr.uf2` | application | drag-and-drop bootstrap on UF2 boards (ADR 0016 decision 5) |
+| `ota.bin` | application | Matter OTA image (header + the signed payload above) |
+| `build-manifest.json` | — | device model + versions + image hashes — consumed by the dashboard |
+| `memory-report.txt` | per image | ROM/RAM footprint — regression tracking |
+
+The unsigned `zephyr.bin` is kept as well, and not only for the memory
+report: signing is a detached `imgtool` step over the finished binary, so
+a remote builder returns the unsigned image and the signature is applied
+where the key is (ADR 0015 decision 8).
 
 Flashing UX (`mcuhome flash`, browser-based flashing from the dashboard)
 is its own later design; the artifacts above are designed so both work.

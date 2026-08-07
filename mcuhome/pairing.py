@@ -38,13 +38,9 @@ credentials themselves are random (they are random *once*, in
 * *manual code* — three decimal chunks cut out of a 72-bit packing, plus
   a Verhoeff check digit.
 
-The P-256 scalar multiplication below is ~30 lines of double-and-add
-rather than a dependency: the builder has exactly one runtime dependency
-(ruamel.yaml) and this code runs at build time on the user's own machine
-against the user's own secret, so the side-channel resistance a crypto
-library would buy has nothing to protect against here. It is emphatically
-**not** a general-purpose curve implementation — it multiplies the fixed
-generator by a scalar and nothing else.
+The P-256 scalar multiplication this needs is ~30 lines of double-and-add
+rather than a dependency, and lives in :mod:`mcuhome.p256`, which
+:mod:`mcuhome.signing` shares.
 """
 
 from __future__ import annotations
@@ -55,6 +51,8 @@ import hashlib
 import secrets
 import struct
 from dataclasses import dataclass
+
+from mcuhome import p256
 
 __all__ = [
     "DEFAULT_ITERATIONS",
@@ -166,60 +164,14 @@ TEST_ITERATIONS = 1_000
 
 
 # --------------------------------------------------------------------------
-# P-256, only as much of it as one scalar multiplication needs
+# The scalar field the verifier lives in (curve arithmetic: mcuhome.p256)
 # --------------------------------------------------------------------------
 
-#: NIST P-256 (secp256r1) domain parameters, FIPS 186-4 D.1.2.3.
-_P = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
-_A = _P - 3
-_GX = 0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296
-_GY = 0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5
-#: Order of the generator; the scalar field w0/w1 are reduced into.
-_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
-
 #: Length of one coordinate, and of w0/w1, in bytes.
-_COORD_BYTES = 32
+_COORD_BYTES = p256.COORD_BYTES
 #: PBKDF2 output per scalar: 32 bytes plus 8, so that the reduction
 #: modulo the group order is statistically uniform (Matter 1.4 §3.10).
 _WS_BYTES = _COORD_BYTES + 8
-
-#: An affine point, or None for the point at infinity.
-_Point = tuple[int, int] | None
-
-
-def _add(left: _Point, right: _Point) -> _Point:
-    """Affine point addition on P-256, doubling included."""
-    if left is None:
-        return right
-    if right is None:
-        return left
-    x1, y1 = left
-    x2, y2 = right
-    if x1 == x2 and (y1 + y2) % _P == 0:
-        return None
-    if left == right:
-        slope = (3 * x1 * x1 + _A) * pow(2 * y1, -1, _P) % _P
-    else:
-        slope = (y2 - y1) * pow(x2 - x1, -1, _P) % _P
-    x3 = (slope * slope - x1 - x2) % _P
-    return (x3, (slope * (x1 - x3) - y1) % _P)
-
-
-def _generator_times(scalar: int) -> _Point:
-    """``scalar · G``, by double-and-add.
-
-    Not constant time, deliberately: this runs in the builder on the
-    machine that owns the secret, never on a device and never against an
-    attacker who can observe it.
-    """
-    result: _Point = None
-    addend: _Point = (_GX, _GY)
-    while scalar:
-        if scalar & 1:
-            result = _add(result, addend)
-        addend = _add(addend, addend)
-        scalar >>= 1
-    return result
 
 
 def spake2p_verifier(passcode: int, salt: bytes, iterations: int) -> str:
@@ -230,9 +182,9 @@ def spake2p_verifier(passcode: int, salt: bytes, iterations: int) -> str:
     material = hashlib.pbkdf2_hmac(
         "sha256", struct.pack("<I", passcode), salt, iterations, _WS_BYTES * 2
     )
-    w0 = int.from_bytes(material[:_WS_BYTES], "big") % _N
-    w1 = int.from_bytes(material[_WS_BYTES:], "big") % _N
-    point = _generator_times(w1)
+    w0 = int.from_bytes(material[:_WS_BYTES], "big") % p256.N
+    w1 = int.from_bytes(material[_WS_BYTES:], "big") % p256.N
+    point = p256.generator_times(w1)
     if point is None:  # pragma: no cover - w1 == 0 has probability 2^-256
         raise ValueError("the derived scalar is zero; regenerate the salt")
     x, y = point

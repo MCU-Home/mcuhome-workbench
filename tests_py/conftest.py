@@ -56,6 +56,22 @@ node:
 
 
 @pytest.fixture(autouse=True)
+def _no_real_signing_key(monkeypatch, tmp_path):
+    """No test may touch the developer's own firmware signing key.
+
+    ``mcuhome build`` generates one on first need under
+    ``$XDG_CONFIG_HOME/mcuhome/`` (ADR 0015 decision 8), which on the
+    machine running this suite is a real, long-lived private key. A test
+    that reaches it would either read a secret it has no business
+    reading or — worse — create one silently outside a temporary
+    directory. Point the variable at the test's own tmp_path instead;
+    tests that care about the resolution rules pass an explicit ``env``.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.delenv("MCUHOME_SIGNING_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_docker(monkeypatch):
     """Nothing in this suite is allowed to reach a container runtime.
 

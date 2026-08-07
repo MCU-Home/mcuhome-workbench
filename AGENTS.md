@@ -119,7 +119,10 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 # Compiles in the builder image (ADR 0007) — pull it once:
 #   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r1
 # Writes the application to build/<device>/app and the CMake tree to
-# build/<device>/build, then reports the image path and its footprint.
+# build/<device>/build — one sub-directory per sysbuild image (ADR 0015:
+# mcuboot + the signed application) — and reports both with their
+# footprints. The first build generates the per-user signing key in
+# ~/.config/mcuhome/; --signing-key points somewhere else.
 # -S adds a snippet on top of the ones the configuration needs.
 mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node -S debug-rtt

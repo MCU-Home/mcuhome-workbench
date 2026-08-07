@@ -15,6 +15,10 @@ The layout the pipeline design fixes::
     └── app/                       a standalone Zephyr application
         ├── CMakeLists.txt
         ├── prj.conf
+        ├── sysbuild.conf              which bootloader, which mode
+        ├── sysbuild/
+        │   ├── mcuboot.conf           the bootloader image's Kconfig
+        │   └── mcuboot.overlay        the bootloader image's devicetree
         ├── boards/<board>.overlay
         ├── include/
         │   └── CHIPProjectConfig.h    (Matter devices only)
@@ -22,12 +26,20 @@ The layout the pipeline design fixes::
             ├── mcuhome_config.c
             └── mcuhome_config.h
 
-"Standalone" is meant literally: ``west build -b <board> -S <snippets>
-<build dir>/app`` from a west workspace produces the same image
-``mcuhome build`` does. That is why the CMakeLists carries the whole
-Matter build glue rather than a call into something the builder owns —
-and why the *only* thing it needs from the MCUHome module is the module
-directory Zephyr hands it, never a path this generator wrote down.
+"Standalone" is meant literally: ``west build -b <board> --sysbuild
+<build dir>/app`` from a west workspace produces the same images
+``mcuhome build`` does — the file names above are the ones sysbuild
+discovers by itself. That is why the CMakeLists carries the whole Matter
+build glue rather than a call into something the builder owns — and why
+the *only* thing it needs from the MCUHome module is the module directory
+Zephyr hands it, never a path this generator wrote down.
+
+**One thing is deliberately missing from the tree: the signing key.** It
+is a per-user secret living outside every repository and build directory
+(ADR 0015 decision 8, :mod:`mcuhome.signing`), so its path is passed on
+the command line and never written here. A build that forgets it does not
+fail — MCUboot's own default is its published demo key — which is why the
+generated ``sysbuild.conf`` says so where a reader will see it.
 
 **Thin codegen.** The C artifacts are *data*: struct initializers for the
 two runtime contracts, ``<mcuhome/matter_tables.h>`` (ADR 0014) and
@@ -74,16 +86,29 @@ from mcuhome.model import (
 
 __all__ = [
     "APP_DIR",
+    "BOOTLOADER_IMAGE",
     "CHIP_PROJECT_CONFIG_PATH",
     "CONFIG_BASENAME",
     "MODEL_FILE",
+    "SYSBUILD_CONF",
+    "SYSBUILD_DIR",
     "board_file_stem",
     "generate",
     "write_tree",
 ]
 
 #: Sub-directory of the build tree holding the standalone Zephyr app.
+#: Sysbuild names the main image after this directory, which is why the
+#: per-image CMake variables below spell it out (``-Dapp_SNIPPET=…``).
 APP_DIR = "app"
+#: Sysbuild's name for the MCUboot image. Fixed by
+#: ``zephyr/share/sysbuild/images/bootloader/CMakeLists.txt``; the config
+#: file names under :data:`SYSBUILD_DIR` are derived from it.
+BOOTLOADER_IMAGE = "mcuboot"
+#: Where sysbuild looks for per-image configuration, relative to the app.
+SYSBUILD_DIR = "sysbuild"
+#: Sysbuild's own Kconfig fragment, relative to the app.
+SYSBUILD_CONF = "sysbuild.conf"
 #: The canonical model, written next to the app for inspection (§1.3).
 MODEL_FILE = "device-model.json"
 #: Stem of the two generated C files, in ``<app>/src/``.
@@ -631,18 +656,64 @@ _OVERLAY_INTRO = [
     "in devicetree, never in C constants — which is also why a Zephyr sensor "
     "driver is enabled by its node here and not by a Kconfig symbol in the "
     "fragment next to this file.",
-    "The first block, if there is one, is board wiring rather than device "
-    "configuration: what every MCUHome node on this board needs, whatever "
-    "its YAML says.",
+    "The blocks before the peripherals are board wiring rather than device "
+    "configuration: the flash layout and whatever every MCUHome node on this "
+    "board needs, whatever its YAML says.",
 ]
+
+#: Why the builder owns the flash layout instead of taking the board's.
+#: Generic knowledge about MCUHome on any board, so it is generated
+#: comment text like the rest (see the module docstring).
+_PARTITION_NOTE = (
+    "Flash layout (ADR 0015). MCUHome fixes the partition table itself rather "
+    "than inheriting the board's, because no upstream default holds an MCUHome "
+    "image: the two-slot table this board ships with gives the application "
+    "464 KiB, and a commissioned Matter node is over 550 KiB.\n"
+    "The storage partition keeps the address and size the board's own devicetree "
+    "gives it. That is what makes an update not a re-commissioning: the Matter "
+    "fabric credentials and the Thread dataset live there, and every layout in "
+    "ADR 0015 preserves them."
+)
+
+#: Appended to :data:`_PARTITION_NOTE` in the application's board overlay.
+_PARTITION_NOTE_APP = (
+    "The bootloader image is given the same table, in "
+    f"{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay: the two have to agree on the "
+    "flash map byte for byte."
+)
+
+
+def _layout_comment(scheme: registry.UpdateSchemeDef, note: str) -> list[str]:
+    """*note* as a block comment, with the layout table under it verbatim.
+
+    The table is appended rather than wrapped into the prose because it
+    is a table: :func:`_comment` would reflow the columns into one
+    paragraph and the numbers would stop lining up.
+    """
+    wrapped = _wrap(_check_comment_safe(note), _COLUMNS - 3)
+    body = [f"/* {wrapped[0]}"] + [f" * {line}".rstrip() for line in wrapped[1:]]
+    body.append(" *")
+    body += [f" *   {entry.describe()}" for entry in scheme.partitions]
+    body.append(" */")
+    return body
+
+
+def _partition_block(board: registry.BoardDef | None) -> list[str]:
+    """The flash layout, or nothing for a board that has no scheme yet."""
+    if board is None or board.update_scheme is None:
+        return []
+    scheme = board.update_scheme
+    note = f"{_PARTITION_NOTE}\n{_PARTITION_NOTE_APP}"
+    return ["", *_layout_comment(scheme, note), scheme.partition_overlay]
 
 
 def render_overlay(model: DeviceModel, *, config_name: str) -> str:
-    """The board overlay: board wiring, then one node per peripheral."""
+    """The board overlay: flash layout, board wiring, one node per peripheral."""
     intro = [f"Board: {model.device.board}.", *_OVERLAY_INTRO]
     out = [_file_header("c", config_name, intro)]
 
     board = registry.BOARDS.get(model.device.board)
+    out += _partition_block(board)
     if board is not None and board.overlay:
         out.append("")
         out += _comment(board.overlay_note, 0)
@@ -738,9 +809,10 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
     ]
     if model.build.snippets:
         intro.append(
-            "This application needs the snippets it was generated for:\n"
-            + "  "
-            + " ".join(f"-S {snippet}" for snippet in model.build.snippets)
+            "This application needs the snippets it was generated for: "
+            + ", ".join(model.build.snippets)
+            + ". CMakeLists.txt next to this file spells out the build command "
+            "that applies them."
         )
     out = [_file_header("hash", config_name, intro), ""]
     out += list(model.build.kconfig)
@@ -775,6 +847,164 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
             f"# writes next to this file ({CHIP_PROJECT_CONFIG_PATH}).",
             f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
         ]
+    return "\n".join(out) + "\n"
+
+
+# --------------------------------------------------------------------------
+# sysbuild: which bootloader, and how it is configured
+# --------------------------------------------------------------------------
+
+
+def _scheme_of(model: DeviceModel) -> registry.UpdateSchemeDef | None:
+    board = registry.BOARDS.get(model.device.board)
+    return None if board is None else board.update_scheme
+
+
+def render_sysbuild_conf(model: DeviceModel, *, config_name: str) -> str:
+    """``sysbuild.conf`` — the bootloader, its mode and the signature type.
+
+    Vanilla Zephyr integrates MCUboot through sysbuild only (ADR 0015
+    decision 1), and sysbuild picks this file up by name from the
+    application directory, so the choice travels with the generated tree
+    rather than living in the command line that built it.
+    """
+    scheme = _scheme_of(model)
+    if scheme is None:  # pragma: no cover - guarded by the caller
+        raise GenerationError(
+            f'The board "{model.device.board}" has no update scheme in the registry.',
+            hint="this is a builder bug — every buildable board carries one (ADR 0015)",
+        )
+    mode_symbol = registry.MCUBOOT_MODE_SYMBOLS[scheme.mcuboot_mode]
+    staging = {
+        "external-flash": (
+            "the second copy of the image lives on the board's external flash "
+            "part, so a failed update can be rolled back"
+        ),
+        "none": (
+            "there is no second copy: this board updates over USB through the "
+            "bootloader's serial recovery, and cannot roll back"
+        ),
+    }.get(scheme.staging, scheme.staging)
+    intro = [
+        f'Sysbuild configuration for device "{model.device.name}". Every MCUHome '
+        f"image boots through MCUboot (ADR 0015 decision 1), and vanilla Zephyr "
+        f"builds a bootloader only under sysbuild — which is why this file "
+        f"exists and why the application is built with --sysbuild.",
+        f"Board class {scheme.board_class}: {staging}. The flash layout that "
+        f"follows from it is in boards/{board_file_stem(model.device.board)}.overlay "
+        f"and in {SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay, and the bootloader's own "
+        f"settings are in {SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf.",
+        "THE SIGNING KEY IS NOT IN THIS FILE, AND NOT IN THIS TREE. It is a "
+        "per-user secret (ADR 0015 decision 8), so mcuhome build passes it on the "
+        "command line:\n"
+        '  -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="<path to your signing.key>"\n'
+        "Building this tree by hand without that argument does not fail — it "
+        "signs with MCUboot's demo key, whose private half is published in the "
+        "MCUboot repository. An image signed with it is not signed; it only "
+        "looks signed. Pass the key.",
+    ]
+    out = [_file_header("hash", config_name, intro), ""]
+    out += [
+        "SB_CONFIG_BOOTLOADER_MCUBOOT=y",
+        f"{mode_symbol}=y",
+        "SB_CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y",
+        "",
+        "# One hex file with every image at its own offset. Off upstream,",
+        "# on here: bringing a board into the MCUHome standard state writes",
+        "# the bootloader and the application together (ADR 0016 decision 2),",
+        "# and on a development kit that is one debug-probe flash of one file.",
+        "SB_CONFIG_MERGED_HEX_FILES=y",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
+    """``sysbuild/mcuboot.conf`` — Kconfig for the bootloader image.
+
+    Sysbuild adds this to the MCUboot image's ``EXTRA_CONF_FILE``, which
+    is merged after MCUboot's own per-board fragment — so a value here
+    overrides one MCUboot ships, which is exactly what an external
+    secondary slot needs (upstream switches the SPI-NOR driver off for
+    this board, correctly, for a bootloader that has no external slot).
+    """
+    scheme = _scheme_of(model)
+    if scheme is None:  # pragma: no cover - guarded by the caller
+        raise GenerationError(
+            f'The board "{model.device.board}" has no update scheme in the registry.',
+            hint="this is a builder bug — every buildable board carries one (ADR 0015)",
+        )
+    intro = [
+        "Kconfig fragment for the MCUboot image. Sysbuild derives the swap mode "
+        "and the signature type from sysbuild.conf next to this file; what is "
+        "below is everything that does not follow from those two.",
+        "Recovery: " + ", ".join(scheme.recovery) + ".",
+    ]
+    out = [_file_header("hash", config_name, intro), ""]
+    out += list(scheme.bootloader_kconfig)
+    slot = scheme.partition("slot0_partition")
+    out += [
+        "",
+        "# How many flash sectors MCUboot has to be able to track per slot.",
+        "# Not left to CONFIG_BOOT_MAX_IMG_SECTORS_AUTO: it reads the block size",
+        "# of slot0's flash node and applies it to slot1 as well, which is wrong",
+        "# the moment the two slots live on different parts — as they do here",
+        "# (ADR 0015 decision 3; upstream bug candidate). The number below is",
+        f"# {slot.size // 1024} KiB of slot divided by the {scheme.erase_block_size} B erase unit.",
+        "CONFIG_BOOT_MAX_IMG_SECTORS_AUTO=n",
+        f"CONFIG_BOOT_MAX_IMG_SECTORS={scheme.max_image_sectors}",
+    ]
+    return "\n".join(out) + "\n"
+
+
+#: MCUboot's own ``boot/zephyr/app.overlay`` is one chosen entry, and
+#: sysbuild's per-image overlay *replaces* the image's devicetree overlay
+#: rather than adding to it — so the entry has to be restated here or the
+#: bootloader links at the wrong address. Small and stable, but a real
+#: coupling to upstream, hence the comment in the generated file.
+_BOOTLOADER_CODE_PARTITION = """\
+/ {
+\tchosen {
+\t\tzephyr,code-partition = &boot_partition;
+\t};
+};"""
+
+#: The CDC-ACM function on the board's USB device controller. Same three
+#: lines as MCUboot's own ``usb_cdc_acm.overlay``, restated for the same
+#: reason as the chosen entry above.
+_BOOTLOADER_CDC_ACM = """\
+&zephyr_udc0 {
+\tcdc_acm_uart0 {
+\t\tcompatible = "zephyr,cdc-acm-uart";
+\t};
+};"""
+
+_BOOTLOADER_OVERLAY_INTRO = [
+    "Devicetree for the MCUboot image. Sysbuild finds this file by name and "
+    "hands it to the bootloader image as its devicetree overlay.",
+    "It REPLACES the overlay MCUboot would otherwise pick up rather than adding "
+    "to it, which is why the two upstream fragments it needs are restated below "
+    "instead of referenced: the chosen entry that links MCUboot into its own "
+    "partition (MCUboot's boot/zephyr/app.overlay) and the CDC-ACM function "
+    "serial recovery talks over (its usb_cdc_acm.overlay).",
+    "The flash layout below is byte-identical to the one in the application's "
+    "board overlay. Both images have to see the same flash map: the bootloader "
+    "writes the slots, the application is linked into one of them.",
+]
+
+
+def render_bootloader_overlay(model: DeviceModel, *, config_name: str) -> str:
+    """``sysbuild/mcuboot.overlay`` — devicetree for the bootloader image."""
+    scheme = _scheme_of(model)
+    if scheme is None:  # pragma: no cover - guarded by the caller
+        raise GenerationError(
+            f'The board "{model.device.board}" has no update scheme in the registry.',
+            hint="this is a builder bug — every buildable board carries one (ADR 0015)",
+        )
+    intro = [f"Board: {model.device.board}.", *_BOOTLOADER_OVERLAY_INTRO]
+    out = [_file_header("c", config_name, intro), "", _BOOTLOADER_CODE_PARTITION]
+    if "serial-recovery" in scheme.recovery:
+        out += ["", _BOOTLOADER_CDC_ACM]
+    out += ["", *_layout_comment(scheme, _PARTITION_NOTE), scheme.partition_overlay]
     return "\n".join(out) + "\n"
 
 
@@ -907,7 +1137,25 @@ def render_cmakelists(model: DeviceModel, *, config_name: str) -> str:
         f"Building it for anything else is not a supported configuration: the "
         f"tables reference this board's devicetree nodes by name.",
     ]
-    if snippets != "none":
+    scheme = _scheme_of(model)
+    if scheme is not None:
+        # Snippets are named per image, not once for the whole build:
+        # sysbuild passes a bare SNIPPET down to every image, and the
+        # application's snippets are meaningless — often fatal — in a
+        # bootloader. The image names are the application directory's
+        # name (this one) and sysbuild's fixed name for MCUboot.
+        intro.append(
+            "Build it the way it was generated, from a west workspace that has "
+            "the MCUHome module. --sysbuild is what builds the bootloader "
+            "alongside the application (ADR 0015); the signing key is yours and "
+            "lives outside this tree (ADR 0015 decision 8):\n"
+            f"  west build -b {model.device.board} --sysbuild <this directory> -- \\\n"
+            f'      -D{APP_DIR}_SNIPPET="{";".join(model.build.snippets)}" \\\n'
+            f"      -D{BOOTLOADER_IMAGE}_SNIPPET="
+            f'"{";".join(scheme.bootloader_snippets)}" \\\n'
+            '      -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="<path to your signing.key>"'
+        )
+    elif snippets != "none":
         intro.append(
             "Build it the way it was generated, from a west workspace that has "
             "the MCUHome module:\n"
@@ -1001,6 +1249,14 @@ def generate(model: DeviceModel, *, config_name: str) -> dict[str, str]:
         f"{APP_DIR}/src/{CONFIG_BASENAME}.c": render_config_source(model, config_name=config_name),
         f"{APP_DIR}/src/{CONFIG_BASENAME}.h": render_config_header(model, config_name=config_name),
     }
+    if _scheme_of(model) is not None:
+        files[f"{APP_DIR}/{SYSBUILD_CONF}"] = render_sysbuild_conf(model, config_name=config_name)
+        files[f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf"] = render_bootloader_conf(
+            model, config_name=config_name
+        )
+        files[f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay"] = render_bootloader_overlay(
+            model, config_name=config_name
+        )
     if model.network.matter_enabled:
         files[f"{APP_DIR}/{CHIP_PROJECT_CONFIG_PATH}"] = render_chip_project_config(
             model, config_name=config_name
@@ -1009,14 +1265,27 @@ def generate(model: DeviceModel, *, config_name: str) -> dict[str, str]:
 
 
 def write_tree(model: DeviceModel, *, out_dir: Path, config_name: str) -> list[Path]:
-    """Write :func:`generate`'s artifacts under *out_dir*, sorted paths returned."""
+    """Write :func:`generate`'s artifacts under *out_dir*, sorted paths returned.
+
+    A file whose content is already what it should be is left alone, mtime
+    and all. That is not tidiness: CMake watches the application's files,
+    so rewriting an unchanged ``CMakeLists.txt`` reconfigures every image
+    and re-runs the Matter sub-build — which turns "change one Kconfig
+    line" from a two-minute rebuild into a twenty-minute one. The
+    generator is deterministic (§1.4), so "same content" is a fact it can
+    rely on rather than a guess.
+    """
     files = generate(model, config_name=config_name)
     written: list[Path] = []
     for relative in sorted(files):
         path = out_dir / relative
+        content = files[relative]
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(files[relative], encoding="utf-8")
+            if not (path.is_file() and path.read_text(encoding="utf-8") == content):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+        except UnicodeDecodeError:  # pragma: no cover - not text, so not ours
+            path.write_text(content, encoding="utf-8")
         except OSError as error:
             raise GenerationError(
                 f"The build directory {out_dir} cannot be written: {error.strerror}.",

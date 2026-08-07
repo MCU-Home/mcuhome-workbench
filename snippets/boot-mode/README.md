@@ -49,12 +49,12 @@ snippet serves both images.
 
 ## Usage
 
-```sh
-# application image
-west build -b nrf52840dongle/nrf52840 -S boot-mode <app>
+Under sysbuild every image is named explicitly, because sysbuild hands a
+bare `-S` to all of them:
 
-# bootloader image under sysbuild (per-image snippet variable)
-west build -b nrf52840dongle/nrf52840 --sysbuild <app> -- -Dmcuboot_SNIPPET=boot-mode
+```sh
+west build -b nrf52840dongle/nrf52840 --sysbuild <app> -- \
+    -D<app>_SNIPPET=boot-mode -Dmcuboot_SNIPPET=boot-mode
 ```
 
 Both are needed for the mechanism to work end to end: the retention area
@@ -63,6 +63,15 @@ devicetree fragment guarantees.
 
 ## Status
 
-Groundwork for the phase-3 bootloader work. No MCUHome sample or generated
-device applies it yet; the board registry gains the flag once the update
-scheme per board is decided.
+Applied by `mcuhome build` to both images of every board whose update
+scheme asks for it (`BoardDef.update_scheme`, ADR 0015 decision 2) — the
+nRF7002-DK does, in class A. The **bootloader** side is complete: its
+`CONFIG_BOOT_SERIAL_BOOT_MODE=y` reads the area on every boot. The
+**application** side is not: nothing in the framework calls
+`bootmode_set()` yet, so `CONFIG_RETENTION_BOOT_MODE` stays off in the
+application image and the devicetree node it would write to is simply
+unused there. Applying the snippet to both images anyway costs nothing
+(devicetree only) and is what makes enabling the application half a
+Kconfig line rather than a re-bootstrap: the retention area is at the
+address the already-installed bootloader reads. Until then, recovery is
+entered with the board's button.

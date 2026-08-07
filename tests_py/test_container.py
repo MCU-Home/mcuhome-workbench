@@ -190,6 +190,7 @@ def test_the_container_environment_is_composed_not_inherited(tmp_path) -> None:
         "CCACHE_DIR": container.CONTAINER_CCACHE_DIR,
         "CCACHE_BASEDIR": str(tmp_path / "ws"),
         workspace.CHIP_JOBS_VAR: "2",
+        workspace.CMAKE_JOBS_VAR: "2",
     }
 
 
@@ -424,6 +425,39 @@ def test_the_plan_can_be_pointed_at_another_image(tmp_path, monkeypatch) -> None
     _, plan = _plan(tmp_path, monkeypatch, image="localhost/builder:wip")
     assert plan.image == "localhost/builder:wip"
     assert "localhost/builder:wip" in plan.command
+
+
+def test_the_signing_key_is_mounted_read_only_and_by_itself(tmp_path, monkeypatch) -> None:
+    """imgtool runs inside the container, so the key has to be reachable.
+
+    One file, not its directory, and read-only: nothing in a build
+    container has any business writing a signing key, and the rest of
+    ~/.config is none of its business either (ADR 0015 decision 8).
+    """
+    key = tmp_path / "cfg" / "mcuhome" / "signing.key"
+    key.parent.mkdir(parents=True)
+    key.write_text("", "utf-8")
+    _, plan = _plan(tmp_path, monkeypatch, signing_key=key)
+
+    volumes = [
+        plan.command[index + 1] for index, item in enumerate(plan.command) if item == "--volume"
+    ]
+    assert f"{key}:{key}:ro" in volumes
+    assert f"{key.parent}:{key.parent}" not in volumes
+    assert f'-D{workspace.SIGNING_KEY_OPTION}="{key}"' in plan.command
+
+
+def test_without_a_key_nothing_extra_is_mounted(tmp_path, monkeypatch) -> None:
+    _, plan = _plan(tmp_path, monkeypatch)
+    assert not any(item.endswith(":ro") for item in plan.command)
+
+
+def test_the_inner_command_is_a_sysbuild_build(tmp_path, monkeypatch) -> None:
+    """The container path builds exactly what the native path builds."""
+    _, plan = _plan(tmp_path, monkeypatch, snippets=("matter",), bootloader_snippets=("boot-mode",))
+    assert "--sysbuild" in plan.command
+    assert "-Dapp_SNIPPET=matter" in plan.command
+    assert "-Dmcuboot_SNIPPET=boot-mode" in plan.command
 
 
 def test_a_build_directory_outside_the_workspace_is_still_visible(tmp_path, monkeypatch) -> None:

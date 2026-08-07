@@ -276,6 +276,8 @@ def test_the_command_says_board_directories_snippets_and_parallelism() -> None:
         build_dir=Path("/w/build/node/build"),
         board="nrf7002dk/nrf5340/cpuapp",
         snippets=("matter", "debug-rtt"),
+        bootloader_snippets=("boot-mode",),
+        signing_key=Path("/home/someone/.config/mcuhome/signing.key"),
         jobs=2,
     )
     assert command == [
@@ -287,13 +289,73 @@ def test_the_command_says_board_directories_snippets_and_parallelism() -> None:
         "/w/build/node/build",
         "--pristine",
         "auto",
-        "--snippet",
-        "matter",
-        "--snippet",
-        "debug-rtt",
+        "--sysbuild",
         "-o=-j2",
         "/w/build/node/app",
+        "--",
+        "-Dapp_SNIPPET=matter;debug-rtt",
+        "-Dmcuboot_SNIPPET=boot-mode",
+        '-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="/home/someone/.config/mcuhome/signing.key"',
     ]
+
+
+def test_snippets_are_named_per_image_and_never_globally() -> None:
+    """A bare SNIPPET reaches every image, and -S matter kills MCUboot.
+
+    Sysbuild falls back to the global name for an image that has none of
+    its own, so `-S matter` would put CHIP's heap sizing — and symbols
+    MCUboot has never heard of — into the bootloader's Kconfig, where an
+    assignment to an undefined symbol stops the build.
+    """
+    command = workspace.west_build_command(
+        app_dir=Path("/w/build/node/app"),
+        build_dir=Path("/w/build/node/build"),
+        board="x",
+        snippets=("matter",),
+        bootloader_snippets=("boot-mode",),
+        jobs=2,
+    )
+    assert "--snippet" not in command
+    assert "-DSNIPPET=matter" not in command
+    assert "-Dapp_SNIPPET=matter" in command
+    assert "-Dmcuboot_SNIPPET=boot-mode" in command
+
+
+def test_the_image_the_snippets_are_named_for_is_the_application_directory() -> None:
+    """Sysbuild names the main image after the directory it is built from."""
+    command = workspace.west_build_command(
+        app_dir=Path("/w/somewhere/firmware"),
+        build_dir=Path("/w/b"),
+        board="x",
+        snippets=("matter",),
+        jobs=2,
+    )
+    assert "-Dfirmware_SNIPPET=matter" in command
+
+
+def test_no_signing_key_means_no_signing_option_at_all() -> None:
+    """Absence is visible rather than an empty value MCUboot would resolve."""
+    command = workspace.west_build_command(
+        app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=2
+    )
+    assert not any(item.startswith(f"-D{workspace.SIGNING_KEY_OPTION}") for item in command)
+    assert "--" not in command
+
+
+def test_a_fresh_build_directory_builds_incrementally(tmp_path) -> None:
+    assert workspace.pristine_mode(tmp_path) == "auto"
+
+
+def test_a_sysbuild_directory_builds_incrementally(tmp_path) -> None:
+    (tmp_path / "CMakeCache.txt").write_text("", "utf-8")
+    (tmp_path / "domains.yaml").write_text("default: app\n", "utf-8")
+    assert workspace.pristine_mode(tmp_path) == "auto"
+
+
+def test_a_build_directory_from_before_sysbuild_is_rebuilt_from_scratch(tmp_path) -> None:
+    """The one case --pristine=auto cannot see: CMake would refuse it."""
+    (tmp_path / "CMakeCache.txt").write_text("", "utf-8")
+    assert workspace.pristine_mode(tmp_path) == "always"
 
 
 def test_parallelism_is_attached_with_an_equals_sign() -> None:
@@ -317,7 +379,7 @@ def test_a_device_without_snippets_gets_none() -> None:
     command = workspace.west_build_command(
         app_dir=Path("app"), build_dir=Path("b"), board="x", jobs=2
     )
-    assert "--snippet" not in command
+    assert not any("SNIPPET" in item for item in command)
 
 
 def test_the_plan_puts_the_build_tree_next_to_the_application(tmp_path, monkeypatch) -> None:
@@ -459,8 +521,116 @@ def test_only_the_images_that_exist_are_reported(tmp_path) -> None:
     output.mkdir()
     (output / "zephyr.hex").write_text("", "utf-8")
     (output / "zephyr.elf").write_text("", "utf-8")
-    assert [path.name for path in workspace.artifacts(tmp_path)] == ["zephyr.elf", "zephyr.hex"]
+    (output / "zephyr.signed.bin").write_text("", "utf-8")
+    assert [path.name for path in workspace.artifacts(tmp_path)] == [
+        "zephyr.elf",
+        "zephyr.hex",
+        "zephyr.signed.bin",
+    ]
 
 
 def test_an_empty_build_directory_has_no_images(tmp_path) -> None:
     assert workspace.artifacts(tmp_path) == []
+
+
+# --------------------------------------------------------------------------
+# Two images, not one (ADR 0015)
+# --------------------------------------------------------------------------
+
+
+def _image(build_dir: Path, name: str, *, flash: int) -> None:
+    output = build_dir / name / "zephyr"
+    output.mkdir(parents=True)
+    (output / "zephyr.elf").write_text("", "utf-8")
+    (output / "zephyr.bin").write_bytes(b"\0" * flash)
+
+
+def test_both_images_are_reported_bootloader_first(tmp_path) -> None:
+    _image(tmp_path, "app", flash=2048)
+    _image(tmp_path, "mcuboot", flash=1024)
+
+    images = workspace.build_images(tmp_path, app_image="app")
+    assert [(image.name, image.role, image.flash_bytes) for image in images] == [
+        ("mcuboot", "bootloader", 1024),
+        ("app", "application", 2048),
+    ]
+    assert images[0].describe() == "mcuboot (bootloader)  1.0 KiB"
+
+
+def test_an_image_that_produced_nothing_is_simply_absent(tmp_path) -> None:
+    _image(tmp_path, "app", flash=16)
+    assert [image.name for image in workspace.build_images(tmp_path, app_image="app")] == ["app"]
+
+
+def test_the_merged_image_is_reported_only_when_sysbuild_wrote_one(tmp_path) -> None:
+    """Named after the board target, so it is found by pattern."""
+    assert workspace.merged_image(tmp_path) is None
+    merged = tmp_path / "merged_nrf7002dk_nrf5340_cpuapp.hex"
+    merged.write_text("", "utf-8")
+    assert workspace.merged_image(tmp_path) == merged
+
+
+def test_more_than_one_merged_image_is_reported_as_none(tmp_path) -> None:
+    """One board target per device; two means an upstream change to look at."""
+    (tmp_path / "merged_one.hex").write_text("", "utf-8")
+    (tmp_path / "merged_two.hex").write_text("", "utf-8")
+    assert workspace.merged_image(tmp_path) is None
+
+
+_SYSBUILD_LOG = """\
+[1/2] Performing build step for 'mcuboot'
+Memory region         Used Size  Region Size  %age Used
+           FLASH:       57344 B        64 KB      87.50%
+[2/2] Performing build step for 'app'
+Memory region         Used Size  Region Size  %age Used
+           FLASH:      859672 B         1 MB      81.99%
+             RAM:      196296 B       448 KB      42.79%
+"""
+
+
+def test_each_images_footprint_is_attributed_to_it() -> None:
+    """Zephyr's report names no image; the build-step banner before it does."""
+    by_image = workspace.parse_image_memory_report(_SYSBUILD_LOG, images=["mcuboot", "app"])
+    assert sorted(by_image) == ["app", "mcuboot"]
+    assert [region.name for region in by_image["mcuboot"]] == ["FLASH"]
+    assert by_image["mcuboot"][0].used == 57344
+    assert [region.name for region in by_image["app"]] == ["FLASH", "RAM"]
+
+
+def test_a_report_before_any_image_banner_belongs_to_no_image() -> None:
+    assert workspace.parse_image_memory_report(_LOG, images=["app"]) == {}
+
+
+#: The Matter build is an ExternalProject of its own inside the
+#: application image, and it prints the same banner sysbuild does.
+_NESTED_LOG = """\
+[9/16] Performing build step for 'app'
+[334/880] Performing build step for 'chip-gn'
+[1/321] c++ obj/src/lib/core/error.CHIPError.cpp.o
+Memory region         Used Size  Region Size  %age Used
+           FLASH:      859672 B         1 MB      81.99%
+"""
+
+
+def test_a_nested_external_project_is_not_mistaken_for_an_image() -> None:
+    """Otherwise chip-gn is credited with the application's footprint."""
+    by_image = workspace.parse_image_memory_report(_NESTED_LOG, images=["mcuboot", "app"])
+    assert sorted(by_image) == ["app"]
+    assert by_image["app"][0].used == 859672
+
+
+def test_the_signing_key_is_passed_as_a_quoted_kconfig_string() -> None:
+    """An unquoted string assignment is a fatal Kconfig warning.
+
+    And the consequence of getting it wrong is not a build that stops: it
+    is "Assignment ignored", after which MCUboot falls back to its own
+    default, which is the published demo key.
+    """
+    command = workspace.west_build_command(
+        app_dir=Path("app"),
+        build_dir=Path("b"),
+        board="x",
+        signing_key=Path("/home/someone/keys/signing.key"),
+        jobs=2,
+    )
+    assert '-DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="/home/someone/keys/signing.key"' in command

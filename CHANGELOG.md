@@ -141,8 +141,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own update mechanism, and browser flashing goes over Web Serial with an
   SMP client MCUHome writes itself.
 
+- The per-board update scheme and flash layout in the builder's board
+  registry (`BoardDef.update_scheme`, ADR 0015 decision 2): which MCUboot
+  mode a board uses, where staging lives, how recovery is entered, the
+  partition table that follows, and the bootloader Kconfig and snippets
+  that go with it. The nRF7002-DK carries class A — swap with the
+  secondary slot on its MX25R64 over SPI4, 64 KiB boot / 928 KiB slot0 /
+  32 KiB storage internally — and `storage_partition` keeps the address
+  and size the board's own devicetree already gives it, so a device that
+  is re-flashed into this layout keeps its Matter fabric. Nothing in the
+  builder branches on a board name; `tests_py/test_registry.py` asserts
+  that by reading the source of every other module.
+- Firmware signing (`mcuhome/signing.py`, ADR 0015 decision 8): one real
+  ECDSA P-256 key per user, generated on first need into
+  `$XDG_CONFIG_HOME/mcuhome/signing.key` with owner-only permissions,
+  outside every repository and every build directory. `--signing-key` and
+  `MCUHOME_SIGNING_KEY` point elsewhere — that is the future dashboard's
+  path. The key pair is one P-256 scalar multiplication and a PKCS#8
+  encoder (`mcuhome/p256.py`, shared with the SPAKE2+ verifier), so the
+  builder still has one runtime dependency; the output is byte-shaped
+  like `imgtool keygen -t ecdsa-p256` and either can replace the other.
+  **MCUboot's demo key is never used** — its private half is published,
+  so signing with it only looks like a signature.
+
 ### Changed
 
+- `mcuhome build` builds two images, not one (ADR 0015 decision 1): stage
+  5 moved to `west build --sysbuild`, so every device now boots through
+  MCUboot and its application is signed and linked into `slot0`. Stage 4
+  emits the sysbuild half of the tree — `sysbuild.conf`, and
+  `sysbuild/mcuboot.{conf,overlay}` — from the board's update scheme, and
+  the build summary reports both images with their footprints, the
+  combined hex and the flash layout they were built against. Snippets are
+  named per image (`-Dapp_SNIPPET=…`, `-Dmcuboot_SNIPPET=…`): sysbuild
+  hands a bare `-S` to every image, and `-S matter` in a bootloader is an
+  assignment to symbols MCUboot has never heard of. A build directory from
+  before this change is rebuilt pristine automatically, because CMake
+  would otherwise refuse it with a message about source directories.
+  Measured on the nRF7002-DK: MCUboot 63.1 KiB of its 64 KiB partition,
+  the application 551.7 KiB of 923.9 KiB.
+- A build also produces `merged_<board target>.hex`, every image at its
+  own offset in one file — what bringing a board into the MCUHome
+  standard state writes, and on a development kit one flash of one file.
+- Stage 4 leaves a generated file alone when its content is already
+  right, mtime included. CMake watches the application's files, so
+  rewriting an unchanged `CMakeLists.txt` reconfigured every image and
+  re-ran the Matter sub-build — the difference between a two-minute and a
+  twenty-minute rebuild after a one-line change.
 - Build parallelism is auto-detected instead of a static `-j2`:
   `mcuhome.workspace.auto_jobs` computes
   `min(cpu_count, max(2, available_ram_gb // 2))` from live CPU count and
@@ -157,7 +202,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget is the host's (or the WSL VM's), not one guessed at from inside
   a possibly cgroup-limited container. `MCUHOME_CHIP_JOBS`, which caps
   the vendored CHIP GN sub-build's own inner `ninja`, now carries this
-  resolved value instead of the previous fixed `2`.
+  resolved value instead of the previous fixed `2` — as does
+  `CMAKE_BUILD_PARALLEL_LEVEL`, which is what reaches each sysbuild
+  image's own `cmake --build` (the outer `-o=-jN` does not).
 - `mcuhome build` compiles in the builder container by default; `--native`
   is the escape hatch (ADR 0007). Host prerequisites for a compiling build
   shrink to git and docker — the Zephyr SDK, `gn` and `zap` are only

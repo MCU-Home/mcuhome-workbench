@@ -291,8 +291,10 @@ def container_environment(
         # (workspace.west_build_command) — resolved once on the host
         # (workspace.resolve_jobs) and passed in here rather than
         # recomputed: the vendored CHIP GN sub-build otherwise ignores it
-        # entirely, see workspace.CHIP_JOBS_VAR.
+        # entirely, see workspace.CHIP_JOBS_VAR, and so does each sysbuild
+        # image's own inner ninja, see workspace.CMAKE_JOBS_VAR.
         workspace.CHIP_JOBS_VAR: str(jobs),
+        workspace.CMAKE_JOBS_VAR: str(jobs),
     }
 
 
@@ -306,18 +308,28 @@ def docker_run_command(
     environment: dict[str, str],
     command: Sequence[str],
     user: str | None = None,
+    read_only_mounts: Sequence[Path] = (),
 ) -> list[str]:
     """``docker run`` around *command*, with the workspace mounted.
 
     ``--rm`` because the container is a process, not a place: everything
     worth keeping is on a mount. ``--init`` because a build spawns
     hundreds of short-lived children and PID 1 has to reap them.
+
+    *read_only_mounts* are single files rather than trees, and there is
+    exactly one today: the firmware signing key. It is mounted because
+    imgtool runs inside the container and read-only because nothing in
+    there has any business writing a key — the file itself stays where
+    :mod:`mcuhome.signing` put it, outside every repository and every
+    build directory.
     """
     argv = [docker, "run", "--rm", "--init"]
     if user is not None:
         argv += ["--user", user]
     for mount in mounts:
         argv += ["--volume", f"{mount}:{mount}"]
+    for mount in read_only_mounts:
+        argv += ["--volume", f"{mount}:{mount}:ro"]
     argv += ["--volume", f"{ccache_dir}:{CONTAINER_CCACHE_DIR}"]
     argv += ["--workdir", str(workdir)]
     for name in sorted(environment):
@@ -342,6 +354,8 @@ def plan_build(
     app_subdir: str,
     board: str,
     snippets: tuple[str, ...] = (),
+    bootloader_snippets: tuple[str, ...] = (),
+    signing_key: Path | None = None,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
     jobs: int,
@@ -371,7 +385,10 @@ def plan_build(
         build_dir=build_dir,
         board=board,
         snippets=snippets,
+        bootloader_snippets=bootloader_snippets,
+        signing_key=signing_key,
         jobs=jobs,
+        pristine=workspace.pristine_mode(build_dir),
     )
     return workspace.BuildPlan(
         topdir=topdir,
@@ -386,6 +403,9 @@ def plan_build(
             environment=container_environment(topdir=topdir, jobs=jobs),
             command=inner,
             user=_current_user(),
+            # The key file itself, not its directory: the container needs
+            # to read exactly one secret and gets exactly that one.
+            read_only_mounts=() if signing_key is None else (signing_key,),
         ),
         env=host_env,
         image=reference,

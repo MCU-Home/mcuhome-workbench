@@ -21,18 +21,23 @@ directory, so a change in them is a change worth reviewing.
 
 from __future__ import annotations
 
+import dataclasses
+import os
 import shutil
 import subprocess
 
 import pytest
 from conftest import EXAMPLES_DIR, GOLDEN_DIR, REPO_ROOT, resolve_file
 
-from mcuhome import pairing
+from mcuhome import pairing, registry
 from mcuhome.errors import GenerationError
 from mcuhome.generate import (
     APP_DIR,
+    BOOTLOADER_IMAGE,
     CHIP_PROJECT_CONFIG_PATH,
     MODEL_FILE,
+    SYSBUILD_CONF,
+    SYSBUILD_DIR,
     board_file_stem,
     generate,
     write_tree,
@@ -56,6 +61,9 @@ SOURCE_PATH = f"{APP_DIR}/src/mcuhome_config.c"
 HEADER_PATH = f"{APP_DIR}/src/mcuhome_config.h"
 CMAKE_PATH = f"{APP_DIR}/CMakeLists.txt"
 CHIP_CONFIG_PATH = f"{APP_DIR}/{CHIP_PROJECT_CONFIG_PATH}"
+SYSBUILD_PATH = f"{APP_DIR}/{SYSBUILD_CONF}"
+MCUBOOT_CONF_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf"
+MCUBOOT_OVERLAY_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay"
 
 
 def _example_files() -> dict[str, str]:
@@ -68,15 +76,20 @@ def _example_files() -> dict[str, str]:
 
 
 def test_the_tree_has_exactly_the_designed_artifacts() -> None:
-    assert sorted(_example_files()) == [
-        CMAKE_PATH,
-        OVERLAY_PATH,
-        CHIP_CONFIG_PATH,
-        f"{APP_DIR}/prj.conf",
-        SOURCE_PATH,
-        HEADER_PATH,
-        MODEL_FILE,
-    ]
+    assert sorted(_example_files()) == sorted(
+        [
+            CMAKE_PATH,
+            OVERLAY_PATH,
+            CHIP_CONFIG_PATH,
+            f"{APP_DIR}/prj.conf",
+            SOURCE_PATH,
+            HEADER_PATH,
+            SYSBUILD_PATH,
+            MCUBOOT_CONF_PATH,
+            MCUBOOT_OVERLAY_PATH,
+            MODEL_FILE,
+        ]
+    )
 
 
 def test_write_tree_puts_them_on_disk(tmp_path) -> None:
@@ -127,6 +140,9 @@ def test_nothing_generated_mentions_the_host() -> None:
         (f"{APP_DIR}/prj.conf", "00-bmp180-two-endpoints.prj.conf"),
         (CMAKE_PATH, "00-bmp180-two-endpoints.CMakeLists.txt"),
         (CHIP_CONFIG_PATH, "00-bmp180-two-endpoints.CHIPProjectConfig.h"),
+        (SYSBUILD_PATH, "00-bmp180-two-endpoints.sysbuild.conf"),
+        (MCUBOOT_CONF_PATH, "00-bmp180-two-endpoints.mcuboot.conf"),
+        (MCUBOOT_OVERLAY_PATH, "00-bmp180-two-endpoints.mcuboot.overlay"),
     ],
 )
 def test_artifact_matches_its_golden_file(artifact: str, golden: str) -> None:
@@ -504,7 +520,8 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
         f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
     ]
     assert not any(line.startswith("CONFIG_CHIP_PROJECT_CONFIG") for line in model.build.kconfig)
-    assert "-S matter" in fragment  # the snippets the app has to be built with
+    # The snippets the app has to be built with, the board's included.
+    assert "matter, boot-mode" in fragment
 
 
 def test_the_chip_project_config_wrapper_only_forwards_to_the_framework() -> None:
@@ -574,3 +591,117 @@ def test_a_device_without_matter_gets_no_chip_glue_at_all() -> None:
     # can say what it is and keep the C++ toolchain out of the build.
     assert "project(bench-node LANGUAGES C)" in cmake
     assert "CONFIG_CHIP_PROJECT_CONFIG" not in files[f"{APP_DIR}/prj.conf"]
+
+
+# --------------------------------------------------------------------------
+# The sysbuild half (ADR 0015)
+# --------------------------------------------------------------------------
+
+
+def test_both_images_are_given_the_same_flash_map() -> None:
+    """The bootloader writes the slots; the application is linked into one.
+
+    Two files carry the table because sysbuild's per-image devicetree
+    overlay *replaces* the image's own rather than adding to it. Two
+    copies that could disagree would be a device that boots into the
+    middle of nothing, so both come from the one string in the registry.
+    """
+    files = _example_files()
+    layout = registry.BOARDS["nrf7002dk/nrf5340/cpuapp"].update_scheme.partition_overlay
+    assert layout in files[OVERLAY_PATH]
+    assert layout in files[MCUBOOT_OVERLAY_PATH]
+
+
+def test_the_bootloader_overlay_restates_what_replacing_the_overlay_costs() -> None:
+    """Two upstream fragments, and the reason they had to be copied."""
+    overlay = _example_files()[MCUBOOT_OVERLAY_PATH]
+    assert "zephyr,code-partition = &boot_partition;" in overlay
+    assert 'compatible = "zephyr,cdc-acm-uart";' in overlay
+    assert "REPLACES" in overlay
+
+
+def test_the_sysbuild_config_names_the_bootloader_and_the_mode() -> None:
+    conf = _example_files()[f"{APP_DIR}/{SYSBUILD_CONF}"]
+    body = [line for line in conf.splitlines() if line and not line.startswith("#")]
+    assert body == [
+        "SB_CONFIG_BOOTLOADER_MCUBOOT=y",
+        "SB_CONFIG_MCUBOOT_MODE_SWAP_USING_OFFSET=y",
+        "SB_CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y",
+        "SB_CONFIG_MERGED_HEX_FILES=y",
+    ]
+
+
+def test_no_generated_file_carries_a_signing_key_or_a_path_to_one() -> None:
+    """It is a per-user secret; the tree is copied, reviewed and shared.
+
+    Silence would be worse than absence, though — MCUboot's default is
+    its own published demo key — so the file that would have carried it
+    says out loud what happens without the argument.
+    """
+    files = _example_files()
+    for name, text in files.items():
+        assert "-----BEGIN" not in text, name
+        for line in text.splitlines():
+            # Comment leaders stripped: the two files that *mention* the
+            # option do so in prose, showing the argument to pass.
+            assert not line.lstrip("#/* \t").startswith("SB_CONFIG_BOOT_SIGNATURE_KEY_FILE="), name
+    conf = files[f"{APP_DIR}/{SYSBUILD_CONF}"]
+    assert "SB_CONFIG_BOOT_SIGNATURE_KEY_FILE" in conf
+    assert "demo key" in conf
+
+
+def test_the_bootloader_fragment_states_the_sector_count_itself() -> None:
+    conf = _example_files()[MCUBOOT_CONF_PATH]
+    assert "CONFIG_BOOT_MAX_IMG_SECTORS_AUTO=n" in conf
+    assert "CONFIG_BOOT_MAX_IMG_SECTORS=232" in conf
+
+
+def test_the_build_command_in_the_cmakelists_names_the_snippets_per_image() -> None:
+    cmake = _example_files()[CMAKE_PATH]
+    assert "--sysbuild" in cmake
+    assert f'-D{APP_DIR}_SNIPPET="matter;boot-mode"' in cmake
+    assert f'-D{BOOTLOADER_IMAGE}_SNIPPET="boot-mode"' in cmake
+
+
+def test_a_board_without_an_update_scheme_gets_no_sysbuild_files() -> None:
+    """A fixture board, and the shape a not-yet-brought-up board has."""
+    model = _hardware_model(HardwareModel())
+    board = registry.BOARDS[model.device.board]
+    files = generate(model, config_name="main.yaml")
+    assert f"{APP_DIR}/{SYSBUILD_CONF}" in files  # the real board has one
+
+    plain = dataclasses.replace(board, update_scheme=None)
+    with_plain_board = dict(registry.BOARDS, **{model.device.board: plain})
+    original = registry.BOARDS.copy()
+    registry.BOARDS.clear()
+    registry.BOARDS.update(with_plain_board)
+    try:
+        files = generate(model, config_name="main.yaml")
+    finally:
+        registry.BOARDS.clear()
+        registry.BOARDS.update(original)
+    assert not [name for name in files if "sysbuild" in name]
+    assert "Flash layout" not in files[OVERLAY_PATH]
+
+
+def test_an_unchanged_file_is_not_rewritten(tmp_path) -> None:
+    """CMake watches these files; touching one re-runs the Matter build."""
+    model = resolve_file(EXAMPLE)
+    write_tree(model, out_dir=tmp_path, config_name=EXAMPLE.name)
+    cmake = tmp_path / CMAKE_PATH
+    stamp = cmake.stat().st_mtime_ns
+    os.utime(cmake, ns=(stamp - 10**9, stamp - 10**9))
+    before = cmake.stat().st_mtime_ns
+
+    write_tree(model, out_dir=tmp_path, config_name=EXAMPLE.name)
+    assert cmake.stat().st_mtime_ns == before
+
+
+def test_a_changed_file_is_rewritten(tmp_path) -> None:
+    model = resolve_file(EXAMPLE)
+    write_tree(model, out_dir=tmp_path, config_name=EXAMPLE.name)
+    cmake = tmp_path / CMAKE_PATH
+    cmake.write_text("stale\n", encoding="utf-8")
+
+    write_tree(model, out_dir=tmp_path, config_name=EXAMPLE.name)
+    assert cmake.read_text(encoding="utf-8") == _example_files()[CMAKE_PATH]

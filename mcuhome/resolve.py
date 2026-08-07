@@ -482,4 +482,14 @@ def _resolve_build(
         kconfig += ["CONFIG_SENSOR=y", "CONFIG_MCUHOME_SENSOR=y"]
 
     kconfig += list(board.kconfig)
+    if board.update_scheme is not None:
+        # Snippets the board's update scheme needs in the *application*
+        # image (ADR 0015 decision 2). They come last so a device's own
+        # snippets stay in front: Zephyr lets a later fragment override an
+        # earlier one, and board wiring is the more specific statement.
+        snippets += [
+            snippet
+            for snippet in board.update_scheme.application_snippets
+            if snippet not in snippets
+        ]
     return BuildModel(snippets=snippets, kconfig=sorted(set(kconfig)))

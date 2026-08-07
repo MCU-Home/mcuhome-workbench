@@ -91,8 +91,12 @@ mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
 ```
 
 That writes the generated Zephyr application to `build/bmp180-node/app`,
-compiles it in the container as your own user, and prints the image path
-and its flash/RAM footprint. `--generate-only` stops after the
+compiles it in the container as your own user, and prints both images —
+MCUboot and the application signed for it — with their flash/RAM
+footprints and the flash layout they were built against. The first build
+also draws your own ECDSA P-256 signing key into
+`~/.config/mcuhome/signing.key` and says so: every device you flash
+verifies its firmware against it, so it is worth keeping (ADR 0015). `--generate-only` stops after the
 generating half, which needs nothing but Python; `--native` compiles on
 a host toolchain instead, for people working on MCUHome itself. Details,
 including how to build the image yourself, are in
