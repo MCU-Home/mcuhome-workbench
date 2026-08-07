@@ -19,6 +19,9 @@ network:
     device_role: mtd
   matter:
     enabled: true
+    # Bench credentials: the pairing code published with the Matter SDK.
+    # A real device draws its own with `mcuhome init-pairing <device>`.
+    use_test_pairing: true
 
 hardware:
   buses:

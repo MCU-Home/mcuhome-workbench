@@ -279,3 +279,73 @@ def test_build_reports_configuration_problems_and_writes_nothing(tmp_path, capsy
 def test_clean_refuses_cleanly(capsys) -> None:
     assert main(["clean", "--all"]) == 1
     assert "mcuhome clean is not implemented yet" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Commissioning codes
+# --------------------------------------------------------------------------
+
+
+def test_validate_prints_the_pairing_codes(capsys) -> None:
+    assert main(["validate", str(EXAMPLE)]) == 0
+    out = capsys.readouterr().out
+    assert "Commissioning" in out
+    assert "manual code    34970112332" in out
+    assert "QR code        MT:Y.K90AFN00KA0648G00" in out
+    assert "discriminator  3840 (0xF00)" in out
+
+
+def test_the_published_test_credentials_are_called_out(capsys) -> None:
+    assert main(["validate", "bench-node", "--config-root", str(FIXTURE_TREE)]) == 0
+    own = capsys.readouterr().out
+    assert "published with the Matter SDK" not in own, "this fixture has credentials of its own"
+
+    assert main(["validate", str(EXAMPLE)]) == 0
+    assert "published with the Matter SDK" in capsys.readouterr().out
+
+
+def test_build_prints_the_pairing_codes_last(tmp_path, capsys) -> None:
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only"]) == 0
+    out = capsys.readouterr().out
+    assert out.index("Commissioning") > out.index("Generated 7 files")
+    assert "MT:Y.K90AFN00KA0648G00" in out
+
+
+def test_init_pairing_writes_the_codes_and_prints_them(tmp_path, capsys) -> None:
+    tree = tmp_path / "config"
+    (tree / "devices" / "bench-node").mkdir(parents=True)
+    entry = tree / "devices" / "bench-node" / "main.yaml"
+    entry.write_text(VALID_CONFIG.replace("    use_test_pairing: true\n", ""), "utf-8")
+
+    assert main(["init-pairing", "bench-node", "--config-root", str(tree)]) == 0
+    out = capsys.readouterr().out
+    assert str(entry) in out
+    assert "Commissioning" in out
+    assert "manual code" in out
+    assert "QR code        MT:" in out
+
+    # The device now builds, and the codes it reports are the ones just
+    # written — the loop that makes the credentials ordinary input.
+    assert main(["validate", "bench-node", "--config-root", str(tree)]) == 0
+    assert out.splitlines()[3] in capsys.readouterr().out
+
+
+def test_init_pairing_refuses_a_second_time(tmp_path, capsys) -> None:
+    entry = tmp_path / "main.yaml"
+    entry.write_text(VALID_CONFIG, "utf-8")
+    assert main(["init-pairing", str(entry)]) == 1
+    captured = capsys.readouterr()
+    assert "already has commissioning credentials" in captured.err
+    assert "--force" in captured.err
+    assert entry.read_text("utf-8") == VALID_CONFIG
+
+
+def test_init_pairing_with_secrets_writes_two_files(tmp_path, capsys) -> None:
+    entry = tmp_path / "main.yaml"
+    entry.write_text(VALID_CONFIG.replace("    use_test_pairing: true\n", ""), "utf-8")
+    assert main(["init-pairing", str(entry), "--secrets"]) == 0
+
+    out = capsys.readouterr().out
+    assert str(tmp_path / "secrets.yaml") in out
+    assert "!secret bench_node_passcode" in entry.read_text("utf-8")
+    assert main(["validate", str(entry)]) == 0

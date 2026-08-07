@@ -61,7 +61,7 @@ import textwrap
 from fractions import Fraction
 from pathlib import Path
 
-from mcuhome import registry
+from mcuhome import pairing, registry
 from mcuhome.errors import GenerationError
 from mcuhome.model import (
     AttrModel,
@@ -744,6 +744,26 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
         )
     out = [_file_header("hash", config_name, intro), ""]
     out += list(model.build.kconfig)
+    if model.network.pairing is not None:
+        credentials = model.network.pairing
+        out += [
+            "",
+            "# This device's commissioning identity, emitted as one indivisible group",
+            "# by mcuhome.pairing.kconfig_lines(). CHIP takes the passcode and the",
+            "# SPAKE2+ verifier derived from it as two unrelated symbols and checks",
+            "# neither against the other on Zephyr, so a build that changed one and",
+            "# not the other would flash, boot, advertise itself and then refuse",
+            "# every commissioner. Nothing here may be edited by hand: change the",
+            "# credentials in the device configuration and rebuild.",
+            *pairing.kconfig_lines(
+                pairing.Pairing(
+                    discriminator=credentials.discriminator,
+                    passcode=credentials.passcode,
+                    salt=credentials.salt,
+                    iterations=credentials.iterations,
+                )
+            ),
+        ]
     if model.network.matter_enabled:
         # Not part of the device model on purpose: this symbol names a file
         # inside the generated tree, so it is a fact of stage 4's layout

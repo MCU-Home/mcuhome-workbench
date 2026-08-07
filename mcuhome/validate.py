@@ -15,6 +15,8 @@ checks that need knowledge:
 4. **Matter conformance.** A device type's mandatory clusters, and
    whether the requested measurement fits the attribute the cluster
    defines.
+5. **Commissioning credentials.** That the device has any at all, and
+   that discriminator, passcode and salt are values Matter accepts.
 
 All findings are collected: a user should be able to fix a config in one
 pass, not in five runs.
@@ -25,12 +27,19 @@ from __future__ import annotations
 import re
 from fractions import Fraction
 
-from mcuhome import registry
+from mcuhome import pairing, registry
 from mcuhome.errors import ErrorCollector, Location
-from mcuhome.schema import RawCluster, RawConfig, RawEndpoint, assign_endpoint_ids
+from mcuhome.schema import (
+    RawBase,
+    RawCluster,
+    RawConfig,
+    RawEndpoint,
+    RawMatter,
+    assign_endpoint_ids,
+)
 from mcuhome.toolchain import resolve_toolchain
 
-__all__ = ["INT16S_MAX", "INT16S_MIN", "validate"]
+__all__ = ["INT16S_MAX", "INT16S_MIN", "PAIRING_KEYS", "validate"]
 
 #: Range of the ``int16s`` attributes every measurement cluster uses.
 INT16S_MIN = -32768
@@ -51,6 +60,7 @@ def validate(config: RawConfig) -> None:
     _check_scope_gates(config, errors)
     _check_device(config, errors)
     _check_network(config, errors)
+    _check_pairing(config, errors)
     _check_hardware(config, errors)
     _check_node(config, errors)
 
@@ -235,6 +245,172 @@ def _matter_enabled(config: RawConfig) -> bool:
     if network.matter is not None and network.matter.enabled is not None:
         return network.matter.enabled
     return network.thread is not None or network.wifi is not None
+
+
+# --------------------------------------------------------------------------
+# network.matter: commissioning credentials
+# --------------------------------------------------------------------------
+
+#: The three keys that make up one device's pairing identity. They are
+#: written together and replaced together — a configuration carrying two
+#: of them is a half-finished edit, not a shorthand.
+PAIRING_KEYS = ("discriminator", "passcode", "salt")
+
+
+def _check_pairing(config: RawConfig, errors: ErrorCollector) -> None:
+    """The credential half of ``network.matter:``.
+
+    MCUHome refuses to invent commissioning credentials at build time, and
+    it refuses to fall back to the ones CHIP publishes. Both refusals have
+    the same reason: a passcode everybody knows is a passcode that lets
+    anybody commission the device, and a passcode the builder makes up
+    behind the user's back is one they can never write down. So the
+    configuration states them, and this function makes sure it does.
+    """
+    network = config.network
+    matter = network.matter if network is not None else None
+    enabled = _matter_enabled(config)
+    device = config.device.name or "<device>"
+
+    if matter is None:
+        if enabled:
+            _report_no_credentials(config, device, location_of=network, errors=errors)
+        return
+
+    given = [key for key in PAIRING_KEYS if getattr(matter, key) is not None]
+    test = bool(matter.use_test_pairing)
+
+    if not enabled:
+        for key in [*given, *(["use_test_pairing"] if test else [])]:
+            errors.add(
+                f'"{key}:" only means something for a device that speaks Matter.',
+                location=matter.loc_of(key),
+                hint=(
+                    f"commissioning is a Matter idea — switch Matter on, or remove the {key}: line"
+                ),
+            )
+        return
+
+    if test and given:
+        errors.add(
+            "This device asks for the test pairing code and brings its own at the same time.",
+            location=matter.loc_of("use_test_pairing"),
+            hint=(
+                "keep one of the two: remove use_test_pairing: true to commission with "
+                f"your own credentials, or remove {', '.join(f'{key}:' for key in given)} "
+                "to use the published test ones"
+            ),
+        )
+        return
+    if test:
+        return
+
+    if not given:
+        _report_no_credentials(config, device, location_of=matter, errors=errors)
+        return
+
+    missing = [key for key in PAIRING_KEYS if key not in given]
+    if missing:
+        errors.add(
+            "The commissioning credentials are incomplete: "
+            f"{', '.join(f'{key}:' for key in missing)} missing.",
+            location=matter.loc_of(given[0]),
+            hint=(
+                "discriminator, passcode and salt belong together — write the missing "
+                f"ones, or replace all three:\n    mcuhome init-pairing {device} --force"
+            ),
+        )
+        return
+
+    _check_discriminator(matter.discriminator, matter, errors)
+    _check_passcode(matter.passcode, matter, device, errors)
+    _check_salt(matter.salt, matter, device, errors)
+
+
+def _report_no_credentials(
+    config: RawConfig,
+    device: str,
+    *,
+    location_of: RawBase | None,
+    errors: ErrorCollector,
+) -> None:
+    errors.add(
+        "This device has no commissioning credentials.",
+        location=location_of.loc if location_of is not None else config.loc,
+        hint=(
+            "every Matter device needs a pairing code of its own — let the builder "
+            f"draw one and write it into this file:\n    mcuhome init-pairing {device}\n"
+            "  (on a bench device you can instead add use_test_pairing: true under "
+            "matter:, which uses the passcode published with the Matter SDK — never "
+            "on a device that leaves your desk)"
+        ),
+    )
+
+
+def _check_discriminator(value: int | None, matter: RawMatter, errors: ErrorCollector) -> None:
+    if value is None or 0 <= value <= pairing.DISCRIMINATOR_MAX:
+        return
+    errors.add(
+        f'"discriminator: {value}" is outside the range Matter allows.',
+        location=matter.loc_of("discriminator"),
+        hint=(
+            f"a discriminator is a number from 0 to {pairing.DISCRIMINATOR_MAX} "
+            f"(0x000 to 0x{pairing.DISCRIMINATOR_MAX:03X}); it is how a commissioner "
+            "picks this device out of everything else advertising itself"
+        ),
+    )
+
+
+def _check_passcode(
+    value: int | None, matter: RawMatter, device: str, errors: ErrorCollector
+) -> None:
+    if value is None:
+        return
+    if not pairing.PASSCODE_MIN <= value <= pairing.PASSCODE_MAX:
+        errors.add(
+            f'"passcode: {value}" is not a passcode Matter can carry.',
+            location=matter.loc_of("passcode"),
+            hint=(
+                f"a passcode is a number from {pairing.PASSCODE_MIN} to "
+                f"{pairing.PASSCODE_MAX} — or let the builder pick one:\n"
+                f"    mcuhome init-pairing {device} --force"
+            ),
+        )
+        return
+    if value in pairing.FORBIDDEN_PASSCODES:
+        errors.add(
+            f'"passcode: {value:08d}" is one of the passcodes Matter forbids.',
+            location=matter.loc_of("passcode"),
+            hint=(
+                "the specification rules out the twelve most guessable codes — eight "
+                "repeated digits, 12345678 and 87654321 — because they are the first "
+                f"thing anyone tries; pick another, or run:\n"
+                f"    mcuhome init-pairing {device} --force"
+            ),
+        )
+
+
+def _check_salt(value: str | None, matter: RawMatter, device: str, errors: ErrorCollector) -> None:
+    if value is None:
+        return
+    problem = pairing.describe_salt_problem(value)
+    if problem is None:
+        return
+    detail = (
+        "it is not base64 text"
+        if problem == "not base64"
+        else f"this one is {problem} once decoded"
+    )
+    errors.add(
+        f'"salt:" is not a usable commissioning salt: {detail}.',
+        location=matter.loc_of("salt"),
+        hint=(
+            f"the salt is {pairing.SALT_MIN_BYTES} to {pairing.SALT_MAX_BYTES} random "
+            "bytes written in base64, and it is what stops one precomputed table from "
+            f"unlocking every device — the builder makes one for you:\n"
+            f"    mcuhome init-pairing {device} --force"
+        ),
+    )
 
 
 # --------------------------------------------------------------------------

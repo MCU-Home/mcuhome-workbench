@@ -76,7 +76,9 @@ def test_unknown_key_inside_a_section(write_config) -> None:
     text = VALID_CONFIG.replace("  matter:\n", "  matter:\n    enable: true\n")
     errors = expect_failure(write_config(text))
     error = find_error(errors, 'Unknown key "enable"')
-    assert error.hint == "keys allowed here: enabled"
+    assert error.hint == (
+        "keys allowed here: discriminator, enabled, passcode, salt, use_test_pairing"
+    )
 
 
 def test_error_rendering_is_stable() -> None:

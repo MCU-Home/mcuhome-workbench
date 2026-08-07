@@ -95,12 +95,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its tag does not exist yet. This closes the workflow's `TODO(twister)`
   block.
 
+- Commissioning-code support in the builder (`mcuhome/pairing.py`,
+  `mcuhome/provision.py`, phase 3 block 4). `network.matter:` gains
+  `discriminator:`, `passcode:` and `salt:`, and `mcuhome init-pairing
+  <device>` draws them from the system CSPRNG and edits them into the
+  device's own configuration — line by line, so comments and indentation
+  survive — or into `secrets.yaml` with `!secret` references
+  (`--secrets`). Randomness therefore happens once per device rather than
+  once per build, which is what lets per-device credentials coexist with
+  byte-identical rebuilds. `--force` replaces existing credentials and
+  says what that costs. A Matter device with no credentials is a
+  validation error; `use_test_pairing: true` selects the tuple published
+  with the Matter SDK, verbatim, for bench devices.
+- The builder computes the SPAKE2+ verifier itself, in pure Python
+  (PBKDF2-HMAC-SHA256 plus one P-256 scalar multiplication, ~30 lines, no
+  new dependency), and emits the whole commissioning identity —
+  vendor/product ID, discriminator, passcode, iteration count, salt and
+  verifier — as one indivisible Kconfig group from one function. CHIP
+  checks none of those symbols against each other on Zephyr, so a
+  passcode written without its verifier used to yield firmware that
+  builds, boots, advertises itself and then refuses every commissioner.
+  PBKDF2 iterations default to 10000 (CHIP: 1000); the device stores the
+  finished verifier and never runs PBKDF2, so the cost is the
+  commissioner's alone.
+- `mcuhome validate`, `build` and `init-pairing` print the device's manual
+  pairing code and `MT:` QR payload. Printed only: the builder keeps no
+  record of a device's codes beyond the configuration the user owns.
+  Verifier, QR payload and manual code are golden-tested against the
+  vectors in the pinned connectedhomeip checkout, including the two codes
+  the hardware-verified nRF7002-DK was commissioned with.
+
 ### Changed
 
 - `mcuhome build` compiles in the builder container by default; `--native`
   is the escape hatch (ADR 0007). Host prerequisites for a compiling build
   shrink to git and docker — the Zephyr SDK, `gn` and `zap` are only
   needed on the `--native` path.
+- Generated Kconfig fragments now state the commissioning identity
+  explicitly instead of inheriting CHIP's Kconfig defaults. For
+  `docs/design/examples/00-bmp180-two-endpoints.yaml`, which asks for
+  `use_test_pairing: true`, the emitted values are CHIP's defaults to the
+  byte, so the hardware-verified reference image is unchanged.
 
 - `app/` is no longer a placeholder application: `app/src/main.c` is the
   generic MCUHome application main that every generated device shares, and

@@ -184,9 +184,10 @@ is its own later design; the artifacts above are designed so both work.
 ## 8. CLI surface (v0.1)
 
 ```
-mcuhome validate <device>          # stages 1–3, prints resolved summary
-mcuhome build    <device>          # stages 1–5
-mcuhome clean    <device|--all>
+mcuhome validate     <device>      # stages 1–3, prints resolved summary
+mcuhome build        <device>      # stages 1–5
+mcuhome init-pairing <device>      # draw commissioning credentials, once
+mcuhome clean        <device|--all>
 ```
 
 `<device>` is a folder name resolved against the config tree root
@@ -194,6 +195,15 @@ mcuhome clean    <device|--all>
 `--config-root`, else auto-discovered (cwd upwards). Everything else
 (`flash`, `logs`, `migrate`, `update`) arrives with its own design.
 Flags: `--native` (§5), `--keep-going` for CI, `-v`.
+
+`init-pairing` is the exception to "the builder never writes into the
+configuration tree" (§2), and it exists because of §1.4: a device needs
+credentials nobody else has, and a build has to be reproducible, so the
+randomness happens once — in this command, into the device's own YAML or
+the tree's `secrets.yaml` — and every build after that is deterministic
+input in, deterministic bytes out (yaml-schema.md §4.1).
+`validate`/`build` print the resulting pairing codes and store them
+nowhere.
 
 ## 9. Testing strategy
 

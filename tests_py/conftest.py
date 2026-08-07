@@ -33,6 +33,7 @@ network:
     device_role: ftd
   matter:
     enabled: true
+    use_test_pairing: true
 
 hardware:
   buses:

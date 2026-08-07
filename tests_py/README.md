@@ -26,6 +26,7 @@ second — they are the fast half of the strategy in
 | `test_loader.py` | YAML parsing and `!secret` resolution, including their error messages |
 | `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
+| `test_pairing.py` | commissioning: the CHIP vectors, the atomic Kconfig group, `init-pairing` |
 | `test_examples.py` | the design examples in `docs/design/examples/` |
 | `test_model_golden.py` | the canonical model of `00-bmp180-two-endpoints.yaml`, byte-exact |
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
@@ -86,3 +87,14 @@ overlay next to them.
 Error **text** is asserted on purpose: validation messages are user
 interface (builder-pipeline.md §9). If a message changes, that is a
 deliberate UX change and the test is where it gets reviewed.
+
+## Foreign vectors
+
+`test_pairing.py` is the one suite whose expected values are not
+MCUHome's own output: every SPAKE2+ verifier, QR payload and manual code
+in it comes from the pinned connectedhomeip checkout, with the file it
+was taken from named in a comment. Reproducing somebody else's numbers is
+the only way to know that a code this builder prints is a code a real
+controller accepts — a golden file of our own output would only prove we
+are consistent. The last vector is stronger still: the two codes of the
+nRF7002-DK that was commissioned into a production Home Assistant.

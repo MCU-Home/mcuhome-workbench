@@ -69,6 +69,18 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
   configuration it generates; `west build mcuhome/app` refuses at CMake
   configure time and says so. Anything device-, board- or
   peripheral-specific is a contract violation there — see `app/README.md`.
+- **A device's commissioning identity is emitted by one function.**
+  `mcuhome/pairing.py::kconfig_lines()` writes all of
+  `CONFIG_CHIP_DEVICE_{VENDOR_ID,PRODUCT_ID,DISCRIMINATOR,SPAKE2_PASSCODE,
+  SPAKE2_IT,SPAKE2_SALT,SPAKE2_TEST_VERIFIER}` from one tuple, and
+  `tests_py/test_pairing.py` asserts no other module even names them. CHIP
+  does not check the passcode against the verifier derived from it on
+  Zephyr, so anything that could write one without the other yields
+  firmware that builds, boots and then refuses every commissioner.
+- **Credentials are drawn once, into the user's YAML** (`mcuhome
+  init-pairing`), never per build — random per device *and* byte-identical
+  builds, which is only possible if the configuration is the source
+  (yaml-schema.md §4.1).
 - **Two files carry the Matter build glue** — `samples/matter-node/
   CMakeLists.txt` and the one `mcuhome/generate.py` emits — and
   `tests_py/test_generate.py` asserts the shared blocks stay byte-equal.

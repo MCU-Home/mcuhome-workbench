@@ -17,6 +17,9 @@ network:
     poll_interval: 5s
   matter:
     enabled: true        # default when a transport exists; shown for clarity
+    # Bench credentials: the pairing code published with the Matter SDK.
+    # A real device draws its own with `mcuhome init-pairing <device>`.
+    use_test_pairing: true
 
 hardware:
   buses:

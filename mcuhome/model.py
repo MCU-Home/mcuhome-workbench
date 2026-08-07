@@ -47,6 +47,7 @@ __all__ = [
     "EndpointModel",
     "HardwareModel",
     "NetworkModel",
+    "PairingModel",
     "PeripheralModel",
     "SourceModel",
     "ThreadModel",
@@ -98,26 +99,72 @@ class ThreadModel:
 
 
 @dataclass(frozen=True)
+class PairingModel:
+    """This device's commissioning credentials (:mod:`mcuhome.pairing`).
+
+    The SPAKE2+ verifier is deliberately **not** a field: it is a pure
+    function of the three values below, and storing it would create a
+    second copy that can disagree with them. Everything downstream derives
+    it, so a model that travels to a remote build server carries the
+    inputs and lets that server compute the same verifier byte for byte.
+    """
+
+    discriminator: int
+    passcode: int
+    #: Base64, exactly as CHIP's Kconfig wants it.
+    salt: str
+    iterations: int
+    #: True when this is the published Matter test tuple, which the
+    #: builder is allowed to use only because the configuration asked for
+    #: it in so many words (``use_test_pairing: true``).
+    test_credentials: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "discriminator": self.discriminator,
+            "passcode": self.passcode,
+            "salt": self.salt,
+            "iterations": self.iterations,
+            "test_credentials": self.test_credentials,
+        }
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> PairingModel:
+        return PairingModel(
+            discriminator=data["discriminator"],
+            passcode=data["passcode"],
+            salt=data["salt"],
+            iterations=data["iterations"],
+            test_credentials=data["test_credentials"],
+        )
+
+
+@dataclass(frozen=True)
 class NetworkModel:
     #: ``thread``, ``wifi`` or None for a config without a transport.
     transport: str | None
     matter_enabled: bool
     thread: ThreadModel | None = None
+    #: Present exactly when Matter is enabled.
+    pairing: PairingModel | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "transport": self.transport,
             "matter_enabled": self.matter_enabled,
             "thread": self.thread.to_dict() if self.thread else None,
+            "pairing": self.pairing.to_dict() if self.pairing else None,
         }
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> NetworkModel:
         thread = data.get("thread")
+        pairing = data.get("pairing")
         return NetworkModel(
             transport=data["transport"],
             matter_enabled=data["matter_enabled"],
             thread=ThreadModel.from_dict(thread) if thread else None,
+            pairing=PairingModel.from_dict(pairing) if pairing else None,
         )
 
 

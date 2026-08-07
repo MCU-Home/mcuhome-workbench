@@ -34,6 +34,15 @@ network:
     device_role: ftd            # Router — mains-powered, no sleep budget
   matter:
     enabled: true               # default when a transport exists
+    # The pairing code published with the Matter SDK (passcode 20202021,
+    # discriminator 0xF00) — the codes the DK on the bench was actually
+    # commissioned with, which is why this example asks for them by name.
+    # A real device draws its own instead:
+    #     mcuhome init-pairing <device>
+    # writes a random passcode, discriminator and salt into its
+    # configuration. Without either, the builder refuses to build: a
+    # passcode everyone knows is a device anyone can commission.
+    use_test_pairing: true
 
 hardware:
   buses:

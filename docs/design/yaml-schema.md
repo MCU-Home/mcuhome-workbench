@@ -90,6 +90,9 @@ network:
 
   matter:
     enabled: true                  # default; shown for clarity
+    discriminator: !secret bedroom_climate_discriminator   # 0…4095
+    passcode: !secret bedroom_climate_passcode             # 1…99999998
+    salt: !secret bedroom_climate_salt                     # base64, 16…32 B
 ```
 
 - Exactly one transport must be configured; a board without radio for it
@@ -107,6 +110,67 @@ network:
   runtime offers Router (FTD) and Minimal End Device (MED) only today.
   SED support is not offered yet — it lands with the power-management
   phase (ICD configuration, poll period, Matter LIT/SIT semantics).
+
+### 4.1 Commissioning credentials
+
+Three keys under `matter:` are one thing: `discriminator` (how a
+commissioner picks this device out of the crowd), `passcode` (the secret
+that proves possession) and `salt` (what stops one precomputed table from
+unlocking every device ever built — a published attack, IACR 2025/1268).
+They are written together and replaced together; a configuration carrying
+one or two of them is refused as a half-finished edit.
+
+**The configuration states them; the builder never invents them.** Two
+requirements meet here and only one design satisfies both:
+
+- every device must have credentials nobody else has, and
+- the same configuration must produce the same firmware forever
+  (builder-pipeline.md §1.4) — which rules out drawing them per build.
+
+So randomness happens exactly once, in a command of its own, and its
+output lands in the configuration file, where it is ordinary input from
+then on:
+
+```sh
+mcuhome init-pairing <device>             # writes the three keys into main.yaml
+mcuhome init-pairing <device> --secrets   # …into secrets.yaml, with !secret refs
+mcuhome init-pairing <device> --force     # replace existing ones (re-commissioning!)
+```
+
+The file is edited by line, not re-serialized: comments and indentation
+survive untouched. Nothing is written anywhere else — no state directory,
+no cache, no log. **The configuration is the only copy**, and losing it
+means the device has to be re-flashed to be re-commissioned.
+
+A Matter device with no credentials and no explicit opt-out is a
+validation error, not a default. The opt-out exists for the bench:
+
+```yaml
+  matter:
+    use_test_pairing: true         # the tuple published with the Matter SDK
+```
+
+which selects CHIP's own published values (discriminator `0xF00`,
+passcode `20202021`, its documented salt and 1000 iterations) — verbatim,
+including the iteration count, so a build made this way is bit-identical
+to CHIP's defaults. Everyone has those values, which is exactly why they
+have to be asked for by name. `mcuhome validate` and `mcuhome build` say
+so in the summary whenever they are in use.
+
+The two onboarding codes are printed by `validate`, `build` and
+`init-pairing`, and printed only — the manual pairing code and the `MT:`
+QR payload, both derived from the tuple above plus the vendor/product ID.
+
+- **PBKDF2 iterations** are not a schema key: the builder uses 10000, ten
+  times CHIP's default. The cost is the commissioner's alone — the device
+  stores the finished SPAKE2+ verifier and never runs PBKDF2 — so the
+  higher count is free on the device side. It is defense in depth rather
+  than a boundary; the per-device salt is what does the real work.
+- **The firmware image contains the verifier**, which for a 27-bit
+  passcode means the image is passcode-equivalent to anyone willing to
+  spend GPU time. Vanilla Zephyr CHIP has no factory-data partition, so
+  the credentials are compiled in and one image belongs to one device.
+  Treat built images like the configuration they came from.
 
 ## 5. `hardware:` — devicetree-shaped hardware description
 
@@ -312,3 +376,4 @@ Model:
 | Packages/substitutions/includes | Schema revision 2 |
 | Expression language in automations | Reserved extension point |
 | Real Matter VID/PID | PO topic, pre-certification |
+| Per-device credentials in factory data instead of Kconfig | Blocked: vanilla Zephyr CHIP has no factory-data mechanism (see §4.1) |

@@ -340,6 +340,124 @@ def test_endpoints_without_matter(write_config) -> None:
     assert "CoAP is deferred" in (error.hint or "")
 
 
+# --------------------------------------------------------------------------
+# network.matter: commissioning credentials
+# --------------------------------------------------------------------------
+
+TEST_PAIRING_LINE = "    use_test_pairing: true\n"
+
+
+def _with_credentials(**values: object) -> str:
+    """VALID_CONFIG with explicit credentials instead of the test opt-in."""
+    lines = "".join(f"    {key}: {value}\n" for key, value in values.items())
+    return VALID_CONFIG.replace(TEST_PAIRING_LINE, lines)
+
+
+CREDENTIALS = {
+    "discriminator": 2314,
+    "passcode": 84920174,
+    "salt": '"GBG/P9QwOwhgSLc1fnDR7FWutk+sSsOutub53NjXsp8="',
+}
+
+
+def test_a_configuration_with_its_own_credentials_is_valid(write_config) -> None:
+    model = resolve_file(write_config(_with_credentials(**CREDENTIALS)))
+    assert model.network.pairing is not None
+    assert model.network.pairing.passcode == 84920174
+    assert not model.network.pairing.test_credentials
+
+
+def test_a_matter_device_without_credentials_is_refused(write_config) -> None:
+    text = VALID_CONFIG.replace(TEST_PAIRING_LINE, "")
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "no commissioning credentials")
+    assert error.message == "This device has no commissioning credentials."
+    assert error.location.line == line_of(text, "  matter:")
+    assert "mcuhome init-pairing bench-node" in (error.hint or "")
+    assert "use_test_pairing: true" in (error.hint or "")
+
+
+def test_half_written_credentials_name_what_is_missing(write_config) -> None:
+    text = _with_credentials(discriminator=2314, passcode=84920174)
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "incomplete")
+    assert error.message == "The commissioning credentials are incomplete: salt: missing."
+    assert error.location.line == line_of(text, "discriminator:")
+    assert "mcuhome init-pairing bench-node --force" in (error.hint or "")
+
+
+def test_a_passcode_out_of_range_is_refused(write_config) -> None:
+    text = _with_credentials(**{**CREDENTIALS, "passcode": 99999999999})
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "is not a passcode Matter can carry")
+    assert error.message == '"passcode: 99999999999" is not a passcode Matter can carry.'
+    assert error.location.line == line_of(text, "passcode:")
+    assert "a passcode is a number from 1 to 99999998" in (error.hint or "")
+
+
+def test_a_forbidden_passcode_is_refused(write_config) -> None:
+    text = _with_credentials(**{**CREDENTIALS, "passcode": 12345678})
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "one of the passcodes Matter forbids")
+    assert error.message == '"passcode: 12345678" is one of the passcodes Matter forbids.'
+    assert error.location.line == line_of(text, "passcode:")
+    assert "the first thing anyone tries" in (error.hint or "")
+
+
+def test_a_discriminator_out_of_range_is_refused(write_config) -> None:
+    text = _with_credentials(**{**CREDENTIALS, "discriminator": 5000})
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "outside the range Matter allows")
+    assert error.message == '"discriminator: 5000" is outside the range Matter allows.'
+    assert error.location.line == line_of(text, "discriminator:")
+    assert "a number from 0 to 4095 (0x000 to 0xFFF)" in (error.hint or "")
+
+
+def test_a_salt_that_is_not_base64_is_refused(write_config) -> None:
+    text = _with_credentials(**{**CREDENTIALS, "salt": '"not a salt!"'})
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "not a usable commissioning salt")
+    assert error.message == '"salt:" is not a usable commissioning salt: it is not base64 text.'
+    assert error.location.line == line_of(text, "salt:")
+
+
+def test_a_salt_of_the_wrong_length_says_how_long_it_is(write_config) -> None:
+    text = _with_credentials(**{**CREDENTIALS, "salt": '"dG9vX3Nob3J0"'})
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "not a usable commissioning salt")
+    assert error.message == (
+        '"salt:" is not a usable commissioning salt: this one is 9 bytes once decoded.'
+    )
+    assert "16 to 32 random bytes" in (error.hint or "")
+
+
+def test_asking_for_both_kinds_of_credentials_is_refused(write_config) -> None:
+    text = VALID_CONFIG.replace(
+        TEST_PAIRING_LINE,
+        TEST_PAIRING_LINE + "".join(f"    {key}: {value}\n" for key, value in CREDENTIALS.items()),
+    )
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "at the same time")
+    assert error.location.line == line_of(text, "use_test_pairing:")
+    assert "discriminator:, passcode:, salt:" in (error.hint or "")
+
+
+def test_credentials_on_a_device_without_matter_are_refused(write_config) -> None:
+    text = _with_credentials(**CREDENTIALS).replace("    enabled: true", "    enabled: false")
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, '"passcode:" only means something')
+    assert error.location.line == line_of(text, "passcode:")
+    assert "switch Matter on" in (error.hint or "")
+
+
+def test_the_test_credentials_are_resolved_as_chips_own(write_config) -> None:
+    model = resolve_file(write_config(VALID_CONFIG))
+    assert model.network.pairing is not None
+    assert model.network.pairing.test_credentials
+    assert model.network.pairing.passcode == 20202021
+    assert model.network.pairing.discriminator == 0xF00
+
+
 def test_every_problem_is_reported_at_once(write_config) -> None:
     text = VALID_CONFIG.replace("device_role: ftd", "device_role: sed").replace(
         "driver: bosch,bmp180", "driver: sensirion,sht4x"

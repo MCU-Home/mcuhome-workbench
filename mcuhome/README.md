@@ -8,6 +8,7 @@ produces Zephyr firmware. Design records:
 
 ```sh
 pip install -e '.[dev]'          # from the repository root
+mcuhome init-pairing <device>    # draw this device's commissioning credentials
 mcuhome validate <device>        # stages 1-3, prints the resolved device
 mcuhome build <device> --generate-only   # + stage 4, writes the application
 mcuhome build <device>           # + stage 5, compiles it in the builder image
@@ -19,7 +20,7 @@ pytest                           # the suite in ../tests_py/
 
 | Module | Stage | Role |
 |---|---|---|
-| `cli.py` | — | `argparse` command surface; `validate` and `build` work, `clean` refuses |
+| `cli.py` | — | `argparse` command surface; `validate`, `build` and `init-pairing` work, `clean` refuses |
 | `tree.py` | — | config-tree discovery and `<device>` resolution |
 | `loader.py` | 1 | YAML parsing (ruamel, with line/column) and `!secret` |
 | `schema.py` | 2a | typed model of the raw configuration; shape errors |
@@ -28,6 +29,8 @@ pytest                           # the suite in ../tests_py/
 | `generate.py` | 4 | the per-device build tree: Matter/channel tables, overlay, Kconfig fragment, CMakeLists |
 | `container.py` | 5 | the builder image: which one, which mounts, the `docker run` around the build |
 | `workspace.py` | 5 | west-workspace discovery, prerequisites, the `west build` invocation, the memory report |
+| `pairing.py` | — | commissioning credentials: SPAKE2+ verifier, QR and manual code, the atomic Kconfig group |
+| `provision.py` | — | `init-pairing`: draws credentials once and edits them into the device's YAML |
 | `model.py` | — | the canonical device model and its JSON form |
 | `registry.py` | — | static tables: clusters, device types, drivers, boards |
 | `toolchain.py` | — | Zephyr line and blob resolution — the ADR 0013 seam |
@@ -74,6 +77,16 @@ naming the source of every number. Matter revisions come from CHIP's own
 implementation data model, never from the specification scrape shipped
 next to it — the sourcing rule is spelled out at the top of that file
 and, generated from it, at the top of every emitted table set.
+
+**The commissioning identity is one call, never seven lines.**
+`pairing.kconfig_lines()` is the only place in the package that names
+`CONFIG_CHIP_DEVICE_SPAKE2_*` and friends, and `test_pairing.py` asserts
+that no other module does. CHIP takes the passcode and the SPAKE2+
+verifier derived from it as unrelated symbols and checks neither against
+the other on Zephyr, so a second code path that wrote one of them would
+produce firmware that builds, boots, advertises itself and then refuses
+every commissioner — with nothing in the log to look at. Adding a symbol
+to that identity means adding it to that function.
 
 **The sample is generator output.** `samples/matter-node/src/
 mcuhome_config.{c,h}` is what `generate.py` emits for

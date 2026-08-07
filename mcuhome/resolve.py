@@ -17,15 +17,18 @@ need", and to make every derived value explicit exactly once:
   and the channel table will share;
 * **unit conversion** — the YAML speaks °C and hPa, the Matter attributes
   are 0.01 °C and 0.1 kPa, and the Zephyr sensor API speaks a third
-  system again. All three meet here, as integers, never at runtime.
+  system again. All three meet here, as integers, never at runtime;
+* **commissioning credentials** — read out of the configuration, never
+  invented (:func:`_resolve_pairing`), with the PBKDF2 iteration count as
+  the one builder-owned constant among them.
 """
 
 from __future__ import annotations
 
 from fractions import Fraction
 
-from mcuhome import registry
-from mcuhome.errors import ErrorCollector
+from mcuhome import pairing, registry
+from mcuhome.errors import ConfigError, ErrorCollector
 from mcuhome.model import (
     AttrModel,
     BuildModel,
@@ -38,6 +41,7 @@ from mcuhome.model import (
     EndpointModel,
     HardwareModel,
     NetworkModel,
+    PairingModel,
     PeripheralModel,
     SourceModel,
     ThreadModel,
@@ -132,7 +136,61 @@ def _resolve_network(config: RawConfig) -> NetworkModel:
     if raw.matter is not None and raw.matter.enabled is not None:
         matter_enabled = raw.matter.enabled
 
-    return NetworkModel(transport=transport, matter_enabled=matter_enabled, thread=thread)
+    return NetworkModel(
+        transport=transport,
+        matter_enabled=matter_enabled,
+        thread=thread,
+        pairing=_resolve_pairing(config, matter_enabled),
+    )
+
+
+def _resolve_pairing(config: RawConfig, matter_enabled: bool) -> PairingModel | None:
+    """The commissioning credentials, exactly as the configuration states them.
+
+    Nothing is invented here — that is the whole design (yaml-schema.md
+    §4.1). The credentials are random, but they are randomized *once*, by
+    ``mcuhome init-pairing``, into the configuration file; from there on
+    they are ordinary input and the builder stays byte-deterministic. The
+    iteration count is the one derived value, and it is a constant of the
+    builder rather than of the device.
+    """
+    matter = config.network.matter if config.network is not None else None
+    if not matter_enabled:
+        return None
+    if matter is not None and matter.use_test_pairing:
+        return PairingModel(
+            discriminator=pairing.TEST_DISCRIMINATOR,
+            passcode=pairing.TEST_PASSCODE,
+            salt=pairing.TEST_SALT,
+            iterations=pairing.TEST_ITERATIONS,
+            test_credentials=True,
+        )
+    if (
+        matter is None
+        or matter.discriminator is None
+        or matter.passcode is None
+        or matter.salt is None
+    ):
+        # Unreachable through the CLI: mcuhome.validate refuses this
+        # configuration. Reachable by a caller that skipped stage 2, and
+        # the quiet alternatives are both wrong — omitting the symbols
+        # would silently ship CHIP's published test passcode, and making
+        # one up would ship a passcode nobody wrote down.
+        raise ConfigError(
+            "This configuration reached the code generator without commissioning credentials.",
+            location=matter.loc if matter is not None else config.loc,
+            hint=(
+                "run mcuhome validate on it first; the credentials come from\n"
+                f"    mcuhome init-pairing {config.device.name or '<device>'}"
+            ),
+        )
+    return PairingModel(
+        discriminator=matter.discriminator,
+        passcode=matter.passcode,
+        salt=matter.salt,
+        iterations=pairing.DEFAULT_ITERATIONS,
+        test_credentials=False,
+    )
 
 
 def _resolve_toolchain(config: RawConfig) -> ToolchainModel:
@@ -390,9 +448,13 @@ def _resolve_build(
             "CONFIG_MCUHOME_MATTER=y",
             "CONFIG_CHIP=y",
             "CONFIG_STD_CPP17=y",
-            # Matter test VID/PID until MCUHome has real ones
-            # (yaml-schema.md §3; a product-owner topic far later).
-            "CONFIG_CHIP_DEVICE_PRODUCT_ID=32768",
+            # The commissioning identity — vendor/product IDs,
+            # discriminator, passcode, salt, iterations and the verifier —
+            # is deliberately absent from this list. It is one indivisible
+            # group emitted by mcuhome.pairing.kconfig_lines() straight
+            # into the fragment (mcuhome/generate.py), so that no code
+            # path can produce a passcode without the verifier derived
+            # from it.
             "CONFIG_CHIP_ENABLE_PAIRING_AUTOSTART=y",
             "CONFIG_MBEDTLS=y",
             "CONFIG_MBEDTLS_PSA_CRYPTO_C=y",

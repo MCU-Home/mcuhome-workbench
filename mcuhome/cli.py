@@ -4,15 +4,16 @@
 
 ::
 
-    mcuhome validate <device>          # stages 1-3, prints a summary
-    mcuhome build    <device>          # stages 1-5
-    mcuhome clean    <device|--all>
+    mcuhome validate     <device>      # stages 1-3, prints a summary
+    mcuhome build        <device>      # stages 1-5
+    mcuhome init-pairing <device>      # draw commissioning credentials
+    mcuhome clean        <device|--all>
 
-``validate`` and ``build`` are what this milestone implements; ``clean``
-exists so the surface is stable and refuses cleanly rather than being
-missing. ``build`` compiles in the MCUHome builder image (ADR 0007,
-:mod:`mcuhome.container`); ``--native`` compiles on the host toolchain
-instead (:mod:`mcuhome.workspace`).
+``validate``, ``build`` and ``init-pairing`` are what this milestone
+implements; ``clean`` exists so the surface is stable and refuses cleanly
+rather than being missing. ``build`` compiles in the MCUHome builder image
+(ADR 0007, :mod:`mcuhome.container`); ``--native`` compiles on the host
+toolchain instead (:mod:`mcuhome.workspace`).
 
 ``validate`` writes nothing at all. ``build`` writes only into its build
 directory, which is deliberately outside the configuration tree
@@ -20,6 +21,9 @@ directory, which is deliberately outside the configuration tree
 ``--build-dir`` says otherwise. Inside it, the generated application is
 ``app/`` and the compiler's working tree is ``build/`` — everything a
 human is meant to read on one side, machine spoil on the other.
+``init-pairing`` is the one command that writes into the *configuration*
+tree, and it writes into exactly one file: the device's own
+(:mod:`mcuhome.provision`).
 """
 
 from __future__ import annotations
@@ -28,11 +32,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from mcuhome import __version__, container, registry, workspace
+from mcuhome import __version__, container, pairing, provision, registry, workspace
+from mcuhome import tree as tree_module
 from mcuhome.errors import MCUHomeError
 from mcuhome.generate import APP_DIR, write_tree
 from mcuhome.loader import load_config
-from mcuhome.model import DeviceModel
+from mcuhome.model import DeviceModel, PairingModel
 from mcuhome.resolve import resolve
 from mcuhome.schema import parse_config
 from mcuhome.tree import ConfigTree, resolve_device
@@ -41,6 +46,7 @@ from mcuhome.validate import validate
 __all__ = [
     "BUILD_DIR",
     "format_build_summary",
+    "format_commissioning",
     "format_summary",
     "load_device_model",
     "main",
@@ -78,6 +84,34 @@ def _cluster_unit(cluster_id: int) -> tuple[str, float]:
         if definition.id == cluster_id:
             return definition.unit, float(definition.raw_per_unit)
     return "", 1.0  # pragma: no cover - every generated cluster is known
+
+
+def format_commissioning(credentials: PairingModel) -> str:
+    """The two strings a human needs to add the device to a controller.
+
+    Printed, never written: the builder keeps no record of a device's
+    codes beyond the configuration file the user owns and the firmware it
+    compiles. Anyone holding either of those holds the passcode, which is
+    what makes them worth saying out loud here.
+    """
+    tuple_ = pairing.Pairing(
+        discriminator=credentials.discriminator,
+        passcode=credentials.passcode,
+        salt=credentials.salt,
+        iterations=credentials.iterations,
+    )
+    lines = [
+        "Commissioning",
+        f"  manual code    {tuple_.manual_code}",
+        f"  QR code        {tuple_.qr_payload}",
+        f"  discriminator  {credentials.discriminator} (0x{credentials.discriminator:03X})",
+    ]
+    if credentials.test_credentials:
+        lines.append(
+            "  NOTE: these are the credentials published with the Matter SDK. Anyone "
+            "who\n        knows them can commission this device — bench use only."
+        )
+    return "\n".join(lines)
 
 
 def format_summary(model: DeviceModel) -> str:
@@ -148,6 +182,10 @@ def format_summary(model: DeviceModel) -> str:
                 f"{channel.cluster_id:#06x}/{channel.attr_id:#06x}, every "
                 f"{_format_duration(channel.sample_period_ms)}, {delta}"
             )
+
+    if model.network.pairing is not None:
+        lines.append("")
+        lines.append(format_commissioning(model.network.pairing))
 
     if model.build.snippets or model.build.kconfig:
         lines.append("")
@@ -224,6 +262,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(f"  {path.relative_to(out_dir)}")
 
     if args.generate_only:
+        _print_commissioning(model)
         return 0
 
     snippets = _snippets_for(model, args.snippet)
@@ -267,7 +306,48 @@ def _cmd_build(args: argparse.Namespace) -> int:
             regions=workspace.parse_memory_report(log),
         )
     )
+    _print_commissioning(model)
     return 0
+
+
+def _print_commissioning(model: DeviceModel) -> None:
+    """The pairing codes, last, where a freshly built device needs them."""
+    if model.network.pairing is None:
+        return
+    print()
+    print(format_commissioning(model.network.pairing))
+
+
+def _cmd_init_pairing(args: argparse.Namespace) -> int:
+    tree, entry = resolve_device(args.device, config_root=args.config_root)
+    result = provision.init_pairing(
+        entry,
+        secrets_file=tree.secrets_file,
+        use_secrets=args.secrets,
+        force=args.force,
+    )
+    verb = "Replaced the commissioning credentials in" if result.replaced else "Wrote"
+    print(f"{verb} {result.entry}.")
+    if result.secrets_file is not None:
+        print(f"The values themselves are in {result.secrets_file}.")
+    print()
+    print(format_commissioning(_pairing_model(result.pairing)))
+    print()
+    print(
+        "Keep the configuration safe: it is the only copy. Anyone who has it — or the "
+        "firmware\nbuilt from it — can commission this device."
+    )
+    return 0
+
+
+def _pairing_model(credentials: pairing.Pairing) -> PairingModel:
+    return PairingModel(
+        discriminator=credentials.discriminator,
+        passcode=credentials.passcode,
+        salt=credentials.salt,
+        iterations=credentials.iterations,
+        test_credentials=credentials.test_credentials,
+    )
 
 
 def _cmd_clean(args: argparse.Namespace) -> int:
@@ -371,6 +451,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_options(build_parser_)
     build_parser_.set_defaults(func=_cmd_build)
+
+    init_parser = subparsers.add_parser(
+        "init-pairing",
+        help="draw this device's commissioning credentials and write them into its configuration",
+    )
+    init_parser.add_argument("device", help="device folder name or path")
+    init_parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "replace credentials that are already there (every controller that knows "
+            "the device has to commission it again)"
+        ),
+    )
+    init_parser.add_argument(
+        "--secrets",
+        action="store_true",
+        help=(
+            f"put the values in the tree's {tree_module.SECRETS_FILE} and reference them "
+            "with !secret, for a configuration that lives in version control"
+        ),
+    )
+    add_common_options(init_parser)
+    init_parser.set_defaults(func=_cmd_init_pairing)
 
     clean_parser = subparsers.add_parser("clean", help="remove build output of a device")
     clean_parser.add_argument("device", nargs="?", help="device folder name or path")

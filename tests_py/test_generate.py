@@ -27,6 +27,7 @@ import subprocess
 import pytest
 from conftest import EXAMPLES_DIR, GOLDEN_DIR, REPO_ROOT, resolve_file
 
+from mcuhome import pairing
 from mcuhome.errors import GenerationError
 from mcuhome.generate import (
     APP_DIR,
@@ -290,6 +291,11 @@ def test_no_generated_line_is_longer_than_the_column_limit() -> None:
         if name == MODEL_FILE:
             continue
         for number, line in enumerate(text.splitlines(), start=1):
+            if line.startswith("CONFIG_"):
+                # A Kconfig assignment cannot be wrapped: the base64
+                # SPAKE2+ verifier is 132 characters and has to be one
+                # line or none.
+                continue
             width = len(line.expandtabs(8))
             assert width <= 100, f"{name}:{number} is {width} columns wide"
 
@@ -474,18 +480,28 @@ def test_the_overlay_can_render_flags_frequencies_and_text() -> None:
 def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> None:
     """Everything about the *device* comes from the model, in model order.
 
-    The one exception is appended, not interleaved:
-    ``CONFIG_CHIP_PROJECT_CONFIG`` names a file inside the generated tree,
-    so it is stage 4's fact and deliberately absent from the canonical
-    model — a remote build server derives it from the same layout rule
-    rather than receiving it over the wire.
+    Two blocks are appended rather than interleaved, and both are derived
+    rather than carried: the commissioning identity, which
+    :mod:`mcuhome.pairing` computes from the model's pairing tuple in one
+    call, and ``CONFIG_CHIP_PROJECT_CONFIG``, which names a file inside
+    the generated tree and is therefore stage 4's fact. A remote build
+    server derives both from what it received rather than being told.
     """
     model = resolve_file(EXAMPLE)
+    assert model.network.pairing is not None
     fragment = _example_files()[f"{APP_DIR}/prj.conf"]
     body = [line for line in fragment.splitlines() if line and not line.startswith("#")]
     assert body[: len(model.build.kconfig)] == model.build.kconfig
     assert body[len(model.build.kconfig) :] == [
-        f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"'
+        *pairing.kconfig_lines(
+            pairing.Pairing(
+                discriminator=model.network.pairing.discriminator,
+                passcode=model.network.pairing.passcode,
+                salt=model.network.pairing.salt,
+                iterations=model.network.pairing.iterations,
+            )
+        ),
+        f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
     ]
     assert not any(line.startswith("CONFIG_CHIP_PROJECT_CONFIG") for line in model.build.kconfig)
     assert "-S matter" in fragment  # the snippets the app has to be built with

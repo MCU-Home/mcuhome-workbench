@@ -29,6 +29,7 @@ from typing import Any
 from mcuhome.errors import ConfigError, ErrorCollector, Location
 
 __all__ = [
+    "RawBase",
     "RawBus",
     "RawCluster",
     "RawConfig",
@@ -137,6 +138,13 @@ class RawWifi(RawBase):
 @dataclass(kw_only=True)
 class RawMatter(RawBase):
     enabled: bool | None = None
+    #: Commissioning credentials, as written. Shape only here — the
+    #: ranges Matter puts on them are checked in :mod:`mcuhome.validate`,
+    #: where the message can explain what the number is for.
+    discriminator: int | None = None
+    passcode: int | None = None
+    salt: str | None = None
+    use_test_pairing: bool | None = None
 
 
 @dataclass(kw_only=True)
@@ -622,11 +630,17 @@ def _parse_network(reader: MapReader) -> RawNetwork:
     matter: RawMatter | None = None
     matter_reader = reader.mapping("matter")
     if matter_reader is not None:
-        matter_reader.reject_unknown({"enabled"})
+        matter_reader.reject_unknown(
+            {"enabled", "discriminator", "passcode", "salt", "use_test_pairing"}
+        )
         matter = RawMatter(
             loc=matter_reader.loc,
             locs=matter_reader.all_locs(),
             enabled=matter_reader.boolean("enabled"),
+            discriminator=matter_reader.integer("discriminator"),
+            passcode=matter_reader.integer("passcode"),
+            salt=matter_reader.string("salt"),
+            use_test_pairing=matter_reader.boolean("use_test_pairing"),
         )
 
     return RawNetwork(

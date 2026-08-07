@@ -4,7 +4,9 @@
 # delta, no measurement range, no explicit Thread role, no I2C address —
 # every one of those is resolved, and the resolved values are asserted.
 # The friendly name comes from secrets.yaml so the fixture tree exercises
-# !secret as well.
+# !secret as well, and so do the commissioning credentials — this fixture
+# is the "real device" shape, with a passcode and a salt of its own,
+# exactly as `mcuhome init-pairing --secrets` writes them.
 
 device:
   name: bench-node
@@ -17,6 +19,9 @@ network:
   thread: {}
   matter:
     enabled: true
+    discriminator: !secret bench_node_discriminator
+    passcode: !secret bench_node_passcode
+    salt: !secret bench_node_salt
 
 hardware:
   buses:
