@@ -150,3 +150,65 @@ YAML-level abstraction; the builder will map it onto this v1 contract,
 with scale/offset conversion happening in the sensor binding, not the
 channel itself. Any richer channel fields land as a contract-version
 bump per ADR 0014.
+
+## 10. Future direction: filters, scripting, and the DEV/LIVE split
+
+Product-owner direction, 2026-08-07. Not v0.x scope — recorded here so
+nothing built before the automation phase closes a door on it. The
+formal decision is an ADR at the start of that phase, backed by a
+measured prototype.
+
+**Principle.** Firmware stays individually generated and compiled per
+device, exactly as today — drivers, bus wiring, devicetree and the
+Matter tables are compile-time (Zephyr instantiates drivers from
+devicetree at build time; there is no runtime bus/address binding, and
+MCUHome will not maintain a parallel driver stack to get one). A
+scripting engine is added strictly as the *filter/hook/automation*
+layer: it can transform values on their way from a sensor binding to a
+channel and it can react to events, but it never becomes the data path
+itself and never carries the device's Matter model. End users never
+write C/C++.
+
+**Three filter tiers**, escalating in capability and cost; the builder
+picks the cheapest tier that covers the configuration:
+
+1. **Predefined filters** (`offset`, `range`, later moving average,
+   deadband, …) — declarative registry entries. Everything *stateful*
+   lives here, with its state owned by the C framework.
+2. **Expressions** (`x * 1.02 + 3.7`) — pure math, one value in, one
+   value out; side-effect-free by construction (no loops, no state, no
+   system access). A stack evaluator for this is KiB-class with no
+   heap and no GC. The expression grammar is defined as a subset of
+   the scripting language's, so tier 2 → 3 is copy-paste, not
+   relearning.
+3. **Scripting engine** — stateful logic, `on_boot`-style hooks,
+   timers, actions (e.g. `trigger_measurement()`), user automations.
+   Candidate of record: **Berry** (MIT, MCU-native, Tasmota
+   precedent); second: Lua. Evaluated and behind: Toit (LGPL VM,
+   ESP-IDF-bound, host-compile deploys), Wren (dormant since 0.4.0,
+   double-precision-only numbers on single-precision-FPU targets).
+
+**DEV/LIVE split.** A freshly set-up device runs in DEV mode: YAML
+filters are lowered to *script* and pushed without recompiling —
+config iteration lands in seconds. Once tuned, the user switches to
+LIVE: one full rebuild bakes the YAML-defined filters back into C, and
+the engine is linked only for what genuinely needs it (hand-written
+hooks/automations) — possibly not at all, which is the steady state
+for battery devices. Both lowerings of a filter primitive come from
+one registry definition and are held equivalent by golden tests (same
+input series, identical output). The builder classifies every config
+diff as firmware-affecting (wiring, drivers, endpoint structure →
+rebuild + OTA) or script-only (filters, automations → push), and the
+device's mode is part of the canonical model so a filter is never
+applied twice (baked *and* scripted).
+
+**Fixed constraints for that phase:** the tables contract (ADR 0014)
+stays the single interface — a boot script would be a second *producer*
+of the same tables, never a bypass; unit conversion into Matter raw
+units stays in the C binding (scripts work in user units); script
+transport needs an authenticated channel (the CoAP management path)
+plus staged apply with fallback to the last good script — a broken
+script degrades to the identity path and logs, it never takes the node
+down; and a script/firmware binding-API version handshake mirrors
+`tables_version`. Real OTA remains required regardless, for base-image
+security updates.
