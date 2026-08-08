@@ -40,6 +40,7 @@ from mcuhome.generate import (
     SYSBUILD_CMAKE,
     SYSBUILD_CONF,
     SYSBUILD_DIR,
+    WATCHDOG_TIMEOUT_S,
     board_file_stem,
     generate,
     write_tree,
@@ -67,6 +68,19 @@ SYSBUILD_PATH = f"{APP_DIR}/{SYSBUILD_CONF}"
 SYSBUILD_CMAKE_PATH = f"{APP_DIR}/{SYSBUILD_CMAKE}"
 DETACHED_SIGNING_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{DETACHED_SIGNING_CMAKE}"
 MCUBOOT_CONF_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.conf"
+
+#: The health guarantee every generated application states out loud.
+#: Spelled out here rather than imported from the generator, because a
+#: test that read the list from the code it checks would agree with any
+#: future version of that list — including one that quietly dropped the
+#: watchdog. ADR 0015's health amendment is what this encodes.
+HEALTH_KCONFIG = [
+    "CONFIG_MCUHOME_HEALTH=y",
+    "CONFIG_MCUHOME_RESET_ON_FATAL_ERROR=y",
+    "CONFIG_MCUHOME_WATCHDOG=y",
+    "CONFIG_MCUHOME_CRASH_BREADCRUMB=y",
+    f"CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S={WATCHDOG_TIMEOUT_S}",
+]
 MCUBOOT_OVERLAY_PATH = f"{APP_DIR}/{SYSBUILD_DIR}/{BOOTLOADER_IMAGE}.overlay"
 
 
@@ -502,12 +516,14 @@ def test_the_overlay_can_render_flags_frequencies_and_text() -> None:
 def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> None:
     """Everything about the *device* comes from the model, in model order.
 
-    Two blocks are appended rather than interleaved, and both are derived
-    rather than carried: the commissioning identity, which
+    Three blocks are appended rather than interleaved, and none of them
+    is carried in the model: the health foundation, which is a property
+    of every MCUHome application image rather than of this device
+    (ADR 0015 health amendment); the commissioning identity, which
     :mod:`mcuhome.pairing` computes from the model's pairing tuple in one
-    call, and ``CONFIG_CHIP_PROJECT_CONFIG``, which names a file inside
+    call; and ``CONFIG_CHIP_PROJECT_CONFIG``, which names a file inside
     the generated tree and is therefore stage 4's fact. A remote build
-    server derives both from what it received rather than being told.
+    server derives all three from what it received rather than being told.
     """
     model = resolve_file(EXAMPLE)
     assert model.network.pairing is not None
@@ -515,6 +531,7 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
     body = [line for line in fragment.splitlines() if line and not line.startswith("#")]
     assert body[: len(model.build.kconfig)] == model.build.kconfig
     assert body[len(model.build.kconfig) :] == [
+        *HEALTH_KCONFIG,
         *pairing.kconfig_lines(
             pairing.Pairing(
                 discriminator=model.network.pairing.discriminator,
@@ -661,6 +678,50 @@ def test_the_bootloader_fragment_states_the_sector_count_itself() -> None:
     conf = _example_files()[MCUBOOT_CONF_PATH]
     assert "CONFIG_BOOT_MAX_IMG_SECTORS_AUTO=n" in conf
     assert "CONFIG_BOOT_MAX_IMG_SECTORS=228" in conf
+
+
+def test_every_generated_application_states_the_health_guarantee() -> None:
+    """ADR 0015's health amendment, spelled out rather than defaulted.
+
+    Reboot-on-fatal, the hardware watchdog and the crash breadcrumb are
+    mandatory for every application image, and every one of them is
+    already its own Kconfig default — which is exactly the problem this
+    guards. A default is a decision anything downstream can reverse
+    without saying so: a board defconfig, a snippet merged after
+    ``prj.conf``, a module that ``select``s the symbol off. The same
+    defect class already removed the RTT log transport from generated
+    builds once (fixed in f43555a). Stating the symbols makes a
+    regression a diff instead of a field failure.
+
+    Checked on the reference device and on a model with neither Matter
+    nor a commissioning identity: nothing about the health foundation
+    depends on either, so the plainest device the generator will emit
+    must still get a node that reboots and a watchdog that resets it.
+    """
+    cases = (
+        ("the reference device", resolve_file(EXAMPLE)),
+        ("a plain device", _hardware_model(HardwareModel())),
+    )
+    for label, model in cases:
+        fragment = generate(model, config_name="main.yaml")[f"{APP_DIR}/prj.conf"]
+        lines = fragment.splitlines()
+        for line in HEALTH_KCONFIG:
+            assert line in lines, f"{line} missing for {label}"
+
+
+def test_the_watchdog_timeout_is_one_number_for_the_whole_boot_chain() -> None:
+    """The nRF watchdog cannot be reconfigured once started.
+
+    Whatever the bootloader arms is what the application runs under, so
+    the two fragments have to name the same duration — in different
+    units, from one constant.
+    """
+    files = _example_files()
+    assert (
+        f"CONFIG_BOOT_WATCHDOG_TIMEOUT_MS={WATCHDOG_TIMEOUT_S * 1000}" in files[MCUBOOT_CONF_PATH]
+    )
+    assert f"CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S={WATCHDOG_TIMEOUT_S}" in files[f"{APP_DIR}/prj.conf"]
+    assert "CONFIG_MCUHOME_BOOT_WATCHDOG=y" in files[MCUBOOT_CONF_PATH]
 
 
 def test_the_bootloader_fragment_carries_its_own_lto() -> None:

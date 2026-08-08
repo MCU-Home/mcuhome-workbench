@@ -400,6 +400,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once started, a bench session has to set the bootloader's symbol too:
   setting only the application's changes nothing at all.
 
+- Every generated application states the health guarantee out loud
+  (`CONFIG_MCUHOME_HEALTH`, `_RESET_ON_FATAL_ERROR`, `_WATCHDOG`,
+  `_CRASH_BREADCRUMB`, `_WATCHDOG_TIMEOUT_S`), and every generated
+  bootloader states its watchdog. All of these symbols already default to
+  `y`, and that is exactly why the generator writes them: a default is a
+  decision any board defconfig, snippet or module Kconfig can reverse
+  without saying so, and the first evidence would be a node in the field
+  that never came back. The same defect class had already removed the RTT
+  log transport from generated applications once.
+  `samples/matter-node/prj.conf` states the same four symbols, for the
+  same reason.
 - Every generated application now carries the `debug-rtt` snippet — the
   RTT log transport — without being asked (debug output is load-bearing
   until v1.0, product-owner directive; see AGENTS.md). Previously the

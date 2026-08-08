@@ -138,6 +138,17 @@ CONFIG_BASENAME = "mcuhome_config"
 #: (:mod:`mcuhome.resolve` emits it).
 CHIP_PROJECT_CONFIG_PATH = "include/CHIPProjectConfig.h"
 
+#: Hardware-watchdog timeout, in seconds, for the WHOLE boot chain.
+#:
+#: One number, in one place, because the hardware allows only one: the nRF
+#: watchdog cannot be reconfigured once it has started, so whatever the
+#: bootloader arms is what the application inherits. It is therefore
+#: emitted twice — as ``CONFIG_BOOT_WATCHDOG_TIMEOUT_MS`` in the
+#: bootloader's fragment and as ``CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S`` in
+#: the application's — and the two must agree. Matches the default of
+#: ``MCUHOME_WATCHDOG_TIMEOUT_S`` in ``lib/health/Kconfig``.
+WATCHDOG_TIMEOUT_S = 60
+
 #: Column limit of the repository's ``.clang-format``.
 _COLUMNS = 100
 #: ``IndentWidth``/``TabWidth`` of the same file.
@@ -834,6 +845,29 @@ def render_prj_conf(model: DeviceModel, *, config_name: str) -> str:
         )
     out = [_file_header("hash", config_name, intro), ""]
     out += list(model.build.kconfig)
+    out += [
+        "",
+        "# The health foundation ADR 0015's health amendment makes mandatory for",
+        "# EVERY application image: a fatal error reboots instead of halting, a",
+        "# hardware watchdog resets a node whose loops stopped, and a crash",
+        "# leaves a breadcrumb in reset-surviving RAM for the next boot to report",
+        "# (lib/health/). Image self-confirmation is the fourth mechanism and is",
+        "# NOT stated here: it needs a staging slot, so it follows the board's",
+        "# update scheme rather than applying to every board class.",
+        "#",
+        "# Every symbol here is already its own Kconfig default, and that is",
+        "# exactly why the generator states them anyway. A guarantee that rests on",
+        "# an unstated default is not a guarantee: any board defconfig, snippet or",
+        "# module Kconfig that flips one of these turns a mandatory safety",
+        "# mechanism off in every generated image, silently, and the first",
+        "# evidence is a node in the field that never came back. The same defect",
+        "# class already cost this project the debug-rtt snippet once.",
+        "CONFIG_MCUHOME_HEALTH=y",
+        "CONFIG_MCUHOME_RESET_ON_FATAL_ERROR=y",
+        "CONFIG_MCUHOME_WATCHDOG=y",
+        "CONFIG_MCUHOME_CRASH_BREADCRUMB=y",
+        f"CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S={WATCHDOG_TIMEOUT_S}",
+    ]
     if model.network.pairing is not None:
         credentials = model.network.pairing
         out += [
@@ -1044,6 +1078,28 @@ def render_bootloader_conf(model: DeviceModel, *, config_name: str) -> str:
     out += list(scheme.bootloader_kconfig)
     slot = scheme.partition("slot0_partition")
     out += [
+        "",
+        "# The hardware watchdog, armed in the bootloader (ADR 0015 health",
+        "# amendment). Emitted by the generator for every board, not by the",
+        "# update scheme: a fault in MCUboot ends in Zephyr's default fatal",
+        "# handler, which HALTS — during a swap that is a device with the",
+        "# application half-erased, spinning in a fault handler until someone",
+        "# walks over and resets it (observed on the bench, 1.5 h). The",
+        "# watchdog the health design mandates for the application has to",
+        "# cover the minutes the bootloader owns the SoC too.",
+        "# WATCHDOG=y activates MCUboot's own setup/feed machinery",
+        "# (BOOT_WATCHDOG_SETUP_AT_BOOT and BOOT_WATCHDOG_FEED default to y",
+        "# with it); MCUHOME_BOOT_WATCHDOG arms earlier, at PRE_KERNEL_2,",
+        "# and keeps the watchdog counting even while a debugger holds the",
+        "# core — see lib/boot_watchdog/ and",
+        "# CONFIG_MCUHOME_BOOT_WATCHDOG_PAUSE_ON_DEBUG for why that default",
+        "# is the way round it is. The timeout is one number for the whole",
+        "# boot chain — the nRF watchdog cannot be reconfigured once",
+        "# started, so the application inherits it, and mcuhome.generate",
+        "# emits both ends of it from WATCHDOG_TIMEOUT_S.",
+        "CONFIG_WATCHDOG=y",
+        f"CONFIG_BOOT_WATCHDOG_TIMEOUT_MS={WATCHDOG_TIMEOUT_S * 1000}",
+        "CONFIG_MCUHOME_BOOT_WATCHDOG=y",
         "",
         "# How many flash sectors MCUboot has to be able to track per slot.",
         "# Not left to CONFIG_BOOT_MAX_IMG_SECTORS_AUTO: it reads the block size",
