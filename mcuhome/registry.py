@@ -718,10 +718,10 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         # symbols are MCUboot's own usb_cdc_acm_recovery.conf.
         "CONFIG_MCUBOOT_SERIAL=y",
         "CONFIG_BOOT_SERIAL_CDC_ACM=y",
-        "CONFIG_UART_CONSOLE=n",
+        "CONFIG_UART_CONSOLE=n",  # debug-output: approved ADR 0015 RTT amendment
         # The console stays gone — serial recovery owns the port, and a
         # console backend would only compile output nothing receives.
-        "CONFIG_CONSOLE=n",
+        "CONFIG_CONSOLE=n",  # debug-output: approved ADR 0015 RTT amendment
         # But the LOG does not. A bootloader that decides silently is a
         # bootloader whose decisions cannot be debugged, and that cost was
         # paid in full: a Matter OTA that downloaded, verified and

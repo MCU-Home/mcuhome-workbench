@@ -100,6 +100,37 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
   `tests_py/test_generate.py` asserts the shared blocks stay byte-equal.
   A CMake fix found on the bench goes into both, in the same commit.
 
+## Debug output is load-bearing (product-owner directive, until v1.0)
+
+RTT debug output is part of every image this repository produces — every
+application, every bootloader, every test firmware. It is never disabled,
+removed or reduced silently, not even to win flash or RAM back: space
+pressure is reported and resolved as an explicit joint decision with the
+product owner, never absorbed by dropping the log. The precedent is
+recorded in ADR 0015's RTT amendment — an OTA swap failure whose one
+explanatory MCUboot log line was compiled out (`CONFIG_LOG=n`) turned a
+five-minute diagnosis into a day of source reading.
+
+Concretely:
+
+- New features get their debug output FIRST, and a baseline firmware
+  with that output runs before the feature changes behaviour.
+- `scripts/check_debug_output.py` (a CI step and a pre-commit hook)
+  fails on diagnostics-reducing Kconfig lines in config fragments —
+  `CONFIG_LOG=n`, `CONFIG_LOG_MODE_MINIMAL=y`, an RTT backend or console
+  switched off, `CONFIG_PRINTK=n`, `CONFIG_ASSERT=n` and similar —
+  unless the line carries an explicit approval marker on the same or the
+  directly preceding line:
+
+  ```
+  # debug-output: approved <short reason, or where the decision is recorded>
+  ```
+
+- The marker states a decision; it never creates one. Adding it requires
+  the decision to actually exist — an ADR, an in-file rationale, or the
+  product owner's explicit sign-off. A marker whose reason nobody can
+  trace is a defect.
+
 ## Commands
 
 ```sh

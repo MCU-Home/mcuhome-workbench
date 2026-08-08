@@ -3,8 +3,9 @@
 #
 # CI for the MCUHome firmware framework. Two gates:
 #
-#   lint     — the same ruff/REUSE checks .pre-commit-config.yaml runs
-#              locally. Needs nothing but Python.
+#   lint     — the same ruff/REUSE/debug-output checks
+#              .pre-commit-config.yaml runs locally. Needs nothing but
+#              Python.
 #   twister  — the Zephyr test suites in tests/, compiled and run inside
 #              the MCUHome builder image (ADR 0007). The image is the same
 #              one `mcuhome build` uses, which is the point of having one:
@@ -50,6 +51,12 @@ jobs:
 
       - name: REUSE lint
         run: reuse lint
+
+      # Debug output is load-bearing (AGENTS.md): config fragments must
+      # not reduce diagnostics without a recorded decision and its
+      # `# debug-output: approved <reason>` marker.
+      - name: Debug-output policy
+        run: python scripts/check_debug_output.py
 
   twister:
     name: Twister (native_sim, in the builder image)

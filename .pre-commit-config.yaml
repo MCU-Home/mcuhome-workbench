@@ -53,3 +53,13 @@ repos:
         # .cpp too: components/matter is C++ internally (CHIP is a C++ SDK)
         # while its public headers stay C-clean.
         files: \.(c|h|cpp)$
+
+      - id: check-debug-output
+        name: debug-output policy (AGENTS.md)
+        # Debug output is load-bearing: no config fragment reduces
+        # diagnostics without a recorded decision and its
+        # `# debug-output: approved <reason>` marker.
+        language: system
+        entry: python3 scripts/check_debug_output.py
+        pass_filenames: false
+        always_run: true
