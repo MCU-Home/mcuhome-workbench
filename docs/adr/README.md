@@ -27,3 +27,6 @@ dashboard-specific decisions live in
 | [0014](0014-generated-tables-contract.md) | Generated-tables contract and native composed-node topology | accepted |
 | [0015](0015-update-and-partition-architecture.md) | Update and partition architecture per board class | accepted |
 | [0016](0016-device-onboarding-and-flash-transport.md) | Device onboarding, the MCUHome standard state, and flash transport | accepted |
+| [0017](0017-repo-and-packaging-layout.md) | Repository and packaging layout for the remote-build architecture | accepted |
+| [0018](0018-build-context-and-manifest.md) | The build context: self-contained, content-addressed, archivable | accepted |
+| [0019](0019-session-build-protocol-and-container-contract.md) | Session build protocol and the builder container contract | accepted |
