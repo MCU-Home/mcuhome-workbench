@@ -287,6 +287,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration's file name became a model field (`device.source`) so that
   stage 4 is a function of the model alone, which the generated "generated
   from" headers had quietly made untrue.
+- Build-context creation and the normative context identity
+  (`mcuhome/context.py`; ADR 0018, builder-container-contract.md §3):
+  `create_context` writes the self-contained input artifact of a remote
+  build — `manifest.yaml`, the canonical device model under `model/`,
+  patches passed through as ordinary integrity entries — and
+  `verify_context` recomputes every file hash and the context ID from the
+  bytes actually present, so declared values stay advisory. The ID is the
+  SHA-256 over the RFC 8785 canonical JSON of exactly the build-relevant
+  fields (container digest, SDK package hash, target board, sorted file
+  integrity list); the rule is locked with context format version 1 and
+  anchored by a golden vector in `tests_py/test_context.py`.
 
 ### Changed
 

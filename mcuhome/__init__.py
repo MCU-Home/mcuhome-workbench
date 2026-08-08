@@ -17,6 +17,7 @@ Pipeline (builder-pipeline.md §3), by module:
 :mod:`mcuhome.container`     stage 5: compile in the builder image
 :mod:`mcuhome.workspace`     stage 5: compile on the host (``--native``)
 :mod:`mcuhome.manifest`      what came out: ``build-manifest.json``
+:mod:`mcuhome.context`       the remote-build context (ADR 0018)
 :mod:`mcuhome.imgtool`       signing the image afterwards (ADR 0015 §8)
 :mod:`mcuhome.export`        the registry and the YAML schema, as data
 :mod:`mcuhome.scaffold`      a new device's first configuration file
