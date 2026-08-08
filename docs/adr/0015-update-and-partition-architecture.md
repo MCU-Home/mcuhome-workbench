@@ -558,3 +558,140 @@ read and must not scan memory for the block — the procedure and the
 addresses are in
 [`docs/design/matter-zephyr-integration.md`](../design/matter-zephyr-integration.md),
 Addendum 4.
+
+## Amendment: the watchdog covers the boot chain, and the fatal path is finite and leaves evidence (2026-08-08, product owner)
+
+The health amendment above mandates two mechanisms for the application
+image: a fatal error reboots rather than halts, and a hardware watchdog
+resets a node whose loops stopped. On 2026-08-08 a bench node with both
+of them nominally in place was found, an hour and a half after a Matter
+OTA download faulted, still sitting in the BusFault handler — not
+rebooted, not reset, and with no explanation of any kind. Each mechanism
+that should have ended that state had been defeated by a detail, and
+each detail is a decision recorded here.
+
+**1. The watchdog is armed by the bootloader, and there is one timeout
+for the whole boot chain.** The mandate above covers the application.
+Nothing covered MCUboot, whose own fault path is Zephyr's default fatal
+handler — `arch_system_halt()`. During a swap that is a device with its
+application half-erased and nothing left in the system able to reset it.
+`CONFIG_MCUHOME_BOOT_WATCHDOG` (`lib/boot_watchdog/`) arms the watchdog
+from a `PRE_KERNEL_2` `SYS_INIT` in the MCUboot image and takes over
+MCUboot's weak `mcuboot_watchdog_setup()`, so the arming happens once,
+earlier than MCUboot's own arming in `main()`, and with the options
+MCUHome chose. Only the pre-kernel window is left unguarded.
+
+The timeout is one number for the boot chain, not one per image: the nRF
+watchdog cannot be reconfigured after it starts, so whatever the
+bootloader arms is what the application inherits.  `mcuhome.generate`
+emits both ends of it from a single constant —
+`CONFIG_BOOT_WATCHDOG_TIMEOUT_MS` in the bootloader's fragment and
+`CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S` in the application's — and `tests_py`
+asserts the two agree. Both are generator output for every board rather
+than update-scheme data (decision 2): a bootloader that can hang is a
+property of having a bootloader, not of having a staging slot.
+
+**2. The watchdog does not pause for a debugger.** MCUHome's application
+watchdog passed `WDT_OPT_PAUSE_HALTED_BY_DBG` unconditionally, for the
+reasonable-sounding purpose of surviving breakpoints. That is what kept
+it from firing on the bench: a debug connection need not be deliberate or
+even present — a killed probe session leaves the core halted with nobody
+attached, and the one mechanism meant to bring the node back is the one
+that is paused. The option is now off by default on both sides
+(`CONFIG_MCUHOME_WATCHDOG_PAUSE_ON_DEBUG`,
+`CONFIG_MCUHOME_BOOT_WATCHDOG_PAUSE_ON_DEBUG`) and is a deliberate bench
+override. Because of the write-lock above, a bench session has to set the
+bootloader's symbol too; setting only the application's changes nothing
+at all.
+
+**3. The RTT log backend runs in OVERWRITE mode, because DROP blocks in
+panic mode.** The RTT amendment above chose "drop-on-full" for the
+bootloader for a good reason — a wedged or absent host reader must never
+stall the device — and the choice does not deliver it. In
+`log_backend_rtt.c`, `data_out_drop_mode()` hands straight over to
+`data_out_block_mode()` as soon as the backend has panicked, and
+`on_write()` then spins on `SEGGER_RTT_HasDataUp()` with a
+`k_busy_wait()` of `LOG_BACKEND_RTT_RETRY_DELAY_MS` — a symbol declared
+under `if LOG_BACKEND_RTT_MODE_BLOCK`, so a DROP build cannot set it and
+inherits the file's hardcoded 10 ms — while re-arming its `host_present`
+latch on every successful write, so the wait never gives up. With the
+one-byte output buffer DROP mode gets, that is ~10 ms per character of a
+fault dump, on the exact path this ADR's rollback story depends on.
+Upstream says as much in the backend's own help text ("In panic mode
+backend always blocks"); recorded as upstream candidate Z12.
+
+`CONFIG_LOG_BACKEND_RTT_MODE_OVERWRITE` is the one mode with no retry
+loop in any mode: `data_out_overwrite_mode()` writes and returns. The
+price is that a full buffer loses the oldest unread bytes rather than the
+newest, which is the right way round for a crash log. Both images change
+— the application's `snippets/debug-rtt` and the class-A bootloader's
+registry lever — and this supersedes the "drop-on-full" of the amendment
+above. `lib/health/health.c`'s `LOG_PANIC()` step is bounded *because* of
+that line, which is why both files say so.
+
+**4. A crash leaves a breadcrumb, and that is the fourth mandatory
+mechanism.** Rebooting on a fatal error is correct and is also why nobody
+ever learns what happened: the dump goes to a transport that on a
+deployed node has no reader, and the reset takes the evidence with it.
+`CONFIG_MCUHOME_CRASH_BREADCRUMB` writes the reason code, PC, LR and the
+SCB fault registers into `__noinit` RAM from inside the fault handler —
+plain stores, before anything that can block — and the next boot logs it
+at `ERR` and counts it. The record carries an integrity word rather than
+a magic alone, because that RAM holds junk after a power-up and belongs
+to MCUboot before it belongs to the application: losing a report is
+acceptable, inventing one is not. About 36 bytes of RAM and one log line
+per boot after a crash.
+
+**5. The health symbols are stated in every generated image, never left
+to their defaults.** All of them already default to `y`. That is exactly
+why the generator writes them out: a default is a decision any board
+defconfig, snippet or module Kconfig can reverse without saying so, and
+the first evidence would be a node in the field that never came back. The
+same defect class had already removed the RTT log transport from
+generated applications once.
+
+**The cost, measured on the reference device**
+(`docs/design/examples/00-bmp180-two-endpoints.yaml`,
+`nrf7002dk/nrf5340/cpuapp`, both images, native build, 2026-08-08):
+
+| | Before | After | Delta |
+|---|---:|---:|---:|
+| Bootloader flash | 59,492 B | 60,644 B | **+1,152 B** |
+| Bootloader RAM | 36,688 B | 36,768 B | +80 B |
+| Application flash | 689,864 B | 748,960 B | **+59,096 B** |
+| Application RAM | 218,984 B | 229,196 B | +10,212 B |
+
+Partition use after: bootloader 74.0 % of 80 KiB, application 80.6 % of
+its 912 KiB slot (176 KiB free), RAM 50.0 % of 448 KiB.
+
+Neither delta is where one would guess, so both are broken down here.
+
+*The bootloader's 1,152 B* is the watchdog glue plus its log lines. The
+log lines are not optional decoration: MCUboot's own `prj.conf` pins
+`CONFIG_LOG_DEFAULT_LEVEL=0` and keeps its logging under
+`MCUBOOT_LOG_LEVEL`, so a module registered at the default level compiles
+away silently — including the line that would say the watchdog failed to
+arm. `lib/boot_watchdog/` registers at `CONFIG_MCUBOOT_LOG_LEVEL`
+instead.
+
+*The application's 59,096 B* is 53,724 B of `.ARM.exidx` and
+`.ARM.extab` — 91 % of it — and only 4,824 B of code.
+`CONFIG_EXTRA_EXCEPTION_INFO` is what makes `ARCH_STACKWALK` selectable,
+`EXCEPTION_STACK_TRACE` then defaults to `y`, and Zephyr compiles the
+whole image with `-funwind-tables` for it. What that buys is a call stack
+in the fault report — precisely what the 2026-08-08 dump did not have.
+It fits with 176 KiB to spare and is kept for that reason;
+`CONFIG_EXCEPTION_STACK_TRACE=n` is the documented first lever if the
+slot ever gets tight, and pulling it is a decision for the product owner
+(AGENTS.md), not a silent one.
+
+*The application's 10,212 B of RAM* is 9,540 B of thread stacks
+(`noinit`) and 669 B of `bss`; the health mechanisms themselves are the
+36-byte breadcrumb. The stacks are the same bench failure's other half:
+the load profile that faulted — a 700 KiB BDX download into external
+flash while a live subscription reports — had never run before, the
+faulting thread could not be named for want of `CONFIG_THREAD_NAME`, and
+an out-of-bounds write inside a stack frame is the one corruption class
+the ARMv8-M stack guard does not catch. They are headroom with
+`CONFIG_INIT_STACKS` turned on to replace them with measurements, not
+sizing decisions.
