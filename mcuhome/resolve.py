@@ -67,6 +67,10 @@ DEFAULT_SAMPLING_BATTERY_MS = 300_000
 #: (components/matter/CMakeLists.txt).
 MATTER_SNIPPET = "matter"
 
+#: Debug output is load-bearing (AGENTS.md, product-owner directive until
+#: v1.0): every generated application carries the RTT log transport.
+DEBUG_RTT_SNIPPET = "debug-rtt"
+
 
 def store_id(endpoint_id: int, cluster_name: str, attr_name: str) -> str:
     """Name of the RAM cell behind one attribute.
@@ -445,7 +449,10 @@ def _resolve_build(
     in Kconfig").
     """
     kconfig = ["CONFIG_MCUHOME=y"]
-    snippets: list[str] = []
+    # debug-rtt always comes first, so the more specific statements —
+    # transport snippets, board wiring, the user's own -S additions
+    # (deduplicated against this list in the cli repo) — can override it.
+    snippets: list[str] = [DEBUG_RTT_SNIPPET]
 
     if network.matter_enabled:
         snippets.append(MATTER_SNIPPET)

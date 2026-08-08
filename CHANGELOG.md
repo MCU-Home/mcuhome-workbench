@@ -301,6 +301,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Every generated application now carries the `debug-rtt` snippet — the
+  RTT log transport — without being asked (debug output is load-bearing
+  until v1.0, product-owner directive; see AGENTS.md). Previously the
+  bootloader half of every generated build logged over RTT (ADR 0015)
+  while the application half was silent unless the user appended
+  `-S debug-rtt` by hand. An explicit `-S debug-rtt` stays valid and
+  collapses into the built-in one.
 - The `mcuhome` command line moved to its own repository,
   [mcu-home/cli](https://github.com/mcu-home/cli), as the thin shell of
   the repo family (mcuhome = SDK + builder library, cli = command

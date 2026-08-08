@@ -195,6 +195,7 @@
   ],
   "build": {
     "snippets": [
+      "debug-rtt",
       "matter",
       "boot-mode"
     ],

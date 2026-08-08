@@ -7,15 +7,15 @@
 # so this file only names the generated device configuration and the framework's generic application
 # main — all behavior lives in the module.
 #
-# Generated for board nrf7002dk/nrf5340/cpuapp, snippets: matter, boot-mode. Building it for
-# anything else is not a supported configuration: the tables reference this board's devicetree nodes
-# by name.
+# Generated for board nrf7002dk/nrf5340/cpuapp, snippets: debug-rtt, matter, boot-mode. Building it
+# for anything else is not a supported configuration: the tables reference this board's devicetree
+# nodes by name.
 #
 # Build it the way it was generated, from a west workspace that has the MCUHome module. --sysbuild
 # is what builds the bootloader alongside the application (ADR 0015); the signing key is yours and
 # lives outside this tree (ADR 0015 decision 8):
 #   west build -b nrf7002dk/nrf5340/cpuapp --sysbuild <this directory> -- \
-#       -Dapp_SNIPPET="matter;boot-mode" \
+#       -Dapp_SNIPPET="debug-rtt;matter;boot-mode" \
 #       -Dmcuboot_SNIPPET="boot-mode" \
 #       -DSB_CONFIG_BOOT_SIGNATURE_KEY_FILE="<path to your signing.key>"
 

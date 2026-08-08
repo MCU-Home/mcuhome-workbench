@@ -526,8 +526,9 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
         f'CONFIG_CHIP_PROJECT_CONFIG="{CHIP_PROJECT_CONFIG_PATH}"',
     ]
     assert not any(line.startswith("CONFIG_CHIP_PROJECT_CONFIG") for line in model.build.kconfig)
-    # The snippets the app has to be built with, the board's included.
-    assert "matter, boot-mode" in fragment
+    # The snippets the app has to be built with, the board's included and
+    # the always-on RTT log transport in front (AGENTS.md, debug output).
+    assert "debug-rtt, matter, boot-mode" in fragment
 
 
 def test_the_chip_project_config_wrapper_only_forwards_to_the_framework() -> None:
@@ -695,7 +696,7 @@ def test_the_bootloader_overlay_drops_the_dead_uart_and_the_app_keeps_it() -> No
 def test_the_build_command_in_the_cmakelists_names_the_snippets_per_image() -> None:
     cmake = _example_files()[CMAKE_PATH]
     assert "--sysbuild" in cmake
-    assert f'-D{APP_DIR}_SNIPPET="matter;boot-mode"' in cmake
+    assert f'-D{APP_DIR}_SNIPPET="debug-rtt;matter;boot-mode"' in cmake
     assert f'-D{BOOTLOADER_IMAGE}_SNIPPET="boot-mode"' in cmake
 
 
