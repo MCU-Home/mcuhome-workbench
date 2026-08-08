@@ -315,8 +315,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/health_breadcrumb` suite drives every branch on the host — junk
   patterns, a planted magic word, every single-bit flip of every field.
   About 36 bytes of RAM.
+- The hardware watchdog now covers the boot chain, not only the
+  application (`CONFIG_MCUHOME_BOOT_WATCHDOG`, `lib/boot_watchdog/`; ADR
+  0015 health amendment). A fault inside MCUboot ends in Zephyr's default
+  fatal handler, which halts — during a swap that is a device with its
+  application half-erased and nothing left in the system able to reset
+  it, observed on the bench for over 1.5 hours. The MCUboot image now
+  arms the watchdog from a `PRE_KERNEL_2` `SYS_INIT` and takes over
+  MCUboot's weak `mcuboot_watchdog_setup()`, so the arming happens once,
+  earlier than MCUboot's own arming in `main()`, and with the options
+  MCUHome chose; only the pre-kernel window stays unguarded. One timeout
+  covers the whole chain because the hardware allows only one — the nRF
+  watchdog cannot be reconfigured after it starts, so what the bootloader
+  arms is what the application inherits — and `mcuhome.generate` emits
+  both ends of it (`CONFIG_BOOT_WATCHDOG_TIMEOUT_MS`,
+  `CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S`) from one constant. Costs 1,152 B
+  of bootloader flash, most of it the log lines that say whether the
+  arming worked.
 
 ### Changed
+
+- The watchdog no longer pauses while the core is halted by a debugger.
+  `WDT_OPT_PAUSE_HALTED_BY_DBG` was passed unconditionally to survive
+  breakpoints, and that is what kept it from firing on the bench: a debug
+  connection need not be deliberate or even present, since a killed probe
+  session leaves the core halted with nobody attached and the one
+  mechanism meant to bring the node back is the one that is paused. Now
+  off by default on both sides
+  (`CONFIG_MCUHOME_WATCHDOG_PAUSE_ON_DEBUG`,
+  `CONFIG_MCUHOME_BOOT_WATCHDOG_PAUSE_ON_DEBUG`) and a deliberate bench
+  override — and because the nRF watchdog configuration is write-locked
+  once started, a bench session has to set the bootloader's symbol too:
+  setting only the application's changes nothing at all.
 
 - Every generated application now carries the `debug-rtt` snippet — the
   RTT log transport — without being asked (debug output is load-bearing

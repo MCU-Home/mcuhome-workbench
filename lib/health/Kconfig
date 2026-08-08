@@ -65,6 +65,33 @@ config MCUHOME_WATCHDOG
 	  ADR 0015's health amendment makes this mandatory for every
 	  application image.
 
+config MCUHOME_WATCHDOG_PAUSE_ON_DEBUG
+	bool "Pause the watchdog while the CPU is halted by a debugger"
+	depends on MCUHOME_WATCHDOG
+	default n
+	help
+	  Passes WDT_OPT_PAUSE_HALTED_BY_DBG to wdt_setup(), so a breakpoint
+	  longer than the timeout does not reset the board.
+
+	  Off by default, and that is the whole point of the symbol. A
+	  watchdog that pauses whenever the core is halted is a watchdog any
+	  stale debug connection can silently disable — and a debug
+	  connection does not have to be deliberate: a killed probe session
+	  leaves DHCSR/DEMCR set, the core can sit halted at a vector catch
+	  with nobody attached, and the one mechanism that was supposed to
+	  bring the node back is the one that is paused. That is exactly the
+	  state a bench node was found in on 2026-08-08 after an OTA
+	  download faulted: stuck in the fault handler for over an hour with
+	  an armed 60 s watchdog that never fired. ADR 0015's health
+	  amendment asks for a node that always comes back; it does not ask
+	  for one that comes back unless a debugger is in the room.
+
+	  Turn it on for a bench session that needs breakpoints. Note that on
+	  nRF hardware the watchdog configuration is write-locked once
+	  started, so the BOOTLOADER's choice is what the SoC actually runs
+	  (CONFIG_MCUHOME_BOOT_WATCHDOG_PAUSE_ON_DEBUG, top-level Kconfig) —
+	  set both or neither.
+
 config MCUHOME_WATCHDOG_TIMEOUT_S
 	int "Watchdog timeout (seconds)"
 	depends on MCUHOME_WATCHDOG

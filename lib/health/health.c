@@ -277,11 +277,21 @@ static int watchdog_start(void)
 	}
 	watchdog_channel = rc;
 
-	/* WDT_OPT_PAUSE_HALTED_BY_DBG: a breakpoint must not reset the board
-	 * under the debugger. It stays running in sleep — a Matter node
-	 * spends most of its life there, and a watchdog that pauses then is
-	 * a watchdog that never fires. */
-	rc = wdt_setup(watchdog, WDT_OPT_PAUSE_HALTED_BY_DBG);
+	/* No WDT_OPT_PAUSE_IN_SLEEP: it stays running in sleep, because a
+	 * Matter node spends most of its life there and a watchdog that
+	 * pauses then is a watchdog that never fires.
+	 *
+	 * WDT_OPT_PAUSE_HALTED_BY_DBG only when it was asked for. A watchdog
+	 * that pauses whenever the core is halted is one that any stale
+	 * debug connection disables — see the Kconfig help; that is not a
+	 * theoretical objection, it is the state a bench node was found in.
+	 * On nRF the configuration is write-locked once the watchdog starts,
+	 * so the bootloader's choice is the one the hardware runs; this call
+	 * only decides what happens on a board whose bootloader left the
+	 * watchdog alone. */
+	rc = wdt_setup(watchdog, IS_ENABLED(CONFIG_MCUHOME_WATCHDOG_PAUSE_ON_DEBUG)
+				  ? WDT_OPT_PAUSE_HALTED_BY_DBG
+				  : 0);
 	if (rc < 0) {
 		LOG_ERR("wdt_setup failed: %d", rc);
 		watchdog_channel = -1;
@@ -289,8 +299,9 @@ static int watchdog_start(void)
 	}
 
 	(void)k_work_reschedule(&feed_work, K_MSEC(FEED_INTERVAL_MS));
-	LOG_INF("watchdog armed: %u s timeout, fed every %u s", CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S,
-		CONFIG_MCUHOME_WATCHDOG_FEED_INTERVAL_S);
+	LOG_INF("watchdog armed: %u s timeout, fed every %u s, %s while halted by a debugger",
+		CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S, CONFIG_MCUHOME_WATCHDOG_FEED_INTERVAL_S,
+		IS_ENABLED(CONFIG_MCUHOME_WATCHDOG_PAUSE_ON_DEBUG) ? "paused" : "running");
 	return 0;
 }
 
