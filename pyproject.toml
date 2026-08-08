@@ -44,8 +44,9 @@ Homepage = "https://github.com/mcu-home/mcuhome"
 Issues = "https://github.com/mcu-home/mcuhome/issues"
 Changelog = "https://github.com/mcu-home/mcuhome/blob/main/CHANGELOG.md"
 
-[project.scripts]
-mcuhome = "mcuhome.__main__:main"
+# No console script here, deliberately: the `mcuhome` command is its own
+# thin package (github.com/mcu-home/cli) and this package is the library
+# it shells out to. Programs embed `mcuhome.api`.
 
 [tool.hatch.build.targets.wheel]
 packages = ["mcuhome"]

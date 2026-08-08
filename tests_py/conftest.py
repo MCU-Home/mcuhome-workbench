@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from mcuhome import container
-from mcuhome.cli import load_device_model
+from mcuhome.api import load_model
 from mcuhome.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model import DeviceModel
 from mcuhome.tree import ConfigTree, find_config_root
@@ -118,7 +118,7 @@ def resolve_file(path: Path) -> DeviceModel:
     """Run stages 1-3 on a configuration file, tree discovery included."""
     root = find_config_root(path.parent)
     tree = ConfigTree(root=root or path.parent, discovered=root is not None)
-    return load_device_model(path, tree=tree)
+    return load_model(path, tree=tree)
 
 
 def errors_of(exc: ConfigError | ConfigErrorGroup) -> list[ConfigError]:

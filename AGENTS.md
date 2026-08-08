@@ -33,7 +33,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | `west.yml` | West manifest (T2 topology) — Zephyr + modules, pinned revisions |
 | `zephyr/module.yml` | Makes this repo consumable as a Zephyr module |
 | `CMakeLists.txt`, `Kconfig` | Zephyr module build entry points |
-| `mcuhome/` | Python package: YAML validation, codegen, build orchestration, `mcuhome` CLI |
+| `mcuhome/` | Python package: YAML validation, codegen, build orchestration; `mcuhome.api` is the supported surface. The `mcuhome` command line is a thin shell in its own repo ([mcu-home/cli](https://github.com/mcu-home/cli)) |
 | `components/` | Components: Python schema + C sources side by side |
 | `app/` | The generic application main every generated device shares — **not** a buildable app |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree hardware support |
@@ -118,8 +118,11 @@ west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
 west twister -T mcuhome/tests --integration --inline-logs -v
 
 # Builder (Python): install once, then run its tests (tests_py/) — no
-# Zephyr and no west workspace needed, ~1 s
+# Zephyr and no west workspace needed, ~1 s. The `mcuhome` *command*
+# comes from the sibling cli repo (github.com/mcu-home/cli, cloned next
+# to this one); this package is the library it shells out to.
 pip install -e '.[dev]'
+pip install -e ../cli
 pytest
 
 # Check one device configuration with the builder

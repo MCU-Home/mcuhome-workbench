@@ -290,6 +290,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `mcuhome` command line moved to its own repository,
+  [mcu-home/cli](https://github.com/mcu-home/cli), as the thin shell of
+  the repo family (mcuhome = SDK + builder library, cli = command
+  shell). This package no longer installs a console script; programs
+  keep embedding `mcuhome.api`, and the command surface itself is
+  unchanged — `pip install mcuhome-cli` (or, while unpublished, the
+  sibling checkout) provides the same `mcuhome` command. The CLI
+  behavior tests moved with it; `tests_py/` keeps the api-level
+  coverage.
 - `mcuhome build` builds two images, not one (ADR 0015 decision 1): stage
   5 moved to `west build --sysbuild`, so every device now boots through
   MCUboot and its application is signed and linked into `slot0`. Stage 4

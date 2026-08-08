@@ -7,7 +7,8 @@ produces Zephyr firmware. Design records:
 [component-model.md](../docs/design/component-model.md).
 
 ```sh
-pip install -e '.[dev]'          # from the repository root
+pip install -e '.[dev]'          # from the repository root: the library
+pip install -e ../cli            # the `mcuhome` command (own repo, github.com/mcu-home/cli)
 mcuhome init-pairing <device>    # draw this device's commissioning credentials
 mcuhome validate <device>        # stages 1-3, prints the resolved device
 mcuhome build <device> --generate-only   # + stage 4, writes the application
@@ -16,11 +17,16 @@ mcuhome build <device> --native  #   … or on this machine's own toolchain
 pytest                           # the suite in ../tests_py/
 ```
 
+This package is the **library**: pipeline, registry, orchestration, and
+`mcuhome.api` as the supported programmatic surface. The `mcuhome`
+command itself is a thin shell in its own repository
+([mcu-home/cli](https://github.com/mcu-home/cli)) — it parses arguments
+and calls in here.
+
 ## Modules
 
 | Module | Stage | Role |
 |---|---|---|
-| `cli.py` | — | `argparse` command surface; `validate`, `build` and `init-pairing` work, `clean` refuses |
 | `tree.py` | — | config-tree discovery and `<device>` resolution |
 | `loader.py` | 1 | YAML parsing (ruamel, with line/column) and `!secret` |
 | `schema.py` | 2a | typed model of the raw configuration; shape errors |

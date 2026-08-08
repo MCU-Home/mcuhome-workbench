@@ -48,7 +48,7 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 |---|---|
 | `west.yml` | West manifest pinning Zephyr and modules |
 | `zephyr/module.yml` | Zephyr module definition (boards, DTS, snippets roots) |
-| `mcuhome/` | Python package: YAML config validation, codegen, build orchestration, builder CLI |
+| `mcuhome/` | Python package: YAML config validation, codegen, build orchestration; `mcuhome.api` is the supported surface (the `mcuhome` command is its own repo, [mcu-home/cli](https://github.com/mcu-home/cli)) |
 | `components/` | MCUHome components (Python schema + C sources side by side) |
 | `app/` | The generic application main every generated device shares |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree Zephyr hardware support |
@@ -82,10 +82,15 @@ versioned in lockstep with the pinned Zephyr release:
 docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r1
 ```
 
-Then build a device from its YAML description:
+Then build a device from its YAML description. The `mcuhome` command is
+a thin shell in its own repository
+([mcu-home/cli](https://github.com/mcu-home/cli)); until the packages
+are published it is installed from a checkout next to this one:
 
 ```sh
-pip install -e mcuhome
+pip install -e mcuhome            # the builder library
+git clone https://github.com/mcu-home/cli
+pip install -e cli                # the `mcuhome` command
 mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node
 ```

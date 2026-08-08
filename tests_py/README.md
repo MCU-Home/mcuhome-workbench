@@ -34,12 +34,16 @@ second — they are the fast half of the strategy in
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
 | `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the sysbuild command, per-image artifacts and memory reports |
 | `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
-| `test_cli.py` | command surface, exit codes, summary output, `--json`, `new`/`sign`/`public-key`/`schema` |
 | `test_api.py` | the supported programmatic surface (`mcuhome.api`) and the serialized shape of an error |
 | `test_manifest.py` | `build-manifest.json`: its fields, its determinism, and the signing parameters it states |
 | `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
 | `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
 | `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that init-pairing then validate works on it |
+
+The command-surface tests (exit codes, summary output, `--json`
+documents) live with the command: `tests/test_cli.py` in the
+[mcu-home/cli](https://github.com/mcu-home/cli) repository, which is
+where the `mcuhome` command itself moved.
 
 The one test that runs an external program is the detached-signing
 equivalence proof in `test_imgtool.py`, which invokes `imgtool` over a
@@ -53,11 +57,11 @@ developer's own signing key.** An autouse fixture in `conftest.py` points
 private key on first need and a suite that reached the real one would
 either read a secret or create one outside a temporary directory.
 
-**No build ever runs here, and neither does docker.** `test_workspace.py`,
-`test_container.py` and the `build` tests in `test_cli.py` cover
-everything stage 5 decides *before* the compiler starts and mock the
-subprocess itself — `container.plan_build()` takes its process runner as
-an argument for exactly that reason, and an autouse fixture in
+**No build ever runs here, and neither does docker.** `test_workspace.py`
+and `test_container.py` (plus the `build` tests in the cli repository)
+cover everything stage 5 decides *before* the compiler starts and mock
+the subprocess itself — `container.plan_build()` takes its process
+runner as an argument for exactly that reason, and an autouse fixture in
 `conftest.py` makes the real one raise, so a test that forgets to stub
 stage 5 fails instead of starting a Matter build. Compiling a Matter node takes
 minutes, a toolchain and a few gigabytes of image; that belongs to
@@ -80,10 +84,9 @@ Regenerate deliberately, never automatically — from the repository root:
 
 ```sh
 # the device model
-python -c "from pathlib import Path; from mcuhome.cli import load_device_model; \
-from mcuhome.tree import ConfigTree; \
+python -c "from pathlib import Path; from mcuhome.api import ConfigTree, load_model; \
 p = Path('docs/design/examples/00-bmp180-two-endpoints.yaml').resolve(); \
-print(load_device_model(p, tree=ConfigTree(root=p.parent, discovered=False)).to_json(), end='')" \
+print(load_model(p, tree=ConfigTree(root=p.parent, discovered=False)).to_json(), end='')" \
   > tests_py/data/golden/00-bmp180-two-endpoints.device-model.json
 
 # the stage-4 artifacts, including the sample's C files
