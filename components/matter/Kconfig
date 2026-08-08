@@ -266,17 +266,6 @@ menuconfig MCUHOME_MATTER_OTA
 
 if MCUHOME_MATTER_OTA
 
-config MCUHOME_MATTER_OTA_WRITE_BUFFER_SIZE
-	int "Staging-slot write buffer size (bytes)"
-	default 1024
-	range 128 8192
-	help
-	  Sizes the static buffer the image processor streams through
-	  (components/matter/src/ota_image_processor.cpp). It has to be a
-	  multiple of the staging part's write block size and no larger than
-	  its erase page, which stream_flash checks at init
-	  (CONFIG_STREAM_FLASH_INSPECT).
-
 config MCUHOME_MATTER_OTA_HEADER_MAX
 	int "Largest Matter OTA header TLV accepted (bytes)"
 	default 512

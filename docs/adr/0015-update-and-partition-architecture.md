@@ -498,3 +498,63 @@ appear *after* confirmation:
 Class-B note: single-slot boards have no previous image to revert to;
 what the counters do there (at most: drop to serial recovery) is
 specified at implementation.
+
+## Amendment: the bootloader logs, over RTT (2026-08-08, product owner)
+
+Decision 3 shipped the class-A bootloader with `CONFIG_LOG=n` and
+`CONFIG_CONSOLE=n`, argued from two true premises: serial recovery owns
+the UART, so a log had no backend to reach, and the 64 KiB partition of
+the day had 108 bytes less room than the image needed. Both premises
+have since expired — the partition is 80 KiB, and RTT is a backend that
+needs no port, no pin and no host driver beyond the debug probe.
+
+**What the silence cost, measured in a day rather than in bytes.** A
+Matter OTA download completed, verified, requested the upgrade and
+rebooted; MCUboot then booted the *old* image, twice, with nothing
+anywhere to say why. The bootloader was not confused — it had decided
+correctly and printed the reason:
+
+    Secondary header magic detected in first sector, wrong upload address?
+    (bootloader/mcuboot/boot/bootutil/src/loader.c:608)
+
+into a logging subsystem that was compiled out. The actual defect
+(MCUHome's OTA image processor staged the download at offset 0 of the
+secondary slot, and swap-using-offset reads the header one erase sector
+in) was found by reading MCUboot's sources instead of a log line. A
+bootloader that cannot explain a refusal turns a five-minute diagnosis
+into a source audit, and it will do so again for the next class of
+staging or signature failure.
+
+**The lever, and its price.** `CONFIG_LOG=y` + `CONFIG_USE_SEGGER_RTT=y`
++ `CONFIG_LOG_BACKEND_RTT=y`, immediate mode (a deferred log thread does
+not run again before the chain-load, which would drop exactly the last
+and most interesting lines), drop-on-full, at `MCUBOOT_LOG_LEVEL_INF`:
+
+| | |
+|---|---:|
+| Bootloader before | 55,460 B — 54.2 KiB |
+| Bootloader after | 59,492 B — 58.1 KiB |
+| Cost | **+3.94 KiB** |
+| Partition use | 58.1 KiB of 80 KiB — **72.6 %**, 21.9 KiB free |
+
+INF rather than DBG is a deliberate stop: INF carries the swap type
+MCUboot decided on, each slot's validation result, the copy progress and
+the chain-load address — the whole decision chain of this ADR's update
+path — while DBG adds a per-sector flood for more flash than the
+partition should spend on it.
+
+`CONFIG_CONSOLE=n` stays: serial recovery still owns the port, and a
+console backend would still compile output nothing receives. Per
+decision 2 the lever is registry data on the class-A scheme, not a
+global.
+
+One consequence worth stating because it is not obvious from the Kconfig
+alone: bootloader and application now both carry an RTT control block,
+in the same `.rtt_buff_data` section at the start of RAM but at
+different offsets within it, because link order inside that section
+differs per image. They are two independent sessions, not one shared
+one. A host must therefore attach with the ELF of the image it wants to
+read and must not scan memory for the block — the procedure and the
+addresses are in
+[`docs/design/matter-zephyr-integration.md`](../design/matter-zephyr-integration.md),
+Addendum 4.

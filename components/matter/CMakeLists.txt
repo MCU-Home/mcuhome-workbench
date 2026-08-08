@@ -79,10 +79,14 @@ if(CONFIG_MCUHOME_MATTER)
     src/dnssd_retry.cpp
   )
   # ADR 0015 decision 5: only board classes with a staging slot, and only
-  # when their update scheme says so (mcuhome/registry.py). The header
-  # parser is CHIP-free and exercised on the host by tests/ota_image_header.
+  # when their update scheme says so (mcuhome/registry.py). Two of these
+  # are CHIP-free and exercised on the host: the header parser by
+  # tests/ota_image_header, the staging writer — which is what decides
+  # WHERE in the slot the image lands, and got that wrong once — by
+  # tests/ota_staging.
   zephyr_library_sources_ifdef(CONFIG_MCUHOME_MATTER_OTA
     src/ota_image_header.c
+    src/ota_staging.c
     src/ota_image_processor.cpp
     src/ota_requestor.cpp
   )

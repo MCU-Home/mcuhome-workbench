@@ -17,12 +17,11 @@
 #ifndef MCUHOME_COMPONENTS_MATTER_OTA_IMAGE_PROCESSOR_H_
 #define MCUHOME_COMPONENTS_MATTER_OTA_IMAGE_PROCESSOR_H_
 
-#include <zephyr/storage/stream_flash.h>
-
 #include <lib/support/Span.h>
 #include <platform/OTAImageProcessor.h>
 
 #include "ota_image_header.h"
+#include "ota_staging.h"
 
 namespace chip
 {
@@ -36,7 +35,8 @@ namespace mcuhome
  * Writes a downloaded Matter OTA payload into the board's staging slot and
  * hands the swap to MCUboot.
  *
- * Everything is statically allocated: the write-through buffer, the header
+ * Everything is statically allocated: the write-through buffer (inside
+ * the staging context, sized by CONFIG_IMG_BLOCK_BUF_SIZE), the header
  * parser and the single instance itself. Nothing here allocates, and
  * nothing here blocks for longer than one flash page write.
  */
@@ -64,12 +64,16 @@ class OtaImageProcessor: public chip::OTAImageProcessorInterface
 	/** Consume whatever of @p block belongs to the OTA header. */
 	CHIP_ERROR ConsumeHeader(chip::ByteSpan &block);
 
+	/** Post-download check that the image is where MCUboot will look. */
+	CHIP_ERROR VerifyStagedImage();
+
 	chip::OTADownloader *mDownloader = nullptr;
 	struct mcuhome_ota_header_parser mParser;
 	struct mcuhome_ota_header mHeader;
-	struct stream_flash_ctx mStream;
+	/* Where the bytes go, and — the whole point — WHERE in the slot.
+	 * ota_staging.h carries the regression note. */
+	struct mcuhome_ota_staging mStaging;
 	bool mWriting = false;
-	uint8_t mBuffer[CONFIG_MCUHOME_MATTER_OTA_WRITE_BUFFER_SIZE];
 };
 
 } // namespace mcuhome

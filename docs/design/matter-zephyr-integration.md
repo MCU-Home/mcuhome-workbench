@@ -356,3 +356,88 @@ at a time by instrumenting the vendored sources.
   completely. Worth a troubleshooting note in the user documentation —
   the symptom (a border router that receives but never sends) looks like
   a software problem.
+
+## Addendum 4: RTT once the bootloader logs too (2026-08-08)
+
+ADR 0015's RTT amendment turned MCUboot's log on so that swap decisions
+are visible during an update. That makes **two RTT control blocks live
+in one device**, and reading the wrong one looks exactly like a device
+that has stopped logging.
+
+### Two blocks, not one shared block
+
+Zephyr's segger module places RTT data in a linker section pinned to the
+start of RAM (`SEGGER_RTT_SECTION_CUSTOM`, sort key `aaa` in
+`zephyr/modules/segger/CMakeLists.txt`), and both images link RAM at
+`0x20000000`. That is *almost* the setup where a bootloader and an
+application share one session — SEGGER even has an init mode for it
+(`SEGGER_RTT_INIT_MODE_STRONG_CHECK`: do not re-initialize a block that
+already has a valid ID). But the section only pins where the *region*
+starts, not the order of the objects inside it, and the order differs
+per image. Measured on the class-A build (`build/ota-fix-base`):
+
+| Symbol | MCUboot | Application |
+|---|---|---|
+| `__rtt_buff_data_start` | `0x20000000` | `0x20000000` |
+| `_SEGGER_RTT` (the control block) | `0x20000000` | `0x20001010` |
+| `_acUpBuffer` | `0x200000b8` | `0x20000010` |
+
+So the application's `STRONG_CHECK` looks at `0x20001010`, finds no ID
+there, and initializes its own block — which is the *right* outcome
+(inheriting the bootloader's would have meant inheriting its buffer
+geometry), but it means the two never merge into one stream. The two
+layouts overlap: the bootloader's up-buffer runs
+`0x200000b8..0x200010b8`, straight across where the application's
+control block will be, and the application's up-buffer starts at
+`0x20000010`, immediately behind the bootloader's 16-byte ID string.
+Consequences, both of which have to be planned around rather than fixed:
+
+- **The bootloader's log history does not survive into the
+  application.** Read it live, while the bootloader is running, or not
+  at all.
+- **The bootloader's ID string does survive**, at `0x20000000`, long
+  after its pointers have been overwritten by application log text. A
+  stale block that still looks valid to anything that searches for one.
+
+### Attaching
+
+Give probe-rs the **ELF of the image you want to read**. It resolves
+`_SEGGER_RTT` from the symbol table, which is the only way to get the
+right block of the two:
+
+```sh
+# Watch MCUboot decide: swap type, slot validation, copy progress,
+# chain-load address. Attach before resetting the board.
+probe-rs attach --chip nRF5340_xxAA --rtt-channel-mode no-block-skip \
+    build/ota-fix-base/build/mcuboot/zephyr/zephyr.elf
+
+# Then re-attach for the application (a second session, not a
+# continuation of the first).
+probe-rs attach --chip nRF5340_xxAA --rtt-channel-mode no-block-skip \
+    build/ota-fix-base/build/app/zephyr/zephyr.elf
+```
+
+Three pitfalls, all of which produce "no output" or worse:
+
+- **Never `--scan-region ram` on a device with a bootloader.** The scan
+  takes the first "SEGGER RTT" ID it finds, which is the lowest address,
+  which after the chain-load is the bootloader's dead block. Passing an
+  ELF makes probe-rs use the exact address and skip scanning entirely.
+- **Always pass `--rtt-channel-mode no-block-skip`.** probe-rs's default
+  is to reconfigure the channel to *block* when full, "to avoid losing
+  data" — it overwrites the target's own `LOG_BACKEND_RTT_MODE_DROP` by
+  writing the channel flags. A host that then stops reading stalls the
+  target inside whatever it was logging, and on the bootloader that
+  means stalling mid-swap.
+- **The addresses above are not constants.** They move whenever either
+  image's link order changes. Read them from the ELF of the build in
+  front of you (`nm zephyr.elf | grep _SEGGER_RTT`), never from this
+  table.
+
+Related: the stale-control-block finding above (upstream candidate Z7)
+is about the *same* block across a reset; this is about two *different*
+blocks in one boot. `CONFIG_MCUHOME_RTT_REINIT` fixes the first and is
+application-side only — the bootloader image does not have it, because
+`lib/debug/Kconfig` lives under `if MCUHOME` and the MCUboot image never
+sets that symbol. MCUboot does not need it: it runs first after every
+reset, so nothing has left it a stale block.

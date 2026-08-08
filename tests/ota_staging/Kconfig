@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One symbol, so that this suite can run on the host.
+#
+# The bootloader mode that decides where a staged image goes
+# (MCUBOOT_BOOTLOADER_MODE_SWAP_USING_OFFSET) lives inside
+# `if BOOTLOADER_MCUBOOT`, and BOOTLOADER_MCUBOOT selects
+# USE_DT_CODE_PARTITION, which is only available on targets that set
+# HAS_FLASH_LOAD_OFFSET — every real MCUHome target does, native_sim does
+# not, and Kconfig turns that unmet select into an error before a line is
+# compiled.
+#
+# Setting it here is honest for what this suite does: native_sim's
+# simulated flash carries the same slot0/slot1 partition pair a real
+# board does, the flash map serves them the same way, and nothing on
+# native_sim ever reads FLASH_LOAD_OFFSET (it links as a host binary, not
+# into a partition). The alternative was to test the one rule this
+# repository got wrong only on hardware, which is where it already went
+# unnoticed once.
+
+config MCUHOME_TEST_HAS_FLASH_LOAD_OFFSET
+	bool
+	default y
+	select HAS_FLASH_LOAD_OFFSET
+
+source "Kconfig.zephyr"

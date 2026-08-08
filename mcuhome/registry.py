@@ -677,9 +677,17 @@ _NRF7002DK_PARTITION_OVERLAY = """\
 #: (52.2 KiB) and left the swap state machine on top of that as the
 #: number this bring-up owed. It was ~12 KiB: the first build of this
 #: configuration overflowed the partition by **108 bytes**. What bought
-#: the room back was dropping the logging subsystem and the console,
-#: which on this board have no backend once serial recovery takes the
-#: port — see ``CONFIG_LOG`` below.
+#: the room back then was dropping the logging subsystem and the
+#: console, neither of which had a backend once serial recovery took the
+#: port.
+#:
+#: **Amended 2026-08-08 (product owner): the log came back, over RTT.**
+#: A silent bootloader cost a day of source reading on a Matter OTA that
+#: downloaded and then simply booted the old image — the bootloader knew
+#: exactly why and had nowhere to say it. RTT needs no port and no pin,
+#: only the probe that is attached anyway. Measured: **+3.94 KiB**
+#: (55,460 -> 59,492 B), 58.1 KiB of the 80 KiB partition, 72.6 % full.
+#: See ``CONFIG_LOG`` below and ADR 0015's RTT amendment.
 #:
 #: **Amended 2026-08-07 (ADR 0015 amendment, product owner).** At 64 KiB
 #: the bootloader measured 63.1 KiB — 98.6 % full. Two independent size
@@ -711,16 +719,46 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         "CONFIG_MCUBOOT_SERIAL=y",
         "CONFIG_BOOT_SERIAL_CDC_ACM=y",
         "CONFIG_UART_CONSOLE=n",
-        # And with the console gone, so is every backend the bootloader's
-        # log could reach: this board has no RTT console out of the box,
-        # so CONFIG_LOG=y would compile a logging subsystem whose output
-        # nothing receives. MCUboot's own CDC-ACM board fragment
-        # (boot/zephyr/boards/nrf52840dongle_nrf52840.conf) drops both for
-        # exactly this reason. Measured here: without them the bootloader
-        # overflows its 64 KiB partition by 108 bytes — see the size note
-        # above this scheme.
-        "CONFIG_LOG=n",
+        # The console stays gone — serial recovery owns the port, and a
+        # console backend would only compile output nothing receives.
         "CONFIG_CONSOLE=n",
+        # But the LOG does not. A bootloader that decides silently is a
+        # bootloader whose decisions cannot be debugged, and that cost was
+        # paid in full: a Matter OTA that downloaded, verified and
+        # rebooted, and then simply booted the old image again, with the
+        # one line that explained it — "Secondary header magic detected in
+        # first sector, wrong upload address?" — compiled out. Diagnosing
+        # it took a source reading of MCUboot instead of a glance at a
+        # log. So the bootloader logs over RTT, which needs no pin, no
+        # port and no host driver beyond the probe already attached.
+        #
+        # INF, not DBG: at INF MCUboot prints the swap type it decided on,
+        # the slot validation result, the copy progress and the address it
+        # chain-loads — every step of the decision this scheme's whole
+        # update path turns on — while DBG adds a per-sector flood and
+        # more flash than the partition should spend on it.
+        "CONFIG_LOG=y",
+        "CONFIG_MCUBOOT_LOG_LEVEL_INF=y",
+        "CONFIG_USE_SEGGER_RTT=y",
+        "CONFIG_LOG_BACKEND_RTT=y",
+        # A wedged or absent host reader must never stall the bootloader.
+        "CONFIG_LOG_BACKEND_RTT_MODE_DROP=y",
+        # Deferred logging hands the work to a thread that will not run
+        # again before the chain-load: the interesting lines are the last
+        # ones before the jump, which is exactly what deferred mode would
+        # drop.
+        "CONFIG_LOG_MODE_IMMEDIATE=y",
+        # The one number that has to agree with the application's
+        # debug-rtt snippet. Zephyr's segger module puts the RTT control
+        # block at the start of RAM (SEGGER_RTT_SECTION_CUSTOM, "sort key
+        # aaa") and both images link RAM at 0x20000000, so bootloader and
+        # application share ONE control block — which is what lets a host
+        # attach once and watch the boot straight through into the
+        # application. The application then finds a valid block and leaves
+        # it alone (SEGGER_RTT_INIT_MODE_STRONG_CHECK), inheriting the
+        # geometry the bootloader wrote. With different buffer sizes it
+        # would inherit the bootloader's smaller one instead of its own.
+        "CONFIG_SEGGER_RTT_BUFFER_SIZE_UP=4096",
         # Buttonless entrance (ADR 0016 decision 3): MCUboot reads the
         # retention area the boot-mode snippet puts in GPREGRET1. The
         # physical button entrance stays on — it is what is left when the
@@ -790,6 +828,16 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         # reboot and the swap attempt.
         "CONFIG_STREAM_FLASH_ERASE=y",
         "CONFIG_IMG_MANAGER=y",
+        # img_manager also brings flash_img, which is what actually places
+        # the downloaded image in the slot — one erase sector in, because
+        # that is where swap-using-offset reads the header from
+        # (components/matter/src/ota_staging.h). Its write-through buffer
+        # is this symbol; it has to be a multiple of the staging part's
+        # write block size and no larger than its erase page.
+        "CONFIG_IMG_BLOCK_BUF_SIZE=1024",
+        # flash_img asks the flash map for the size of the slot's first
+        # sector to compute that offset, which needs the page layout.
+        "CONFIG_FLASH_PAGE_LAYOUT=y",
         # Applying an update means rebooting into the swapped image.
         "CONFIG_REBOOT=y",
         # The staging part itself. Same driver as the bootloader side

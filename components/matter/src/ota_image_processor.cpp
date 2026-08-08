@@ -6,13 +6,16 @@
  *
  * The download path, end to end:
  *
- *   PrepareDownload  open slot1 through the flash map, point stream_flash
- *                    at the part it actually lives on, reset the header
- *                    parser.
+ *   PrepareDownload  open slot1 for staging (ota_staging.c — which is
+ *                    where the swap-using-offset position of the image
+ *                    comes from) and reset the header parser.
  *   ProcessBlock     feed the block to the header parser until the header
  *                    is complete, check vendor/product/size against this
  *                    device, then stream the payload into slot1.
- *   Finalize         flush the write buffer.
+ *   Finalize         flush the write buffer, then read the staged image's
+ *                    MCUboot header back through the bootloader's own
+ *                    reader — the one check that says "this will actually
+ *                    swap" before a reboot is spent finding out.
  *   Apply            boot_request_upgrade(BOOT_UPGRADE_TEST) and reboot.
  *
  * TEST, never PERMANENT. The whole rollback story of ADR 0015 hangs on the
@@ -39,7 +42,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/storage/flash_map.h>
-#include <zephyr/storage/stream_flash.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/sys/util.h>
 
@@ -50,6 +52,7 @@
 
 #include "matter_internal.h"
 #include "ota_image_processor.h"
+#include "ota_staging.h"
 
 LOG_MODULE_DECLARE(MCUHOME_MATTER_LOG_MODULE, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -75,7 +78,9 @@ LOG_MODULE_DECLARE(MCUHOME_MATTER_LOG_MODULE, CONFIG_LOG_DEFAULT_LEVEL);
  * missing member is a message rather than a link error or, worse, silence. */
 #if !defined(CONFIG_MCUBOOT_IMG_MANAGER)
 #error "CONFIG_MCUHOME_MATTER_OTA needs CONFIG_IMG_MANAGER=y (which defaults to the MCUboot " \
-	"image manager): boot_request_upgrade() and the image trailer come from it."
+	"image manager): boot_request_upgrade() and the image trailer come from it, and so does " \
+	"flash_img — the writer that knows where in the staging slot MCUboot expects the image " \
+	"(components/matter/src/ota_staging.h)."
 #endif
 
 #if !defined(CONFIG_FLASH_MAP)
@@ -143,11 +148,15 @@ CHIP_ERROR OtaImageProcessor::PrepareDownloadImpl()
 	mHeader = {};
 	mParams = {};
 	mWriting = false;
+	/* A download that ended without Abort() — CHIP's downloader has more
+	 * than one way out — still holds the flash area. */
+	mcuhome_ota_staging_abort(&mStaging);
 
 	/* The flash map is what makes this processor board-agnostic: it
 	 * answers which device the staging slot is on, and at what offset
 	 * within THAT device — the two facts CHIP's own processor assumes
-	 * instead of asking. */
+	 * instead of asking. Opened here only to say so in the log; the
+	 * writer below opens it again for itself. */
 	rc = flash_area_open(PARTITION_ID(slot1_partition), &area);
 	if (rc != 0) {
 		LOG_ERR("staging slot is not in the flash map (%d)", rc);
@@ -163,12 +172,18 @@ CHIP_ERROR OtaImageProcessor::PrepareDownloadImpl()
 
 	LOG_INF("staging slot: %s +0x%lx, %zu KiB", flash->name, (unsigned long)area->fa_off,
 		area->fa_size / 1024U);
-
-	rc = stream_flash_init(&mStream, flash, mBuffer, sizeof(mBuffer), (size_t)area->fa_off,
-			       area->fa_size, nullptr);
 	flash_area_close(area);
+
+	/* NOT stream_flash_init() on the slot's own offset. In
+	 * swap-using-offset mode MCUboot reads the staged image's header one
+	 * erase sector into the slot, and an image written at offset 0 is
+	 * refused without a word once the bootloader's log is off — which is
+	 * how this shipped once. ota_staging.h has the citations; the
+	 * position comes from Zephyr's flash_img, the same writer mcumgr
+	 * uses. */
+	rc = mcuhome_ota_staging_open(&mStaging, PARTITION_ID(slot1_partition));
 	if (rc != 0) {
-		LOG_ERR("stream_flash_init failed (%d)", rc);
+		LOG_ERR("opening the staging slot for writing failed (%d)", rc);
 		return chip::System::MapErrorZephyr(rc);
 	}
 
@@ -215,9 +230,18 @@ CHIP_ERROR OtaImageProcessor::ConsumeHeader(chip::ByteSpan &block)
 		return CHIP_ERROR_INVALID_ARGUMENT;
 	}
 
-	/* The staging slot is finite and stream_flash would fail somewhere in
+	/* The staging slot is finite and the writer would fail somewhere in
 	 * the middle. Failing here costs the user one error message instead
-	 * of a download. */
+	 * of a download.
+	 *
+	 * Deliberately the WHOLE slot rather than what the writer can
+	 * actually take: swap-using-offset spends the first erase sector and
+	 * MCUboot's trailer the last few, so the real ceiling is a little
+	 * lower — but restating it here would mean a second copy of the
+	 * offset rule (ota_staging.h says why that is exactly what must not
+	 * happen). An image in the narrow band between the two limits is
+	 * caught by the writer with -EFBIG instead, one download later but
+	 * just as safely. */
 	if (mHeader.payload_size > (uint64_t)PARTITION_SIZE(slot1_partition)) {
 		LOG_ERR("image payload is %llu B, the staging slot holds %u B",
 			(unsigned long long)mHeader.payload_size,
@@ -237,7 +261,7 @@ CHIP_ERROR OtaImageProcessor::ProcessBlock(chip::ByteSpan &block)
 	CHIP_ERROR error = ConsumeHeader(block);
 
 	if (error == CHIP_NO_ERROR && !block.empty()) {
-		int rc = stream_flash_buffered_write(&mStream, block.data(), block.size(), false);
+		int rc = mcuhome_ota_staging_write(&mStaging, block.data(), block.size());
 
 		if (rc != 0) {
 			LOG_ERR("writing %zu B to the staging slot failed (%d)", block.size(), rc);
@@ -259,17 +283,68 @@ CHIP_ERROR OtaImageProcessor::ProcessBlock(chip::ByteSpan &block)
 	});
 }
 
+CHIP_ERROR OtaImageProcessor::VerifyStagedImage()
+{
+	struct mcuboot_img_header header = {};
+	int rc;
+
+	/* boot_read_bank_header() reads the staged image's MCUboot header
+	 * from the position the BOOTLOADER will read it from: internally it
+	 * applies boot_get_image_start_offset(), the same swap-using-offset
+	 * rule the writer applied (zephyr/subsys/dfu/boot/mcuboot.c:
+	 * 223-297). So this is not a second opinion about the offset — it is
+	 * the bootloader's own reader confirming that what we wrote is
+	 * findable, before a reboot is spent discovering it is not.
+	 *
+	 * This check is what turns the field failure this whole file's
+	 * regression note describes into one log line at the moment it
+	 * happens, instead of an old version number reported by the
+	 * controller ten minutes later with nothing in any log. */
+	rc = boot_read_bank_header(PARTITION_ID(slot1_partition), &header, sizeof(header));
+	if (rc == 0) {
+		LOG_INF("MCUboot reads the staged image as v%u.%u.%u+%u, %u B — it will swap",
+			header.h.v1.sem_ver.major, header.h.v1.sem_ver.minor,
+			header.h.v1.sem_ver.revision, header.h.v1.sem_ver.build_num,
+			header.h.v1.image_size);
+		return CHIP_NO_ERROR;
+	}
+
+	/* One state makes this check lie, and only one: while the running
+	 * image is still unconfirmed, MCUboot's swap type is REVERT and the
+	 * reader then looks at offset 0, where the previous image sits and
+	 * ours does not. ADR 0015's health amendment makes that window real
+	 * (lib/health/image_confirm.c holds confirmation back for a while
+	 * after boot), so a download finishing inside it must not be failed
+	 * for this reason. It has a bigger problem anyway — a pending revert
+	 * outranks a new test image — and that one is not ours to fix here. */
+	if (mcuboot_swap_type_multi(0) == BOOT_SWAP_TYPE_REVERT) {
+		LOG_WRN("cannot confirm the staged image yet: this image is still unconfirmed, so "
+			"MCUboot is looking at the slot's revert copy (%d). The update was "
+			"written; a pending revert takes precedence over it on the next boot.",
+			rc);
+		return CHIP_NO_ERROR;
+	}
+
+	LOG_ERR("MCUboot cannot find an image header in the staging slot (%d). The download "
+		"completed, so the image is there but not where the bootloader looks — see "
+		"ota_staging.h. Refusing to apply: rebooting would boot the old image and erase "
+		"the staged one.",
+		rc);
+	return chip::System::MapErrorZephyr(rc);
+}
+
 CHIP_ERROR OtaImageProcessor::Finalize()
 {
-	int rc = stream_flash_buffered_write(&mStream, nullptr, 0, true);
+	int rc = mcuhome_ota_staging_finish(&mStaging);
 
 	mWriting = false;
 	if (rc != 0) {
 		LOG_ERR("flushing the staging slot failed (%d)", rc);
 		return chip::System::MapErrorZephyr(rc);
 	}
-	LOG_INF("staged %zu B in the secondary slot", stream_flash_bytes_written(&mStream));
-	return CHIP_NO_ERROR;
+	LOG_INF("staged %zu B in the secondary slot", mcuhome_ota_staging_written(&mStaging));
+
+	return VerifyStagedImage();
 }
 
 CHIP_ERROR OtaImageProcessor::Abort()
@@ -277,8 +352,11 @@ CHIP_ERROR OtaImageProcessor::Abort()
 	/* Nothing to undo. A half-written slot1 is not dangerous: MCUboot
 	 * only swaps a slot whose image is complete, signed and marked for
 	 * upgrade, and the next download overwrites it from the start.
-	 * Erasing it here would cost seconds of SPI-NOR erase for no gain. */
+	 * Erasing it here would cost seconds of SPI-NOR erase for no gain.
+	 * The flash area does have to be given back, though — only the
+	 * flushing write does that on its own. */
 	LOG_WRN("OTA download aborted; the staging slot keeps a partial image until the next one");
+	mcuhome_ota_staging_abort(&mStaging);
 	mWriting = false;
 	return CHIP_NO_ERROR;
 }
