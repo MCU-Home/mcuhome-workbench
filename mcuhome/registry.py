@@ -741,8 +741,22 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
         "CONFIG_MCUBOOT_LOG_LEVEL_INF=y",
         "CONFIG_USE_SEGGER_RTT=y",
         "CONFIG_LOG_BACKEND_RTT=y",
-        # A wedged or absent host reader must never stall the bootloader.
-        "CONFIG_LOG_BACKEND_RTT_MODE_DROP=y",
+        # A wedged or absent host reader must never stall the bootloader,
+        # and OVERWRITE is the only one of the three RTT backend modes
+        # that keeps that promise in PANIC mode. DROP looks equivalent
+        # and is not: log_backend_rtt.c's data_out_drop_mode() hands
+        # straight over to data_out_block_mode() as soon as the backend
+        # has panicked, which then busy-waits for a host to drain the
+        # up-buffer — inside a fault handler, on a bootloader that is
+        # possibly halfway through a swap. Zephyr's own backend help says
+        # so ("In panic mode backend always blocks"), the delay it
+        # busy-waits for is declared under
+        # `if LOG_BACKEND_RTT_MODE_BLOCK` so a DROP build cannot even set
+        # it, and on_write() re-arms its host-present latch on every
+        # write, so the wait is per character and never gives up. The
+        # application's snippet makes the same choice for the same reason
+        # (snippets/debug-rtt/debug-rtt.conf).
+        "CONFIG_LOG_BACKEND_RTT_MODE_OVERWRITE=y",
         # Deferred logging hands the work to a thread that will not run
         # again before the chain-load: the interesting lines are the last
         # ones before the jump, which is exactly what deferred mode would

@@ -335,6 +335,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The RTT log backend runs in OVERWRITE mode instead of DROP, in both
+  images (`snippets/debug-rtt/debug-rtt.conf` and the class-A bootloader
+  lever in `mcuhome/registry.py`) — a safety setting, not a preference,
+  and it supersedes the "drop-on-full" of ADR 0015's RTT amendment. DROP
+  was chosen so that a wedged or absent host reader could never stall the
+  device, and it does not deliver that: `log_backend_rtt.c`'s
+  `data_out_drop_mode()` hands straight over to `data_out_block_mode()`
+  as soon as the backend has panicked, and `on_write()` then busy-waits
+  on `SEGGER_RTT_HasDataUp()` for `LOG_BACKEND_RTT_RETRY_DELAY_MS` — a
+  symbol declared under `if LOG_BACKEND_RTT_MODE_BLOCK`, so a DROP build
+  cannot set it and inherits the file's hardcoded 10 ms — while re-arming
+  its `host_present` latch on every successful write, so the wait never
+  gives up. With the one-byte output buffer DROP mode gets, that is
+  ~10 ms per character of a fault dump, inside the fatal path ADR 0015's
+  rollback story depends on. `data_out_overwrite_mode()` has no retry
+  loop in any mode; the price is that a full buffer loses the oldest
+  unread bytes instead of the newest, which is the right way round for a
+  crash log. Upstream candidate Z12.
+- A fault dump now names a thread and an address instead of only a fault
+  class (`snippets/debug-rtt`): `CONFIG_EXTRA_EXCEPTION_INFO` puts the
+  callee-saved registers and the exception return address in the report,
+  `CONFIG_THREAD_NAME` turns "unknown" into the faulting thread's name,
+  and `CONFIG_INIT_STACKS` fills stacks at creation so unused depth stays
+  measurable afterwards. They live in the always-on debug snippet rather
+  than in an opt-in build because the first fault on a device is the one
+  worth understanding, and it is never the one somebody rebuilt for — a
+  BusFault during an OTA download on 2026-08-08 produced a dump with none
+  of this in it. `CONFIG_LOG_PROCESS_THREAD_STACK_SIZE` rises to 2048 in
+  the same snippet: vanilla's 768 B is the minimum Zephyr boots with, not
+  a size chosen for formatting Matter and OpenThread lines. The cost is
+  larger than it looks and is written next to the symbol that causes it:
+  `EXTRA_EXCEPTION_INFO` is what makes `ARCH_STACKWALK` selectable,
+  `EXCEPTION_STACK_TRACE` then defaults to `y`, and Zephyr compiles the
+  whole image with `-funwind-tables` — 52.5 KiB of `.ARM.exidx` and
+  `.ARM.extab` on the reference device, which is 91 % of this snippet's
+  whole flash cost. It buys the call stack the 2026-08-08 dump did not
+  have, and `CONFIG_EXCEPTION_STACK_TRACE=n` is the documented first
+  lever if the slot ever gets tight.
+- Service-thread stacks in `snippets/matter/` are raised from their
+  vanilla defaults, which nobody sized for Matter-over-Thread while a
+  700 KiB BDX download runs into an external flash part
+  (`OPENTHREAD_THREAD_STACK_SIZE` 3072 → 6144, `NET_RX_STACK_SIZE`
+  1500 → 2048, `NET_TX_STACK_SIZE` 1200 → 2048,
+  `SYSTEM_WORKQUEUE_STACK_SIZE` 2560 → 4096, `CHIP_TASK_STACK_SIZE`
+  8192 → 10240, and on the nRF7002-DK `IEEE802154_NRF5_RX_STACK_SIZE`
+  800 → 1024, `IPC_SERVICE_BACKEND_RPMSG_WQ_STACK_SIZE` 1024 → 2048).
+  That load profile first ran on 2026-08-08 and ended in a BusFault whose
+  faulting thread could not be named, and an out-of-bounds write inside a
+  stack frame is the one corruption class the ARMv8-M stack guard does
+  not catch. These are headroom with `CONFIG_INIT_STACKS` on to replace
+  them with measurements, not sizing decisions — 9.3 KiB of RAM on a part
+  that has 448 KiB.
 - The watchdog no longer pauses while the core is halted by a debugger.
   `WDT_OPT_PAUSE_HALTED_BY_DBG` was passed unconditionally to survive
   breakpoints, and that is what kept it from firing on the bench: a debug
