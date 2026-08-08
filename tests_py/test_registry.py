@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import tokenize
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,43 @@ def test_the_dk_carries_the_adr_class_a_layout() -> None:
     ] == ADR_CLASS_A_LAYOUT
     assert SCHEME.board_class == "A"
     assert SCHEME.staging == "external-flash"
+
+
+def test_a_scheme_with_a_staging_slot_can_take_a_matter_ota() -> None:
+    """ADR 0015 decision 5: class A only, and as registry data.
+
+    The flag is derived from the Kconfig group rather than stated next to
+    it, so the two cannot drift into a board that claims OTA and enables
+    nothing, or the reverse.
+    """
+    assert SCHEME is not None
+    assert SCHEME.matter_ota is True
+    assert SCHEME.staging == "external-flash"
+    group = SCHEME.matter_ota_kconfig
+    # The framework half, CHIP's half, and the Zephyr DFU plumbing they
+    # both stand on. Emitted together or not at all — components/matter
+    # cannot express this as Kconfig selects without closing a dependency
+    # cycle, so the C side checks the group by name and this checks that
+    # the builder writes it.
+    assert "CONFIG_MCUHOME_MATTER_OTA=y" in group
+    assert "CONFIG_CHIP_OTA_REQUESTOR=y" in group
+    for symbol in (
+        "CONFIG_FLASH_MAP=y",
+        "CONFIG_STREAM_FLASH=y",
+        "CONFIG_STREAM_FLASH_ERASE=y",
+        "CONFIG_IMG_MANAGER=y",
+        "CONFIG_REBOOT=y",
+    ):
+        assert symbol in group, f"{symbol} missing from the OTA group"
+    # And the driver for the part the staging slot is actually on, which is
+    # the whole reason MCUHome has an image processor of its own.
+    assert "CONFIG_SPI_NOR=y" in group
+
+
+def test_a_scheme_without_the_group_cannot_take_a_matter_ota() -> None:
+    """The derivation, from the other side."""
+    assert SCHEME is not None
+    assert replace(SCHEME, matter_ota_kconfig=()).matter_ota is False
 
 
 def test_storage_stays_where_the_board_already_puts_it() -> None:

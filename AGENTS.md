@@ -77,6 +77,20 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
   does not check the passcode against the verifier derived from it on
   Zephyr, so anything that could write one without the other yields
   firmware that builds, boots and then refuses every commissioner.
+- **A device's version is emitted by one function too.**
+  `mcuhome/ota.py::kconfig_lines()` writes
+  `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION` together with
+  `CONFIG_CHIP_DEVICE_SOFTWARE_VERSION{,_STRING}` from one SemVer string
+  (ADR 0015 decision 9). A build in which MCUboot's image version and
+  Matter's SoftwareVersion disagree updates to an image the controller then
+  reports as the wrong version, and nothing warns.
+- **`components/matter/Kconfig`'s `MCUHOME_MATTER_OTA` selects nothing, on
+  purpose.** `MCUHOME_MATTER` depends on the PICOLIBC member of the libc
+  choice, and a `select FLASH`/`STREAM_FLASH`/`IMG_MANAGER` from under it
+  closes a Kconfig cycle through `REBOOT` and `USB_DFU_REBOOT` — which
+  stops Kconfig parsing the tree in *every* build in the repository, the
+  native_sim suites included. The group is registry data
+  (`UpdateSchemeDef.matter_ota_kconfig`) and the C side checks it by name.
 - **Credentials are drawn once, into the user's YAML** (`mcuhome
   init-pairing`), never per build — random per device *and* byte-identical
   builds, which is only possible if the configuration is the source

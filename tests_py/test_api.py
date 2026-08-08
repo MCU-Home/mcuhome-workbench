@@ -10,10 +10,11 @@ by name and by field, not only by behaviour.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES_DIR, VALID_CONFIG
+from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
 
 from mcuhome import api
 from mcuhome.errors import (
@@ -218,3 +219,31 @@ def test_registry_data_and_schema_are_reachable_from_the_api() -> None:
 def test_the_example_still_resolves_through_the_api() -> None:
     tree, entry = api.find_device(str(EXAMPLE))
     assert api.load_model(entry, tree=tree).device.name == "bmp180-node"
+
+
+# --------------------------------------------------------------------------
+# read_model: the receiving end of the wire format
+# --------------------------------------------------------------------------
+
+
+def test_read_model_round_trips_a_resolved_model(tmp_path) -> None:
+    """The model is the wire format, so it has to survive the trip."""
+    tree, entry = api.find_device("bench-node", config_root=FIXTURE_TREE)
+    original = api.load_model(entry, tree=tree)
+    path = tmp_path / "device-model.json"
+    path.write_text(original.to_json(), encoding="utf-8")
+
+    assert api.read_model(path).to_dict() == original.to_dict()
+
+
+def test_read_model_refuses_another_model_version(tmp_path) -> None:
+    """Negotiated, never guessed (dashboard ADR 0007 decision 4)."""
+    path = tmp_path / "device-model.json"
+    path.write_text(json.dumps({"model_version": api.MODEL_VERSION + 1}), encoding="utf-8")
+    with pytest.raises(api.BuildError) as error:
+        api.read_model(path)
+    assert str(api.MODEL_VERSION + 1) in error.value.message
+    assert str(api.MODEL_VERSION) in error.value.message
+    # And it serializes, because a dashboard renders it rather than
+    # printing it.
+    assert error.value.to_dict()["message"].startswith("The device model")

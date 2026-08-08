@@ -4,7 +4,9 @@
     "name": "bmp180-node",
     "friendly_name": "BMP180 Two-Endpoint Node",
     "board": "nrf7002dk/nrf5340/cpuapp",
-    "power_source": "mains"
+    "power_source": "mains",
+    "version": "0.1.0",
+    "source": "00-bmp180-two-endpoints.yaml"
   },
   "network": {
     "transport": "thread",
@@ -199,18 +201,32 @@
     "kconfig": [
       "CONFIG_BT=n",
       "CONFIG_CHIP=y",
+      "CONFIG_CHIP_DEVICE_SOFTWARE_VERSION=65536",
+      "CONFIG_CHIP_DEVICE_SOFTWARE_VERSION_STRING=\"0.1.0\"",
       "CONFIG_CHIP_ENABLE_PAIRING_AUTOSTART=y",
+      "CONFIG_CHIP_OTA_REQUESTOR=y",
       "CONFIG_ENTROPY_GENERATOR=y",
+      "CONFIG_FLASH=y",
+      "CONFIG_FLASH_MAP=y",
+      "CONFIG_IMG_MANAGER=y",
       "CONFIG_MBEDTLS=y",
       "CONFIG_MBEDTLS_PSA_CRYPTO_C=y",
+      "CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION=\"0.1.0\"",
       "CONFIG_MCUHOME=y",
       "CONFIG_MCUHOME_MATTER=y",
       "CONFIG_MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS=2",
+      "CONFIG_MCUHOME_MATTER_OTA=y",
       "CONFIG_MCUHOME_MATTER_THREAD_ROUTER=y",
       "CONFIG_MCUHOME_SENSOR=y",
       "CONFIG_NET_L2_OPENTHREAD=y",
+      "CONFIG_REBOOT=y",
       "CONFIG_SENSOR=y",
-      "CONFIG_STD_CPP17=y"
+      "CONFIG_SPI=y",
+      "CONFIG_SPI_NOR=y",
+      "CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE=4096",
+      "CONFIG_STD_CPP17=y",
+      "CONFIG_STREAM_FLASH=y",
+      "CONFIG_STREAM_FLASH_ERASE=y"
     ]
   }
 }

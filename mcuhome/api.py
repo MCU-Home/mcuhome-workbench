@@ -24,6 +24,12 @@ What is here, in the order a caller needs it:
     Where the configuration lives and which file is a given device's.
 ``load_model``
     Stages 1-3 on one device, raising on the first thing that is wrong.
+``read_model``
+    A canonical model back from JSON — the other end of the wire. A build
+    server receives one of these and starts at stage 4; it never sees the
+    configuration tree and never sees a secrets file (dashboard ADR 0007
+    decision 4). ``mcuhome build --model <file>`` is the same thing as a
+    command.
 ``validate_device``
     The same three stages, returning **every** problem as typed errors
     instead of raising — one pass, all markers.
@@ -42,6 +48,7 @@ caller with an event loop runs it in an executor.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -98,6 +105,7 @@ __all__ = [
     "load_model",
     "open_config_tree",
     "read_manifest",
+    "read_model",
     "registry_data",
     "validate_device",
 ]
@@ -140,6 +148,76 @@ def load_model(entry: Path, *, tree: ConfigTree) -> DeviceModel:
     config = parse_config(data, file=entry)
     validate(config)
     return resolve(config)
+
+
+def read_model(path: Path) -> DeviceModel:
+    """A canonical device model back from its JSON form.
+
+    The receiving end of builder-pipeline.md §6: the model is the wire
+    format of a remote build, so a build server is handed one of these and
+    runs stages 4 and 5 on it. It deliberately re-runs nothing — the
+    configuration tree, the secrets file and the whole front half of the
+    pipeline stay on the machine that owns them (dashboard ADR 0007
+    decision 4), which is also why a build server never needs to be
+    trusted with them.
+
+    Refuses in plain language, and the refusals are the interesting part:
+
+    * a file that is not JSON, or not an object;
+    * a ``model_version`` this builder does not implement — named on both
+      sides, never silently coerced. A newer model may describe things
+      this builder has no generator for, and an older one may mean
+      something different by a field that still parses;
+    * a model missing a field this version requires.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise BuildError(
+            f"MCUHome cannot read the device model {path}: {error.strerror}.",
+            hint=(
+                "a device model is the JSON mcuhome build writes next to the "
+                "application it generates (device-model.json), and what "
+                "mcuhome validate --json carries in its `model` field."
+            ),
+        ) from error
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise BuildError(
+            f"The device model {path} is not valid JSON ({error.msg}, line {error.lineno}).",
+            hint="it is builder output — regenerate it rather than editing it",
+        ) from error
+    if not isinstance(data, dict):
+        raise BuildError(
+            f"The device model {path} does not describe a device.",
+            hint="it is builder output — regenerate it rather than editing it",
+        )
+
+    found = data.get("model_version")
+    if found != MODEL_VERSION:
+        raise BuildError(
+            f"The device model {path} is version {found!r}, and this builder "
+            f"implements version {MODEL_VERSION}.",
+            hint=(
+                "the canonical model is a versioned contract (dashboard ADR 0007 "
+                "decision 4): a mismatch is a refusal that names both numbers, "
+                f"never a guess. Build with a builder that implements model "
+                f"version {found!r}, or regenerate the model with this one "
+                f"(MCUHome {VERSION})."
+            ),
+        )
+    try:
+        return DeviceModel.from_dict(data)
+    except (KeyError, TypeError, ValueError) as error:
+        raise BuildError(
+            f"The device model {path} is missing something this builder needs: {error}.",
+            hint=(
+                "it states model version "
+                f"{MODEL_VERSION}, so this is a truncated or hand-edited file "
+                "rather than a version mismatch. Regenerate it."
+            ),
+        ) from error
 
 
 @dataclass(frozen=True)

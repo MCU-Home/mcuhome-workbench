@@ -14,6 +14,7 @@ rsource "components/matter/Kconfig"
 rsource "components/sensor/Kconfig"
 rsource "drivers/entropy/Kconfig"
 rsource "lib/debug/Kconfig"
+rsource "lib/health/Kconfig"
 
 # Further component and driver Kconfig trees are sourced here as they
 # are implemented.

@@ -35,6 +35,11 @@
             "nrf7002dk/nrf5340/cpuapp"
           ]
         },
+        "version": {
+          "type": "string",
+          "description": "Firmware version of this device, as SemVer. It becomes MCUboot's image version, the Matter SoftwareVersion a controller compares when deciding whether an update is newer, and the version in the .ota file. Defaults to 0.1.0; each field is at most 255 (ADR 0015 decision 9).",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
+        },
         "power": {
           "type": "object",
           "additionalProperties": false,

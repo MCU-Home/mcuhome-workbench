@@ -19,6 +19,42 @@ if(CONFIG_CHIP AND NOT CONFIG_MCUHOME_MATTER)
     "  west build -b <board> -S matter -S debug-rtt <app>")
 endif()
 
+# The mirror image of the check above, for the OTA group, and it has to
+# work in BOTH directions. MCUHOME_MATTER_OTA selects nothing
+# (components/matter/Kconfig explains why: a Kconfig cycle), so it is the
+# builder that emits it together with CONFIG_CHIP_OTA_REQUESTOR and the
+# Zephyr DFU symbols — and a half-applied group produces an image that
+# builds, links, and does not work.
+#
+# Both halves have happened. The second one was real: snippets/matter/
+# matter.conf used to pin CONFIG_CHIP_OTA_REQUESTOR=n "to keep builds
+# lean", and a snippet's EXTRA_CONF_FILE is merged AFTER the application's
+# prj.conf — so the board's =y was silently overridden and the image
+# carried MCUHome's image processor with no CHIP requestor behind it.
+# Found in a verification build, not on the bench, and only because
+# somebody read the resulting .config.
+if(CONFIG_CHIP_OTA_REQUESTOR AND NOT CONFIG_MCUHOME_MATTER_OTA)
+  message(FATAL_ERROR
+    "CONFIG_CHIP_OTA_REQUESTOR is enabled but CONFIG_MCUHOME_MATTER_OTA is not.\n"
+    "The two are one group (ADR 0015 decision 5): CHIP's requestor needs "
+    "MCUHome's image processor, because CHIP's own one writes to internal "
+    "flash and this board's staging slot is not there.\n"
+    "Matter OTA is turned on by the board's update scheme in "
+    "mcuhome/registry.py, never by hand in a device's prj.conf.")
+endif()
+
+if(CONFIG_MCUHOME_MATTER_OTA AND NOT CONFIG_CHIP_OTA_REQUESTOR)
+  message(FATAL_ERROR
+    "CONFIG_MCUHOME_MATTER_OTA is enabled but CONFIG_CHIP_OTA_REQUESTOR is not.\n"
+    "MCUHome's image processor is the storage half of Matter OTA; the "
+    "cluster, the query state machine and the BDX transfer are CHIP's, and "
+    "without them the node has nowhere to receive an update from.\n"
+    "Something later in the Kconfig merge order turned it off again — a "
+    "snippet's EXTRA_CONF_FILE is merged after the application's prj.conf, "
+    "so a snippet with CONFIG_CHIP_OTA_REQUESTOR=n in it wins over the "
+    "board's update scheme. Check the snippets this image is built with.")
+endif()
+
 if(CONFIG_MCUHOME_MATTER)
   # Same guard as the BUILD_ASSERTs in src/matter_init.cpp, hoisted to
   # configure time: those thresholds are only reached after the whole CHIP
@@ -41,6 +77,14 @@ if(CONFIG_MCUHOME_MATTER)
     src/endpoint_registry.cpp
     src/table_validate.c
     src/dnssd_retry.cpp
+  )
+  # ADR 0015 decision 5: only board classes with a staging slot, and only
+  # when their update scheme says so (mcuhome/registry.py). The header
+  # parser is CHIP-free and exercised on the host by tests/ota_image_header.
+  zephyr_library_sources_ifdef(CONFIG_MCUHOME_MATTER_OTA
+    src/ota_image_header.c
+    src/ota_image_processor.cpp
+    src/ota_requestor.cpp
   )
 
   # Compile in the same CHIP data-model context as the application.

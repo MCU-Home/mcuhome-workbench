@@ -46,6 +46,7 @@ device:
   name: bedroom-climate            # [a-z0-9-], ≤32 chars; hostname/node id
   friendly_name: Bedroom Climate
   board: nrf54l15dk/nrf54l15/cpuapp  # Zephyr board target, verbatim
+  version: "0.1.0"                 # SemVer, quoted (default: 0.1.0)
   power:
     source: battery                # battery | mains  (default: mains)
   # Advanced (ADR 0013 incl. amendment) — defaults serve the typical user:
@@ -57,6 +58,15 @@ device:
 
 - `board` is the exact Zephyr board target string — no own board naming
   layer. Validation: against the boards known to the pinned Zephyr.
+- `version` is this firmware's own SemVer (ADR 0005), and it has to be
+  quoted — YAML reads an unquoted `1.4` as a float. It becomes three
+  things at once (ADR 0015 decision 9): MCUboot's image version, the
+  Matter `SoftwareVersion` a controller compares when deciding whether an
+  update is newer (`major << 24 | minor << 16 | patch << 8`, low byte
+  reserved for a tweak counter), and the version in the `.ota` file's
+  header. Each field is therefore at most 255, and pre-release or
+  build-metadata suffixes are rejected — a Matter `SoftwareVersion` is a
+  single number with nowhere to put them.
 - `power.source: battery` switches defaults conservatively (sampling
   intervals, logging off, Thread role hint) and activates the Matter
   Power Source cluster (battery level reporting if a measurement source

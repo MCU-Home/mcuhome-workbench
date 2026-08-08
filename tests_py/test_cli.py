@@ -15,6 +15,7 @@ from mcuhome import __version__, container, imgtool, signing, workspace
 from mcuhome.cli import main
 from mcuhome.generate import APP_DIR
 from mcuhome.manifest import MANIFEST_FILE
+from mcuhome.model import MODEL_VERSION
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -142,7 +143,9 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
             (output / "zephyr.elf").write_text("", "utf-8")
             (output / "zephyr.hex").write_text("", "utf-8")
             (output / "zephyr.bin").write_text("x" * 1024, "utf-8")
-        (plan.build_dir / APP_DIR / "zephyr" / "zephyr.signed.bin").write_text("", "utf-8")
+        # Not empty: the Matter OTA file wraps this, and wrapping nothing
+        # is refused (mcuhome.ota).
+        (plan.build_dir / APP_DIR / "zephyr" / "zephyr.signed.bin").write_text("s" * 512, "utf-8")
         (plan.build_dir / "merged_nrf7002dk_nrf5340_cpuapp.hex").write_text("", "utf-8")
         return 0, MEMORY_LOG
 
@@ -171,6 +174,15 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     # And the layout those images were built against.
     assert "Flash layout (class A, MCUboot swap-using-offset, staging: external-flash)" in out
     assert "image-0  internal 0x014000..0x0f8000   912 KiB" in out
+    # The delivery path: a class-A board with Matter gets a Matter OTA file
+    # wrapped around the signed image (ADR 0015 decision 5).
+    assert "Matter OTA image (version 0.1.0, SoftwareVersion 65536)" in out
+    ota_file = tmp_path / "bmp180-node-0.1.0.ota"
+    assert ota_file.is_file()
+    manifest = json.loads((tmp_path / "build-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["ota"]["path"] == "bmp180-node-0.1.0.ota"
+    assert manifest["ota"]["software_version"] == 65536
+    assert manifest["ota"]["size"] == ota_file.stat().st_size
 
 
 def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
@@ -620,6 +632,12 @@ def test_no_sign_builds_unsigned_and_says_what_is_next(tmp_path, capsys, monkeyp
     assert not (out_dir / "build" / APP_DIR / "zephyr" / "zephyr.signed.bin").exists()
     assert not list((out_dir / "build").glob(workspace.MERGED_IMAGE_GLOB))
     assert document["merged"] is None
+    # And no .ota either: it wraps the SIGNED image. What the manifest does
+    # carry is the parameters, which is what lets `mcuhome sign` write one
+    # on a machine that has no device configuration (ADR 0015 decision 8).
+    assert document["ota"]["path"] is None
+    assert document["ota"]["version"] == "0.1.0"
+    assert not list(out_dir.glob("*.ota"))
 
 
 def test_the_detached_build_command_carries_the_public_key(tmp_path, monkeypatch) -> None:
@@ -690,6 +708,14 @@ def test_sign_applies_the_manifests_parameters(tmp_path, capsys, monkeypatch) ->
     assert document["signing"]["signed_by_the_build"] is False
     application = next(image for image in document["images"] if image["name"] == APP_DIR)
     assert any(entry["path"].endswith("zephyr.signed.bin") for entry in application["files"])
+
+    # The delivery path closes here rather than at build time: the .ota is
+    # written where the key is, wrapping the image that was just signed.
+    assert "Matter OTA image (version 0.1.0" in out
+    ota_file = out_dir / "bmp180-node-0.1.0.ota"
+    assert ota_file.is_file()
+    assert document["ota"]["path"] == "bmp180-node-0.1.0.ota"
+    assert document["ota"]["size"] == ota_file.stat().st_size
 
 
 # --------------------------------------------------------------------------
@@ -773,3 +799,133 @@ def test_schema_registry_prints_the_registry(tmp_path, capsys) -> None:
     assert "registry" in capsys.readouterr().out
     document = json.loads((tmp_path / "registry.json").read_text("utf-8"))
     assert document["boards"][0]["name"] == "nrf7002dk/nrf5340/cpuapp"
+
+
+# --------------------------------------------------------------------------
+# build --model: the build server's entry point (dashboard ADR 0007 §4)
+# --------------------------------------------------------------------------
+
+
+def test_build_from_a_model_generates_the_same_tree_as_from_the_yaml(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """The property the remote-build contract rests on.
+
+    The canonical model is the wire format (builder-pipeline.md §6): the
+    dashboard resolves stages 1-3 and sends the model, a build server runs
+    stages 4-5 on it and never sees the configuration tree. That is only a
+    contract if both routes produce the *same* application — including the
+    "generated from" line in every file header, which is why the source
+    file name is a field of the model rather than an argument of stage 4.
+    """
+    direct = tmp_path / "direct"
+    assert main(["build", str(EXAMPLE), "--build-dir", str(direct), "--generate-only"]) == 0
+    capsys.readouterr()
+
+    from_model = tmp_path / "from-model"
+    assert (
+        main(
+            [
+                "build",
+                "--model",
+                str(direct / "device-model.json"),
+                "--build-dir",
+                str(from_model),
+                "--generate-only",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    left = sorted(path.relative_to(direct) for path in direct.rglob("*") if path.is_file())
+    right = sorted(path.relative_to(from_model) for path in from_model.rglob("*") if path.is_file())
+    assert left == right
+    for relative in left:
+        assert (direct / relative).read_bytes() == (from_model / relative).read_bytes(), relative
+
+
+def test_build_from_a_model_reads_no_configuration_tree(tmp_path, monkeypatch) -> None:
+    """A build server holds neither the tree nor the secrets file.
+
+    Enforced by making the resolution the other path uses explode: if
+    --model touched it, this test would fail instead of quietly passing on
+    a machine that happens to have a tree.
+    """
+    direct = tmp_path / "direct"
+    main(["build", str(EXAMPLE), "--build-dir", str(direct), "--generate-only"])
+
+    def explode(*arguments, **keywords):  # pragma: no cover - must not run
+        raise AssertionError("--model must not resolve a configuration tree")
+
+    monkeypatch.setattr("mcuhome.cli.resolve_device", explode)
+    assert (
+        main(
+            [
+                "build",
+                "--model",
+                str(direct / "device-model.json"),
+                "--build-dir",
+                str(tmp_path / "out"),
+                "--generate-only",
+            ]
+        )
+        == 0
+    )
+
+
+def test_build_help_advertises_the_model_flag(capsys) -> None:
+    """The build server feature-probes the help text for it."""
+    with pytest.raises(SystemExit):
+        main(["build", "--help"])
+    assert "--model" in capsys.readouterr().out
+
+
+def test_build_refuses_a_device_and_a_model_at_once(capsys) -> None:
+    with pytest.raises(SystemExit):
+        main(["build", str(EXAMPLE), "--model", "model.json"])
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_build_needs_one_of_the_two(capsys) -> None:
+    with pytest.raises(SystemExit):
+        main(["build"])
+    assert "required" in capsys.readouterr().err
+
+
+def test_a_model_of_the_wrong_version_names_both_numbers(tmp_path, capsys) -> None:
+    path = tmp_path / "device-model.json"
+    path.write_text(json.dumps({"model_version": 99}), encoding="utf-8")
+    assert main(["build", "--model", str(path), "--generate-only"]) == 1
+    err = capsys.readouterr().err
+    assert "version 99" in err
+    assert f"implements version {MODEL_VERSION}" in err
+
+
+def test_a_model_that_is_not_json_is_refused(tmp_path, capsys) -> None:
+    path = tmp_path / "device-model.json"
+    path.write_text("{not json", encoding="utf-8")
+    assert main(["build", "--model", str(path), "--generate-only"]) == 1
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_a_truncated_model_says_it_is_truncated(tmp_path, capsys) -> None:
+    path = tmp_path / "device-model.json"
+    path.write_text(json.dumps({"model_version": MODEL_VERSION}), encoding="utf-8")
+    assert main(["build", "--model", str(path), "--generate-only"]) == 1
+    assert "missing something this builder needs" in capsys.readouterr().err
+
+
+def test_a_missing_model_file_says_where_one_comes_from(tmp_path, capsys) -> None:
+    assert main(["build", "--model", str(tmp_path / "nope.json"), "--generate-only"]) == 1
+    assert "device-model.json" in capsys.readouterr().err
+
+
+def test_model_errors_serialize_in_json_mode(tmp_path, capsys) -> None:
+    """--json stays a document even when the model was the problem."""
+    path = tmp_path / "device-model.json"
+    path.write_text(json.dumps({"model_version": 99}), encoding="utf-8")
+    assert main(["build", "--model", str(path), "--generate-only", "--json"]) == 1
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is False
+    assert document["errors"][0]["message"].startswith("The device model")

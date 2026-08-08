@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
-from mcuhome import __version__, registry, workspace
+from mcuhome import __version__, pairing, registry, workspace
 from mcuhome import manifest as manifest_module
 from mcuhome.errors import BuildError
 from mcuhome.generate import APP_DIR, BOOTLOADER_IMAGE
@@ -135,7 +137,34 @@ def test_the_manifest_names_the_device_and_the_builder(tmp_path) -> None:
         "name": "bmp180-node",
         "friendly_name": "BMP180 Two-Endpoint Node",
         "board": "nrf7002dk/nrf5340/cpuapp",
+        "version": "0.1.0",
     }
+
+
+def test_the_ota_block_states_the_parameters_before_the_file_exists(tmp_path) -> None:
+    """What lets `mcuhome sign` write the .ota on a machine with no config.
+
+    A detached build produces no .ota — there is no signed image to wrap
+    yet — but the manifest still has to say what one would look like, or
+    the machine that does the signing would have to be told the version and
+    the identifiers some other way (ADR 0015 decision 8).
+    """
+    block = _manifest(tmp_path, ota_image=None).to_dict()["ota"]
+    assert block["version"] == "0.1.0"
+    assert block["software_version"] == 65536
+    assert block["vendor_id"] == pairing.VENDOR_ID
+    assert block["product_id"] == pairing.PRODUCT_ID
+    assert block["path"] is None
+
+
+def test_a_board_without_a_staging_slot_gets_no_ota_block() -> None:
+    """ADR 0015 decision 5: Matter OTA is board class A only."""
+    model = resolve_file(EXAMPLE)
+    board = registry.BOARDS[model.device.board]
+    scheme = replace(board.update_scheme, matter_ota_kconfig=())
+    patched = {**registry.BOARDS, model.device.board: replace(board, update_scheme=scheme)}
+    with mock.patch.dict(registry.BOARDS, patched, clear=True):
+        assert manifest_module.ota_parameters(model) is None
 
 
 def test_the_manifest_records_how_the_build_ran(tmp_path) -> None:

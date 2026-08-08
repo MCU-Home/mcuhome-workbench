@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 
-from mcuhome import pairing, registry
+from mcuhome import ota, pairing, registry
 from mcuhome.errors import ConfigError, ErrorCollector
 from mcuhome.model import (
     AttrModel,
@@ -84,11 +84,13 @@ def resolve(config: RawConfig) -> DeviceModel:
     board = registry.BOARDS[device.board or ""]
     power_source = (device.power.source if device.power else None) or "mains"
 
+    version = device.version or ota.DEFAULT_VERSION
+
     network = _resolve_network(config)
     toolchain = _resolve_toolchain(config)
     hardware = _resolve_hardware(config)
     endpoints, channels = _resolve_node(config, power_source)
-    build = _resolve_build(board, network, endpoints, channels)
+    build = _resolve_build(board, network, endpoints, channels, version)
 
     return DeviceModel(
         device=DeviceMeta(
@@ -96,6 +98,8 @@ def resolve(config: RawConfig) -> DeviceModel:
             friendly_name=device.friendly_name or (device.name or ""),
             board=board.name,
             power_source=power_source,
+            version=version,
+            source=config.file.name,
         ),
         network=network,
         toolchain=toolchain,
@@ -430,6 +434,7 @@ def _resolve_build(
     network: NetworkModel,
     endpoints: list[EndpointModel],
     channels: list[ChannelModel],
+    version: str,
 ) -> BuildModel:
     """Kconfig fragments and snippets, derived from the resolved model.
 
@@ -482,6 +487,12 @@ def _resolve_build(
         kconfig += ["CONFIG_SENSOR=y", "CONFIG_MCUHOME_SENSOR=y"]
 
     kconfig += list(board.kconfig)
+    # MCUboot's image version and, on a Matter device, the SoftwareVersion
+    # a controller compares against the image an OTA provider offers. One
+    # group from one string (ADR 0015 decision 9, mcuhome.ota): a build in
+    # which those two disagree updates to an image the controller then
+    # reports as the wrong version, and nothing warns.
+    kconfig += ota.kconfig_lines(version, matter=network.matter_enabled)
     if board.update_scheme is not None:
         # Snippets the board's update scheme needs in the *application*
         # image (ADR 0015 decision 2). They come last so a device's own
@@ -492,4 +503,10 @@ def _resolve_build(
             for snippet in board.update_scheme.application_snippets
             if snippet not in snippets
         ]
+        # Matter OTA is board-class data, never a global constant and
+        # never a device's own choice (ADR 0015 decision 5): a board with
+        # a staging slot can receive one, a board without cannot, and a
+        # device with no Matter stack has nothing to receive it with.
+        if network.matter_enabled:
+            kconfig += list(board.update_scheme.matter_ota_kconfig)
     return BuildModel(snippets=snippets, kconfig=sorted(set(kconfig)))

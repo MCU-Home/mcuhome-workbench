@@ -214,6 +214,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inline-signed and a detached-signed application agree in header,
   payload, protected TLVs, image digest and key hash — differing only in
   the ECDSA signature, which is randomized by construction.
+- **Firmware over the air** (ADR 0015 decision 5), on board class A and
+  gated by the board's update scheme rather than by a Kconfig flip:
+  - The **OTA Software Update Requestor cluster (0x002A)** and the
+    Provider client (0x0029) are in the framework ZAP
+    (`components/matter/zap/mcuhome-root.zap`, still endpoint 0 only), and
+    the framework instantiates CHIP's `DefaultOTARequestor`,
+    `BDXDownloader` and `DefaultOTARequestorDriver` in a bring-up stage of
+    its own. Enabling `CONFIG_CHIP_OTA_REQUESTOR` alone had been measured
+    to change the image by *zero bytes* — with no cluster in the ZAP,
+    `--gc-sections` dropped everything CHIP compiled.
+  - **MCUHome's own image processor**
+    (`components/matter/src/ota_image_processor.cpp`). CHIP's Zephyr one
+    opens `DT_CHOSEN(zephyr_flash_controller)` and applies the
+    `slot1_partition` offsets to it, which on a board whose staging slot
+    lives on an external part would write into `slot0` and `storage`
+    instead. MCUHome's looks the slot up in the flash map, so it writes to
+    whichever part actually holds it, checks the incoming image's vendor
+    and product IDs and its size against the slot before writing a byte,
+    and applies the update as an MCUboot **test** image — never permanent,
+    which is what leaves a way back.
+  - A **CHIP-free Matter OTA header parser**
+    (`components/matter/src/ota_image_header.c`): static buffers, no heap,
+    and exercised on the host by `tests/ota_image_header/` against golden
+    headers captured from CHIP's own `ota_image_tool.py` plus hand-built
+    malformed ones.
+  - The builder emits the **`.ota` file** itself, wrapping the *signed*
+    image (`mcuhome/ota.py`), and the build manifest gains an `ota` block.
+    Written by MCUHome rather than shelled out to CHIP's tool for one
+    reason: an .ota wraps the signed image, signing happens where the key
+    is (ADR 0015 decision 8), and that machine has no Matter SDK. The
+    result is byte-identical to CHIP's tool's, which the pytest suite
+    checks wherever the SDK is present.
+- **`device.version`** (ADR 0015 decision 9): a SemVer string in the
+  device configuration, defaulting to `0.1.0`, mapped to Matter's
+  `SoftwareVersion` as `major << 24 | minor << 16 | patch << 8` with the
+  low byte reserved for a tweak counter. One function
+  (`mcuhome.ota.kconfig_lines`) emits MCUboot's image version and the two
+  CHIP symbols together, for the same reason the commissioning identity is
+  emitted as one group: a build in which they disagree updates to an image
+  the controller then reports as the wrong version, and nothing warns.
+- **Health foundation** (`lib/health/`, ADR 0015 health amendment):
+  - Fatal errors **reboot** instead of halting. Vanilla Zephyr halts, and
+    `CONFIG_RESET_ON_FATAL_ERROR` is Nordic's symbol, not Zephyr's — so
+    this is MCUHome code overriding the weak
+    `k_sys_fatal_error_handler()`. A halted node is unreachable and never
+    reaches the boot in which MCUboot would revert an unconfirmed image.
+  - A **hardware watchdog fed from evidence**: the feeder is a work item
+    on the system workqueue (running at all proves that queue schedules),
+    and it only feeds while every loop registered through
+    `mcuhome_health_liveness_register()` has checked in. The framework
+    registers the CHIP event loop. A watchdog fed by a timer proves the
+    timer runs, which is never the thing that broke.
+  - **Image self-confirmation**: `boot_write_img_confirmed()` about 30
+    seconds after the Matter stack reports up, and only when this boot
+    really is a pending test image. An image that faults, hangs or resets
+    before that never confirms, and MCUboot swaps the previous one back.
+    The confirmation CHIP's requestor driver would do immediately during
+    bring-up is deliberately deferred to that timer.
+- The C10 hunk in `patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch`:
+  CHIP's Zephyr OTA image processor uses `FIXED_PARTITION_OFFSET`/`_SIZE`,
+  which Zephyr 4.4 deprecates and CHIP's `-Werror` GN build turns into a
+  hard build failure. Needed even though MCUHome does not use that file —
+  CHIP compiles it whenever the requestor is enabled.
+- **`mcuhome build --model <device-model.json>`** (builder-pipeline.md §6,
+  dashboard ADR 0007 decision 4): build a canonical model that some other
+  machine already resolved, starting at stage 4. It reads no configuration
+  tree and no secrets file, which is what makes a build server a machine
+  that needs no trust. `mcuhome.api.read_model` is the same thing in
+  process and refuses a `model_version` it does not implement by naming
+  both numbers. The two routes produce byte-identical trees; the source
+  configuration's file name became a model field (`device.source`) so that
+  stage 4 is a function of the model alone, which the generated "generated
+  from" headers had quietly made untrue.
 
 ### Changed
 

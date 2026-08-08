@@ -220,4 +220,85 @@ config MCUHOME_MATTER_MRP_IDLE_RETRY_MS
 	  CHIP_CONFIG_MRP_LOCAL_IDLE_RETRY_INTERVAL. Same rationale as
 	  CONFIG_MCUHOME_MATTER_MRP_ACTIVE_RETRY_MS.
 
+menuconfig MCUHOME_MATTER_OTA
+	bool "Matter OTA Software Update Requestor"
+	default n
+	# THIS SYMBOL SELECTS NOTHING, ON PURPOSE, AND THAT IS NOT AN
+	# OVERSIGHT. MCUHOME_MATTER depends on the PICOLIBC member of the
+	# LIBC_IMPLEMENTATION choice, so every `select` written here inherits
+	# the whole libc select-web as a dependency edge — and each one of
+	# FLASH, STREAM_FLASH and IMG_MANAGER then closes a cycle back through
+	# REBOOT and USB_DFU_REBOOT. Kconfig refuses to parse the tree when
+	# that happens, which breaks EVERY build in the repository, including
+	# the native_sim suites that never heard of OTA. Verified: with
+	# `select FLASH` in place, `west twister -T mcuhome/tests` errors out
+	# on all four suites.
+	#
+	# So the Zephyr side of this feature is emitted as one group by the
+	# board's update scheme (mcuhome/registry.py), exactly like the
+	# commissioning identity is emitted as one group by mcuhome.pairing —
+	# and, exactly like that group, an incomplete one is caught loudly
+	# rather than silently: the guards at the top of
+	# src/ota_image_processor.cpp name every symbol that has to be there.
+	help
+	  Lets a commissioned node download a new firmware image from a Matter
+	  OTA Provider and hand it to MCUboot. ADR 0015 decision 5 puts this on
+	  board class A only — a board with a staging slot — so it is turned on
+	  by the board's update scheme in mcuhome/registry.py and never
+	  globally: a board without a second slot has nowhere to put the image
+	  and would fail the build on a missing slot1_partition.
+
+	  Three things are needed and this symbol is only one of them. The
+	  framework ZAP has to carry cluster 0x002A on endpoint 0 (it does),
+	  and the application has to instantiate the requestor (the framework
+	  does, in a bring-up stage). CONFIG_CHIP_OTA_REQUESTOR on its own was
+	  measured to change the image by zero bytes, because --gc-sections
+	  drops everything nothing references.
+
+	  Measured cost on the nRF7002-DK: about +27 KiB flash and +2 KiB RAM
+	  for the requestor, plus the DFU plumbing underneath it.
+
+	  Matter OTA is never the first-flash or unbrick path: it needs a CASE
+	  session, fabric membership and administrator privilege, so an
+	  uncommissioned node is structurally out of its reach. USB/SMP through
+	  the bootloader's serial recovery stays the baseline (ADR 0015
+	  decision 6).
+
+if MCUHOME_MATTER_OTA
+
+config MCUHOME_MATTER_OTA_WRITE_BUFFER_SIZE
+	int "Staging-slot write buffer size (bytes)"
+	default 1024
+	range 128 8192
+	help
+	  Sizes the static buffer the image processor streams through
+	  (components/matter/src/ota_image_processor.cpp). It has to be a
+	  multiple of the staging part's write block size and no larger than
+	  its erase page, which stream_flash checks at init
+	  (CONFIG_STREAM_FLASH_INSPECT).
+
+config MCUHOME_MATTER_OTA_HEADER_MAX
+	int "Largest Matter OTA header TLV accepted (bytes)"
+	default 512
+	range 64 2048
+	help
+	  Sizes the static accumulation buffer of the header parser. The
+	  mandatory fields need about 50 bytes; the specification bounds the
+	  optional ones at a 64-character version string and a 256-character
+	  release-notes URL. A header larger than this is refused, not
+	  truncated.
+
+config MCUHOME_MATTER_OTA_QUERY_INTERVAL_S
+	int "How often to ask the known providers for a newer image (seconds)"
+	default 86400
+	range 300 604800
+	help
+	  Passed to CHIP's DefaultOTARequestorDriver as its periodic query
+	  timeout; upstream's own default is the 24 hours this defaults to.
+	  This is the fallback path — a controller that wants to push an
+	  update calls AnnounceOTAProvider and does not wait for the timer,
+	  which is what Home Assistant does.
+
+endif # MCUHOME_MATTER_OTA
+
 endif # MCUHOME_MATTER

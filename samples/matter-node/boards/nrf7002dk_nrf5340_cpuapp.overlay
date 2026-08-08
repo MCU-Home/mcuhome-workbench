@@ -22,6 +22,18 @@
 	chosen {
 		zephyr,entropy = &netcore_entropy;
 	};
+
+	/* Watchdog: ADR 0015's health amendment makes one mandatory for every
+	 * application image, and lib/health/ finds it through the watchdog0
+	 * alias — the Zephyr convention, which this board's own devicetree
+	 * does not define even though the SoC has the peripheral. Board
+	 * wiring, exactly like the entropy redirection above, and exactly
+	 * what mcuhome/registry.py emits into a generated application's
+	 * overlay. Without it the build stops and names the alias.
+	 */
+	aliases {
+		watchdog0 = &wdt0;
+	};
 };
 
 /* Bosch BMP180 on the DK's Arduino-header I2C bus.

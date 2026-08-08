@@ -12,6 +12,7 @@
         "board_class": "A",
         "mcuboot_mode": "swap-using-offset",
         "staging": "external-flash",
+        "matter_ota": true,
         "recovery": [
           "serial-recovery",
           "boot-mode",

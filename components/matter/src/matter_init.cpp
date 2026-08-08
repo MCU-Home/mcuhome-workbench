@@ -24,6 +24,7 @@
 #include <lib/support/CHIPMem.h>
 #include <platform/CHIPDeviceLayer.h>
 
+#include <mcuhome/health.h>
 #include <mcuhome/matter.h>
 
 #include "matter_internal.h"
@@ -107,6 +108,53 @@ static_assert(FIXED_ENDPOINT_COUNT == 1,
 		LOG_INF("stage %s ok", stage_name);                                                \
 	} while (0)
 
+/* --- Liveness of the CHIP event loop -----------------------------------
+ *
+ * The watchdog (lib/health/) is fed from evidence, not from a timer, and
+ * the CHIP event loop is the loop whose silence matters most on a Matter
+ * node: it owns the stack lock, the exchange manager, the reporting engine
+ * and every timer above them. If it stops, the node is a brick that still
+ * answers ping.
+ *
+ * Both numbers derive from the watchdog's own so that changing one setting
+ * keeps the pair consistent: the loop checks in twice per feed interval,
+ * and it is allowed to be quiet for half the watchdog timeout before the
+ * feeder gives up on it. With the defaults that is a ping every 5 s and a
+ * 30 s budget, so a wedged event loop resets the SoC between 30 and 90
+ * seconds later. */
+#ifdef CONFIG_MCUHOME_WATCHDOG
+
+#define MCUHOME_EVENT_LOOP_PING_MS    (CONFIG_MCUHOME_WATCHDOG_FEED_INTERVAL_S * 1000U / 2U)
+#define MCUHOME_EVENT_LOOP_SILENCE_MS (CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S * 1000U / 2U)
+
+static mcuhome_health_liveness_t event_loop_slot = -1;
+
+static void event_loop_alive(chip::System::Layer *layer, void *context)
+{
+	mcuhome_health_alive(event_loop_slot);
+	(void)layer->StartTimer(chip::System::Clock::Milliseconds32(MCUHOME_EVENT_LOOP_PING_MS),
+				event_loop_alive, context);
+}
+
+static void event_loop_liveness_arm(void)
+{
+	event_loop_slot =
+		mcuhome_health_liveness_register("chip-event-loop", MCUHOME_EVENT_LOOP_SILENCE_MS);
+	/* Scheduled rather than started directly: this runs on the caller's
+	 * thread, and CHIP timers may only be armed from the event loop or
+	 * under the stack lock. ScheduleLambda is the thread-safe door. */
+	(void)chip::DeviceLayer::SystemLayer().ScheduleLambda(
+		[] { event_loop_alive(&chip::DeviceLayer::SystemLayer(), nullptr); });
+}
+
+#else /* !CONFIG_MCUHOME_WATCHDOG */
+
+static void event_loop_liveness_arm(void)
+{
+}
+
+#endif /* CONFIG_MCUHOME_WATCHDOG */
+
 __weak void mcuhome_matter_stage(const char *name, int err)
 {
 	if (err == 0) {
@@ -186,9 +234,24 @@ int mcuhome_matter_start(const struct mcuhome_matter_node *node)
 	 * metadata by endpoint_registry.cpp. */
 	MCUHOME_STAGE_ERRNO("RegisterEndpoints", mcuhome_matter_registry_register(node));
 
+#ifdef CONFIG_MCUHOME_MATTER_OTA
+	/* After ServerInit — the requestor persists its provider list in the
+	 * server's storage — and before the event loop, which is what will
+	 * run the queries it schedules here (ADR 0015 decision 5). */
+	MCUHOME_STAGE_ERRNO("OtaRequestor", mcuhome_matter_ota_init());
+#endif
+
 	MCUHOME_STAGE("StartEventLoop", chip::DeviceLayer::PlatformMgr().StartEventLoopTask());
 
 	mcuhome_matter_dnssd_retry_arm();
+
+	/* Last, and in this order. The event loop has to be running before
+	 * its liveness ping can be armed, and "operational" has to mean
+	 * everything above succeeded — it is the statement the image
+	 * confirmation timer hangs off (ADR 0015 health amendment). A node
+	 * that never gets here never confirms, and MCUboot reverts it. */
+	event_loop_liveness_arm();
+	mcuhome_health_operational();
 
 	LOG_INF("Matter up: %u endpoint(s) registered", (unsigned int)node->endpoint_count);
 	return 0;

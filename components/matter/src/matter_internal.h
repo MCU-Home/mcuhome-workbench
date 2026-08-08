@@ -47,4 +47,21 @@ void mcuhome_matter_registry_report(uint16_t endpoint_id, uint32_t cluster_id, u
  */
 void mcuhome_matter_dnssd_retry_arm(void);
 
+#ifdef CONFIG_MCUHOME_MATTER_OTA
+/**
+ * @brief Instantiate the Matter OTA Requestor and wire it to MCUHome's own
+ *        image processor (ADR 0015 decision 5).
+ *
+ * Must be called after Server::Init() — the requestor's storage lives in
+ * the server's persistent storage — and before the CHIP event loop starts.
+ * Idempotent: a second call returns without touching anything, because
+ * bring-up stages are retried.
+ *
+ * @return 0. The signature is an int for the sake of the bring-up stage
+ *         macro; nothing here can fail in a way the caller could act on,
+ *         and the upstream Init() calls it makes return void.
+ */
+int mcuhome_matter_ota_init(void);
+#endif
+
 #endif /* MCUHOME_COMPONENTS_MATTER_INTERNAL_H_ */

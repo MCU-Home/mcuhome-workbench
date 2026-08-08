@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcuhome import __version__, registry, workspace
+from mcuhome import __version__, ota, pairing, registry, workspace
 from mcuhome.errors import BuildError
 from mcuhome.model import DeviceModel
 
@@ -52,11 +52,15 @@ __all__ = [
     "BuildManifest",
     "FileEntry",
     "ImageEntry",
+    "OtaEntry",
     "SigningBlock",
     "SigningParameters",
     "build_manifest",
     "dump_manifest",
+    "ota_entry",
+    "ota_parameters",
     "read_manifest",
+    "record_ota",
     "record_signature",
     "signing_parameters",
     "write_manifest",
@@ -137,6 +141,62 @@ class ImageEntry:
             "flash_bytes": self.flash_bytes,
             "files": [entry.to_dict() for entry in self.files],
         }
+
+
+@dataclass(frozen=True)
+class OtaEntry:
+    """The Matter OTA identity of this build, and the file when there is one.
+
+    Two things in one block on purpose. The identity — version, the
+    SoftwareVersion derived from it, the vendor and product IDs the header
+    carries — is known the moment the build is planned, and stating it even
+    when no file exists yet is what lets ``mcuhome sign`` write the .ota on
+    a machine that has the manifest, the signed image and nothing else
+    (ADR 0015 decision 8 puts signing where the key is, which is not where
+    the compiler is).
+
+    :attr:`file` is None until then, and ``capable`` in the serialized form
+    says why the block exists at all: a board with no staging slot gets no
+    block, so a block with no file means "not yet", never "never".
+    """
+
+    version: str
+    software_version: int
+    vendor_id: int
+    product_id: int
+    file: FileEntry | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "version": self.version,
+            "software_version": self.software_version,
+            "vendor_id": self.vendor_id,
+            "product_id": self.product_id,
+        }
+        data.update(
+            self.file.to_dict()
+            if self.file is not None
+            else {"path": None, "size": None, "sha256": None}
+        )
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> OtaEntry:
+        try:
+            return cls(
+                version=str(data["version"]),
+                software_version=int(data["software_version"]),
+                vendor_id=int(data["vendor_id"]),
+                product_id=int(data["product_id"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise BuildError(
+                f"The build manifest's Matter OTA parameters are incomplete: {error}.",
+                hint=(
+                    "the manifest is written by mcuhome build; an edited or "
+                    "truncated one cannot be wrapped into an .ota file. Build again."
+                ),
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -229,6 +289,8 @@ class BuildManifest:
     device: str
     friendly_name: str
     board: str
+    #: SemVer of the firmware this build produced (ADR 0015 decision 9).
+    version: str
     model_version: int
     builder_version: str
     snippets: tuple[str, ...]
@@ -237,6 +299,12 @@ class BuildManifest:
     images: tuple[ImageEntry, ...]
     signing: SigningBlock | None
     merged: FileEntry | None = None
+    #: The Matter OTA file, when this build produced one. None for a board
+    #: that cannot take one (ADR 0015 decision 5), for a device without
+    #: Matter, and for a detached build until `mcuhome sign` has run —
+    #: an .ota wraps the SIGNED image, so before that there is nothing to
+    #: wrap.
+    ota: OtaEntry | None = None
     manifest_version: int = MANIFEST_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -247,6 +315,7 @@ class BuildManifest:
                 "name": self.device,
                 "friendly_name": self.friendly_name,
                 "board": self.board,
+                "version": self.version,
             },
             "build": {
                 "snippets": list(self.snippets),
@@ -256,6 +325,7 @@ class BuildManifest:
             "images": [image.to_dict() for image in self.images],
             "merged": None if self.merged is None else self.merged.to_dict(),
             "signing": None if self.signing is None else self.signing.to_dict(),
+            "ota": None if self.ota is None else self.ota.to_dict(),
         }
 
     def to_json(self) -> str:
@@ -376,6 +446,38 @@ def _signing_block(
     )
 
 
+def ota_parameters(model: DeviceModel) -> OtaEntry | None:
+    """The OTA identity of a device, or None when it cannot take one.
+
+    "Cannot" is two different facts and both are checked here: the board's
+    update scheme has to allow Matter OTA (ADR 0015 decision 5 — a board
+    with nowhere to stage an image cannot), and the device has to have a
+    Matter stack to receive it with.
+    """
+    board = registry.BOARDS.get(model.device.board)
+    scheme = None if board is None else board.update_scheme
+
+    if scheme is None or not scheme.matter_ota or not model.network.matter_enabled:
+        return None
+    return OtaEntry(
+        version=model.device.version,
+        software_version=ota.software_version(model.device.version),
+        vendor_id=pairing.VENDOR_ID,
+        product_id=pairing.PRODUCT_ID,
+    )
+
+
+def ota_entry(image: ota.OtaImage, *, out_dir: Path) -> OtaEntry:
+    """Describe a freshly written .ota file for the manifest."""
+    return OtaEntry(
+        version=image.version,
+        software_version=image.software_version,
+        vendor_id=image.vendor_id,
+        product_id=image.product_id,
+        file=_file_entry(image.path, out_dir=out_dir),
+    )
+
+
 def build_manifest(
     model: DeviceModel,
     *,
@@ -388,6 +490,7 @@ def build_manifest(
     jobs: int,
     signed_by_the_build: bool,
     merged: Path | None = None,
+    ota_image: ota.OtaImage | None = None,
 ) -> BuildManifest:
     """Describe what came out of stage 5, hashing every file it names."""
     board = registry.BOARDS.get(model.device.board)
@@ -396,6 +499,7 @@ def build_manifest(
         device=model.device.name,
         friendly_name=model.device.friendly_name,
         board=model.device.board,
+        version=model.device.version,
         model_version=model.model_version,
         builder_version=__version__,
         snippets=tuple(snippets),
@@ -422,6 +526,7 @@ def build_manifest(
             )
         ),
         merged=None if merged is None else _file_entry(merged, out_dir=out_dir),
+        ota=(ota_parameters(model) if ota_image is None else ota_entry(ota_image, out_dir=out_dir)),
     )
 
 
@@ -464,6 +569,17 @@ def record_signature(data: dict[str, Any], *, out_dir: Path, files: list[Path]) 
             else:
                 entries.append(fresh)
         image["files"] = entries
+    return data
+
+
+def record_ota(data: dict[str, Any], image: ota.OtaImage, *, out_dir: Path) -> dict[str, Any]:
+    """Fold a freshly written .ota file into a manifest mapping.
+
+    The detached path's half of the story: a build that left the image
+    unsigned could not wrap it, so `mcuhome sign` writes the .ota after
+    signing and says so here. *data* is modified in place and returned.
+    """
+    data["ota"] = ota_entry(image, out_dir=out_dir).to_dict()
     return data
 
 

@@ -431,6 +431,24 @@ class UpdateSchemeDef:
     #: Snippets the application image is built with on top of the ones
     #: its own configuration asks for.
     application_snippets: tuple[str, ...] = ()
+    #: Kconfig the *application* image needs to receive a Matter OTA on
+    #: this scheme, or empty for a scheme that cannot (ADR 0015 decision 5
+    #: puts Matter OTA on board class A only — a board with nowhere to
+    #: stage a second image has nothing to enable).
+    #:
+    #: One indivisible group, emitted together or not at all, and emitted
+    #: from here rather than expressed as Kconfig ``select``s in
+    #: ``components/matter/Kconfig``: MCUHOME_MATTER hangs off Zephyr's
+    #: libc choice, and a ``select FLASH``/``STREAM_FLASH``/``IMG_MANAGER``
+    #: from under it closes a dependency cycle through REBOOT and
+    #: USB_DFU_REBOOT that stops Kconfig parsing the tree at all — in every
+    #: build in the repository, not only in one with OTA on. The C side
+    #: checks the group by name and says which member is missing.
+    #:
+    #: Only applied to a device whose configuration actually has Matter
+    #: (:func:`mcuhome.resolve._resolve_build`); a class-A board running a
+    #: Matter-less device gets none of it.
+    matter_ota_kconfig: tuple[str, ...] = ()
     #: Devicetree written *only* to the bootloader image's overlay, after
     #: :attr:`partition_overlay` — never to the application's, which does
     #: not carry the bootloader's dead-weight problems (e.g. a serial
@@ -439,6 +457,15 @@ class UpdateSchemeDef:
     #: Why :attr:`bootloader_overlay` is there, rendered as its generated
     #: comment (mirrors :attr:`BoardDef.overlay_note`).
     bootloader_overlay_note: str = ""
+
+    @property
+    def matter_ota(self) -> bool:
+        """Whether a device on this scheme can take a Matter OTA update.
+
+        Derived rather than stated, so that the flag and the Kconfig group
+        that implements it cannot disagree (ADR 0015 decision 5).
+        """
+        return bool(self.matter_ota_kconfig)
 
     def partition(self, label: str) -> PartitionDef:
         """The partition with this node label, or a KeyError."""
@@ -554,8 +581,9 @@ class BoardDef:
 
 
 #: Board wiring of the nRF5340 application core: it has no RNG peripheral
-#: of its own. See :data:`BOARDS`.
-_NRF5340_ENTROPY_NOTE = (
+#: of its own, and its watchdog needs the alias the framework looks for.
+#: See :data:`BOARDS`.
+_NRF5340_BOARD_NOTE = (
     "Entropy. The nRF5340 application core has no RNG peripheral: the one on the die "
     "belongs to the network core. The board default points zephyr,entropy at the "
     "Bluetooth HCI entropy driver, which cannot work here because MCUHome runs this "
@@ -564,10 +592,16 @@ _NRF5340_ENTROPY_NOTE = (
     "endpoint on the ipc0 instance the 802.15.4 spinel channel already uses.\n"
     "The network core must run mcuhome/samples/netcore-radio for this endpoint to "
     "exist; against the upstream 802154_rpmsg image the node comes up and then fails "
-    "every entropy request with -EIO rather than falling back to a weaker generator."
+    "every entropy request with -EIO rather than falling back to a weaker generator.\n"
+    "Watchdog. ADR 0015's health amendment makes a hardware watchdog mandatory for "
+    "every application image, and the framework finds it through the watchdog0 alias "
+    "(the Zephyr convention). This SoC has the peripheral and this board does not "
+    "name it, so the alias is board wiring exactly like the entropy redirection "
+    "above. Without it the build stops with a message naming the alias, rather than "
+    "producing an image with no watchdog in it."
 )
 
-_NRF5340_ENTROPY_OVERLAY = """\
+_NRF5340_BOARD_OVERLAY = """\
 / {
 \tnetcore_entropy: netcore-entropy {
 \t\tcompatible = "mcuhome,entropy-ipc";
@@ -577,6 +611,10 @@ _NRF5340_ENTROPY_OVERLAY = """\
 
 \tchosen {
 \t\tzephyr,entropy = &netcore_entropy;
+\t};
+
+\taliases {
+\t\twatchdog0 = &wdt0;
 \t};
 };"""
 
@@ -728,6 +766,41 @@ _CLASS_A_EXTERNAL_STAGING = UpdateSchemeDef(
     ),
     bootloader_snippets=("boot-mode",),
     application_snippets=("boot-mode",),
+    # Matter OTA (ADR 0015 decision 5). This scheme is the reason the
+    # decision exists: the secondary slot is on the MX25R64, so there is
+    # somewhere to stage a downloaded image and somewhere to swap back
+    # from. Measured cost on this board: +27.0 KiB flash, +2.0 KiB RAM.
+    matter_ota_kconfig=(
+        # The framework's own gate. CHIP's requestor plus MCUHome's image
+        # processor, which is the pair that makes an external staging slot
+        # work at all — CHIP's own processor writes to the internal flash
+        # controller and would land inside slot0 and storage.
+        "CONFIG_MCUHOME_MATTER_OTA=y",
+        "CONFIG_CHIP_OTA_REQUESTOR=y",
+        # Zephyr's DFU plumbing underneath it: the flash map to find the
+        # staging slot on whichever part it lives, stream_flash to write
+        # through a small buffer, img_manager for the MCUboot trailer and
+        # boot_request_upgrade(). Measured at +1.3 KiB flash, +0 B RAM.
+        "CONFIG_FLASH=y",
+        "CONFIG_FLASH_MAP=y",
+        "CONFIG_STREAM_FLASH=y",
+        # NOT implied by STREAM_FLASH and not defaulted by it: without it
+        # stream_flash writes into pages nobody erased, the staged image is
+        # silently wrong, and it only shows up after the download, the
+        # reboot and the swap attempt.
+        "CONFIG_STREAM_FLASH_ERASE=y",
+        "CONFIG_IMG_MANAGER=y",
+        # Applying an update means rebooting into the swapped image.
+        "CONFIG_REBOOT=y",
+        # The staging part itself. Same driver as the bootloader side
+        # above, and for the same reason: the MX25R64 hangs off SPI4, not
+        # QSPI, which the nRF7002 Wi-Fi companion occupies. The layout page
+        # size has to match the bootloader's, or the two disagree about
+        # where a sector begins.
+        "CONFIG_SPI=y",
+        "CONFIG_SPI_NOR=y",
+        "CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE=4096",
+    ),
     # Dead UART (measured -1.30 KiB; ADR 0015 amendment, 2026-08-07).
     # MCUBOOT_SERIAL selects SERIAL and UART_INTERRUPT_DRIVEN
     # unconditionally, regardless of which serial-recovery transport is
@@ -785,8 +858,8 @@ BOARDS: dict[str, BoardDef] = {
         name="nrf7002dk/nrf5340/cpuapp",
         transports=frozenset({"thread"}),
         kconfig=("CONFIG_BT=n", "CONFIG_ENTROPY_GENERATOR=y"),
-        overlay=_NRF5340_ENTROPY_OVERLAY,
-        overlay_note=_NRF5340_ENTROPY_NOTE,
+        overlay=_NRF5340_BOARD_OVERLAY,
+        overlay_note=_NRF5340_BOARD_NOTE,
         update_scheme=_CLASS_A_EXTERNAL_STAGING,
         bootstrap=_NRF7002DK_BOOTSTRAP,
     ),

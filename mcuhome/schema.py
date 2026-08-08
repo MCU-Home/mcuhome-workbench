@@ -116,6 +116,10 @@ class RawDevice(RawBase):
     name: str | None = None
     friendly_name: str | None = None
     board: str | None = None
+    #: SemVer string, as written. Range-checked in
+    #: :mod:`mcuhome.validate`, where the message can explain what the
+    #: number becomes.
+    version: str | None = None
     power: RawPower | None = None
     blob_usage: str | None = None
     zephyr_version: str | None = None
@@ -524,7 +528,16 @@ def _parse_power(reader: MapReader) -> RawPower:
 
 def _parse_device(reader: MapReader) -> RawDevice:
     reader.reject_unknown(
-        {"name", "friendly_name", "board", "power", "blob_usage", "zephyr_version", "blobs"}
+        {
+            "name",
+            "friendly_name",
+            "board",
+            "version",
+            "power",
+            "blob_usage",
+            "zephyr_version",
+            "blobs",
+        }
     )
 
     name = reader.string(
@@ -548,6 +561,7 @@ def _parse_device(reader: MapReader) -> RawDevice:
 
     power_reader = reader.mapping("power")
     zephyr_version = _parse_zephyr_version(reader)
+    version = _parse_version(reader)
 
     blobs: dict[str, str] = {}
     blob_locs: dict[str, Location] = {}
@@ -570,12 +584,39 @@ def _parse_device(reader: MapReader) -> RawDevice:
             required=True,
             hint="add board: nrf7002dk/nrf5340/cpuapp — the Zephyr board target, verbatim",
         ),
+        version=version,
         power=_parse_power(power_reader) if power_reader is not None else None,
         blob_usage=reader.string("blob_usage", choices=("auto", "none")),
         zephyr_version=zephyr_version,
         blobs=blobs,
         blob_locs=blob_locs,
     )
+
+
+def _parse_version(reader: MapReader) -> str | None:
+    """``device.version``, as a string, or None when it is not written.
+
+    Shape only: the SemVer rules and the range Matter's SoftwareVersion
+    puts on the three fields are checked in :mod:`mcuhome.validate`, where
+    the message can say what the number is for. What happens here is the
+    YAML-scalar problem — an unquoted ``1.4.0`` is a string but an
+    unquoted ``1.4`` is a float, and telling a user to learn YAML's scalar
+    rules is not an error message.
+    """
+    if not reader.has("version"):
+        return None
+    raw = reader.raw("version")
+    if isinstance(raw, float | int) and not isinstance(raw, bool):
+        reader.errors.add(
+            f"{raw} is not a device version.",
+            location=reader.loc_of("version"),
+            hint=(
+                "a version is three numbers separated by dots, and YAML reads that "
+                'as text only in quotes:\n    version: "1.4.0"'
+            ),
+        )
+        return None
+    return reader.string("version")
 
 
 _ZEPHYR_LINE_RE = re.compile(r"^\d+\.\d+$")

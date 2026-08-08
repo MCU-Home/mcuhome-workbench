@@ -469,3 +469,37 @@ def test_every_problem_is_reported_at_once(write_config) -> None:
     assert [error.location.line for error in errors] == sorted(
         error.location.line for error in errors
     )
+
+
+# --------------------------------------------------------------------------
+# device.version
+# --------------------------------------------------------------------------
+
+
+def test_a_version_field_too_large_for_the_matter_mapping_is_refused(write_config) -> None:
+    """ADR 0015 decision 9 packs each field into one byte.
+
+    Without this check 256.0.0 would silently become 0.0.0 on the wire —
+    a device reporting a version it was not built as, to a controller that
+    then refuses every genuinely newer image.
+    """
+    text = VALID_CONFIG.replace("board:", 'version: "256.0.0"\n  board:')
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "is not a usable device version")
+    assert error.location.line == line_of(text, 'version: "256.0.0"')
+    assert "one byte each" in (error.hint or "")
+    assert "MCUboot's image version" in (error.hint or "")
+
+
+def test_a_prerelease_version_is_refused(write_config) -> None:
+    """Matter's SoftwareVersion is a number; there is nowhere to put -rc1."""
+    text = VALID_CONFIG.replace("board:", 'version: "1.0.0-rc1"\n  board:')
+    errors = expect_failure(write_config(text))
+    assert find_error(errors, "is not a usable device version")
+
+
+def test_the_version_reaches_the_kconfig_fragment(write_config) -> None:
+    text = VALID_CONFIG.replace("board:", 'version: "1.2.3"\n  board:')
+    model = resolve_file(write_config(text))
+    assert 'CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="1.2.3"' in model.build.kconfig
+    assert "CONFIG_CHIP_DEVICE_SOFTWARE_VERSION=16909056" in model.build.kconfig

@@ -9,3 +9,7 @@
 if(CONFIG_MCUHOME_RTT_REINIT)
   add_subdirectory(debug)
 endif()
+
+if(CONFIG_MCUHOME_HEALTH)
+  add_subdirectory(health)
+endif()

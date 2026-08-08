@@ -60,6 +60,7 @@ from mcuhome import (
     container,
     export,
     imgtool,
+    ota,
     pairing,
     provision,
     registry,
@@ -393,14 +394,39 @@ def _resolve_build_key(args: argparse.Namespace) -> tuple[Path, signing.SigningK
     return path, None
 
 
-def _cmd_build(args: argparse.Namespace) -> int:
-    tree, entry = resolve_device(args.device, config_root=args.config_root)
-    args.json_root = tree.root
-    as_json = getattr(args, "json", False)
-    model = load_device_model(entry, tree=tree)
+def _build_input(args: argparse.Namespace) -> tuple[DeviceModel, Path]:
+    """The model to build and where to build it, from either input form.
 
-    out_dir = args.build_dir or tree.root / BUILD_DIR / model.device.name
-    written = write_tree(model, out_dir=out_dir, config_name=entry.name)
+    Two ways in, one result. The normal one runs stages 1-3 on a device
+    configuration; ``--model`` takes a canonical model that some other
+    machine already resolved and starts at stage 4 (builder-pipeline.md
+    §6, dashboard ADR 0007 decision 4). The second path deliberately never
+    touches a configuration tree — a build server has no business holding
+    one, and no business holding the secrets file next to it.
+    """
+    if args.model is not None:
+        model = api.read_model(Path(args.model))
+        # No tree to hang the default on, so the build directory is
+        # relative to where the command was run. A caller that cares —
+        # every build server does — passes --build-dir.
+        root = Path.cwd()
+    else:
+        tree, entry = resolve_device(args.device, config_root=args.config_root)
+        args.json_root = tree.root
+        model = load_device_model(entry, tree=tree)
+        root = tree.root
+    return model, args.build_dir or root / BUILD_DIR / model.device.name
+
+
+def _cmd_build(args: argparse.Namespace) -> int:
+    as_json = getattr(args, "json", False)
+    model, out_dir = _build_input(args)
+
+    # The configuration's file name comes out of the model rather than out
+    # of the path this command was given: the generated files name it in
+    # their header, and stage 4 has to be a function of the model alone or
+    # a --model build could not reproduce a direct build byte for byte.
+    written = write_tree(model, out_dir=out_dir, config_name=model.device.source)
     generated = [str(path.relative_to(out_dir)) for path in written]
 
     if not as_json:
@@ -479,6 +505,17 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
     images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
     merged = workspace.merged_image(plan.build_dir)
+    # The .ota wraps the SIGNED image, so a --no-sign build has nothing to
+    # wrap yet: mcuhome sign writes it afterwards, where the key is
+    # (ADR 0015 decision 8). The manifest states the OTA parameters either
+    # way, which is what lets that second machine do it at all.
+    ota_image = None
+    if not args.no_sign:
+        ota_image = _write_ota(
+            model,
+            out_dir=out_dir.resolve(),
+            signed=plan.build_dir / plan.app_dir.name / "zephyr" / "zephyr.signed.bin",
+        )
     manifest = manifest_module.build_manifest(
         model,
         out_dir=out_dir.resolve(),
@@ -490,6 +527,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         jobs=resolved_jobs.value,
         signed_by_the_build=not args.no_sign,
         merged=merged,
+        ota_image=ota_image,
     )
     manifest_path = manifest_module.write_manifest(manifest, out_dir=out_dir.resolve())
 
@@ -518,6 +556,9 @@ def _cmd_build(args: argparse.Namespace) -> int:
         )
     )
     print(f"  {manifest_path}")
+    if ota_image is not None:
+        print()
+        print(_ota_note(ota_image))
     layout = format_flash_layout(model.device.board)
     if layout:
         print()
@@ -527,6 +568,37 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(_detached_next_step(out_dir))
     _print_commissioning(model)
     return 0
+
+
+def _write_ota(model: DeviceModel, *, out_dir: Path, signed: Path) -> ota.OtaImage | None:
+    """Wrap the signed image in a Matter OTA file, when this device can take one.
+
+    Returns None — silently, and correctly — for a board whose update
+    scheme has no staging slot and for a device without a Matter stack:
+    neither can be updated over the air, so an .ota file for it would be a
+    file nothing can deliver.
+    """
+    parameters = manifest_module.ota_parameters(model)
+    if parameters is None or not signed.is_file():
+        return None
+    return ota.write_ota_image(
+        payload=signed,
+        output=out_dir / ota.ota_file_name(model.device.name, parameters.version),
+        vendor_id=parameters.vendor_id,
+        product_id=parameters.product_id,
+        version=parameters.version,
+    )
+
+
+def _ota_note(image: ota.OtaImage) -> str:
+    return (
+        f"Matter OTA image (version {image.version}, "
+        f"SoftwareVersion {image.software_version}):\n"
+        f"    {image.path}\n"
+        "Put it where your controller's OTA provider looks for images; the device "
+        "downloads it\nover Thread once a controller announces the provider or the "
+        "next periodic query runs."
+    )
 
 
 def _drop_unsigned_lookalikes(build_dir: Path, *, app_image: str) -> None:
@@ -659,10 +731,20 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         out_dir=plan.out_dir,
         files=plan.outputs,
     )
+    # Now, and not during the build: the .ota wraps the signed image, and
+    # until this command ran there was none (ADR 0015 decision 8). The
+    # parameters come out of the manifest, so this machine needs neither
+    # the device configuration nor the Matter SDK.
+    ota_image = _sign_ota(data, out_dir=plan.out_dir, outputs=plan.outputs)
+    if ota_image is not None:
+        manifest_module.record_ota(data, ota_image, out_dir=plan.out_dir)
     manifest_module.dump_manifest(data, out_dir=plan.out_dir)
     print(f"Signed the application image of {plan.out_dir} with {plan.key}:")
     for path in plan.outputs:
         print(f"  {path}")
+    if ota_image is not None:
+        print()
+        print(_ota_note(ota_image))
     print()
     print(
         f"imgtool sign --version {plan.parameters.version} "
@@ -680,6 +762,32 @@ def _cmd_sign(args: argparse.Namespace) -> int:
             "separately, or build with signing on."
         )
     return 0
+
+
+def _sign_ota(data: dict, *, out_dir: Path, outputs: list[Path]) -> ota.OtaImage | None:
+    """The .ota file for a build that was signed detached, if it can have one.
+
+    Everything needed comes from the manifest: the OTA block is present
+    exactly when the device can be updated over the air, and it carries the
+    version and the identifiers the header needs. The device name comes
+    from the manifest too, so the file lands under the same name an inline
+    build would have given it.
+    """
+    block = data.get("ota")
+    if not isinstance(block, dict):
+        return None
+    signed = next((path for path in outputs if path.suffix == ".bin"), None)
+    if signed is None:  # pragma: no cover - the builder writes both forms
+        return None
+    parameters = manifest_module.OtaEntry.from_dict(block)
+    device = str((data.get("device") or {}).get("name") or "device")
+    return ota.write_ota_image(
+        payload=signed,
+        output=out_dir / ota.ota_file_name(device, parameters.version),
+        vendor_id=parameters.vendor_id,
+        product_id=parameters.product_id,
+        version=parameters.version,
+    )
 
 
 def _cmd_public_key(args: argparse.Namespace) -> int:
@@ -810,13 +918,33 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.set_defaults(func=_cmd_validate)
 
     build_parser_ = subparsers.add_parser("build", help="build firmware for a device")
-    build_parser_.add_argument("device", help="device folder name or path")
+    # Two ways to say what to build, and exactly one of them per run. The
+    # second exists for the build server (dashboard ADR 0007 decision 4):
+    # the canonical model is the wire format, so a machine that receives
+    # one starts at stage 4 and never sees the configuration tree — or the
+    # secrets file next to it.
+    build_input = build_parser_.add_mutually_exclusive_group(required=True)
+    build_input.add_argument("device", nargs="?", help="device folder name or path")
+    build_input.add_argument(
+        "--model",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "build a canonical device model (device-model.json) that has already "
+            "been resolved elsewhere, skipping load/validate/resolve — no "
+            "configuration tree and no secrets are read"
+        ),
+    )
     build_parser_.add_argument(
         "--build-dir",
         type=Path,
         default=None,
         metavar="PATH",
-        help=f"where to generate the application (default: <tree root>/{BUILD_DIR}/<device>)",
+        help=(
+            f"where to generate the application (default: <tree root>/{BUILD_DIR}/<device>, "
+            f"or ./{BUILD_DIR}/<device> with --model)"
+        ),
     )
     build_parser_.add_argument(
         "--generate-only",

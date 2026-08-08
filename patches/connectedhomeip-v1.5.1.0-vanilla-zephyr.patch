@@ -205,6 +205,21 @@ index 597fcacab1..bc6fc97481 100644
  constexpr uint8_t kAdvertisingFlags    = BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR;
  
  const bt_uuid_128 UUID128_CHIPoBLEChar_RX =
+diff --git a/src/platform/Zephyr/OTAImageProcessorImpl.cpp b/src/platform/Zephyr/OTAImageProcessorImpl.cpp
+index 279cae475f..fe530ae840 100644
+--- a/src/platform/Zephyr/OTAImageProcessorImpl.cpp
++++ b/src/platform/Zephyr/OTAImageProcessorImpl.cpp
+@@ -67,8 +67,8 @@ CHIP_ERROR OTAImageProcessorImpl::PrepareDownloadImpl()
+         return System::MapErrorZephyr(-EFAULT);
+     }
+ 
+-    int err = stream_flash_init(&mStream, flash_dev, mBuffer, sizeof(mBuffer), FIXED_PARTITION_OFFSET(slot1_partition),
+-                                FIXED_PARTITION_SIZE(slot1_partition), NULL);
++    int err = stream_flash_init(&mStream, flash_dev, mBuffer, sizeof(mBuffer), PARTITION_OFFSET(slot1_partition),
++                                PARTITION_SIZE(slot1_partition), NULL);
+ 
+     if (err)
+     {
 diff --git a/src/platform/Zephyr/PlatformManagerImpl.cpp b/src/platform/Zephyr/PlatformManagerImpl.cpp
 index ec21ff4683..15a6af421d 100644
 --- a/src/platform/Zephyr/PlatformManagerImpl.cpp

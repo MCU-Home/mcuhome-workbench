@@ -37,7 +37,10 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from mcuhome import ota
+
 __all__ = [
+    "DEFAULT_SOURCE",
     "MODEL_VERSION",
     "AttrModel",
     "BuildModel",
@@ -62,6 +65,12 @@ __all__ = [
 #: every build manifest.
 MODEL_VERSION = 1
 
+#: Configuration file name assumed for a model that does not state one —
+#: which is what a model written before this field existed looks like. It
+#: is the entry name of every device folder (:data:`mcuhome.tree.DEVICE_ENTRY`),
+#: so the assumption is the common case rather than a placeholder.
+DEFAULT_SOURCE = "main.yaml"
+
 
 @dataclass(frozen=True)
 class DeviceMeta:
@@ -69,6 +78,18 @@ class DeviceMeta:
     friendly_name: str
     board: str
     power_source: str
+    #: SemVer string (ADR 0005). It becomes MCUboot's image version, the
+    #: Matter SoftwareVersion a controller compares, and the version in the
+    #: .ota file's header — all through mcuhome.ota, which is the only
+    #: module that maps it.
+    version: str = ota.DEFAULT_VERSION
+    #: File name of the configuration this model was resolved from, with
+    #: no directory part. It is in the model because the generated
+    #: artifacts name it in their "generated from" header, and stage 4
+    #: reads the model and nothing else (builder-pipeline.md §1.4) — so a
+    #: build server that only ever sees the model has to be able to
+    #: produce the same bytes the machine that resolved it would have.
+    source: str = DEFAULT_SOURCE
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +97,8 @@ class DeviceMeta:
             "friendly_name": self.friendly_name,
             "board": self.board,
             "power_source": self.power_source,
+            "version": self.version,
+            "source": self.source,
         }
 
     @staticmethod
@@ -85,6 +108,12 @@ class DeviceMeta:
             friendly_name=data["friendly_name"],
             board=data["board"],
             power_source=data["power_source"],
+            # Tolerated rather than required, and deliberately not a
+            # MODEL_VERSION bump: a model written before device.version
+            # existed describes a device whose version nobody stated, and
+            # the default is exactly what that device was built with.
+            version=data.get("version", ota.DEFAULT_VERSION),
+            source=data.get("source", DEFAULT_SOURCE),
         )
 
 

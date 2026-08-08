@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from mcuhome import __version__, registry, schema
+from mcuhome import __version__, ota, registry, schema
 from mcuhome.model import MODEL_VERSION
 
 __all__ = [
@@ -88,6 +88,11 @@ def _update_scheme(scheme: registry.UpdateSchemeDef) -> dict[str, Any]:
         "board_class": scheme.board_class,
         "mcuboot_mode": scheme.mcuboot_mode,
         "staging": scheme.staging,
+        # Whether a commissioned device on this board can be updated over
+        # the air (ADR 0015 decision 5). The dashboard needs it to know
+        # whether an update it has built is deliverable without a cable, or
+        # whether the user has to be told to plug the device in.
+        "matter_ota": scheme.matter_ota,
         "recovery": list(scheme.recovery),
         "erase_block_size": scheme.erase_block_size,
         "write_block_size": scheme.write_block_size,
@@ -340,6 +345,15 @@ def config_json_schema() -> dict[str, Any]:
                     "board": _string(
                         "Zephyr board target, verbatim.",
                         enum=sorted(registry.BOARDS),
+                    ),
+                    "version": _string(
+                        "Firmware version of this device, as SemVer. It becomes "
+                        "MCUboot's image version, the Matter SoftwareVersion a "
+                        "controller compares when deciding whether an update is "
+                        f"newer, and the version in the .ota file. Defaults to "
+                        f"{ota.DEFAULT_VERSION}; each field is at most "
+                        f"{ota.VERSION_FIELD_MAX} (ADR 0015 decision 9).",
+                        pattern=ota.VERSION_PATTERN,
                     ),
                     "power": {
                         "type": "object",

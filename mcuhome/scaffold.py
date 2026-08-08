@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcuhome import registry, schema
+from mcuhome import ota, registry, schema
 from mcuhome.errors import ConfigError, Location
 from mcuhome.tree import DEVICE_ENTRY, DEVICES_DIR, ConfigTree, find_config_root, is_config_root
 
@@ -133,6 +133,8 @@ def render_starter(name: str, *, board: str) -> str:
         f"  name: {name}",
         f"  friendly_name: {name.replace('-', ' ').title()}",
         f"  board: {board}",
+        f'  version: "{ota.DEFAULT_VERSION}"    # raise it for every image you want '
+        "a device to update to",
         "  # power:",
         "  #   source: battery    # mains (default) or battery",
         "",

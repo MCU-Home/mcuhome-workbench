@@ -164,8 +164,18 @@ now, even though v0.1 only ships "local"):
   MCUHome version). Output: the artifact set from §7 plus logs. No
   shared filesystem, no server-side session state.
 - **The canonical model is the wire format** — the request carries the
-  config bundle, the response carries `build-manifest.json` + artifacts;
-  both ends speak device-model JSON, nothing else.
+  resolved model, the response carries `build-manifest.json` + artifacts;
+  both ends speak device-model JSON, nothing else. **Implemented on the
+  builder side**: `mcuhome build --model <device-model.json>` starts at
+  stage 4, and reads no configuration tree and no secrets file at all
+  (dashboard ADR 0007 decision 4) — a build server has no business
+  holding either. `mcuhome.api.read_model` is the same thing in process,
+  and it refuses a `model_version` it does not implement by naming both
+  numbers rather than guessing. The two routes produce byte-identical
+  trees, which is what makes the split a contract instead of a hope; the
+  file name of the source configuration is a field of the model
+  (`device.source`) for exactly that reason, since the generated headers
+  name it and stage 4 may read nothing but the model.
 - **Version negotiation.** A build server advertises the MCUHome/builder
   image versions it can build; the dashboard picks the match for the
   config. Mismatch is an error, never a silent fallback.
@@ -190,7 +200,7 @@ sysbuild each image has its own sub-directory of the build tree
 | `zephyr.signed.hex` / `.bin` | application | what MCUboot chain-loads, and what an update carries |
 | `merged.hex` | — | every image at its own offset, for a full-chip flash over a debug probe |
 | `zephyr.uf2` | application | drag-and-drop bootstrap on UF2 boards (ADR 0016 decision 5) |
-| `ota.bin` | application | Matter OTA image (header + the signed payload above) |
+| `<device>-<version>.ota` | application | Matter OTA image (header + the signed payload above) |
 | `build-manifest.json` | — | device model + versions + image hashes — consumed by the dashboard |
 | `memory-report.txt` | per image | ROM/RAM footprint — regression tracking |
 
@@ -200,7 +210,7 @@ path in it is relative to that directory, because a manifest crosses a
 network (§6). It carries the device name, board and model version, the
 builder's version, the snippets and job count the build ran with, one
 entry per image (role, files, size, SHA-256 per file), the combined hex,
-and a `signing` block: the `imgtool` arguments — `--version`,
+an `ota` block (below), and a `signing` block: the `imgtool` arguments — `--version`,
 `--header-size`, `--slot-size`, `--align` — under imgtool's own option
 names, the input and output artifact of each format, and two booleans,
 `signed_by_the_build` (how the build ran, never changes) and `signed`
@@ -211,9 +221,23 @@ partition table stage 4 rendered into the overlay; the fourth,
 is deterministic apart from the sizes and hashes it measures: no
 timestamps, no host names, no absolute paths.
 
-`ota.bin` and `memory-report.txt` are still to come; the memory figures
-are reported to the terminal today and carried per image in the manifest
-as `flash_bytes`.
+**The Matter OTA file is implemented** (`mcuhome/ota.py`, ADR 0015
+decision 5). It is written for a device that can actually receive one —
+the board's update scheme has a staging slot and the device has a Matter
+stack — and it wraps the **signed** application image, so an inline build
+writes it at the end and a detached build only gets it from `mcuhome
+sign`. The manifest's `ota` block exists in both cases and carries the
+version, the Matter `SoftwareVersion` derived from it (ADR 0015 decision
+9), and the vendor and product IDs; `path`/`size`/`sha256` are null until
+the file exists. That is what lets the machine holding the signing key
+produce the .ota without a device configuration and without the Matter
+SDK: MCUHome writes the format itself rather than calling CHIP's
+`ota_image_tool.py`, and the pytest suite compares the two byte for byte
+wherever the SDK is present.
+
+`memory-report.txt` is still to come; the memory figures are reported to
+the terminal today and carried per image in the manifest as
+`flash_bytes`.
 
 The unsigned `zephyr.bin` is kept as well, and not only for the memory
 report: signing is a detached `imgtool` step over the finished binary, so

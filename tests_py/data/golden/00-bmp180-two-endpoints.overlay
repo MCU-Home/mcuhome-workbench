@@ -60,7 +60,12 @@
  * over a second endpoint on the ipc0 instance the 802.15.4 spinel channel already uses.
  * The network core must run mcuhome/samples/netcore-radio for this endpoint to exist; against the
  * upstream 802154_rpmsg image the node comes up and then fails every entropy request with -EIO
- * rather than falling back to a weaker generator. */
+ * rather than falling back to a weaker generator.
+ * Watchdog. ADR 0015's health amendment makes a hardware watchdog mandatory for every application
+ * image, and the framework finds it through the watchdog0 alias (the Zephyr convention). This SoC
+ * has the peripheral and this board does not name it, so the alias is board wiring exactly like the
+ * entropy redirection above. Without it the build stops with a message naming the alias, rather
+ * than producing an image with no watchdog in it. */
 / {
 	netcore_entropy: netcore-entropy {
 		compatible = "mcuhome,entropy-ipc";
@@ -70,6 +75,10 @@
 
 	chosen {
 		zephyr,entropy = &netcore_entropy;
+	};
+
+	aliases {
+		watchdog0 = &wdt0;
 	};
 };
 

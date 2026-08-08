@@ -149,6 +149,11 @@ is not.
 ```sh
 mcuhome validate <device> --json    # the resolved model, or the errors
 mcuhome build    <device> --json    # the build manifest (log on stderr)
+
+# A machine that only compiles takes the resolved model and nothing else:
+# no configuration tree, no secrets (dashboard ADR 0007 decision 4). The
+# generated tree is byte-identical to the one the direct route produces.
+mcuhome build --model device-model.json --build-dir build/<device>
 mcuhome schema                      # JSON Schema for main.yaml
 mcuhome schema registry             # boards, drivers, clusters, device types
 ```

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from conftest import VALID_CONFIG, expect_failure, find_error, line_of
+from conftest import VALID_CONFIG, expect_failure, find_error, line_of, resolve_file
 
 from mcuhome.errors import ConfigError, Location
 
@@ -101,3 +101,17 @@ def test_rendering_names_the_file(write_config, monkeypatch) -> None:
     rendered = errors[0].render()
     assert "in main.yaml, line" in rendered
     assert "Traceback" not in rendered
+
+
+def test_an_unquoted_version_says_to_quote_it(write_config) -> None:
+    """YAML reads 1.4 as a float; telling a user to learn that is not a message."""
+    text = VALID_CONFIG.replace("board:", "version: 1.4\n  board:")
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "is not a device version")
+    assert error.location.line == line_of(text, "version: 1.4")
+    assert 'version: "1.4.0"' in (error.hint or "")
+
+
+def test_a_quoted_version_is_accepted(write_config) -> None:
+    text = VALID_CONFIG.replace("board:", 'version: "2.3.4"\n  board:')
+    assert resolve_file(write_config(text)).device.version == "2.3.4"

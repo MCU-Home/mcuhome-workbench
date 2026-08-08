@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from fractions import Fraction
 
-from mcuhome import pairing, registry
+from mcuhome import ota, pairing, registry
 from mcuhome.errors import ErrorCollector, Location
 from mcuhome.schema import (
     RawBase,
@@ -176,6 +176,21 @@ def _check_device(config: RawConfig, errors: ErrorCollector) -> None:
                 hint=(
                     f"boards MCUHome supports today: {supported} — the value is the Zephyr "
                     "board target string, verbatim"
+                ),
+            )
+
+    if device.version is not None:
+        problem = ota.describe_version_problem(device.version)
+        if problem is not None:
+            errors.add(
+                f'"{device.version}" is not a usable device version.',
+                location=device.loc_of("version"),
+                hint=(
+                    f"{problem}. The version becomes three things at once: MCUboot's "
+                    "image version, the Matter SoftwareVersion a controller compares "
+                    "when it decides whether an update is newer, and the version in "
+                    "the .ota file — so it has to be a number MCUHome can map.\n"
+                    f'    version: "{ota.DEFAULT_VERSION}"'
                 ),
             )
 

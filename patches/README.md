@@ -7,7 +7,7 @@ v4.4.0. Background, root-cause analysis and per-patch rationale:
 
 | File | Applies to | Content |
 |---|---|---|
-| `connectedhomeip-v1.5.1.0-vanilla-zephyr.patch` | `modules/lib/connectedhomeip` | PSA/NCS-symbol guard fixes, mbedTLS-4 cert-code port, chip-module flag forwarding, Zephyr 4.x BLE macro, chip_crypto=psa default, pigweed env stub, `chip_gn.cmake` GN/ninja job cap |
+| `connectedhomeip-v1.5.1.0-vanilla-zephyr.patch` | `modules/lib/connectedhomeip` | PSA/NCS-symbol guard fixes, mbedTLS-4 cert-code port, chip-module flag forwarding, Zephyr 4.x BLE macro, chip_crypto=psa default, pigweed env stub, `chip_gn.cmake` GN/ninja job cap, deprecated `FIXED_PARTITION_*` macros in the Zephyr OTA image processor |
 | `zephyr-v4.4.0-nrf53-spinel-stack.patch` | `zephyr` | Overridable spinel send-thread stack size (hardcoded 1 KB upstream) |
 
 Apply with `git apply <patch>` inside the respective west project.
@@ -26,6 +26,18 @@ checkout. Never hand-edit hunk headers or line offsets — a diff and the
 tree it came from drift apart the moment one is edited without the
 other. Verify with `git apply --check <patch>` against a clean worktree
 of the pinned tag (`git worktree add <path> <tag>`) before trusting it.
+
+`src/platform/Zephyr/OTAImageProcessorImpl.cpp` uses
+`FIXED_PARTITION_OFFSET`/`FIXED_PARTITION_SIZE`, which Zephyr 4.4 marks
+`__DEPRECATED_MACRO` while CHIP's GN build compiles with `-Werror` — so on
+our pin `CONFIG_CHIP_OTA_REQUESTOR=y` does not warn, it fails to build
+(workspace `UPSTREAM-BUGS.md` entry C10). The hunk drops the `FIXED_`
+prefix, which is the spelling Zephyr 4.4 wants. It is needed even though
+MCUHome does not *use* that file — `components/matter/src/ota_image_processor.cpp`
+replaces its behaviour, because upstream's hardcodes the internal flash
+controller and MCUHome's staging slot is on an external part (ADR 0015
+decision 3) — because CHIP's `BUILD.gn` compiles it whenever the requestor
+is enabled, regardless of what the application instantiates.
 
 `config/common/cmake/chip_gn.cmake`'s `chip-gn` `ExternalProject_Add`
 calls a bare `ninja` for CHIP's own GN sub-build, so upstream it always
