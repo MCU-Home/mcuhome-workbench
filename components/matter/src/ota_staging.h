@@ -90,12 +90,51 @@ struct mcuhome_ota_staging {
 };
 
 /**
+ * How much of the end of the staging slot is erased before a download
+ * starts, rounded up to whole erase sectors.
+ *
+ * This has to cover MCUboot's image trailer, whose exact size the
+ * application deliberately cannot compute: boot_trailer_sz() lives in
+ * bootutil_area.h, an internal bootloader header, and re-deriving it here
+ * would be a second copy of a number that changes with the swap mode —
+ * the mistake this whole module exists to avoid. So the value below is an
+ * upper bound with its derivation written down instead:
+ *
+ *   trailer = status area + info fields
+ *   status area = BOOT_MAX_IMG_SECTORS * BOOT_STATUS_STATE_COUNT (3)
+ *                 * the slot's write-block size
+ *   info fields = magic (16) + swap_type/copy_done/image_ok/swap_size
+ *                 (4 * BOOT_MAX_ALIGN) + one more BOOT_MAX_ALIGN for
+ *                 swap-using-offset's TLV size = well under 128 B
+ *
+ * For an MCUHome class-A board — 912 KiB of slot in 4 KiB sectors, so 228
+ * sectors, on an SPI-NOR part with a write-block size of 1 — that is
+ * 228 * 3 * 1 + ~56 = under 1 KiB. 8 KiB still covers a slot four times
+ * that size on a part with a 4-byte write block. Two sector erases on the
+ * parts MCUHome uses, paid once at PrepareDownload.
+ */
+#define MCUHOME_OTA_STAGING_TRAILER_SZ 8192U
+
+/**
  * Open @p area_id for staging and position the write cursor where the
  * bootloader will look for the image header.
  *
- * Erases the sector the offset skips, so that a header left there by an
- * earlier, wrongly placed download cannot make the bootloader refuse the
- * new one.
+ * Erases two regions before the first byte is written:
+ *
+ *  - the sector the swap-using-offset rule skips (done by Zephyr's
+ *    flash_img_init_id), so that a header left there by an earlier,
+ *    wrongly placed download cannot make the bootloader refuse the new
+ *    one, and
+ *  - the last @ref MCUHOME_OTA_STAGING_TRAILER_SZ of the slot, which is
+ *    where MCUboot keeps the swap status. flash_img_init_id() flattens
+ *    sector 0 and nothing else, and the progressive erase that follows
+ *    only ever reaches as far as the image is long — so on a slot larger
+ *    than the image (912 KiB against ~690 KiB here) the swap-status bytes
+ *    of a PREVIOUS, failed attempt survive underneath a fresh
+ *    "upgrade pending" magic, and MCUboot's interrupted-swap resume logic
+ *    reads them as its own unfinished work. Erasing them costs two
+ *    sectors and removes a class of failure that would only ever show up
+ *    as a bricked swap on somebody's shelf.
  *
  * @param staging  Caller-owned context.
  * @param area_id  Flash-area ID of the staging slot, e.g.

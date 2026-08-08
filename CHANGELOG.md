@@ -508,3 +508,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MCUHOME_CHIP_JOBS` from the environment; `mcuhome/workspace.py` and
   `mcuhome/container.py` now set it alongside `-o=-j{JOBS}`, both paths
   reading the same constant.
+- OTA staging clears the end of the slot before a download starts
+  (`components/matter/src/ota_staging.c`). `flash_img_init_id()` flattens
+  the first sector and nothing else, and the progressive erase behind
+  `stream_flash` only reaches as far as the image is long — so on a slot
+  larger than the image (912 KiB against ~730 KiB on the reference board)
+  the swap-status bytes MCUboot keeps at the end of the slot outlive a
+  previous, failed attempt and sit there under a fresh "upgrade pending"
+  magic, where the interrupted-swap resume logic reads them as its own
+  unfinished work. The trailer region is now erased at `PrepareDownload`,
+  walking the page layout backwards from the end so that no erase-unit
+  size is assumed anywhere in the file, and a failure fails the download
+  rather than being swallowed. Two new cases in `tests/ota_staging` cover
+  it, including that the image between the two erased regions still reads
+  back exactly.

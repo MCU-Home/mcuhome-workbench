@@ -192,6 +192,66 @@ ZTEST(mcuhome_ota_staging, test_a_stale_first_sector_header_is_cleared)
 		     "opening the slot for staging has to clear the sector the offset skips");
 }
 
+/*
+ * The trailer region — the end of the slot, where MCUboot keeps the swap
+ * status — has to be blank before a download starts.
+ *
+ * flash_img_init_id() flattens sector 0 and nothing else, and the
+ * progressive erase behind stream_flash only reaches as far as the image
+ * is long. So on any slot bigger than the image (912 KiB against ~690 KiB
+ * on the reference board) the status bytes of a previous, failed attempt
+ * outlive it, sitting under a fresh "upgrade pending" magic where
+ * MCUboot's interrupted-swap resume logic will read them as its own
+ * unfinished work.
+ *
+ * The test writes a recognizable pattern over the last sectors, stages an
+ * image that comes nowhere near them, and asserts the pattern is gone.
+ */
+ZTEST(mcuhome_ota_staging, test_the_trailer_region_is_erased_before_a_download)
+{
+	const size_t trailer_off = (size_t)STAGING_SIZE - MCUHOME_OTA_STAGING_TRAILER_SZ;
+	static uint8_t stale[MCUHOME_OTA_STAGING_TRAILER_SZ];
+	const struct flash_area *area = NULL;
+
+	BUILD_ASSERT(MCUHOME_OTA_STAGING_TRAILER_SZ < STAGING_SIZE,
+		     "the trailer region has to be a tail of the slot, not the whole thing");
+
+	for (size_t i = 0; i < sizeof(stale); i++) {
+		stale[i] = (uint8_t)(i ^ 0x5AU);
+	}
+
+	zassert_ok(flash_area_open(STAGING_AREA_ID, &area), "staging slot not in the flash map");
+	zassert_ok(flash_area_write(area, trailer_off, stale, sizeof(stale)), "write failed");
+	flash_area_close(area);
+
+	stage_payload();
+
+	zassert_true(slot_range_is_erased(trailer_off, MCUHOME_OTA_STAGING_TRAILER_SZ),
+		     "opening the slot for staging has to erase the swap-status region, or a "
+		     "previous failed attempt's status survives under the new image");
+}
+
+/*
+ * ...and erasing it must not cost the image anything: the two regions the
+ * writer clears are at opposite ends of the slot, and the payload in
+ * between has to read back exactly.
+ */
+ZTEST(mcuhome_ota_staging, test_erasing_the_trailer_leaves_the_image_alone)
+{
+	const struct flash_area *area = NULL;
+
+	zassert_ok(flash_area_open(STAGING_AREA_ID, &area), "staging slot not in the flash map");
+	zassert_ok(flash_area_write(area, (size_t)STAGING_SIZE - 4U, kImageMagic, 4U),
+		   "write failed");
+	flash_area_close(area);
+
+	stage_payload();
+
+	slot_read(EXPECTED_IMAGE_OFFSET, readback, PAYLOAD_SIZE);
+	zassert_mem_equal(readback, payload, PAYLOAD_SIZE,
+			  "clearing the trailer must not disturb the staged image");
+}
+
 /* The offset is the writer's business, not the caller's: what the caller
  * counts is payload. */
 ZTEST(mcuhome_ota_staging, test_bytes_written_counts_payload_only)
