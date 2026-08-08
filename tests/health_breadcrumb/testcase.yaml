@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+common:
+  tags:
+    - mcuhome
+    - health
+tests:
+  mcuhome.health.breadcrumb:
+    # Host-run: breadcrumb_core.h is plain C over a caller-provided
+    # struct by construction. Plain native_sim needs a 32-bit host glibc
+    # that not every dev machine has; native/64 is the 64-bit variant
+    # (same pattern as tests/ota_image_header).
+    platform_allow:
+      - native_sim/native/64
+    integration_platforms:
+      - native_sim/native/64

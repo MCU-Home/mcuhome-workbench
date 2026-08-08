@@ -19,8 +19,11 @@
  *    been healthy for a while. Until it does, the next boot swaps the
  *    previous image back — which is what makes a bad over-the-air update
  *    recoverable without a cable.
+ * 4. **A crash leaves a breadcrumb behind.** Because (1) reboots, the
+ *    fault dump is gone by the time anybody looks; a small record in
+ *    reset-surviving RAM is logged on the next boot instead, and counted.
  *
- * All three are Kconfig-gated (lib/health/Kconfig) and all three default
+ * All four are Kconfig-gated (lib/health/Kconfig) and all four default
  * to on for an application image.
  */
 
@@ -103,6 +106,29 @@ static inline void mcuhome_health_alive(mcuhome_health_liveness_t slot)
 }
 
 #endif /* CONFIG_MCUHOME_WATCHDOG */
+
+#if defined(CONFIG_MCUHOME_CRASH_BREADCRUMB)
+
+/**
+ * @brief How many fatal errors this device has had since it last lost power.
+ *
+ * Counted in the same reset-surviving record that carries the crash
+ * breadcrumb, so it is a count of *crashes*, not of reboots: a clean
+ * restart, an over-the-air update or a watchdog reset does not raise it.
+ * Zero on a device that has not crashed since power-on — and also zero
+ * whenever the record did not survive intact, because a fault count that
+ * makes numbers up would be worse than none.
+ */
+uint32_t mcuhome_health_fault_count(void);
+
+#else /* !CONFIG_MCUHOME_CRASH_BREADCRUMB */
+
+static inline uint32_t mcuhome_health_fault_count(void)
+{
+	return 0U;
+}
+
+#endif /* CONFIG_MCUHOME_CRASH_BREADCRUMB */
 
 #if defined(CONFIG_MCUHOME_IMAGE_CONFIRM)
 

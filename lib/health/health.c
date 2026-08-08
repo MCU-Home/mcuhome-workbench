@@ -58,27 +58,73 @@
 
 #include <mcuhome/health.h>
 
+#include "breadcrumb.h"
+
 LOG_MODULE_REGISTER(mcuhome_health, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* --- Fatal errors reboot, they do not halt ------------------------------ */
 
 #ifdef CONFIG_MCUHOME_RESET_ON_FATAL_ERROR
-/* Overrides the weak definition in Zephyr's kernel/fatal.c, which logs
+
+/* Set on entry and never cleared. If the fatal path itself faults — which
+ * is not exotic, since the usual reason to be here at all is that memory
+ * is corrupted — the second pass must not walk the same code again. It
+ * takes the shortest route to the reset instead. */
+static bool in_fatal_path;
+
+/*
+ * Overrides the weak definition in Zephyr's kernel/fatal.c, which logs
  * "Halting system" and calls arch_system_halt(). A halted device is
  * unreachable and — the reason this belongs in the update block — never
  * reaches the boot in which MCUboot would revert an unconfirmed image.
  *
- * LOG_PANIC() first: it switches every backend to synchronous mode and
- * drains what is queued, so the fault report reaches the console before
- * the reset takes the console with it. Zephyr's own handler does the same
- * for the same reason.
+ * THE ORDER OF THE THREE STEPS BELOW IS THE POINT OF THIS FUNCTION.
+ *
+ * 1. The breadcrumb, first, before anything that can block. It is a
+ *    handful of stores into uninitialized RAM (breadcrumb.c) and it is
+ *    the only part of the fault report that survives if step 2 does not
+ *    reach a reader — which, on a deployed node, it never does.
+ *
+ * 2. LOG_PANIC(), which switches every backend to synchronous mode and
+ *    drains what is queued, so the fault dump reaches an attached
+ *    console before the reset takes the console with it. This step is
+ *    best-effort and it is the one that has to be BOUNDED, because
+ *    Zephyr's RTT backend blocks here by design: in panic mode
+ *    log_backend_rtt.c routes every write through data_out_block_mode(),
+ *    which waits for the host to drain the up-buffer — including when
+ *    the backend was configured for CONFIG_LOG_BACKEND_RTT_MODE_DROP,
+ *    whose whole promise is that it never blocks. The delay it waits
+ *    (LOG_BACKEND_RTT_RETRY_DELAY_MS) is declared inside
+ *    `if LOG_BACKEND_RTT_MODE_BLOCK`, so a DROP-mode build cannot even
+ *    set it and inherits the file's hardcoded 10 ms — once per write,
+ *    and in DROP mode a write is one character.
+ *    MCUHome therefore configures the backend for
+ *    CONFIG_LOG_BACKEND_RTT_MODE_OVERWRITE (snippets/debug-rtt), the one
+ *    mode whose output function — data_out_overwrite_mode() — has no
+ *    retry loop at all and cannot wait for a host in any mode. That is a
+ *    configuration decision, not a hope: it is what makes this step
+ *    finite, and it is why the snippet says so at length.
+ *
+ * 3. The reset. Reached unconditionally.
+ *
+ * A bench node was found sitting in a BusFault handler for over an hour
+ * on 2026-08-08 with all three of these mechanisms nominally in place;
+ * this ordering, the re-entrancy guard and the OVERWRITE setting are what
+ * that cost.
  */
 FUNC_NORETURN void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
-	ARG_UNUSED(esf);
+	bool reentered = in_fatal_path;
 
-	LOG_PANIC();
-	LOG_ERR("fatal error %u — rebooting", reason);
+	in_fatal_path = true;
+
+	if (!reentered) {
+		mcuhome_health_breadcrumb_record(reason, esf);
+
+		LOG_PANIC();
+		LOG_ERR("fatal error %u — rebooting", reason);
+	}
+
 	sys_reboot(SYS_REBOOT_COLD);
 
 	CODE_UNREACHABLE;

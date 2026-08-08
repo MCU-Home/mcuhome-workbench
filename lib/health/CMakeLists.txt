@@ -7,4 +7,5 @@
 
 zephyr_library()
 zephyr_library_sources(health.c)
+zephyr_library_sources_ifdef(CONFIG_MCUHOME_CRASH_BREADCRUMB breadcrumb.c)
 zephyr_library_sources_ifdef(CONFIG_MCUHOME_IMAGE_CONFIRM image_confirm.c)

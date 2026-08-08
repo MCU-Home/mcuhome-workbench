@@ -298,6 +298,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fields (container digest, SDK package hash, target board, sorted file
   integrity list); the rule is locked with context format version 1 and
   anchored by a golden vector in `tests_py/test_context.py`.
+- A crash now leaves a breadcrumb the next boot reports
+  (`CONFIG_MCUHOME_CRASH_BREADCRUMB`, `lib/health/breadcrumb.c`; ADR 0015
+  health amendment). A fatal error reboots, which is the right behaviour
+  and also the reason nobody ever learns what happened: the fault dump
+  goes out over a transport that on a deployed node has no reader, and
+  the reset takes the evidence with it. The handler now writes the reason
+  code, PC, LR and the SCB fault registers into `__noinit` RAM — plain
+  stores, before anything that can block — and the next boot logs that
+  record at `ERR` level and counts it (`mcuhome_health_fault_count()`).
+  It carries an integrity word rather than a magic word alone, because
+  that RAM holds junk after a power-up and belongs to MCUboot before it
+  belongs to the application: losing a report is acceptable, inventing
+  one is not. The record's logic sits in `lib/health/breadcrumb_core.h`
+  as plain C over a caller-provided struct, so the new
+  `tests/health_breadcrumb` suite drives every branch on the host — junk
+  patterns, a planted magic word, every single-bit flip of every field.
+  About 36 bytes of RAM.
 
 ### Changed
 

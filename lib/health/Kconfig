@@ -101,6 +101,29 @@ config MCUHOME_WATCHDOG_LIVENESS_SLOTS
 	  feed IS the proof that it schedules. The rest of the table is for
 	  components that come later.
 
+config MCUHOME_CRASH_BREADCRUMB
+	bool "Keep a crash breadcrumb across the reset and report it at boot"
+	default y
+	help
+	  A fatal error reboots (CONFIG_MCUHOME_RESET_ON_FATAL_ERROR), which
+	  is the right behaviour and also the reason nobody ever sees why:
+	  the fault dump goes out over a log transport that, on a device in
+	  the field, has no reader — and then the evidence is gone. This
+	  keeps a nine-word record of the fault in uninitialized RAM, which
+	  a soft reset does not clear, and logs it prominently on the next
+	  boot, when a reader may well be attached.
+
+	  What is kept: the reason code, PC and LR from the exception stack
+	  frame, the SCB fault registers as far as they still hold anything
+	  at that point, and a count of faults since the last power loss.
+	  Roughly 36 bytes of RAM, a handful of stores in the fault handler
+	  and one log line per boot.
+
+	  The record is protected by a checksum rather than a magic word
+	  alone, because the RAM it lives in holds junk after a power-up and
+	  belongs to MCUboot before it belongs to the application. Losing a
+	  report is acceptable; inventing one is not.
+
 config MCUHOME_IMAGE_CONFIRM
 	bool "Confirm the running image to MCUboot after a healthy delay"
 	default y

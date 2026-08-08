@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# One symbol, so that lib/health/breadcrumb.c can be compiled here.
+#
+# The real MCUHOME_CRASH_BREADCRUMB lives inside `if MCUHOME`
+# (lib/health/Kconfig), and MCUHOME pulls in the whole framework —
+# components/matter's CHIP dependency included, which cannot build on
+# native_sim (ADR 0014). Declaring the symbol locally is honest for what
+# this suite does: breadcrumb.c needs a linker section and a log module
+# and nothing else, and compiling the file that will actually ship is the
+# difference between testing the design and testing the code.
+
+config MCUHOME_CRASH_BREADCRUMB
+	bool
+	default y
+
+source "Kconfig.zephyr"
