@@ -522,3 +522,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than being swallowed. Two new cases in `tests/ota_staging` cover
   it, including that the image between the two erased regions still reads
   back exactly.
+- The CI west-workspace cache now covers `bootloader/`, and its key is
+  versioned (`west-2-…`). A cache hit skips `west update` entirely, so a
+  project the cache did not carry is simply absent from the workspace:
+  the first warm-cache run after the `ota_staging` suite appeared failed
+  on a missing `bootutil/bootutil_public.h`, which `flash_img` includes
+  via `CONFIG_IMG_MANAGER`. Versioning the key retires caches saved with
+  the old path list, which a key derived from `west.yml` alone would
+  happily restore.

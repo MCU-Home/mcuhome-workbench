@@ -131,6 +131,17 @@ jobs:
       # what `west update` produces. Zephyr and the modules are fetched
       # shallow and narrow, which is what keeps this cache small enough to
       # be worth having.
+      #
+      # The path list must cover EVERY directory west creates, because a
+      # cache hit skips `west update` entirely: a project the cache did
+      # not carry is then simply absent from the workspace. That is not
+      # hypothetical — mcuboot lands in bootloader/, the original list
+      # stopped at modules/, and the first warm-cache run after the
+      # ota_staging suite appeared failed on a missing
+      # bootutil/bootutil_public.h (flash_img includes it via
+      # CONFIG_IMG_MANAGER). The `west-2` segment versions the path set:
+      # bumping it retires caches saved with the old, incomplete list,
+      # which a key based on west.yml alone would happily restore.
       - name: Restore the west workspace
         id: west-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -139,7 +150,8 @@ jobs:
             .west
             zephyr
             modules
-          key: west-${{ runner.os }}-${{ hashFiles('mcuhome/west.yml') }}
+            bootloader
+          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome/west.yml') }}
 
       # Without the Matter SDK: every suite in tests/ is CHIP-free by
       # design (ADR 0014, and the reason tests/matter_tables/ tests the
