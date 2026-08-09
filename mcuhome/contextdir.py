@@ -51,6 +51,7 @@ __all__ = [
     "FileMismatch",
     "create_context",
     "read_context_manifest",
+    "sha256_file",
     "verify_context",
     "write_context_manifest",
 ]
@@ -99,7 +100,22 @@ class ContextFormatVersionError(BuildError):
 # --------------------------------------------------------------------------
 
 
-def _sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """The SHA-256 of a file **as it is on disk**, 64 lowercase hex digits.
+
+    The one definition in this package, and it takes a path rather than
+    bytes on purpose: ``build-container-contract.md`` §5.4 requires every
+    declared hash to be "read back from disk after ``fsync``, never taken
+    from a buffer", and a function that cannot be handed a buffer is the
+    one shape in which that rule cannot be broken by accident. The
+    spelling is bare, with no ``sha256:`` prefix, because "the key names
+    the algorithm" (§3.3.1).
+
+    It lives here because this module is the one that touches a
+    filesystem for the context format (the module docstring), and because
+    three private copies of it is how the two sides of §3.3 start
+    disagreeing about what "the hash of a file" means.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while block := handle.read(_HASH_BLOCK):
@@ -121,7 +137,7 @@ def _context_files(root: Path) -> tuple[ContextFile, ...]:
         relative = path.relative_to(root).as_posix()
         if relative == MANIFEST_FILE or relative.split("/", 1)[0] == BACKEND_DIR:
             continue
-        entries.append(ContextFile(path=relative, sha256=_sha256_file(path)))
+        entries.append(ContextFile(path=relative, sha256=sha256_file(path)))
     entries.sort(key=lambda entry: entry.path)
     return tuple(entries)
 

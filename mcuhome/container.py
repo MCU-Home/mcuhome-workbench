@@ -99,10 +99,12 @@ ZEPHYR_LINE = "4.4.0"
 #:
 #: r4 installs the program of the build-container contract at
 #: ``/mcuhome/run`` (§2.2) — a thin launcher over :mod:`mcuhome.abi`,
-#: which implements the invocation ABI and the ``describe`` action.
-#: Nothing invokes it yet, and the image still carries no
-#: ``org.mcuhome.*`` label, because a label claims conformance and
-#: conformance means all three actions of §7.
+#: which is where the invocation ABI and the actions of §7 live. That
+#: module is **not** image content: it arrives with the SDK mount, so
+#: adding an action to it does not change this image and does not bump
+#: this number. Nothing invokes the program yet, and the image still
+#: carries no ``org.mcuhome.*`` label — whether it may claim conformance
+#: is a decision of its own (``containers/builder/Dockerfile``).
 IMAGE_REVISION = 4
 
 #: GitHub Container Registry under the MCUHome organization. The package
@@ -315,29 +317,39 @@ def container_environment(
     started from. The Zephyr SDK, the toolchain variant and the tool
     paths are baked into the image; what has to be said here is only what
     depends on where the workspace is.
+
+    The variables a Matter build needs wherever it runs — the codegen
+    shim on ``PYTHONPATH``, ``ZEPHYR_BASE``, ``HOME``, and the two job
+    caps that nothing inherits — come from
+    :func:`~mcuhome.workspace.build_environment`, which is their one
+    definition. What this function adds is the two values that are true
+    of a ``docker run`` and of nothing else: the cache is at the fixed
+    mount point, not wherever the host keeps it.
+
+    ``PATH`` is deliberately **not** here. It is the image's, set by the
+    Dockerfile and inherited by the process docker starts; stating a
+    second one would replace the toolchain the image installed with
+    whatever this host happens to have.
     """
-    return {
+    env = workspace.build_environment(
+        {},
+        jobs=jobs,
+        # west does not export ZEPHYR_BASE, and the generated CMakeLists
+        # looks for the Matter SDK next to it. Stated unconditionally: the
+        # workspace is the one this command mounts, not one to go looking
+        # for.
+        zephyr_base=topdir / "zephyr",
         # CHIP's codegen imports a helper its release tarball is missing
         # (scripts/pyshim/README.md).
-        "PYTHONPATH": str(pyshim_dir),
-        # west does not export it, and the generated CMakeLists looks for
-        # the Matter SDK next to it.
-        "ZEPHYR_BASE": str(topdir / "zephyr"),
-        "HOME": CONTAINER_HOME,
-        "CCACHE_DIR": CONTAINER_CCACHE_DIR,
-        # Absolute paths under the workspace are hashed relative to it, so
-        # one cache serves several build directories — and, because the
-        # mount is path-identical, the same cache serves a --native build.
-        "CCACHE_BASEDIR": str(topdir),
-        # Same job count as the outer `-o=-j{jobs}`
-        # (workspace.west_build_command) — resolved once on the host
-        # (workspace.resolve_jobs) and passed in here rather than
-        # recomputed: the vendored CHIP GN sub-build otherwise ignores it
-        # entirely, see workspace.CHIP_JOBS_VAR, and so does each sysbuild
-        # image's own inner ninja, see workspace.CMAKE_JOBS_VAR.
-        workspace.CHIP_JOBS_VAR: str(jobs),
-        workspace.CMAKE_JOBS_VAR: str(jobs),
-    }
+        pyshim_dir=pyshim_dir,
+        home=Path(CONTAINER_HOME),
+    )
+    env["CCACHE_DIR"] = CONTAINER_CCACHE_DIR
+    # Absolute paths under the workspace are hashed relative to it, so one
+    # cache serves several build directories — and, because the mount is
+    # path-identical, the same cache serves a --native build.
+    env["CCACHE_BASEDIR"] = str(topdir)
+    return env
 
 
 def docker_run_command(

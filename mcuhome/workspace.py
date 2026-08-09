@@ -55,10 +55,13 @@ from mcuhome.errors import BuildError
 from mcuhome.generate import BOOTLOADER_IMAGE, DETACHED_SIGNING_VAR
 
 __all__ = [
+    "BIN_ARTIFACT",
     "BOOTLOADER_IMAGE",
     "BUILD_SUBDIR",
     "CHIP_JOBS_VAR",
     "CMAKE_JOBS_VAR",
+    "HEX_ARTIFACT",
+    "IMAGE_OUTPUT_DIR",
     "JOBS_VAR",
     "MERGED_IMAGE_GLOB",
     "PYSHIM_SUBDIR",
@@ -76,6 +79,7 @@ __all__ = [
     "build_images",
     "detect_jobs",
     "find_topdir",
+    "image_output",
     "installed_module_dir",
     "merged_image",
     "missing_tools",
@@ -126,6 +130,28 @@ def installed_module_dir() -> Path:
 #: (builder-pipeline.md §1.3), everything inside it is machine spoil that
 #: can be deleted at any time.
 BUILD_SUBDIR = "build"
+
+#: Sysbuild's output layout, stated once. Every image of a sysbuild build
+#: gets a directory named after the image, and Zephyr leaves that image's
+#: artifacts in a ``zephyr/`` directory inside it —
+#: ``<build dir>/<image>/zephyr/zephyr.hex`` and so on. Three modules read
+#: that layout (this one, :mod:`mcuhome.report`, :mod:`mcuhome.abi`), and
+#: a fourth spelling of it is how one of them would keep reading a layout
+#: Zephyr had moved.
+IMAGE_OUTPUT_DIR = "zephyr"
+
+#: The two raw forms of a linked image, under the names Zephyr gives
+#: them. Named rather than spelled out because the contract's ``build``
+#: delivers them under names of its own (:mod:`mcuhome.abi`) and the
+#: mapping is only readable while one side of it is a constant.
+HEX_ARTIFACT = "zephyr.hex"
+BIN_ARTIFACT = "zephyr.bin"
+
+
+def image_output(build_dir: Path, image: str) -> Path:
+    """Where sysbuild leaves *image*'s artifacts inside *build_dir*."""
+    return build_dir / image / IMAGE_OUTPUT_DIR
+
 
 #: Environment variable that overrides job-count auto-detection outright
 #: (see :func:`resolve_jobs`) — the escape hatch for a machine
@@ -395,11 +421,44 @@ def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> Resolve
 # --------------------------------------------------------------------------
 
 
-def build_environment(env: dict[str, str], *, jobs: int, pyshim_dir: Path) -> dict[str, str]:
+def build_environment(
+    env: dict[str, str],
+    *,
+    jobs: int,
+    pyshim_dir: Path,
+    zephyr_base: Path | None = None,
+    tmpdir: Path | None = None,
+    home: Path | None = None,
+) -> dict[str, str]:
     """*env* plus what the Matter build needs, without mutating the input.
 
     *env* is stated rather than read from the process, for the reason
     :func:`resolve_jobs` gives.
+
+    **This is the one definition of a Matter build environment**, and all
+    three callers reach it: :func:`plan_build` for ``--native``,
+    :func:`mcuhome.container.container_environment` for the ``docker
+    run``, and :class:`mcuhome.abi` for the build-container contract's
+    ``build`` action. Each adds what only it knows — a ccache location,
+    the contract's ``TMPDIR`` — and none of them restates what is here. A
+    second copy is how one of them silently lost ``HOME``.
+
+    ``ZEPHYR_BASE`` is filled in only when it is not already set: west
+    would follow a value someone set on purpose too, and a builder that
+    silently disagrees with the tool it drives is worse than one that
+    leaves the choice alone. Whether the directory is really there is the
+    *caller's* question, because only the caller knows what it is looking
+    at — :func:`plan_build` probes a host workspace it was pointed at, an
+    image states the workspace it baked.
+
+    ``TMPDIR`` and ``HOME`` are set unconditionally when given, and both
+    override an inherited value on purpose. The contract's ``tmp`` is per
+    invocation and emptied by the backend, which is exactly what a child
+    process should be scribbling in (build-container-contract.md §4); and
+    an inherited ``HOME`` inside a container belongs to whoever built the
+    image, not to the UID the build runs as — see
+    :data:`mcuhome.container.CONTAINER_HOME` for what that costs when it
+    is missing.
     """
     prepared = dict(env)
     existing = prepared.get("PYTHONPATH", "")
@@ -416,6 +475,12 @@ def build_environment(env: dict[str, str], *, jobs: int, pyshim_dir: Path) -> di
     # see CMAKE_JOBS_VAR.
     prepared[CHIP_JOBS_VAR] = str(jobs)
     prepared[CMAKE_JOBS_VAR] = str(jobs)
+    if zephyr_base is not None and not prepared.get("ZEPHYR_BASE"):
+        prepared["ZEPHYR_BASE"] = str(zephyr_base)
+    if tmpdir is not None:
+        prepared["TMPDIR"] = str(tmpdir)
+    if home is not None:
+        prepared["HOME"] = str(home)
     return prepared
 
 
@@ -603,17 +668,20 @@ def plan_build(
     (:func:`mcuhome.tree.open_tree`).
     """
     topdir = require_topdir(module_dir, cwd)
-    prepared = build_environment(env, jobs=jobs, pyshim_dir=module_dir / PYSHIM_SUBDIR)
     # ``west build`` does not export ZEPHYR_BASE (it resolves Zephyr through
     # the manifest and the CMake package registry), yet CMake code outside
     # Zephyr's own — the generated application's search for the Matter SDK,
-    # among others — reasonably expects it. Fill it in, but never overwrite
-    # a value someone set on purpose: west would follow that value too, and
-    # a builder that silently disagrees with the tool it drives is worse
-    # than one that leaves the choice alone.
+    # among others — reasonably expects it. build_environment fills it in
+    # and states the "never overwrite" rule; whether the directory is
+    # really there is this caller's question, because a host workspace is
+    # something this function was pointed at rather than something it made.
     zephyr = topdir / "zephyr"
-    if not prepared.get("ZEPHYR_BASE") and zephyr.is_dir():
-        prepared["ZEPHYR_BASE"] = str(zephyr)
+    prepared = build_environment(
+        env,
+        jobs=jobs,
+        pyshim_dir=module_dir / PYSHIM_SUBDIR,
+        zephyr_base=zephyr if zephyr.is_dir() else None,
+    )
     require_tools(prepared)
     app_dir = out_dir / app_subdir
     build_dir = out_dir / BUILD_SUBDIR
@@ -699,8 +767,8 @@ def refuse_failed_build(code: int, *, build_dir: Path) -> BuildError:
 #: it *is* the trust anchor.
 _ARTIFACT_NAMES = (
     "zephyr.elf",
-    "zephyr.hex",
-    "zephyr.bin",
+    HEX_ARTIFACT,
+    BIN_ARTIFACT,
     "zephyr.signed.hex",
     "zephyr.signed.bin",
     "zephyr.signed.confirmed.hex",
@@ -712,7 +780,7 @@ _ARTIFACT_NAMES = (
 #: ``Memory region / FLASH / Used Size`` is byte-identical to the size of
 #: this file, which makes it the one number available for every image of a
 #: multi-image build regardless of what survived in the log.
-_FLASH_ARTIFACT = "zephyr.bin"
+_FLASH_ARTIFACT = BIN_ARTIFACT
 
 #: Human-readable role per sysbuild image name. Anything else is reported
 #: under its own name without a role, which is what a future third image
@@ -723,7 +791,7 @@ _IMAGE_ROLES = {BOOTLOADER_IMAGE: "bootloader"}
 
 def artifacts(build_dir: Path) -> list[Path]:
     """The images one image directory contains, in reporting order."""
-    output = build_dir / "zephyr"
+    output = build_dir / IMAGE_OUTPUT_DIR
     return [output / name for name in _ARTIFACT_NAMES if (output / name).is_file()]
 
 
@@ -756,7 +824,7 @@ def build_images(build_dir: Path, *, app_image: str) -> list[ImageArtifacts]:
         files = artifacts(build_dir / name)
         if not files:
             continue
-        binary = build_dir / name / "zephyr" / _FLASH_ARTIFACT
+        binary = image_output(build_dir, name) / _FLASH_ARTIFACT
         found.append(
             ImageArtifacts(
                 name=name,

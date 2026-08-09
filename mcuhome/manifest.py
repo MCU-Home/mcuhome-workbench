@@ -46,13 +46,13 @@ a consumer does not have to know how Zephyr derives them.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from mcuhome import ota, pairing, registry
+from mcuhome.contextdir import sha256_file
 from mcuhome.errors import BuildError
 from mcuhome.model import DeviceModel
 
@@ -85,19 +85,6 @@ MANIFEST_FILE = "build-manifest.json"
 #: it stays readable).
 MANIFEST_VERSION = 1
 
-#: Read in blocks rather than whole: a Matter image is most of a megabyte
-#: and there is no reason for it to be in memory twice.
-_HASH_BLOCK = 1 << 20
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while block := handle.read(_HASH_BLOCK):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 # --------------------------------------------------------------------------
 # Pieces
 # --------------------------------------------------------------------------
@@ -119,7 +106,7 @@ class FileEntry:
         return cls(
             path=path.resolve().relative_to(out_dir.resolve()).as_posix(),
             size=path.stat().st_size,
-            sha256=_sha256(path),
+            sha256=sha256_file(path),
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -42,9 +42,11 @@ from mcuhome.model import DeviceModel
 
 __all__ = [
     "HEADER_SIZE_SYMBOL",
+    "KCONFIG_FILE",
     "SIGN_VERSION_DEFAULT",
     "SIGN_VERSION_SYMBOL",
     "build_manifest",
+    "kconfig_path",
     "read_kconfig",
     "signing_parameters",
     "write_manifest",
@@ -65,8 +67,15 @@ SIGN_VERSION_DEFAULT = "0.0.0+0"
 #: which builds, flashes and then does not boot.
 HEADER_SIZE_SYMBOL = "CONFIG_ROM_START_OFFSET"
 
-#: Sub-directory of an image's build directory that holds its artifacts.
-_OUTPUT_DIR = "zephyr"
+#: The built application's Kconfig, next to its artifacts. Sysbuild's
+#: output layout itself is :data:`mcuhome.workspace.IMAGE_OUTPUT_DIR`, so
+#: this module states the one file it reads there and nothing else.
+KCONFIG_FILE = ".config"
+
+
+def kconfig_path(build_dir: Path, app_image: str) -> Path:
+    """Where the built application left the ``.config`` this module reads."""
+    return workspace.image_output(build_dir, app_image) / KCONFIG_FILE
 
 
 def read_kconfig(path: Path) -> dict[str, str]:
@@ -142,16 +151,19 @@ def _signing_block(
     scheme: registry.UpdateSchemeDef,
     signed_by_the_build: bool,
 ) -> SigningBlock:
-    output = build_dir / app_image / _OUTPUT_DIR
+    output = workspace.image_output(build_dir, app_image)
     relative = (output.resolve().relative_to(out_dir.resolve())).as_posix()
     return SigningBlock(
         image=app_image,
         signed_by_the_build=signed_by_the_build,
         signature_type=registry.SIGNATURE_TYPE,
         parameters=signing_parameters(
-            scheme, kconfig=read_kconfig(build_dir / app_image / _OUTPUT_DIR / ".config")
+            scheme, kconfig=read_kconfig(kconfig_path(build_dir, app_image))
         ),
-        inputs={"bin": f"{relative}/zephyr.bin", "hex": f"{relative}/zephyr.hex"},
+        inputs={
+            "bin": f"{relative}/{workspace.BIN_ARTIFACT}",
+            "hex": f"{relative}/{workspace.HEX_ARTIFACT}",
+        },
         outputs={
             "bin": f"{relative}/zephyr.signed.bin",
             "hex": f"{relative}/zephyr.signed.hex",

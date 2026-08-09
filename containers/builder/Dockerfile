@@ -28,10 +28,11 @@
 #
 # Since r4 there is a third thing: the PROGRAM of the build-container
 # contract at /mcuhome/run (docs/design/build-container-contract.md §2.2),
-# a thin launcher over mcuhome.abi. It implements the invocation ABI and
-# the `describe` action; `build` and `verify` refuse with
-# `unsupported.action`, which is why the image still carries no MCUHome
-# contract label — see the COPY in stage 3.
+# a thin launcher over mcuhome.abi, which is where the invocation ABI and
+# all three actions of §7 live. The abi module arrives with the SDK mount,
+# not with this image, so what the image contributes here is the launcher
+# and the fixed path. The image still carries no MCUHome contract label —
+# see the COPY in stage 3.
 #
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
@@ -405,9 +406,12 @@ COPY --from=workspace /mcuhome /mcuhome
 # namespace, and this file has to survive it.
 #
 # The image still carries no MCUHome contract label. Such a label claims
-# conformance, and conformance means all three actions of §7 — this
-# program implements `describe` and refuses `build` and `verify` with
-# `unsupported.action`. The labels arrive with the actions.
+# conformance of the IMAGE, and the program it launches is not in the
+# image: mcuhome.abi arrives with the SDK mount, and what it can do
+# depends on the SDK package a session was given. Whether this image may
+# claim conformance is therefore a decision of its own, taken once the
+# three actions have been reviewed against a real backend — not a side
+# effect of an action landing in the SDK.
 COPY containers/builder/run /mcuhome/run
 RUN chmod 0755 /mcuhome/run
 

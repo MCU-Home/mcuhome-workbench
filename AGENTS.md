@@ -31,6 +31,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | Path | Role |
 |---|---|
 | `west.yml` | West manifest (T2 topology) — Zephyr + modules, pinned revisions |
+| `mcuhome-sdk.json`, `bin/generate` | The SDK package's §6.1 interface: the metadata file names `bin/generate` as the code-generation entry point a build container invokes as a child process (body: `mcuhome/sdkentry.py`) |
 | `zephyr/module.yml` | Makes this repo consumable as a Zephyr module |
 | `CMakeLists.txt`, `Kconfig` | Zephyr module build entry points |
 | `mcuhome/` | Python package: YAML validation, codegen, build orchestration; `mcuhome.api` is the supported surface. The `mcuhome` command line is a thin shell in its own repo ([mcu-home/cli](https://github.com/mcu-home/cli)) |

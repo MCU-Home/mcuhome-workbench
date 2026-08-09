@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The SDK package's entry point (build-container-contract.md §6.1).
+# `mcuhome-sdk.json` at the SDK root names this file as
+# `generate.program`, and a build container invokes it as
+#
+#     <trees.sdk.path>/bin/generate generate <request-document path>
+#
+# — §5.1's ABI unchanged. Everything it does is call
+# mcuhome.sdkentry.main() with that argv; the action lives there, not
+# here, so a test can drive it in-process while this file stays the
+# three lines a launcher should be.
+#
+# The runtime this file needs is what `generate.runtime` declares
+# ("python3"), and providing it is the conforming container's duty
+# (E30) — which is why the shebang may assume it. sys.path gains the
+# SDK root because the mcuhome package sits inside the SDK tree and
+# this launcher is invoked by absolute path from anywhere, with no
+# install step and no PYTHONPATH promise (§5.1: no environment
+# variable carries information the program needs).
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mcuhome.sdkentry import main  # noqa: E402 - needs the path above
+
+raise SystemExit(main(sys.argv))
