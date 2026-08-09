@@ -179,7 +179,7 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 
 # Generate AND compile it (stages 4-5), from the workspace top directory.
 # Compiles in the builder image (ADR 0007) — pull it once:
-#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r1
+#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r3
 # Writes the application to build/<device>/app and the CMake tree to
 # build/<device>/build — one sub-directory per sysbuild image (ADR 0015:
 # mcuboot + the signed application) — and reports both with their
@@ -192,8 +192,11 @@ mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
 # The same, on the host toolchain instead of in the container
 mcuhome build … --native
 
-# Build the builder image from source (containers/builder/README.md)
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r1 containers/builder
+# Build the builder image from source (containers/builder/README.md).
+# The context is the repository root, not containers/builder/: since r3
+# the image bakes a west workspace, so west.yml and patches/ are inputs.
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 \
+  -f containers/builder/Dockerfile .
 
 # Python lint/format
 ruff check --fix . && ruff format .
@@ -210,6 +213,16 @@ compiles inside the builder image, which carries the Zephyr SDK, west,
 absolute path, as the calling user, so nothing is left behind owned by
 root. `mcuhome validate` and `--generate-only` need even less — Python,
 and nothing else. See `containers/builder/README.md`.
+
+Since image revision r3 the image also **carries** a west workspace of
+its own at `/mcuhome/workspace` — Zephyr, the modules, MCUboot and the
+Matter SDK at the revisions `west.yml` pins, patched, with the manifest
+repository's directory left empty for the SDK mount (ADR 0020 decision
+E5: `git describe` in the workspace decides `BUILD_VERSION` and therefore
+the firmware bytes, so baking it makes that state a property of the image
+digest). Nothing reads it yet: `mcuhome build` still mounts and builds
+out of the *host's* workspace, so the host requirement above is unchanged
+until the run-time side is switched over.
 
 A missing docker, a stopped daemon and a missing image are three
 different refusals with three different fixes, all raised before the

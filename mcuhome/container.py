@@ -79,7 +79,23 @@ ZEPHYR_LINE = "4.4.0"
 #: ``imgtool getpub`` to generate ``autogen-pubkey.c`` on every build,
 #: signing or not. Every Matter image built before 2026-08-09 therefore
 #: came from ``--native``, where the host interpreter supplied it.
-IMAGE_REVISION = 2
+#:
+#: r3 adds a real west workspace at ``/mcuhome/workspace`` (ADR 0020
+#: decision E5): Zephyr, its modules, MCUboot and the Matter SDK at the
+#: revisions ``west.yml`` pins, with ``patches/`` applied, plus a record
+#: of what that is at ``/mcuhome/workspace.json``. The manifest
+#: repository's directory is there and empty — ADR 0018 makes the SDK a
+#: hash-pinned package fetched per build, so it is mounted, not baked.
+#: The point is that ``git describe`` in the workspace decides
+#: ``BUILD_VERSION`` and therefore the firmware bytes, so the workspace's
+#: git state is a build input; baked, it is a property of the image
+#: digest. Nothing reads it yet — this module still mounts the host's
+#: workspace — which is why r3 changes no build output.
+#:
+#: From r3 on, ``west.yml`` and ``patches/`` are image inputs too: a
+#: change to either needs a revision bump just as ``containers/builder/``
+#: does.
+IMAGE_REVISION = 3
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a
@@ -219,8 +235,9 @@ def _refuse_missing_image(docker: str, reference: str) -> BuildError:
         hint=(
             "pull it — it is published with every MCUHome release:\n"
             f"    {docker} pull {reference}\n"
-            "or build it from this repository (several minutes, a few GB):\n"
-            f"    {docker} build -t {reference} {DOCKERFILE_DIR}\n"
+            "or build it from the root of this repository (the context is the\n"
+            "repository, because west.yml and patches/ are image inputs):\n"
+            f"    {docker} build -t {reference} -f {DOCKERFILE_DIR}/Dockerfile .\n"
             f"{IMAGE_VAR} selects a different image, --image does it per build, and "
             "--native skips the container altogether."
         ),

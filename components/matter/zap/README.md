@@ -54,7 +54,7 @@ is inside it — from the workspace top directory:
 ```sh
 docker run --rm -it --user "$(id -u):$(id -g)" \
     --volume "$PWD:$PWD" --workdir "$PWD" \
-    ghcr.io/mcu-home/builder:zephyr-4.4.0-r1 bash
+    ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 bash
 ```
 
 (The GUI step needs a real `zap` on a desktop, so that one stays a host

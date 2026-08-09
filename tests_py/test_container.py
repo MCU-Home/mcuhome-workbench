@@ -296,7 +296,10 @@ def test_a_missing_image_says_how_to_get_one_both_ways() -> None:
     )
     hint = caught.value.hint or ""
     assert "docker pull ghcr.io/mcu-home/builder:x" in hint
-    assert f"docker build -t ghcr.io/mcu-home/builder:x {container.DOCKERFILE_DIR}" in hint
+    assert (
+        f"docker build -t ghcr.io/mcu-home/builder:x -f {container.DOCKERFILE_DIR}/Dockerfile ."
+        in hint
+    )
     assert container.IMAGE_VAR in hint
     assert "--native" in hint
 

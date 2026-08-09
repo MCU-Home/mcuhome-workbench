@@ -113,9 +113,11 @@ jobs:
       # "Has the image changed?" is answered by asking the registry, not by
       # diffing the Dockerfile: the tag *is* the content identity
       # (zephyr-<line>-r<revision>), so a tag that does not exist yet means
-      # containers/builder/ changed and its revision was bumped — and a
-      # bump that somebody forgot fails loudly here instead of quietly
-      # testing against a stale environment.
+      # an image input changed and its revision was bumped — and a bump
+      # that somebody forgot fails loudly here instead of quietly testing
+      # against a stale environment. Since r3 the image inputs are
+      # containers/builder/ AND west.yml AND patches/, because the image
+      # bakes a west workspace with the patch set applied.
       - name: Pull the builder image, or build it
         id: builder
         run: |
@@ -124,7 +126,11 @@ jobs:
             echo "Using the published image."
           else
             echo "::notice::$reference is not published yet — building it."
-            docker build --tag "$reference" mcuhome/containers/builder
+            # The context is the repository, not containers/builder/:
+            # since r3 the image bakes a west workspace, so west.yml
+            # and patches/ are image inputs too.
+            docker build --tag "$reference" \
+              --file mcuhome/containers/builder/Dockerfile mcuhome
             echo "built=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -370,13 +376,17 @@ jobs:
           python -m pip install --disable-pip-version-check -e ./mcuhome
           python -m pip install --disable-pip-version-check -e ./.deps/cli
 
-      # A hosted runner has on the order of 14 GB free on /, and this job
-      # wants the builder image (2.74 GB), the CHIP clone with its four
-      # submodules, a restored compiler cache (up to the 5 GB
-      # /etc/ccache.conf allows) and the build tree, all at once. The
-      # preinstalled Android/.NET/Haskell toolchains are worth tens of
-      # gigabytes and nothing here uses them. Cheap insurance; drop this
-      # step if a Matter build ever fits without it.
+      # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
+      # step. That is comfortable for what the job wants at once — the
+      # build container (5.3 GB at r3, which bakes a west workspace), the
+      # CHIP clone with its four submodules, a restored compiler cache (up
+      # to the 5 GB /etc/ccache.conf allows) and the build tree, call it
+      # 13 GB. Until the run-time side uses the baked workspace this job
+      # carries two copies of it, the image's and the one it clones, and
+      # even that fits. The step stays because the preinstalled
+      # Android/.NET/Haskell toolchains are worth tens of gigabytes,
+      # nothing here uses them, and the headroom is what lets the image
+      # grow without this job becoming the thing that discovers it.
       - name: Make room on the runner
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
@@ -413,7 +423,11 @@ jobs:
             echo "Using the published image."
           else
             echo "::notice::$reference is not published yet — building it."
-            docker build --tag "$reference" mcuhome/containers/builder
+            # The context is the repository, not containers/builder/:
+            # since r3 the image bakes a west workspace, so west.yml
+            # and patches/ are image inputs too.
+            docker build --tag "$reference" \
+              --file mcuhome/containers/builder/Dockerfile mcuhome
           fi
 
       # WITH the `matter` group — the whole point of this job. west.yml
@@ -446,9 +460,15 @@ jobs:
           # example built from a full checkout (measured 2026-08-09:
           # 748964 against 748960). It is not a defect and this job does
           # not compare sizes across machines — but it is the reason the
-          # two differ, and it stops mattering once the workspace is baked
-          # into the build container, where the git state becomes a
-          # property of the image digest (ADR 0020, decision E5).
+          # two differ.
+          #
+          # The image bakes its own workspace as of r3 (ADR 0020 decision
+          # E5) and fetches the tag ref back, so the git state is a
+          # property of the image digest there. This job still does not
+          # use it: mcuhome/container.py mounts the host workspace and
+          # builds out of that. This step, the patch step below and this
+          # note all go away in the same change that switches the
+          # run-time side over.
 
       # `git apply` and nothing else: no --3way, no --reject, no retry.
       # A patch that no longer applies to the revision west.yml pins is

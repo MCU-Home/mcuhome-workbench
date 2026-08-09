@@ -2,19 +2,41 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # The MCUHome builder image (ADR 0007): the single build environment used
-# by developers, CI and the Home Assistant add-on. It contains TOOLS ONLY
-# — never MCUHome sources and never a west workspace. The workspace is
-# bind-mounted at run time, at the same absolute path it has on the host,
-# so a build directory is usable from inside and outside the container
-# (mcuhome/container.py assembles the invocation).
+# by developers, CI and the Home Assistant add-on. Since r3 it carries two
+# things: the TOOLS (Zephyr SDK, west, gn, zap, ccache) and a real WEST
+# WORKSPACE at /mcuhome/workspace — Zephyr, the modules it imports, MCUboot
+# and the Matter SDK, at the revisions west.yml pins, with the patch set in
+# patches/ applied. What it does NOT carry is MCUHome itself: the manifest
+# repository's directory (/mcuhome/workspace/mcuhome) is present and empty,
+# because ADR 0018 makes the SDK a hash-pinned package fetched per build
+# and mounted there at run time.
+#
+# Why the workspace is baked (ADR 0020 decision E5). Zephyr stamps
+# BUILD_VERSION from `git describe` in the workspace and compiles it into
+# the boot banner, so the git state of the workspace is a build input —
+# one that appears in no build context. The same example built from a full
+# checkout and from CI's shallow one differ (measured 2026-08-09: 748960
+# against 748964 bytes), which contradicts ADR 0018's promise that a
+# context plus a pinned container digest reproduces the build. Baked, that
+# state becomes a property of the image digest, and the gap closes.
+#
+# Nothing uses the baked workspace yet: mcuhome/container.py still
+# bind-mounts the host's workspace at its own absolute path and builds out
+# of that (which is what makes a build directory usable from inside and
+# outside the container). Switching the run-time side over is a separate
+# change; until it lands, this workspace is carried and not read.
 #
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
 # truth for it is mcuhome/container.py. Bump the revision whenever
-# anything below changes; bump the Zephyr part when west.yml does.
+# anything below changes; bump the Zephyr part when west.yml does. Since
+# r3 the revision also has to be bumped for west.yml and patches/, which
+# are image inputs now.
 #
-# Build (from the repository root, the context is this directory only):
-#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r1 containers/builder
+# Build (from the repository root — the context is the REPOSITORY, not
+# this directory, because west.yml and patches/ live outside it):
+#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 \
+#         -f containers/builder/Dockerfile .
 #
 # Everything downloaded is checksum-verified. The checksums are the whole
 # point of the fetch stage: an image that silently absorbs a re-tagged
@@ -64,6 +86,19 @@ ARG GN_SHA256=66cba1384b08f05643a31627bdec1d0fcc87ae7d40853ec24ec60b6eb02fe6c9
 # the generated data model drift away from the SDK that consumes it.
 ARG ZAP_VERSION=v2025.10.23-nightly
 ARG ZAP_SHA256=fe327379a07f22fb91661b6a80c1e58c8f84f5af1d8dd1288b7fb69c8ef75ac0
+
+# The two projects west.yml pins by TAG rather than by SHA. West resolves
+# them from the manifest — nothing here would need to know them, except
+# that a shallow fetch leaves the tag behind at the remote and the
+# workspace stage has to fetch it back (see there for why that matters).
+# They double as the version part of the patch file names, which is the
+# naming convention patches/README.md documents.
+#
+# Restating a pin is a drift risk, so it is checked: tests_py/
+# test_builder_workspace.py asserts both against west.yml, the same way
+# tests_py/test_container.py asserts the image tag against it.
+ARG ZEPHYR_REVISION=v4.4.0
+ARG CHIP_REVISION=v1.5.1.0
 
 # --------------------------------------------------------------------------
 # Stage 1: fetch and unpack, so the final image never carries the archives
@@ -128,7 +163,159 @@ RUN curl -fsSL -o zap.zip \
  && rm zap.zip
 
 # --------------------------------------------------------------------------
-# Stage 2: the image itself
+# Stage 2: the west workspace, materialised exactly the way CI does it
+# --------------------------------------------------------------------------
+#
+# Kept apart from the final stage for the same reason as the fetch stage:
+# what it needs to do the job (a second Python environment, pip's network
+# access, the manifest copy that gets thrown away again) must not end up
+# in the image. Only /mcuhome survives, by COPY --from.
+FROM ${DEBIAN_IMAGE} AS workspace
+
+ARG ZEPHYR_REVISION
+ARG CHIP_REVISION
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Only what `west update` itself needs. No compiler: nothing is built
+# here, the trees are fetched and patched and that is all.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
+        ca-certificates \
+        git \
+        python3 \
+        python3-venv \
+ && rm -rf /var/lib/apt/lists/*
+
+# west, at the version the image ships, without restating the pin: the
+# image's requirements file is used as a *constraint* file, so `pip
+# install west` can only resolve to the line already in it. One west lays
+# the workspace out and the same west reads it later — a version skew
+# between the two would be a difference nobody could see from outside.
+COPY containers/builder/requirements.txt /tmp/requirements.txt
+RUN python3 -m venv /opt/west-venv \
+ && /opt/west-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
+        --constraint /tmp/requirements.txt west
+ENV PATH=/opt/west-venv/bin:/usr/local/bin:/usr/bin:/bin
+
+# `west init -l` needs exactly one file of the manifest repository:
+# west.yml. It checks that the file is there and writes .west/config; it
+# never asks whether the directory is a git repo (west/app/project.py,
+# west 1.5.0). That is what makes it possible to lay the workspace out
+# here from a bare copy of the manifest and mount the real SDK in later.
+WORKDIR /mcuhome/workspace
+COPY west.yml /mcuhome/workspace/mcuhome/west.yml
+RUN west init -l mcuhome
+
+# The same invocation the CI matter job runs, and deliberately WITHOUT a
+# group-filter: the `matter` group is wanted here — this is the image that
+# builds Matter firmware.
+#
+# --narrow -o=--depth=1 because full history for the thirteen projects is
+# ~3.9 GB, 2.5 GB of it .git that no build ever reads. What a build DOES
+# read out of .git stays: west resolves the `import:` of the zephyr
+# project out of git at refs/heads/manifest-rev, never off the filesystem
+# (west/manifest.py), and Zephyr's version stamping shells out to `git
+# describe`. Stripping .git to save space would break both.
+#
+# Note for a rebuild: docker caches this layer on the COPY above, so an
+# unchanged west.yml reuses whatever the tags resolved to last time. That
+# is why /mcuhome/workspace.json records the resolved commits — with two
+# movable tags in the manifest, a rebuild is checkable rather than
+# trustworthy.
+RUN west update --narrow -o=--depth=1
+
+# A shallow fetch brings no tags along, and `git describe --abbrev=12
+# --always` (zephyr/cmake/modules/git.cmake) then answers with the commit
+# instead of the tag. That string becomes BUILD_VERSION, gets compiled
+# into the boot banner (zephyr/kernel/banner.c) and lands in the firmware:
+# measured 2026-08-09, the same example built shallow is 4 bytes larger
+# than built from a full checkout. Fetching just the tag ref costs
+# nothing measurable — .git stayed at 125 MB in the same measurement —
+# and makes the two byte-identical.
+#
+# Only these two: every other project is pinned by SHA, where `git
+# describe --always` already answers with that SHA either way.
+#
+# The two tags are not the same kind of object, and only one of them
+# changes what a build produces. Zephyr's v4.4.0 is annotated, so plain
+# `git describe` finds it and BUILD_VERSION reads `v4.4.0` — that is the
+# byte-identity above. CHIP's v1.5.1.0 is lightweight, so `git describe`
+# passes over it and answers with the commit unless `--tags` is given
+# (both verified inside the built image, 2026-08-09). Its ref is fetched
+# anyway: it costs nothing, and a tree that knows the tag it is pinned to
+# is worth more than one that only knows a hash.
+#
+# The remote is asked for rather than named. west calls it after the
+# manifest's `remotes:` entry — `zephyrproject-rtos` for zephyr,
+# `project-chip` for connectedhomeip (west.yml, verified against a
+# materialised workspace 2026-08-09) — and never `origin`. Hardcoding
+# either name would make this step depend on a manifest detail that has
+# nothing to do with it; each project has exactly one remote, so taking
+# the first is both correct and indifferent to what it is called.
+RUN set -eu; \
+    for entry in "zephyr:${ZEPHYR_REVISION}" \
+                 "modules/lib/connectedhomeip:${CHIP_REVISION}"; do \
+        project="${entry%%:*}"; \
+        tag="${entry##*:}"; \
+        remote="$(git -C "$project" remote | head -n1)"; \
+        test -n "$remote"; \
+        git -C "$project" fetch --depth=1 "$remote" \
+            "refs/tags/$tag:refs/tags/$tag"; \
+    done
+
+# The patch set, applied the way CI applies it (.github/workflows/ci.yml)
+# and patches/README.md documents it: `git apply`, nothing else — no
+# --3way, no --reject, no retry. A patch that has drifted from the
+# revision west.yml pins has to fail the IMAGE build, loudly, right here.
+#
+# Left as working-tree changes, NOT committed. Committing moves `git
+# describe` from `v4.4.0` to `v4.4.0-1-g<sha>` and therefore changes
+# BUILD_VERSION, the banner and the firmware (measured 2026-08-09); it
+# would also need pinned committer identity and dates to produce a
+# reproducible SHA. Uncommitted reproduces exactly the tree the bench node
+# was commissioned from, and `git status` inside a layer still shows the
+# patch set the way patches/README.md says it does.
+COPY patches /tmp/patches
+RUN git -C zephyr apply --verbose \
+        "/tmp/patches/zephyr-${ZEPHYR_REVISION}-nrf53-spinel-stack.patch" \
+ && git -C modules/lib/connectedhomeip apply --verbose \
+        "/tmp/patches/connectedhomeip-${CHIP_REVISION}-vanilla-zephyr.patch"
+
+# What the image says about the workspace it carries: the resolved commit
+# per layer and the SHA-256 of every patch applied to it. The script's
+# docstring has the reasoning; the short version is that an image digest
+# says "the same", not "what", and two of the revisions are movable tags.
+#
+# /mcuhome/workspace.json, not inside the workspace: a file inside a layer
+# makes that layer dirty and shows up in `git status`, and a file at the
+# topdir would be shadowed the moment a backend bind-mounts a writable
+# view over it. /mcuhome/ is the namespace the build-container contract
+# already reserves for us (§2.2).
+COPY containers/builder/workspace-record.py /tmp/workspace-record.py
+RUN python3 /tmp/workspace-record.py \
+        --topdir /mcuhome/workspace \
+        --output /mcuhome/workspace.json \
+        --clone narrow-depth-1 \
+        --patch "zephyr=/tmp/patches/zephyr-${ZEPHYR_REVISION}-nrf53-spinel-stack.patch" \
+        --patch "chip=/tmp/patches/connectedhomeip-${CHIP_REVISION}-vanilla-zephyr.patch"
+
+# The manifest repository's directory is emptied and left in place. west
+# needed west.yml to get here; the SDK mount brings it back at run time,
+# because ADR 0018 makes the SDK a hash-pinned package fetched per build
+# rather than image content.
+#
+# It is re-read on EVERY CMake configure — zephyr/scripts/zephyr_module.py
+# calls west's Manifest.from_file(), which reads <topdir>/<manifest.path>/
+# west.yml off the filesystem — so a missing mount is not a subtle
+# problem. It stops the build at configure time with "MalformedConfig:
+# file not found: manifest file /mcuhome/workspace/mcuhome/west.yml",
+# which names the exact path nobody mounted. That is the right failure
+# and it needs no help from us.
+RUN rm -rf /mcuhome/workspace/mcuhome && mkdir /mcuhome/workspace/mcuhome
+
+# --------------------------------------------------------------------------
+# Stage 3: the image itself
 # --------------------------------------------------------------------------
 FROM ${DEBIAN_IMAGE}
 
@@ -183,7 +370,7 @@ RUN apt-get update \
 # requirements.txt). A virtualenv rather than the system interpreter so
 # the image never fights Debian's PEP 668 marker, and so `python3` inside
 # a build means one thing.
-COPY requirements.txt /opt/requirements.txt
+COPY containers/builder/requirements.txt /opt/requirements.txt
 RUN python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check --upgrade pip \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /opt/requirements.txt
@@ -191,6 +378,32 @@ RUN python3 -m venv /opt/venv \
 COPY --from=fetch /opt/zephyr-sdk-${ZEPHYR_SDK_VERSION} /opt/zephyr-sdk-${ZEPHYR_SDK_VERSION}
 COPY --from=fetch /opt/gn /opt/gn
 COPY --from=fetch /opt/zap /opt/zap
+
+# The baked west workspace and the record of what it is. One COPY: the
+# whole /mcuhome namespace is ours (build-container-contract.md §2.2), and
+# nothing else in the image writes there.
+COPY --from=workspace /mcuhome /mcuhome
+
+# Git refuses to operate in a repository owned by another user (the
+# CVE-2022-24765 hardening), and this is exactly that situation: the
+# workspace above is baked as root, while the container runs as the
+# calling user's UID. Both things a build reads out of .git go through
+# git, and they fail differently:
+#
+#   west's `git ls-tree manifest-rev west.yml`, resolving the zephyr
+#       `import:` — LOUD. west raises ManifestImportFailed, zephyr_module.py
+#       exits, CMake stops with FATAL_ERROR.
+#   Zephyr's `git describe`, stamping BUILD_VERSION — SILENT.
+#       cmake/modules/git.cmake prints a STATUS line and simply leaves the
+#       variable unset; the banner loses its version and the firmware is a
+#       third size, with no error anywhere.
+#
+# So this line is not a convenience. Scoped to the prefix rather than the
+# global '*': the glob matches nested repositories too, submodules of the
+# Matter SDK included (verified with GIT_TEST_ASSUME_DIFFERENT_OWNER=1,
+# git 2.55.0). --system, because the caller's UID has no home directory
+# here and a per-user config would never be read.
+RUN git config --system --add safe.directory '/mcuhome/workspace/*'
 
 # ccache configuration belongs to the image, not to every invocation: the
 # system-wide file is what a bare `docker run <image> ccache -s` sees too,

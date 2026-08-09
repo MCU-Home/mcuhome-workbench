@@ -10,17 +10,43 @@ v4.4.0. Background, root-cause analysis and per-patch rationale:
 | `connectedhomeip-v1.5.1.0-vanilla-zephyr.patch` | `modules/lib/connectedhomeip` | PSA/NCS-symbol guard fixes, mbedTLS-4 cert-code port, chip-module flag forwarding, Zephyr 4.x BLE macro, chip_crypto=psa default, `build_overrides/pigweed_environment.gni` stub (new file), `chip_gn.cmake` GN/ninja job cap, deprecated `FIXED_PARTITION_*` macros in the Zephyr OTA image processor |
 | `zephyr-v4.4.0-nrf53-spinel-stack.patch` | `zephyr` | Overridable spinel send-thread stack size (hardcoded 1 KB upstream) |
 
-Today these are applied by hand: `git apply <patch>` inside the
-respective west project. Automatic application is **specified** — the
-build-container contract makes each patched west project a *patched
-layer* whose patches the build program applies to a writable view of the
-tree, once per session, before building
+The file name is `<project>-<pinned revision>-<topic>.patch`, and the
+builder image's `Dockerfile` builds both names out of its `ZEPHYR_REVISION`
+and `CHIP_REVISION` arguments — so the convention is load-bearing, not
+decoration. `tests_py/test_builder_workspace.py` asserts that the names
+the image applies and the files in this directory are the same set, in
+both directions: a renamed patch fails the image build loudly, an *added*
+one would otherwise be silently left out of the image.
+
+Where they are applied depends on which workspace is being built in:
+
+- **The builder image applies them itself.** Since image revision r3 the
+  image bakes a west workspace with both patches already applied as
+  working-tree changes (`containers/builder/Dockerfile`, ADR 0020
+  decision E5). Nobody applies anything by hand there — and a patch that
+  has drifted from the revision `west.yml` pins fails the *image* build.
+- **A hand-made workspace still needs the manual step**: `git apply
+  <patch>` inside the respective west project. That is what `--native`
+  builds against, what MCUHome's own contributors have in this workspace,
+  and — until `mcuhome build`'s container path is switched over to the
+  baked workspace — what a container build mounts and compiles as well.
+  The CI matter job does the same thing explicitly, per run.
+
+They are deliberately left **uncommitted** in both cases. Committing them
+moves `git describe` from `v4.4.0` to `v4.4.0-1-g<sha>`, which is what
+Zephyr stamps into `BUILD_VERSION` and compiles into the boot banner — so
+a committed patch set changes the firmware.
+
+Automatic application per build is **specified** — the build-container
+contract makes each patched west project a *patched layer* whose patches
+the build program applies to a writable view of the tree, once per
+session, before building
 ([docs/design/build-container-contract.md](../docs/design/build-container-contract.md),
 §6.2 "Patched layers: writable views, applied once"). That is a
-specification, not working code: nothing applies these patches
-automatically yet, so a fresh workspace still needs the manual step
-above. Several hunks are upstream-issue candidates (tracked outside the
-repo for now); only what upstream does not take stays here.
+specification, not working code: the image applies its patch set once, at
+image-build time, which is not the same thing as a context choosing its
+patches per session. Several hunks are upstream-issue candidates (tracked
+outside the repo for now); only what upstream does not take stays here.
 
 The mbedTLS legacy-header shims the chip-module hunk puts on CHIP's
 include path are **not** in this directory and are not generated: they
