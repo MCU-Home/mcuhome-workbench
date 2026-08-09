@@ -23,7 +23,6 @@ from __future__ import annotations
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ruamel.yaml import YAML, YAMLError
@@ -187,7 +186,6 @@ def create_context(
     sdk: SdkPin,
     container: ContainerPin,
     patches_dir: Path | None = None,
-    created: str | None = None,
 ) -> ContextManifest:
     """Build a context directory from a resolved device model.
 
@@ -199,9 +197,11 @@ def create_context(
 
     *out_dir* has to be new or empty: the integrity list is the whole
     truth about the directory, which it cannot be for files this
-    function did not put there. *created* is for reproducing a manifest
-    byte for byte (tests, mirrors); it defaults to now and never
-    influences the ID either way.
+    function did not put there. Nothing here reads a clock: the manifest
+    carries no timestamp — ``created`` dates the *request* and lives in
+    ``context.yaml`` alone, "the one field that does not travel"
+    (ADR 0018) — so two creations of the same inputs yield the same
+    bytes without any argument saying so.
     """
     if out_dir.exists():
         if not out_dir.is_dir():
@@ -225,9 +225,6 @@ def create_context(
 
     files = _context_files(out_dir)
     manifest = ContextManifest(
-        created=(
-            created if created is not None else datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        ),
         sdk=sdk,
         container=container,
         board=model.device.board,

@@ -27,6 +27,7 @@ from conftest import EXAMPLES_DIR, resolve_file
 
 from mcuhome.model.context import (
     BACKEND_DIR,
+    CONTEXT_FILE,
     CONTEXT_ID_VECTORS,
     CONTEXT_VERSION,
     MANIFEST_FILE,
@@ -82,7 +83,7 @@ def model() -> DeviceModel:
 
 
 def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
-    arguments = {"sdk": SDK, "container": CONTAINER, "created": "2026-08-08T10:00:00Z"}
+    arguments = {"sdk": SDK, "container": CONTAINER}
     arguments.update(overrides)
     return create_context(model, out_dir=out_dir, **arguments)
 
@@ -267,9 +268,19 @@ def test_an_unusable_path_is_refused(path: str) -> None:
         )
 
 
-@pytest.mark.parametrize("path", [MANIFEST_FILE, f"{BACKEND_DIR}/command.json"])
+@pytest.mark.parametrize("path", [MANIFEST_FILE, CONTEXT_FILE, f"{BACKEND_DIR}/command.json"])
 def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
-    """The manifest and the backend's runtime directory stay out of the ID."""
+    """Both context documents and the backend directory stay out of the ID.
+
+    ``context.yaml`` is the one that went unenforced for a while: §3.2
+    excludes it "as a statement about the hash rather than about layout"
+    — its never-hashed fields (constraint, url, tag, created) would leak
+    into an identity §6 computes from resolved values alone — but the
+    shared vocabulary accepted it anyway, leaving the exclusion to every
+    caller separately. The build server recomputes IDs from received
+    bytes (ADR 0019 §8), so the one implementation both sides share must
+    be the place that refuses.
+    """
     with pytest.raises(BuildError) as caught:
         context_id(
             container_digest=DIGEST,
@@ -289,7 +300,6 @@ def test_the_informational_fields_do_not_influence_the_id(model, tmp_path: Path)
     """created, constraint, version, url, image, tag — advisory, all of them."""
     manifest = _create(model, tmp_path / "context")
     variants = [
-        replace(manifest, created="1999-01-01T00:00:00Z"),
         replace(manifest, sdk=replace(SDK, constraint="~9.9.9")),
         # The version and the URL are names for bytes the sha256 pins.
         replace(manifest, sdk=replace(SDK, version="9.9.9")),
@@ -302,11 +312,20 @@ def test_the_informational_fields_do_not_influence_the_id(model, tmp_path: Path)
     assert {variant.compute_id() for variant in variants} == {manifest.id}
 
 
-def test_two_creations_at_different_times_share_one_id(model, tmp_path: Path) -> None:
-    first = _create(model, tmp_path / "one", created="2026-08-08T10:00:00Z")
-    second = _create(model, tmp_path / "two", created="2027-01-01T00:00:00Z")
-    assert first.created != second.created
-    assert first.id == second.id
+def test_the_manifest_carries_no_timestamp(model, tmp_path: Path) -> None:
+    """ "The one field that does not travel is `created`" (ADR 0018).
+
+    It dates the *request* and lives in context.yaml alone; the
+    manifest's own moment is the lock. So two creations of the same
+    inputs yield byte-identical manifests with no argument saying so —
+    and a manifest that carries a stray ``created`` anyway is read under
+    the unknown-field rule: ignored, not refused.
+    """
+    manifest = _create(model, tmp_path / "one")
+    assert "created" not in manifest.to_dict()
+    assert manifest == ContextManifest.from_dict(
+        {**manifest.to_dict(), "created": "1999-01-01T00:00:00Z"}
+    )
 
 
 def test_yaml_formatting_is_irrelevant_to_the_id(model, tmp_path: Path) -> None:
@@ -325,7 +344,6 @@ def test_yaml_formatting_is_irrelevant_to_the_id(model, tmp_path: Path) -> None:
         f"  package: {{sha256: {SDK.sha256}, url: {SDK.url}}}\n"
         f"  version: {SDK.version}\n"
         f"  constraint: '{SDK.constraint}'\n"
-        f"created: '{manifest.created}'\n"
         f"context: {CONTEXT_VERSION}\n"
     )
     (out_dir / MANIFEST_FILE).write_text(reordered, encoding="utf-8")

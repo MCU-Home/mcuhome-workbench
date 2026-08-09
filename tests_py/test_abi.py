@@ -175,7 +175,6 @@ def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextMa
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         entries.append(ContextFile(path=name, sha256=digest))
     manifest = ContextManifest(
-        created="2026-08-09T10:00:00Z",
         sdk=SDK,
         container=CONTAINER,
         board="nrf7002dk/nrf5340/cpuapp",
@@ -852,7 +851,6 @@ def test_a_manifest_that_lies_about_its_own_id_does_not_verify(
     manifest = locked_context(context)
     write_context_manifest(
         ContextManifest(
-            created=manifest.created,
             sdk=SDK,
             container=CONTAINER,
             board=manifest.board,

@@ -79,6 +79,9 @@ from mcuhome.model.errors import BuildError
 
 __all__ = [
     "BACKEND_DIR",
+    "CONTEXT_FILE",
+    "KEYS_DIR",
+    "SIGNING_KEY_FILE",
     "CONTEXT_ID_VECTORS",
     "CONTEXT_VERSION",
     "MANIFEST_FILE",
@@ -101,6 +104,18 @@ CONTEXT_VERSION = 1
 
 #: The one file a builder must parse first, at the top of the context.
 MANIFEST_FILE = "manifest.yaml"
+
+#: The request document with the pins, next to the manifest (§3.2). It
+#: is excluded from the integrity list **as a statement about the hash,
+#: not about layout**: its never-hashed fields (constraint, url, tag,
+#: created) would otherwise leak into an identity that §6 computes from
+#: resolved values alone.
+CONTEXT_FILE = "context.yaml"
+
+#: Where the MCUboot verification key lives inside a context (ADR 0018's
+#: 2026-08-09 amendment; required for ``build``, §7.2).
+KEYS_DIR = "keys"
+SIGNING_KEY_FILE = "keys/signing.pub"
 
 #: Where the canonical device model lives inside the context — the
 #: existing wire format (:mod:`mcuhome.model.model`), unchanged.
@@ -182,8 +197,6 @@ class ContainerPin:
 class ContextManifest:
     """``manifest.yaml``, as an object."""
 
-    #: Informational — never hashed. ISO 8601 UTC, seconds precision.
-    created: str
     sdk: SdkPin
     container: ContainerPin
     #: The target board — the manifest's ``target:`` section.
@@ -208,7 +221,6 @@ class ContextManifest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "context": self.context_version,
-            "created": self.created,
             "mcuhome": {
                 "constraint": self.sdk.constraint,
                 "version": self.sdk.version,
@@ -229,9 +241,12 @@ class ContextManifest:
         mcuhome = data["mcuhome"]
         package = mcuhome["package"]
         container = data["container"]
+        # ``created`` is deliberately not read: it dates the *request* and
+        # lives in context.yaml alone — "the one field that does not
+        # travel" (ADR 0018). A manifest that carries one anyway is
+        # handled by the unknown-field rule: ignored.
         return ContextManifest(
             context_version=int(data["context"]),
-            created=str(data["created"]),
             sdk=SdkPin(
                 constraint=str(mcuhome["constraint"]),
                 version=str(mcuhome["version"]),
@@ -330,7 +345,10 @@ def _require_files(entries: Iterable[ContextFile]) -> None:
     for entry in entries:
         _require_path(entry.path)
         _require_sha256(entry.sha256, what=f'The hash of "{entry.path}"')
-        if entry.path == MANIFEST_FILE or entry.path.split("/", 1)[0] == BACKEND_DIR:
+        if (
+            entry.path in (MANIFEST_FILE, CONTEXT_FILE)
+            or entry.path.split("/", 1)[0] == BACKEND_DIR
+        ):
             raise BuildError(
                 f'The integrity list must not name "{entry.path}".',
                 hint=(
