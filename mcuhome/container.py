@@ -72,7 +72,13 @@ ZEPHYR_LINE = "4.4.0"
 #: Rebuilds of the image for the same Zephyr release: a new tool version,
 #: a new Python dependency, a fix in the Dockerfile. Starts at 1 and is
 #: bumped by whoever changes ``containers/builder/``, in the same commit.
-IMAGE_REVISION = 1
+#:
+#: r2 adds ``cryptography`` — MCUboot's imgtool imports it at module load,
+#: so r1 could not build the MCUboot image at all: sysbuild runs
+#: ``imgtool getpub`` to generate ``autogen-pubkey.c`` on every build,
+#: signing or not. Every Matter image built before 2026-08-09 therefore
+#: came from ``--native``, where the host interpreter supplied it.
+IMAGE_REVISION = 2
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a

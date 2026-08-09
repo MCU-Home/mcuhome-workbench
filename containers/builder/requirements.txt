@@ -30,6 +30,19 @@
 #                               data-model generation of every build
 #   cbor, cbor2               the rest of CHIP's
 #                               scripts/setup/requirements.zephyr.txt
+#   cryptography              MCUboot's imgtool
+#                               (bootloader/mcuboot/scripts/requirements.txt
+#                               pins cryptography>=40.0.0). Needed by EVERY
+#                               build, not only a signing one: sysbuild runs
+#                               `imgtool getpub` to generate the bootloader's
+#                               autogen-pubkey.c, and imgtool imports
+#                               cryptography at module load. Without it a
+#                               container build dies at the MCUboot image
+#                               even with --no-sign, which is why the
+#                               container path had never produced a Matter
+#                               image before 2026-08-09 — every signed
+#                               artifact so far came from --native, where
+#                               the host interpreter supplies it.
 #   ruamel.yaml               the MCUHome builder package itself
 #
 # CHIP's build requirements also list `python-path`. It is deliberately
@@ -48,10 +61,12 @@ canopen==2.4.1
 cbor==1.0.0
 cbor2==6.1.4
 certifi==2026.7.22
+cffi==2.1.1
 charset-normalizer==3.4.9
 click==8.4.2
 colorama==0.4.6
 coloredlogs==15.0.1
+cryptography==50.0.0
 docopt==0.6.2
 humanfriendly==10.0
 idna==3.18
@@ -69,6 +84,7 @@ patool==4.0.5
 pluggy==1.6.0
 ply==3.11
 psutil==7.2.2
+pycparser==3.0
 pyelftools==0.33
 Pygments==2.20.0
 pykwalify==1.8.0
