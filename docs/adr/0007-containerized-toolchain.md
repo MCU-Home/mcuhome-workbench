@@ -1,6 +1,6 @@
 # 0007 — Containerized toolchain, minimal host requirements
 
-- Status: accepted
+- Status: accepted; amended 2026-08-09 (see the amendment at the end)
 - Date: 2026-08-02
 
 ## Context
@@ -37,3 +37,39 @@ Product-owner requirement: keep host prerequisites minimal.
   a design-phase topic.
 - The exact image layout (base image, layering, registry) is decided when
   the builder is implemented; this ADR fixes the principle.
+
+## Amendment: one conforming build container among several (2026-08-09)
+
+The principle above is unchanged: the host needs git and docker, the
+toolchain lives in a container. Two of its formulations are not.
+
+**"The MCUHome builder image is the single build environment" no longer
+holds.** The build container is now a replaceable part: any container
+satisfying the published contract is a usable build container,
+third-party ones with their own toolchains included, and it is driven
+through a frozen invocation ABI rather than by knowing what is inside it
+(ADR 0019 decision 4;
+[build-container-contract.md](../design/build-container-contract.md)).
+MCUHome's own image is the reference implementation of that contract and
+one conforming build environment among possibly several. The contract
+also bounds what "your own" may mean: a conforming build container must
+execute MCUHome's code generation out of the SDK tree it is handed, so
+"bring your own build container" is own toolchain and own Zephyr, never
+own build logic (contract §6.1). The terms are kept apart deliberately:
+a build container is the build environment and never a service, and a
+build server "orchestrates; it is never a build environment" (ADR 0020
+decision 4) — which is what keeps it able to drive build containers it
+did not build.
+
+**Image identity is the digest, not the tag.** The lockstep versioning
+above stays a release-process rule and stops being an identity rule: the
+only field of a build container that enters a context ID is
+`container.digest`, while `container.image` and `container.tag` are
+informational and never hashed (ADR 0018 decision 6). SDK ↔ container
+compatibility is expressed as a constraint over the coupling labels
+`org.mcuhome.zephyr` and `org.mcuhome.toolchain`, never as an
+enumeration of blessed tags, so a CVE respin at the same coupling is
+picked up without republishing anything (ADR 0018 decision 7).
+
+Terminology: the image this ADR calls the "builder image" is the **build
+container** / build-container image throughout the newer documents.

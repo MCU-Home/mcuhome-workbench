@@ -84,7 +84,12 @@ a. Switched CHIP to its PSA crypto PAL (`chip_crypto = "psa"` in
    keystores and PSA Spake2p.
 b. Compat shim headers mapping 9 legacy header names (`ecp.h`,
    `bignum.h`, `ccm.h`, `ctr_drbg.h`, `ecdsa.h`, `entropy.h`, `pkcs5.h`,
-   `sha1.h`, `sha256.h`) to their `mbedtls/private/` equivalents.
+   `sha1.h`, `sha256.h`) to their `mbedtls/private/` equivalents. They
+   live in this repository (`compat/mbedtls/`, see `compat/README.md`)
+   and the chip-module hunk puts `${ZEPHYR_MCUHOME_MODULE_DIR}/compat`
+   on CHIP's include path — during the prototype they sat in an
+   untracked workspace directory, which made the build unreproducible
+   anywhere else.
 c. Forwarded Zephyr's generated mbedTLS/TF-PSA config defines and
    include paths into the CHIP GN compile via a `chip-module` patch.
    A global `EXTRA_CFLAGS` approach breaks the Zephyr side of the build

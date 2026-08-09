@@ -137,9 +137,12 @@ Extension rule: new build-relevant fields enter the hash only together
 with a `context` format-version bump.
 
 The full normative statement, including the exact canonical structure,
-lives in the builder container contract
-([builder-container-contract.md](../design/builder-container-contract.md)
-§4) — both sides of the contract compute the same ID.
+lives in the build-container contract
+([build-container-contract.md](../design/build-container-contract.md)
+§3.3, "Context identity — normative hashing rule") — both sides of the
+contract compute the same ID. (Corrected 2026-08-09: this pointed at
+§4, which is the filesystem interface and says nothing about hashing;
+and the document was renamed with the term, see the amendment below.)
 
 ### 7. SDK ↔ container compatibility is label-based, not tag-based
 
@@ -172,3 +175,169 @@ constraint.
   ADR 0008 (Zephyr pinning), ADR 0013 (constraint-based per-device
   pinning), ADR 0015 §8 (detached signing — the unsigned-image
   boundary), ADR 0017, ADR 0019; dashboard ADR 0007 (wire content).
+
+## Amendment: request and result, the signing key in the context, and the explicit freeze (2026-08-09, product owner)
+
+The session protocol of ADR 0019 gained an explicit freeze verb, and
+that freeze splits this ADR's single manifest into two documents. Three
+things ride along: the MCUboot public key becomes context content,
+`verify` is defined against the effective context rather than a base
+header, and a defect in this repository's own verification primitive is
+recorded together with the duty that closes it.
+
+Vocabulary, so decision 1 stays readable: what it calls "a builder" is
+the **build container**, and what it calls "the lib" is the package set
+of ADR 0020. The normative contract document is
+[`build-container-contract.md`](../design/build-container-contract.md).
+
+**`context.yaml` is the request; `manifest.yaml` is the result.**
+Decision 6 describes one file that is two things at once: the pinning
+*request* — what to build, with the constraints already resolved to
+exact pins — and the integrity *record*, what the context turned out to
+contain and what its ID is. The two cannot stay one file once a context
+is uploaded in pieces: the pins have to exist before there is anything
+to hash, and the `files` list cannot be complete until the client stops
+adding to it.
+
+- **`context.yaml`** travels in the base context. It carries the
+  `context` format version, the resolved pins — container digest, SDK
+  package sha256, target board — and the original intent (the
+  constraint) that decision 3 requires to be recorded alongside the
+  resolution. It is what carries the pins into a session, and policy is
+  checked against it when it arrives (ADR 0019's amendment of the same
+  date). `extend-context` MUST NOT touch it; an attempt is a typed
+  error.
+- **`manifest.yaml`** is written by `lock-context`, next to it: the
+  same pins, plus the `files` integrity list and the context `id`. It
+  is the *result* of freezing, never an input to it.
+
+The undefined term "manifest header" in ADR 0019 §2 is retired with
+this split — there is no header separate from `context.yaml`.
+
+**Where each of decision 6's fields lives.** `context.yaml` carries all
+of them except the two that cannot exist before the freeze (`files` and
+`id`) — the three hashed pins, and with them every never-hashed field:
+`created`,
+`mcuhome.constraint`, `mcuhome.version`, `package.url`,
+`container.image` and `container.tag`. That is where they belong,
+because the request is the document in which decision 3 requires intent
+and resolution to be recorded side by side, and because a value that
+never enters an identity is only useful where a human reads back what
+was asked for. `manifest.yaml` repeats the pin blocks — `mcuhome`,
+`container`, `target` — exactly as `context.yaml` states them, and adds
+`files` and `id`. It repeats rather than refers, so that the lock result
+is readable on its own: the document that carries an identity carries
+the inputs that identity was computed from. The one field that does not
+travel is `created` — it dates the request, and the manifest's own
+moment is the lock. The exact shape of both documents is normative in
+[build-container-contract.md](../design/build-container-contract.md)
+§3.2.
+
+**Neither document is in the `files` list, and for `context.yaml` that
+is a statement about the hash rather than about layout.**
+`manifest.yaml` is excluded structurally: it is the document that
+carries the list, so it cannot be an entry in it — the implementation
+refuses one and skips the file when collecting entries
+(`mcuhome/context.py:331`, `:413`). `context.yaml` is excluded for a
+stronger reason. Hashing it as an ordinary content file would readmit
+`created` and `mcuhome.constraint` through the back door, and decision 6
+excludes both from the identity **by name**. Two byte-identical device
+configurations created a second apart would then hash differently, and
+one configuration resolved once under `^2.3.6` and once under an exact
+`2.4.0` would carry two identities for one resolved pin — the two
+outcomes decision 6's exclusion list exists to prevent. Nothing is lost
+by keeping it out: everything build-relevant `context.yaml` carries is
+already hashed in its own right, because `container.digest`,
+`sdk.sha256` and `target.board` are three of the four inputs of the rule
+and the fourth is the `files` list itself.
+
+The normative hashing rule of decision 6 is untouched. The hashed
+structure is still `{container.digest, sdk.sha256, target.board,
+files[]}` in RFC 8785 canonical JSON; only *when* and *from what* the ID
+is derived becomes unambiguous. No build-relevant field is added, so
+decision 6's extension rule is not triggered and no `context` format
+version bump is taken.
+
+**`keys/signing.pub` becomes context content — and that is a decision
+about identity, not only about layout.** The context tree of decision 1
+gains a `keys/` directory holding the MCUboot public key. It enters the
+ID through the ordinary `files` list, on exactly the terms decision 2
+sets for patches: no separate manifest section, no declared list that
+could disagree with the bytes. The write whitelist of ADR 0019 §8 and
+the contract's safe-extraction whitelist gain `keys/`.
+
+It belongs in the hash because the public key is compiled into MCUboot
+(ADR 0015 §8, "the public key is compiled into MCUboot" — which is why
+rotation is a bootloader replacement there). Two builds with different
+keys therefore produce different bootloaders, and two different
+bootloaders must not share an identity.
+
+The consequence has to be stated, because it is the decision and not a
+side effect: **two users with byte-identical device configurations now
+hash to two different context IDs.** Attribution stops encoding only
+*what* was built and starts encoding *who* built it. That is correct —
+the images genuinely differ — but it removes cross-user sharing from
+the content-addressed identity of decision 4 by construction, so the
+artifact cache that decision parked would be per-key if it were ever
+built. In the corpus `signing.pub` exists today only as a filename
+constant (`mcuhome/signing.py:80`) and a CLI-level parameter; this
+makes it context content.
+
+**The context is frozen by an explicit verb, and extension is bounded
+to the phase before it.** ADR 0019's `lock-context` (see its amendment
+of the same date) writes `manifest.yaml`, computes the context ID and
+returns it. What that does to this ADR:
+
+- Decision 5's "the *effective* context = base + extensions, re-hashed
+  at build time" becomes **hashed once, at `lock-context`**. There is
+  one moment at which the ID exists, and both sides compare their
+  independently computed values there (contract §3.3).
+- Decision 5's example — "patches created after a `verify`" — is no
+  longer reachable inside one session: `verify` runs only after the
+  lock, and the lock is one-way (`context.locked`). Adding a patch
+  after a verify is a new session. Archivability is unchanged; the
+  workbench still mirrors every piece it created.
+- ADR 0019 §2's "`manifest.yaml` itself is **immutable for the
+  session's lifetime**" is replaced rather than kept: before the lock
+  there is no `manifest.yaml`. What is immutable for the session is
+  `context.yaml`; the manifest is written once and is immutable
+  afterwards by construction.
+
+**`verify` checks the effective context.** Stated normatively because
+the previous arrangement failed by construction: with a manifest that
+was immutable for the session's lifetime *and* mid-session extension
+allowed, `verify_context` reports "present but not in the integrity
+list" for every file added after upload (`mcuhome/context.py:645-647`)
+and `ok` is therefore `False` (`:670-672`) after any extension at all.
+Under the split above the contradiction disappears by construction: the
+manifest `lock-context` writes *is* the integrity list of the effective
+context, so verifying against it and verifying against the effective
+context are the same act.
+
+**A defect in the verification primitive, and the backend duty that
+closes it.** `verify_context` (`mcuhome/context.py:685-721`)
+carries the docstring "the manifest's values are advisory, the bytes
+decide" (`:688-689`), and that is true of exactly one of the four
+hashed inputs. `container.digest`, `sdk.sha256` and `target.board` are
+read straight out of the declared manifest when the actual ID is
+recomputed (`:714-718`), and the manifest is itself excluded from the
+integrity list by construction — deliberately, so it cannot influence
+its own ID (`:331`, `:413`). The consequence nobody had written down:
+**a self-consistently forged manifest passes with `ok == True`.** The
+file hashes match, the recomputed ID matches, and all three declared
+pins were simply believed.
+
+It is not exploitable while the backend cross-checks those pins against
+what it actually obtained — but nothing stated that duty, and the
+docstring read as though the check were already complete. Both halves
+are fixed:
+
+- **The duty, normative:** the backend MUST verify `container.digest`
+  against the image it pulled, `sdk.sha256` against the package bytes
+  it fetched and unpacked, and `target.board` against the pins the
+  session was admitted on. `verify_context` does not establish them.
+  Recorded in ADR 0019 §8, where the "never trust client-declared
+  hashes" floor lives.
+- **The function** is corrected so that it cannot be mistaken for a
+  complete check — what it measures is the `files` list, and it says
+  so.

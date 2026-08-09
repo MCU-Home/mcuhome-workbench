@@ -1,4 +1,4 @@
-# 0019 — Session build protocol and the builder container contract
+# 0019 — Session build protocol and the build-container contract
 
 - Status: accepted
 - Date: 2026-08-08
@@ -120,9 +120,17 @@ and effective context ID actually used). Signing happens client-side
 
 Any container satisfying the contract is a usable builder. The
 normative specification is
-[builder-container-contract.md](../design/builder-container-contract.md);
-it doubles as the future public "bring your own builder" spec, which
-is why its ABI is frozen deliberately. The load-bearing points:
+[build-container-contract.md](../design/build-container-contract.md)
+(renamed with the term, 2026-08-09 — see the amendment below); it
+doubles as the future public "bring your own build container" spec,
+which is why its ABI is frozen deliberately. The load-bearing points as
+first recorded — **five of them are superseded by the amendment below
+and by the contract, and are kept here as history: the mount table, the
+invocation ABI, the exit codes, the progress channel, and the
+`org.mcuhome.commands` label** (contract §4 defines no mount points,
+§5 the invocation and the exit codes, §8 the event channel, and §2.1 no
+longer carries a commands label at all — `program.actions` is the one
+declaration of the action set):
 
 - **Mounts:** `/ctx` (context, RO), `/sdk` (SDK package unpacked by
   the backend, hash-verified, RO), `/out` (RW), `/ccache` (optional
@@ -171,6 +179,14 @@ pristine baseline), never the mechanism. The same primitive is
 reusable later for other RO bases (e.g. an overlay over the RO
 ccache — parked; the ccache-native RO-secondary setup stays the
 simpler default).
+
+> **Superseded 2026-08-09 — there is no layer reset.** The paragraph
+> below, and the words "restorable pristine baseline" in the guarantee
+> above, are removed by the amendment at the end of this document: with
+> `lock-context` the patch set of a locked context cannot change, so the
+> condition this apparatus reacts to cannot occur. What survives is the
+> writable view, the host-side placement, and the whiteout observation
+> the last sentences make.
 
 **Layer reset is a backend responsibility:** the backend knows when a
 layer's patch set changed (it processed `extend-context`) and resets
@@ -222,13 +238,27 @@ All violations are typed errors.
 - **Safe extraction:** only regular files and directories; reject
   absolute paths, `..` after normalization, symlinks/hardlinks/
   devices. Writes confined to whitelisted subtrees (`model/`,
-  `patches/<layer>/`), into a per-session directory the server owns.
+  **`keys/`** (added 2026-08-09 with the signing key becoming context
+  content — ADR 0018's amendment of the same date), `patches/<layer>/`)
+  plus the context's entry file `context.yaml` at the root, into a
+  per-session directory the server owns. `manifest.yaml` is written by
+  the backend at `lock-context` and is never an extraction target.
   (Zip-slip guard; also part of the container contract, so third-party
   tooling cannot reintroduce the hole.)
 - **Never trust client-declared hashes:** the server recomputes every
   file hash and the context ID from the received bytes and rejects on
   mismatch — declared values are advisory. (Integrity and attribution
-  requirement — independent of any caching.)
+  requirement — independent of any caching.) **Recomputing file hashes
+  is not the whole check** (added 2026-08-09): three of the four hashed
+  inputs — `container.digest`, `sdk.sha256` and `target.board` — are
+  declared values that no file hash can measure, and the context header
+  that declares them is itself outside the integrity list by
+  construction. The backend MUST therefore also verify the container
+  digest against the image it actually pulled, the SDK hash against the
+  package bytes it actually fetched and unpacked, and the board against
+  the pins the session was admitted on. Without it a self-consistently
+  forged header verifies clean; the defect that showed this is recorded
+  in ADR 0018's amendment of the same date.
 - **SDK/container acquisition:** `package.url` is a hint only. The
   backend resolves (name, version, sha256) against its **configured
   source list** into a content-addressed, immutable, fetch-once store;
@@ -240,10 +270,13 @@ All violations are typed errors.
 
   ```yaml
   sdk_sources:
-    - https://packages.mcuhome.org        # default (official)
-    - https://mirror.example.com/mcuhome  # own mirror
-    - /srv/mcuhome/packages               # local dir (dev/offline)
+    - /srv/mcuhome/packages               # local dir (dev/offline/unreleased)
+    - https://packages.mcuhome.org        # the official index
+    - https://mirror.example.com/mcuhome  # any other external source
   ```
+
+  (Order corrected 2026-08-09 — the example carried the reverse of the
+  decided search order; see the amendment below.)
 
   The decisive point is only *who* configures the list: the backend
   operator, never the client manifest. Locally the user IS the
@@ -266,8 +299,8 @@ concurrent-session quota.
   (the build server leaving the dashboard repo) is dashboard ADR 0012.
 - The container contract is a public commitment in the making: its
   ABI, exit codes, result format and label set can only be extended,
-  never changed — extensions ride on new commands (advertised via the
-  commands label) and on format-version bumps, exactly like the
+  never changed — extensions ride on new actions (advertised in
+  `program.actions`) and on format-version bumps, exactly like the
   context hash rule of ADR 0018.
 - Both error-code registry and verb set are append-only; clients treat
   unknown codes as fatal and never infer retryability. Protocol
@@ -285,3 +318,392 @@ concurrent-session quota.
   generalizes), ADR 0013 (build profiles), ADR 0015 §8 (client-side
   signing), ADR 0017, ADR 0018; dashboard ADR 0006 (transport),
   ADR 0007 (wire content), ADR 0012.
+
+## Amendment: the 2026-08-08 layer, backend profiles, the freeze verb, cancellation, and the invocation ABI (2026-08-09, product owner)
+
+Terminology first, because it runs through everything below: the build
+environment is the **build container** and the orchestrator is the
+**build server**; "builder" is retired as a term, and the normative
+document is [`build-container-contract.md`](../design/build-container-contract.md).
+Where this ADR's original text says "builder", read "build container";
+where it says "the lib", read the package set of ADR 0020. The ADR's own
+title was corrected with the term; the filename was deliberately not,
+because an ADR's number is its identity and a rename would break every
+cross-reference already pointing at it.
+
+That read-through is about **prose, not identifiers**. Decision 3's
+error-code registry carries a `builder.*` prefix, and a prefix is a wire
+value that clients match on rather than a word a reader interprets, so
+it is not renamed by a terminology note. Nothing is implemented against
+it and the registry is append-only from its first published entry, so
+its spelling is settled when the registry is — not here, by side effect.
+
+**The 2026-08-08 layer is the only valid remote-build concept.** The
+remote-build architecture was planned once, found wanting, and
+re-decided on 2026-08-08. What is valid is that layer and nothing
+older: ADR 0017, ADR 0018, this ADR, ADR 0020, the build-container
+contract, dashboard ADR 0012 — together with this amendment.
+
+Everything older that concerns the build server is obsolete for this
+subject and is **dismantled, not migrated**: dashboard ADR 0003 (two
+Home Assistant Apps, with "the build server *is* the toolchain
+container"), dashboard ADR 0006 (the job protocol), dashboard ADR 0011
+(builder coupling / "Block 0"), and `docs/design/builder-pipeline.md`
+§5/§6. Dismantled means the text goes away or is marked superseded
+where it stands; it does not mean its concepts are carried into the new
+protocol and renamed.
+
+That has to be read together with this ADR's own Consequences, which
+say dashboard ADR 0006's transport and threat-model decisions carry
+forward. They do — but the carry-forward is stated by dashboard
+ADR 0012, not by ADR 0006 surviving as a standing decision. The
+explicit list is: WebSocket plus bearer token, TLS at the deployment,
+the leaked-token threat model, the mDNS amendment; "the dashboard never
+compiles"; and user key handling with detached signing on the dashboard
+side.
+
+**`lock-context`: the context is frozen by an explicit verb.** The
+session and the build context have different lifetimes, and the verb
+set of decision 2 gains one verb — append-only, as the Consequences
+require — to say where the boundary is:
+
+```
+open-session       session id, lease, version negotiation (no context yet)
+send-context       base context incl. the pins; the container can be created
+extend-context     repeatable; MUST NOT touch the pin file
+[read-only commands permitted]
+lock-context       freezes the context, writes manifest.yaml, computes and
+                   returns the context id; unlocks the writing commands
+verify / build     only from here
+get-artifact
+close-session
+```
+
+The alternative was an implicit freeze on "the first writing command".
+It was rejected for a structural reason: it needs an enumerated list of
+writing commands, and that list has to be kept in sync with a verb set
+that is append-only by decision — a third-party command could not know
+which side of the line it falls on. The explicit verb buys three more
+things. The context ID gets an **observable moment**, at which both
+sides compare values they computed independently (contract §3.3). It
+makes `verify` meaningful, because there is a stable `files` list to
+check against. And it yields clean typed errors — `context.locked`,
+`context.not-locked` — instead of a command that quietly means
+something different depending on what ran before it.
+
+Consequences inside decision 2: `open-session(manifest header, …)`
+loses its first operand — admission negotiates protocol and
+context-format version and profile, and the pins arrive with
+`send-context` (ADR 0018's amendment retires "manifest header" and
+names the pin file `context.yaml`). `extend-context`'s "`manifest.yaml`
+is immutable for the session's lifetime" is replaced: before the lock
+there is no manifest, `context.yaml` is what may not change, and after
+the lock the context is closed to writes entirely.
+
+**Container-specific discovery moves to the `send-context` response.**
+Decision 2 puts the whole negotiation in the `open-session` response,
+including "the serving container's contract version and command set".
+Half of that is no longer answerable there. With no context at
+`open-session` the backend does not yet know **which** build container
+serves the session: the container digest arrives with the pins, in
+`send-context`, and lazy materialization means the container itself may
+not exist before that either.
+
+The response is therefore split along the line the flow already draws.
+`open-session` keeps what admission alone decides — the server's
+protocol version, the supported context-format range, the session ID,
+the lease and the backend profile. `send-context` answers what the
+context determines — the serving build container's contract version and
+its command set. This adds nothing to the protocol and answers nothing
+twice; it is decision 2's discovery payload, delivered at the first
+moment each half of it is knowable.
+
+What decision 2 wanted from discovering early survives intact: a version
+or capability mismatch is still a typed rejection before any work is
+scheduled, because `send-context` precedes `lock-context` and therefore
+precedes every working command. And ahead of a session at all,
+`capabilities` remains the pre-session query that lets the workbench
+choose a container during pin resolution rather than discover the
+mismatch from inside one.
+
+**`cancel(invocation-id)`.** Aborts the running invocation; the session
+and its warm container survive. It is added now, while the verb set is
+still free to grow cheaply, and it is a necessity rather than a
+convenience in the container profile for one concrete reason: **killing
+a `docker exec` client does not stop the process inside the
+container.** A local backend that merely drops the exec connection
+leaves the compile running and the session's resources held, so it
+needs an explicit cancel path rather than a closed socket. This is the
+deliberate counterpart to `attach-session` in decision 2 — connection
+loss is never abandonment, so cancellation must be something a client
+*says*.
+
+**The build server is an orchestrator, and it has two deployment
+targets.** It drives build environments and is never one itself.
+**Standalone and self-hosted is the primary target**: a machine an
+operator installs the service on and reaches over the transport of
+decision 1. The **Home Assistant App is an additional target** — not the
+shape the design is drawn around — and it is served by the subprocess
+profile below rather than by a second architecture.
+
+Naming which target is primary is load-bearing for the rest of this
+amendment. It is why deny-by-default patch policy, the ingress caps and
+the whole hardening floor of decision 8 are written for a server that
+strangers may reach; and it is why the reduced guarantees of the
+subprocess profile are acceptable at all, since they belong to the
+deployment in which operator, user and device owner are the same person.
+
+**SDK package sourcing, and the order the search runs in.** Decision 8
+leaves the source list to the operator; this amendment fixes the order
+it is searched in: **a local directory first, then
+`packages.mcuhome.org`, then any other external source.** Decision 8's
+example config carried the reverse and is corrected above.
+
+Local first is what makes the ordinary cases work without argument. CI
+builds and hashes the `mcuhome-sdk-<version>` archive (ADR 0018
+decision 6), and a directory holding that archive is the whole first
+implementation — enough to run every build method of ADR 0020 decision 6
+before any index is published. A local directory is also the only way an
+unreleased or offline package is usable at all, so a search order that
+reaches the network first would make the development case the awkward
+one. `packages.mcuhome.org` follows as the official source, and the
+static index behind it is built as part of this work. Anything else — a
+mirror, a vendor's own server — comes last, because a source this
+project does not operate should never shadow one it does.
+
+Users providing their own SDK packages is an **explicit goal**, not a
+tolerated side effect. The same list that lets an operator point at a
+mirror lets a user point at a package they built themselves, and the
+"bring your own build container" premise of decision 4 would be worth
+little if the SDK inside that container could only come from one host.
+
+Reordering the list changes nothing about identity: `package.url` stays
+a hint that is never hashed (ADR 0018 §6), so the same context fetched
+from a local directory and from `packages.mcuhome.org` has the same
+context ID. The sha256 is what must match; where the bytes came from is
+not part of what a build reproduces.
+
+**Two backend profiles, and what each one guarantees.** Decision 1
+names two backends by transport (local and remote). This amendment
+names two by build environment, which is the axis the isolation rules
+actually hang on:
+
+- **container** — the backend materializes one container per session.
+  Every isolation guarantee of decision 8 applies unchanged.
+- **subprocess** — the build environment runs **in the same filesystem
+  as the build server**, but as a **separate process** (the Home
+  Assistant App case). The backend runs the build program as a
+  subprocess in its own filesystem namespace instead of via `docker
+  exec`. Same invocation ABI, same request document, same result
+  document; `/ctx`, `/sdk` and `/out` are ordinary directories rather
+  than mount points, which is precisely why the ABI below no longer
+  freezes paths.
+
+  What is shared here is the **filesystem, not the process**, and that
+  distinction is what lets "the build server drives build environments
+  and is never one itself" hold without an exception — the sentence
+  this amendment opens the deployment-targets paragraph with, and the
+  one this profile would otherwise contradict. Even
+  here the build server orchestrates: it materializes the paths, invokes
+  the program and reads its result. Contract §1.2 states it in the same
+  words.
+
+Subprocess, not literally in-process, and the build server's own code
+already argues the point for itself
+(`build-server/mcuhome_buildserver/builder.py:5-28`): a build running
+inside the server process cannot be killed without killing the server;
+an out-of-memory kill or a segfaulting compiler takes the queue, the
+job history and every connected client with it; and only a separate
+process is honest about the interface. Loading the program into the
+server would additionally make MCUHome's own Python implementation the
+only implementable one, against this ADR's premise that a third party
+may ship its own, and would put third-party patch code in the address
+space of the Home Assistant App.
+
+The `open-session` response declares which profile serves the session.
+A subprocess backend serves exactly one build environment — the one it
+is — and rejects a session whose `container.digest` it does not match,
+typed.
+
+Its reduced guarantees are named rather than implied: **no network
+isolation, no per-session resource limits, no container trust
+boundary.** Decision 1's "the session is the trust boundary" is a
+statement about the container profile.
+
+**Limits are per server; the per-user machinery belongs to the hosted
+phase.** v1.0 is single-tenant. Maximum concurrent sessions, TTL, idle
+timeout, disk budget and the compile-lane limit are all **per server**,
+and there is no work metering and no cost classes.
+
+The reason is that the per-user machinery has no subject today: the
+transport carried forward is WebSocket plus a bearer token, and **one
+bearer token is one principal**. A deployment holds one token, so a
+per-user quota would be a per-server quota with a misleading name, and
+metering would bill one principal for its own machine. Decision 1's
+per-user concurrent-session quota and its "metering of actual work",
+decision 2's assigned cost class, decision 7's cost-class scheduling
+comment and decision 8's repetition of the quota are therefore bound to
+the hosted phase (dashboard ADR 0006's post-1.0 outlook) rather than
+implemented now.
+
+Decision 8's hardening floor is untouched by this, and that is the
+point of separating the two: it is identity-independent. Ingress caps,
+safe extraction, never trusting declared hashes, an operator-controlled
+source list and the per-session disk quota all mean exactly the same
+thing with one principal as with a thousand.
+
+**Context and artifacts are destroyed at `close-session`.** The
+per-session directory — the context and every artifact in it — is
+deleted when the session closes. Artifact download therefore happens
+inside the session, after the build and before closing.
+
+Decision 2's `get-artifact` sentence "artifacts are fetchable
+throughout the session and for a bounded grace period after close" is
+**removed**, and with it an undefined bound: nothing said how long the
+grace period was, while the directory it kept alive holds a device's
+Matter commissioning credentials (dashboard ADR 0007 decision 2) and is
+archivable by design (ADR 0018 decision 5). An unbounded retention of
+exactly that material is the wrong default to leave standing in a
+protocol whose evolution is append-only.
+
+Recorded direction, confirmed by the product owner and explicitly
+**not** a v1.0 requirement: commissioning credentials are to move out
+of the build entirely — injected into the image locally after the
+build, exactly as the signature already is (ADR 0015 §8) — so that
+neither build server nor build container ever receives them. That is
+dashboard ADR 0007 decision 5. The consequence for design work now is
+narrow and binding: nothing may entrench credential handling on the
+build side.
+
+**Patches in the subprocess profile: denied by default, enablable by
+the operator.** Decision 7 is unchanged — the patches config *is* the
+policy and unlisted layers are denied. What this settles is that the
+subprocess profile is not categorically excluded from patching: an
+operator may enable layers there.
+
+The recorded reasoning is about who the two deployments actually serve.
+A standalone build server may be publicly reachable and used by
+strangers; the Home Assistant App variant is normally used by one
+person, for their own devices, running their own patches. Deny-by-
+default keeps the first case safe, and the operator switch keeps the
+second usable. That it is the operator's explicit act matters more here
+than in the container profile, because this is the profile with no
+container trust boundary to fall back on.
+
+**Layer reset is removed; a broken patch application ends the
+session.** Decision 5's layer-reset apparatus disappears from the
+frozen surface, and its "restorable pristine baseline" guarantee goes
+with it. Its only stated purpose is a case `lock-context` has made
+unreachable: the backend was to reset a layer's view **when that
+layer's patch set changed between invocations**, so that a v1/v2 patch
+mixture could not be attributed to the v2 context hash. Patches can
+only arrive before the lock, and no working command runs before the
+lock, so the patch set is constant for the whole life of a locked
+context and the triggering condition cannot occur.
+
+Three obligations go away with it: the backend's duty to reset a
+layer's view; the build container's duty to record the applied
+patch-set identity per layer, compare it on every invocation and
+reapply on mismatch — it collapses to **apply once per session**; and
+the per-tree `generation` counter that was proposed for detecting a
+reset (contract §6.2).
+
+**Interrupted patch application** — a crash, a cancellation or an
+out-of-memory kill after some patches but before all — fails typed, and
+every further working command in that session is refused. The client's
+remedy is a **new session**, and therefore a new container with
+pristine trees. The reasoning is that a retry buys nothing: the patch
+set is frozen, so a broken patch fails identically, and after a crash a
+new session costs a container start and a cold build; a recovery
+mechanism would be two frozen contract obligations for a case a new
+session already resolves. Decision 5's own observation is what makes
+the failure terminal rather than recoverable in place — a pristine
+reset is not possible from inside the merged view, because deleting a
+file there creates a whiteout instead of restoring the base.
+
+**The invocation ABI.** Decision 4's invocation bullet and its exit
+codes are superseded; the normative text is the build-container
+contract, and what belongs here is what changed and why.
+
+- **The invocation.** `mcuhome-builder <command> /ctx --out /out`
+  becomes `/mcuhome/run <action> <absolute path of the request
+  document>` — two positional operands, never a flag. A fixed absolute
+  path rather than a bare name on `$PATH`: the image author controls
+  `PATH`, `docker exec` inherits the environment fixed at container
+  creation, and the name resolves without a shell, so a bare name is a
+  promise about a filesystem MCUHome does not control. `/mcuhome/`
+  reserves a namespace in the image and carries the brand; the filename
+  names the role rather than the action, because the action is an
+  argument and cannot also be the name; and there is no extension,
+  because a third party may ship a compiled binary and `.sh` would then
+  be a lie. Precedent for both halves: Cloud Native Buildpacks
+  (`/cnb/lifecycle/*`, `bin/detect`, `bin/build`) and Dev Container
+  Features (`install.sh`) each fix an absolute path, and neither brands
+  the executable with the vendor's name.
+- **Everything else travels in the request document**, which lives in a
+  backend-owned per-invocation directory — never inside the context.
+  That makes the context a genuinely read-only mount, and it removes a
+  race the fixed path `/ctx/.mcuhome/command.json` has today, where two
+  concurrent execs overwrite each other's document.
+- **The program assembles its own build environment.** West workspace,
+  module registration, `ZEPHYR_BASE`, `CHIP_ROOT` — the program builds
+  them from the trees it is given, and the backend never supplies a
+  workspace. A set of paths is not a build: the generated CMakeLists
+  resolves `${ZEPHYR_MCUHOME_MODULE_DIR}`
+  (`mcuhome/generate.py:1343`, `:1354`) and searches for `CHIP_ROOT`
+  via `$ENV{ZEPHYR_BASE}/../modules/lib/connectedhomeip`
+  (`mcuhome/generate.py:1200-1215`), and neither exists outside a
+  registered Zephyr module tree. Assigning the responsibility is what
+  makes the contract implementable by an image with a different
+  topology — an NCS one, say; freezing topology fields would have
+  frozen MCUHome's own layout instead.
+- **Exit codes 0 / 1 / 66.** `0` — the invocation ran and the work
+  succeeded; a result document exists. `1` — the invocation ran and the
+  work did not succeed; a result document exists. `66` — the request
+  was unusable and no result could be addressed; no result document.
+  Anything else means the program died, and stays undefined forever.
+  Decision 4's reserved `64` and `65` are dropped: they are `EX_USAGE`
+  and `EX_DATAERR` from BSD `sysexits.h`, which foreign runtimes emit
+  for ordinary argument errors, so a Go program returning 64 on a typo
+  would be read as "command not supported" and have its work
+  rescheduled. Why a command was refused is an enumerable and growing
+  list, which by this ADR's own evolution rule makes it document
+  content rather than a frozen number. Nothing is deployed, so
+  continuity costs nothing here.
+- **Why the shape is this small, restated because it is the frozen
+  part.** The entry point exists so a user can build and run a
+  completely own build container and still work inside MCUHome's
+  system. Extensibility therefore rides on the JSON document and never
+  on new argv parameters: a new parameter breaks every third-party
+  container that does not know it, while a new JSON field is simply
+  ignored by an older one. This must never change again.
+
+**The frozen surface was cut before signing.** Six items were removed
+from the contract because they carried nothing, and nothing in this ADR
+depends on any of them:
+
+- **`error.code` and `error.layer` beside `reason`** — one value in
+  three frozen places. Only `reason` is in the result document; a
+  backend embedding it into decision 3's envelope derives that
+  envelope's fields from `reason`, and how it does so is the backend's
+  business rather than contract text.
+- **`artifacts[].size`** — decision 8 never trusts a declared size on
+  ingress and the contract's egress hardening caps sizes from the bytes
+  it enumerates. The declared number had no reader on either side.
+- **the request document's `invocation` field** — the program had no use
+  for it beyond echoing it back. The **server-assigned invocation ID
+  stays**: it is what decision 2's `get-artifact` and the `cancel` verb
+  above address, and the backend never had to name it to the program,
+  which addresses an invocation by the paths it was handed.
+- **`org.mcuhome.commands`** — a non-authoritative duplicate of
+  `program.actions`. The backend loses the ability to pre-filter images
+  by action set, which costs nothing: every conforming program
+  implements `describe`, `verify` and `build`, and any action beyond
+  those three needs `describe` to be trusted anyway.
+- **the separate `message` field beside `error.message`** — two
+  untrusted-text fields with one handling rule.
+- **`layers[].count`** — derivable from the patch files the backend
+  already holds.
+
+No capability is lost by any of the six, and each one removed is one
+thing fewer for a third-party implementer to get right.

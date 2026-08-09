@@ -5,6 +5,90 @@
 > ADR 0007 (containerized toolchain) and ADR 0010 (Matter-only).
 > Incorporates the PO requirements: device-as-folder config tree,
 > shared-fragments folder, dashboard/build-server decoupling.
+>
+> ---
+>
+> **STATUS NOTE (2026-08-09) — §5 and §6 no longer describe the design,
+> and §7's manifest is renamed and moves into the build container.**
+>
+> **[§5](#5-build-execution-per-adr-0007) and
+> [§6](#6-build-service-boundary--local-and-remote) are superseded** by
+> ADR 0017-0020 and
+> [build-container-contract.md](build-container-contract.md). They are
+> kept for the record, not as design; **everything else in this document
+> stays valid**, except the two statements about
+> [§7](#7-artifacts)'s manifest marked at the end of this note. Exactly
+> what no longer holds:
+>
+> - **§6's stateless build requests — "No shared filesystem, no
+>   server-side session state".** The unit of interaction is a
+>   **session**: one session = one build environment = one effective
+>   context, with state surviving from one command to the next
+>   (ADR 0019 decisions 1-2). The session's persistent working area is a
+>   named path the backend supplies on every invocation (contract §4,
+>   `work`).
+> - **§6's "thin HTTP wrapper" build server.** The client interface is
+>   the session verb set of ADR 0019 decision 2 over WebSocket with a
+>   bearer token (ADR 0019 decision 1; the transport itself carries
+>   forward from dashboard ADR 0006 decisions 1-2). Towards the build
+>   environment the interface is the frozen invocation ABI of the
+>   build-container contract (ADR 0019 decision 4, contract §5), which
+>   is what lets a build server drive **any** conforming build
+>   container, not only ours.
+> - **§5's "the add-on container *is* the builder image plus
+>   dashboard".** The Home Assistant case is the `subprocess` backend
+>   profile: the build environment runs in the same filesystem as the
+>   build server, but as a separate process, with the same ABI and the
+>   reduced guarantees named there (contract §1.2). What is shared is
+>   the filesystem, not the process — a build server orchestrates and is
+>   never itself the build environment, in either profile. The dashboard
+>   carries no toolchain (ADR 0017 §2) and never compiles (dashboard
+>   ADR 0003 decision 2, the part of that ADR that carries forward).
+> - **§5's persistent volume carrying ccache plus the west workspace
+>   across runs.** The west workspace is baked into the build-container
+>   image, and the program assembles its build environment from the
+>   trees it is handed (contract §6.1). ccache is an optional path in
+>   the request document whose writability the backend asserts rather
+>   than the program probing it — read-only secondary storage for
+>   untrusted work, writable only for an operator's own cache warming
+>   (contract §10, §4.1; ADR 0019 decision 6).
+>
+> Nothing else in §5 or §6 is superseded by this note — in particular
+> not §5's ccache requirement and its GN compiler-launcher finding, and
+> not §6's rule that the canonical device model is the wire format,
+> which ADR 0018 decision 1 keeps by putting `device-model.json` inside
+> the build context.
+>
+> **[§7](#7-artifacts) stays, with two exceptions — the manifest's name,
+> and where it is written.** What a build produces is unchanged: the
+> artifact set of §7's table stays, and so does the memory report. What
+> no longer holds as written:
+>
+> - **The document is called `build-report.json`.** The build-side
+>   report is `build-report.json`, artifact role `report`, and it
+>   carries the `signing` block §7 describes — the `imgtool` parameters
+>   the client needs for detached signing (contract §7.2, §5.4;
+>   dashboard ADR 0007 decision 3). The block's content is the one §7
+>   states; only the document it lives in is renamed.
+> - **It is written inside the build container**, by the program, and
+>   declared in the result document's `artifacts` list, which is
+>   mandatory for a successful `build` (contract §5.4, §7.2). Producing
+>   it belongs to stage 5 and therefore to `mcuhome-compiler`, which
+>   runs inside the build container (ADR 0020 decision 1) — §7's
+>   "implemented (`mcuhome/manifest.py`)" describes that document's
+>   implementation, not a host-side step after the build.
+>
+> The contract governs the names and roles under which artifacts leave
+> the build container — `firmware.hex`/`firmware.bin` (role `firmware`)
+> and `build-report.json` (role `report`), with **no `ota` role in v1**
+> (contract §7.2, §5.4). That leaves §7's `.ota` file where §7 already
+> puts it in a detached build: written by `mcuhome sign`, on the machine
+> holding the private key, because the wrapper's payload has to be the
+> signed image and the program in the container must not sign.
+>
+> Terminology: "builder container" and "builder image" below read as
+> **build container** and build-container image; "the lib" reads as the
+> packages of ADR 0020 decision 1.
 
 ## 1. Principles
 
@@ -130,6 +214,9 @@ set ([../../patches/](../../patches/)).
 
 ## 5. Build execution (per ADR 0007)
 
+> **Superseded in part — see the status note at the top of this
+> document.**
+
 - `mcuhome build` runs stage 5 inside the versioned builder image
   (Zephyr SDK + pinned west workspace pre-baked). Host needs docker
   only; a persistent volume carries ccache + west workspace across runs.
@@ -147,6 +234,9 @@ set ([../../patches/](../../patches/)).
   end users always use the container.
 
 ## 6. Build service boundary — local and remote
+
+> **Superseded in part — see the status note at the top of this
+> document.**
 
 The dashboard never calls the builder directly; it talks to a **build
 service interface** with two implementations:

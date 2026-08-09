@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The build context and its normative ID.
 
-The context ID rule (builder-container-contract.md §3.3, ADR 0018) is
+The context ID rule (build-container-contract.md §3.3, ADR 0018) is
 locked with ``context`` format version 1 and can never change
 afterwards — every archived context, every artifact attribution and
 every server-side integrity check depends on the same inputs hashing to

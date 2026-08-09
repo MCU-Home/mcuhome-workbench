@@ -1,6 +1,7 @@
 # 0017 — Repository and packaging layout for the remote-build architecture
 
-- Status: accepted
+- Status: accepted; the packaging half is superseded in part by ADR 0020
+  (2026-08-09) — see the amendment at the end
 - Date: 2026-08-08
 
 ## Context
@@ -91,6 +92,69 @@ orchestrate third-party builder containers too.
   the cheapest restructuring sequence while the repositories are still
   private — is the merge plan, the next phase after this ADR set.
 - Related standing decisions: ADR 0002 (repo split), ADR 0005
-  (SemVer), ADR 0007 (builder container), ADR 0014 (golden tables
-  contract), ADR 0018, ADR 0019; dashboard ADR 0003, ADR 0011,
-  ADR 0012.
+  (SemVer), ADR 0007 (build container), ADR 0014 (golden tables
+  contract), ADR 0018, ADR 0019, ADR 0020 (packaging, see the
+  amendment); dashboard ADR 0003, ADR 0011, ADR 0012.
+
+## Amendment: the packaging layout is ADR 0020's (2026-08-09)
+
+One published package called "the lib" does not survive the execution
+sites the 2026-08-08/09 remote-build work fixed: code generation now
+runs inside the build container out of the mounted SDK package, the
+dashboard must still never carry a toolchain, and the build server has
+one obligation that needs the vocabulary without the logic. ADR 0020
+replaces the packaging half of this ADR. Precisely what changes here:
+
+**§1, the `mcuhome` row.** This repository publishes three packages, not
+one — `mcuhome-model` (device model, registry, the context format
+including ADR 0018 §6's frozen ID rule, error types, version constants;
+no I/O), `mcuhome-workbench` (stages 1-3, pin resolution, context
+creation, the three build methods, the session-protocol client, signing)
+and `mcuhome-compiler` (stages 4-5 plus the invocation-ABI adapter,
+shipped in the SDK package and executed inside the build container). The
+line is drawn by execution site, not by subject matter (ADR 0020
+decision 1). The two questions this ADR answered for one package are
+answered the same way for three (ADR 0020 decision 8): **all three carry
+§3's single shared version, and this repository publishes all three.**
+One release and one tag covers them together with the
+`mcuhome-sdk-<version>` archive and the build-container image.
+
+**§1, the `cli` row.** The command shell's distribution is renamed to
+`mcuhome`, so that `pip install mcuhome` yields the command a user
+expects; the console script is unchanged (ADR 0020 decision 2). The
+services keep `mcuhome-dashboard` and `mcuhome-build-server`.
+
+**§1's `build-server` row and §3's closing paragraph.** "The build
+server does not consume the lib at all" becomes: the build server
+consumes **`mcuhome-model`, and nothing else** (ADR 0020 decision 4).
+The intent is kept exactly — it depends on no build logic, only on the
+shared vocabulary, which is what keeps it able to orchestrate
+third-party build containers. The absolute form is dropped because it
+failed on one obligation: ADR 0019 §8 makes the server recompute the
+context ID from received bytes, ADR 0018 §6 freezes the rule for that
+computation and requires both sides of the contract to compute the same
+value, and "consumes nothing" gives that one frozen rule a second
+implementation in a second repository with no conformance vectors
+between the two. The contract dependency stays alongside the package.
+
+**"Lib" is retired as a term** (ADR 0020 decision 2), in this ADR and
+everywhere else: it named the extraction history — the remainder after
+the CLI split — rather than the thing, and three packages with three
+jobs cannot share it. So is **"builder"** (ADR 0019's amendment of the
+same date): where §1 and §3 above say "builder container", "builder
+image" or "the builder contract", read **build container**,
+**build-container image** and **build-container contract**. The
+normative contract document named in §3 is
+`docs/design/build-container-contract.md`; it was renamed together with
+the term, as ADR 0018 §6 records, and the old path in §3 is that
+rename's only remaining trace here.
+
+**What this amendment does not touch:** the four repositories of §1, the
+repo ≠ package rule of §2, and §3's three reasons for one shared version
+(atomic contract changes, colocated golden tests, no compatibility
+matrix). Those are arguments about the repository; ADR 0020 is a
+packaging split, and the single shared version those three reasons
+justify now covers three packages instead of one. §3's release
+consequence only changes its count:
+"three artifacts, one version, one tag" becomes the SDK package, the
+build-container image and the packages of ADR 0020 decision 1.

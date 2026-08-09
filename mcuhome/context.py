@@ -15,7 +15,7 @@ and it can never change afterwards.** Everything that ever names a
 context — integrity verification, artifact attribution ("built from
 *this*"), archival references — depends on computing the same ID from
 the same inputs forever. The rule is stated in
-``docs/design/builder-container-contract.md`` §3.3 (ADR 0018); this
+``docs/design/build-container-contract.md`` §3.3 (ADR 0018); this
 module implements it. The ID is the SHA-256 over the canonical JSON
 (RFC 8785) of exactly this document::
 
@@ -111,8 +111,17 @@ MODEL_FILE = "model/device-model.json"
 PATCHES_DIR = "patches"
 
 #: The backend-written runtime directory inside a mounted context
-#: (``.mcuhome/command.json``, builder-container-contract.md §5.2).
+#: (``.mcuhome/command.json``), as contract v1 was first drafted.
 #: Plumbing, not content: never an integrity entry, never identity.
+#:
+#: **The contract has moved on and this constant has not yet.** The
+#: per-invocation request document now lives in a backend-owned
+#: directory outside the context, and there is no ``.mcuhome/`` in a
+#: context at all (build-container-contract.md §3.1, §5.2) — which is
+#: what makes the context a genuinely read-only mount. Removing the
+#: directory from the exclusion rules is migration work; keeping it
+#: excluded in the meantime is harmless, because a context that never
+#: contains one cannot be affected by the exclusion.
 BACKEND_DIR = ".mcuhome"
 
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
@@ -334,7 +343,7 @@ def _require_files(entries: Iterable[ContextFile]) -> None:
                 hint=(
                     "manifest.yaml describes the list and .mcuhome/ is backend "
                     "plumbing — the contract keeps both out of the context's "
-                    "identity (builder-container-contract.md §3.2)"
+                    "identity (build-container-contract.md §3.2)"
                 ),
             )
         if entry.path in seen:
@@ -402,7 +411,7 @@ def _context_files(root: Path) -> tuple[ContextFile, ...]:
     """Every regular file under *root* that is context content, hashed.
 
     The manifest itself and the backend-written ``.mcuhome/`` runtime
-    directory are not content (builder-container-contract.md §3.2), so
+    directory are not content (build-container-contract.md §3.2), so
     neither is listed — and by way of that, neither can influence the ID.
     """
     entries = []
