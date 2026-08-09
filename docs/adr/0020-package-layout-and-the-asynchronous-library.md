@@ -278,7 +278,17 @@ number once; a compatibility matrix costs every reader of it, forever.
   import package this repository ships under that name today. Resolving
   it — import names for the three packages, and what a caller writes
   after `import` — is migration work for the merge plan, which ADR 0017
-  already defers to the phase after the ADR set.
+  already defers to the phase after the ADR set. **The shape of that
+  migration is decided** (product owner, 2026-08-09): packaging and
+  import names move in **one** migration, to real subpackages
+  (`mcuhome.model`, `mcuhome.workbench`, `mcuhome.compiler`), with no
+  interim phase in which three distributions deliver into the flat
+  package — three distributions claiming file subsets of one directory
+  is a relationship pip cannot express, and uninstalling one would
+  silently gut the other two. Until that migration lands, nothing may
+  re-implement what `mcuhome-model` will own; a verb that needs the
+  context-ID computation refuses typed rather than shipping sooner on
+  a second implementation of the frozen rule.
 - The build server's dependency becomes a package rather than a
   contract document alone. ADR 0017 §1's "depends on: builder contract"
   gains `mcuhome-model`; the contract remains what makes third-party

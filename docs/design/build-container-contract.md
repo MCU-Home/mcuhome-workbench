@@ -501,16 +501,43 @@ digits.
 
 **Contract v1 defines no mount points.** Every path the program needs
 arrives in the request document (§5.2), as an absolute path chosen by
-the backend. `/ctx`, `/sdk`, `/out` and `/ccache` may be used as
-conventions by an image or a backend, but a program that *depends* on
-them is not conforming, and MCUHome's conformance suite deliberately
-moves every path.
+the backend. `/ctx`, `/out` and `/ccache` may be used as conventions by
+an image or a backend, but a program that *depends* on one of them is
+not conforming: `context`, `out`, `work`, `tmp`, `ccache`, `result`,
+`events` and `cancel` are the backend's to place, and MCUHome's
+conformance suite deliberately moves every one of them.
 
 The reason is the `subprocess` profile: several concurrent sessions
 live in one filesystem namespace and cannot all have `/ctx`. Fixed
 paths are also wrong in the `container` profile, for the smaller reason
 that a fixed path is a promise about a filesystem the contract does not
 own.
+
+**A `trees` entry is the one thing a program may have a fixed path
+for**, and it may because a tree is a property of the *image* rather
+than of the session. A program MAY declare, in `describe`'s
+`program.trees` (§7.1.1), the path at which it requires a tree to be
+provided; a declared path is then a requirement the backend MUST
+satisfy for that image, and not a convention. The case that exists
+today is the SDK: a program whose build environment is a west workspace
+resolves project paths from `.west/config` and the manifest, and has no
+way to re-point them at invocation time, so "put it where you like" is
+a promise it cannot keep and would have to break in the middle of a
+build. A `path` of `null` keeps its meaning exactly — the program
+carries no tree there and requires nothing about where one goes.
+
+What the paths above have and a tree does not is a per-session
+identity: each of them belongs to one invocation or one session — the
+shared `ccache` to one backend — which is why two sessions in one
+namespace cannot share a spelling of them and why none of them is an
+image's to name. A declared tree path is the same declaration for every
+session the image serves, so nothing about the path is negotiated per
+session — what the backend puts *at* it still is, and a backend that
+cannot give each concurrent session its own view of that path cannot
+use that image. It learns so from `describe`, before it starts a
+session and before it promises a client anything: that is the whole
+difference between a declared requirement and a path compiled into an
+image.
 
 What the backend provides per invocation:
 
@@ -568,10 +595,11 @@ The backend executes each invocation as:
 ```
 
 Exactly two positional operands, both mandatory, **never a flag**. Any
-other arity is exit 66 (§5.3). A program needs `argv[1]`, `argv[2]` and
-a JSON parser. Nothing else — no environment variable carries
-information the program needs, and the working directory is
-meaningless: a program MUST NOT rely on any `cwd`.
+other arity, and an `argv[2]` that is not absolute, is exit 66 (§5.3,
+§5.2 rule 5). A program needs `argv[1]`, `argv[2]` and a JSON parser.
+Nothing else — no environment variable carries information the program
+needs, and the working directory is meaningless: a program MUST NOT
+rely on any `cwd`.
 
 **This argv is frozen and never grows.** Extensibility runs through the
 request document only. The reason is the purpose of the whole contract:
@@ -596,7 +624,7 @@ link at the start, and it is resolved in one jump.
 |---|---|---|
 | 1 | The backend creates a **backend-owned per-invocation directory** and writes the request document into it atomically. | It is not inside the context, so `context` can be a kernel-enforced read-only mount. It also removes the data race the fixed path `/ctx/.mcuhome/command.json` had, where two concurrent `docker exec` invocations overwrote each other's document. |
 | 2 | The backend invokes `/mcuhome/run <action> <request-path>` — via `docker exec` in the `container` profile, as a subprocess in the `subprocess` profile. | One ABI, two profiles. |
-| 3 | The program reads argv: exactly two operands. | Otherwise exit 66. |
+| 3 | The program reads argv: exactly two operands, the second of them an absolute path. | Otherwise exit 66. |
 | 4 | The program opens and parses the request document. | This is the **only** program-caused error that cannot produce a result document — and precisely the case in which the program does not know where a result would go. |
 | 5 | The program reads `request` and `result` from the immortal preamble (§5.2). | From here on **every** error is a result document, including "I do not implement this request format version" — because the preamble guarantees `result` is a top-level string path in every future request format version. |
 | 6 | The program takes the action from `argv[1]`. | One source, not two. |
@@ -688,10 +716,25 @@ more than it was given (§5.4, the echo rule).
    `request` version it does not implement ⇒ `status: "unsupported"`,
    `reason: "unsupported.request"`. This is always possible because
    `result` is in the immortal preamble.
-4. A path value that is not absolute ⇒ `unsupported.request`.
-5. Only if the document is missing, does not parse, is not an object,
-   `result` is missing or not writable, or the argv arity is wrong ⇒
+4. A path value that is not absolute ⇒ `unsupported.request`. `result`
+   is exempt: rule 5 governs it.
+5. Only if the argv arity is wrong, `argv[2]` is not absolute, the
+   document is missing, does not parse, is not an object, or `result`
+   is missing, is not a string, is not absolute or is not writable ⇒
    **exit 66, nothing written**.
+
+Rule 4 cannot reach `result` itself, which is why rule 5 does: a
+program that found a relative `result` would have to write
+`unsupported.request` *into* that path, and §5.1 leaves it nothing to
+make the path absolute with — the working directory is meaningless, so
+the only honest resolution is none at all. The same holds one step
+earlier for `argv[2]`. A relative request path resolves against
+whatever directory the backend happened to leave the process in, so it
+finds nothing or, worse, finds a **different** request document and
+answers that one with exit 0 — the single silent failure this ABI would
+otherwise have, in which every party involved believes the invocation
+succeeded. Both cases are therefore exit 66 with nothing written,
+rather than a refusal nobody could read.
 
 `session` is an **opaque token**. A program MUST NOT compose any path
 from it, from the parent directory of `argv[2]`, or from a compiled-in
@@ -789,7 +832,13 @@ code and document contradict each other, the pessimistic reading wins
 
 Written to the exact path given in `result`, as the **last write
 action** of the invocation, atomically (temporary file in the *same*
-directory, `fsync`, `rename`).
+directory, `fsync`, `rename`). The file's permissions are the
+backend's concern and not the contract's: the backend chose the path,
+and it either runs the program as itself or outranks it, so it can
+always read back what it asked for. The one thing a program MUST NOT
+do is make the result document unreadable to its own uid and gid — an
+answer that exists and cannot be collected is worse than no answer,
+because the exit code then contradicts a document nobody can look at.
 
 ```jsonc
 {
@@ -833,7 +882,7 @@ directory, `fsync`, `rename`).
 |---|---|---|---|
 | `result`, `status` | MUST | MUST | MUST |
 | `action` | MUST | MUST | MUST |
-| `session` | echo rule | MUST | MUST |
+| `session` | echo rule | echo rule — and §5.2 makes the request carry it | echo rule — and §5.2 makes the request carry it |
 | `reason`, `error` | MUST, on `failure`/`unsupported` | MUST, on `failure`/`unsupported` | MUST, on `failure`/`unsupported` |
 | `program` | MUST (§7.1.1) | MAY | MAY |
 | `context` | MUST NOT | MUST, on success | MUST, on success |
@@ -848,6 +897,18 @@ read `manifest.yaml` has no effective context ID. Fabricating either
 would be worse than omitting it, since the backend compares both
 against its own values (§5.3, §9.3). Everything not qualified is
 mandatory unconditionally.
+
+`program` in a `describe` result is deliberately one of those, and the
+consequence is meant: **a `describe` that fails carries the block
+too.** That is the case the block exists for rather than an oversight
+in the qualification — a `describe` refused with `unsupported.request`
+is refused because the backend sent a request version this program does
+not parse, and `program.request` is the field that tells it which
+version to send instead. A refusal that withheld the block would leave
+the backend with nothing to correct its next invocation from, which is
+the one thing `describe` is for. Nothing is fabricated by reporting it
+either: every field of §7.1.1 is a property of the program itself, so
+all of them are answerable whatever the request document said.
 
 A **`cancelled` result carries `reason: null` and `error: null`**, just
 as a successful one does, and it is the only status other than `success`
@@ -866,11 +927,14 @@ backend, symmetrically to the request document's `{request, result}`.
 **The echo rule: a program echoes what it was given, and only that.**
 `action` is always echoed, because it is always present — it is
 `argv[1]` (§5.1). `session` is echoed whenever the request document
-carried it, which §5.2 makes mandatory for every
-working action. `describe` gets by on the preamble alone, so a backend
-that invokes `describe` without it MUST NOT expect it back, and a
-program MUST NOT invent a value for a field it was never given. Stating
-the rule this way keeps the smallest conforming `describe`
+carried it, which §5.2 makes mandatory for every working action — so a
+`verify` and a `build` result carry it in every conforming invocation,
+and the table states those two rows conditionally on purpose: a request
+that omits it is the backend's breach of §5.2, and the echo rule wins
+over the mandate it broke. `describe` gets by on the preamble alone, so
+a backend that invokes `describe` without it MUST NOT expect it back,
+and a program MUST NOT invent a value for a field it was never given.
+Stating the rule this way keeps the smallest conforming `describe`
 implementation possible — read two fields, write four — which is the
 point of `describe` being the first conformance test (§7.1).
 
@@ -910,15 +974,16 @@ diagnostic output.
 - `reason` — a dotted value from an append-only registry owned by the
   MCUHome project; `x-*` for third parties. Unknown values are handled
   as their status class and passed through verbatim. Contract v1 defines
-  eleven:
+  twelve:
 
   | Value | The invocation |
   |---|---|
-  | `unsupported.request` | cannot read the request document as specified: a `request` version it does not implement, a mandatory field it did not find, or a path value that is not absolute (§5.2) |
+  | `unsupported.request` | cannot read the request document as specified: a `request` version it does not implement, a mandatory field it did not find, or a path value other than `result` that is not absolute (§5.2) |
   | `unsupported.required` | was told to honour a pointer or a value it does not honour; the pointers in `error.details.required` (§5.2) |
   | `unsupported.action` | asked for an action this program does not implement (§7) |
   | `unsupported.context` | found a `context` format version it does not implement (§3.2) |
   | `error.context.incomplete` | is missing a file the action needs, such as `keys/signing.pub` for a `build`; the missing path in `error.details` (§7.2) |
+  | `error.context.unreadable` | found `manifest.yaml` and cannot read it as one: broken YAML, a missing section, or a hash in a spelling §3.3.1 refuses (§7.3) |
   | `error.context.mismatch` | measured the materialized context and it is not the context `manifest.yaml` describes — the `verify` failure (§7.3) |
   | `error.layer.unknown` | found `patches/<layer>/` for a layer it has no `trees` entry for or does not know (§6.2) |
   | `error.patch.incomplete` | found a layer recorded as started but not complete; terminal for the session (§6.2) |
@@ -1370,22 +1435,38 @@ and MUST NOT be used as discovery data; the backend asks `describe`.
   version a failed invocation. `program.result` is the advance notice of
   that, not a second channel for it.
 - **`actions`** — the action names the program implements, as an array
-  of strings. It MUST list every action, and it MUST include
-  `describe`, `verify` and `build`, which contract v1 requires of every
-  conforming program (§7). It is the **only** declaration of the action
-  set; no image label carries one (§2.1). A backend MUST NOT invoke an
-  action absent from the list; if it does anyway, the legible answer is
-  `unsupported.action`, exit 1.
-- **`trees`** — where the image keeps each layer it carries, as a map
-  from layer name (§1.1) to an object with a mandatory `path` and an
-  optional `version`. Mandatory in a `describe` result: it is the only
-  way a backend learns where a foreign image keeps its trees, without
-  which §6.2's writable views cannot be arranged at all. A `path` of
-  `null` means "this tree is not in my image; put it wherever you like
-  and name it in `trees`" — which is why `version` is optional, since an
-  image that does not carry a tree cannot state its version (the §5.4
-  example shows exactly that for `sdk`). A concrete path is where the
-  image keeps that tree.
+  of strings, and exactly those: it MUST list every action it
+  implements and MUST NOT list one it does not. It is the **only**
+  declaration of the action set; no image label carries one (§2.1). A
+  backend MUST NOT invoke an action absent from the list; if it does
+  anyway, the legible answer is `unsupported.action`, exit 1.
+  **Conformance is claimed by the declared contract version and never by
+  this list**: by the `org.mcuhome.contract` label (§2.1), and by the
+  `contract` field above it where there is no image to carry a label.
+  Contract v1 requires all three actions of §7 of a conforming program,
+  so a program implementing fewer is a legible non-conforming program
+  rather than a broken one, and the short list is the correct thing for
+  it to report — the list is what a backend acts on, so one that claimed
+  an action the program does not have would be the single lie a backend
+  cannot catch before invoking it.
+- **`trees`** — where the image keeps each layer it carries, and where
+  it requires one to be put, as a map from layer name (§1.1) to an
+  object with a mandatory `path` and an optional `version`. Mandatory in
+  a `describe` result: it is the only way a backend learns where a
+  foreign image keeps its trees, without which §6.2's writable views
+  cannot be arranged at all. A `path` of `null` means "this tree is not
+  in my image; put it wherever you like and name it in `trees`" — which
+  is why `version` is optional, since an image that does not carry a
+  tree cannot state its version (the §5.4 example shows exactly that for
+  `sdk`). A concrete path is where the image keeps that tree, and for a
+  tree the backend supplies it is **the path the backend MUST supply it
+  at** (§4): a program that names a path for a layer it does not carry
+  is stating a requirement, not describing its own filesystem, and a
+  backend naming any other path in `trees.<layer>` is naming one the
+  program cannot honour — `unsupported.required` where the pointer was
+  demanded through `required` (§5.2 rule 2), and a failed invocation
+  otherwise. The distinction a backend needs is therefore in the value
+  and not in a second field: `null` asks, a path requires.
 
 Taken together, `contract`, `request`, `result`, `actions` and `trees`
 are everything a backend needs to arrange an invocation without having
@@ -1500,9 +1581,13 @@ the only party holding the private key.
   verify with, so a client can refuse a mismatched key instead of
   producing an unbootable image. MCUHome's own value is `ecdsa-p256`
   (`mcuhome/registry.py:332-336`).
-- The parameters apply to the artifact declared with role `firmware`.
-  Nothing names that artifact a second time: `role` is already how an
-  artifact is identified (§5.4).
+- The parameters apply to **every** artifact declared with role
+  `firmware`. There is one unsigned image, and a build may declare it in
+  more than one encoding — MCUHome's own container writes `firmware.hex`
+  to flash and `firmware.bin` to sign (§7.2) — so the same four
+  arguments describe each of them, and a per-artifact block would be the
+  same block repeated. Nothing names any of those artifacts a second
+  time: `role` is already how an artifact is identified (§5.4).
 - `memory` — optional, one entry per memory region of a linked image,
   with exactly the fields of the `build.memory.region` event (§8):
   `image`, `region`, `used`, `total`, `percent`. It is the footprint
@@ -1539,6 +1624,23 @@ whose bytes hash to something else, and a file present but absent from
 the list are one outcome and one typed answer:
 `status: "failure"`, `reason: "error.context.mismatch"`, the offending
 paths in `error.details`.
+
+A `manifest.yaml` that is present and cannot be read as one — YAML that
+does not parse, a section the format requires and the document does not
+have, a hash rendered in a spelling §3.3.1 refuses — is a different
+failure and carries its own answer, here and wherever else an action
+has to read the manifest: `status: "failure"`,
+`reason: "error.context.unreadable"`. It is not
+`error.context.mismatch`, because nothing was measured against
+anything: a document that describes no context cannot be disagreed
+with, and a backend told "mismatch" would go looking for the tampered
+file that does not exist. It is not `error.context.incomplete` either,
+since the file is there; and it is not `unsupported.context`, which is
+reserved for a format version the program does not implement and says
+of it that "nothing about this context is broken" (§3.2). A manifest
+that states no `context` format version at all is therefore unreadable
+rather than unsupported — no other image would fare better with it, so
+there is nothing for a backend to reschedule onto.
 
 **`verify` does not apply patches, and it touches no source tree.** It
 reads the context and nothing else: it does not write into any `trees`
@@ -1856,3 +1958,11 @@ policy, not contract.
   the language the program is written in.
 - An incompatible change to anything frozen above is a new contract
   version, declared via `org.mcuhome.contract`.
+
+Nothing is deployed against contract v1 yet, and while that holds a
+defect in this document is corrected where it stands rather than
+versioned around. A new contract version is the answer to a changed
+intent; it is not the answer to a sentence that failed to say what was
+intended, and spending version 2 on one would leave every future reader
+with two documents to reconcile for no gain. That licence ends with the
+first implementation that depends on this text.

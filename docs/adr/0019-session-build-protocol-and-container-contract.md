@@ -707,3 +707,81 @@ depends on any of them:
 
 No capability is lost by any of the six, and each one removed is one
 thing fewer for a third-party implementer to get right.
+
+## Amendment: the wire shape of the two 2026-08-09 verbs, and the session's end (2026-08-09 evening, product owner)
+
+The first amendment added `lock-context` and `cancel` to the verb set
+and said what each does; it did not say what travels on the wire. The
+build server's implementation stopped exactly there — a typed refusal
+rather than a stub that would have decided the shape by existing — and
+the product owner settled the questions the same evening. Three
+decisions, and the reasoning each one was taken on.
+
+**`lock-context` is minimal: the request carries `session_id` and
+nothing else, the response carries the context ID and nothing else.**
+The alternative — the client sending its own independently computed ID
+for the server to compare — was considered and rejected in favour of
+the smallest possible protocol surface. The comparison the first
+amendment requires ("both sides compare values they computed
+independently") therefore happens **on the client**: the workbench
+computes the ID from the bytes it sent, compares it against the ID the
+response carries, and closes the session on a disagreement. The
+consequence is stated here so nobody rediscovers it as a gap: the
+server never sees the client's value, so the server cannot raise a
+mismatch — holding the workbench to its comparison duty is a
+requirement on the session client (the `remote` build method), not on
+the protocol. A third-party client that skips the comparison builds on
+a context that is not the one it thinks it sent, and no server-side
+check exists to catch it; the conformance obligation belongs in the
+client's own suite.
+
+**`cancel(session_id, invocation_id)` acknowledges immediately.** The
+answer means "the stop signal is set", never "the invocation has
+stopped". The actual end travels on the channel that already exists:
+the invocation's event stream, and a result document whose `status` is
+`cancelled` (contract §5.4). A verb that blocked until the invocation
+stood would hang on the socket for up to `cancel_grace_seconds`,
+inherit every reconnect question `attach-session` exists to answer,
+and need rules for a second `cancel` racing the first — three costs
+for a guarantee the result document already gives. Two edges are
+typed: an `invocation_id` the session does not know is the error
+`invocation.unknown`; an invocation that has already finished is
+answered `already_finished` and is **not** an error, because the race
+between a cancel and a natural completion is legitimate and both
+parties behaved correctly.
+
+**A poisoned session refuses work but keeps its artifacts.** The
+interrupted patch application of the first amendment ("fails typed,
+and every further working command in that session is refused") gets
+its error code: `session.poisoned`, raised for every further working
+command. The session is deliberately **not** reaped on the spot:
+`get-artifact` and `close-session` stay permitted, because the moment
+a session poisons is exactly the moment its owner most wants the logs
+and partial artifacts that explain what happened, and destroying them
+to simplify the state machine would trade diagnosis for tidiness.
+Cleanup happens where it always happens — `close-session` or lease
+expiry.
+
+**`close-session` on a busy session cancels implicitly.** The running
+invocation receives the cancel signal, its result document is still
+written, then the session is reaped. Refusing to close while an
+invocation runs was rejected because connection loss is never
+abandonment (that is `attach-session`'s reason to exist), so closing
+must never require a live client to first cancel, reattach, or wait —
+a crashed client's session would otherwise hold its resources until
+lease expiry as the *normal* path rather than the fallback.
+
+Four smaller determinations, recorded with the same append-only
+intent: every authenticated session verb counts as a command for the
+idle timeout and refreshes it — one rule, no per-verb list, and
+`lock-context` and `cancel` are commands like any other. The
+"[read-only commands permitted]" line in the flow above names, today,
+`capabilities`, `attach-session`, `close-session` and `cancel`; no
+context-reading verb exists yet, and the line stays as the place one
+would slot in. Both new verbs are permitted in all three session
+profiles — `oneshot` needs the lock to ever reach `build`, and a
+cancel must be possible wherever a build is. And a context that was
+sent but is empty may be locked: it has a well-defined ID, and the
+things a `build` needs beyond existence — `keys/signing.pub` above
+all — are checked by `build`, which is where the contract scopes
+them, not by the lock.
