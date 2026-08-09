@@ -650,9 +650,9 @@ contract, and what belongs here is what changed and why.
   them from the trees it is given, and the backend never supplies a
   workspace. A set of paths is not a build: the generated CMakeLists
   resolves `${ZEPHYR_MCUHOME_MODULE_DIR}`
-  (`mcuhome/generate.py:1343`, `:1354`) and searches for `CHIP_ROOT`
+  (`mcuhome/compiler/generate.py:1343`, `:1354`) and searches for `CHIP_ROOT`
   via `$ENV{ZEPHYR_BASE}/../modules/lib/connectedhomeip`
-  (`mcuhome/generate.py:1200-1215`), and neither exists outside a
+  (`mcuhome/compiler/generate.py:1200-1215`), and neither exists outside a
   registered Zephyr module tree. Assigning the responsibility is what
   makes the contract implementable by an image with a different
   topology — an NCS one, say; freezing topology fields would have

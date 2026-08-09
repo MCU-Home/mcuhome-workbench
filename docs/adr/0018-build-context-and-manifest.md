@@ -238,7 +238,7 @@ is a statement about the hash rather than about layout.**
 `manifest.yaml` is excluded structurally: it is the document that
 carries the list, so it cannot be an entry in it — the implementation
 refuses one and skips the file when collecting entries
-(`mcuhome/context.py:333-341`, `mcuhome/contextdir.py:90`).
+(`mcuhome/model/context.py:333-341`, `mcuhome/workbench/contextdir.py:116`).
 `context.yaml` is excluded for a stronger reason. Hashing it as an
 ordinary content file would readmit
 `created` and `mcuhome.constraint` through the back door, and decision 6
@@ -281,7 +281,7 @@ the images genuinely differ — but it removes cross-user sharing from
 the content-addressed identity of decision 4 by construction, so the
 artifact cache that decision parked would be per-key if it were ever
 built. In the corpus `signing.pub` exists today only as a filename
-constant (`mcuhome/signing.py:81`) and a CLI-level parameter; this
+constant (`mcuhome/workbench/signing.py:81`) and a CLI-level parameter; this
 makes it context content.
 
 **The context is frozen by an explicit verb, and extension is bounded
@@ -308,22 +308,22 @@ returns it. What that does to this ADR:
 the previous arrangement failed by construction: with a manifest that
 was immutable for the session's lifetime *and* mid-session extension
 allowed, `verify_context` reports "present but not in the integrity
-list" for every file added after upload (`mcuhome/contextdir.py:322-324`)
-and `ok` is therefore `False` (`:347-349`) after any extension at all.
+list" for every file added after upload (`mcuhome/workbench/contextdir.py:349-351`)
+and `ok` is therefore `False` (`:374-376`) after any extension at all.
 Under the split above the contradiction disappears by construction: the
 manifest `lock-context` writes *is* the integrity list of the effective
 context, so verifying against it and verifying against the effective
 context are the same act.
 
 **A defect in the verification primitive, and the backend duty that
-closes it.** `verify_context` (`mcuhome/contextdir.py:362-398`)
+closes it.** `verify_context` (`mcuhome/workbench/contextdir.py:389-425`)
 carries the docstring "the manifest's values are advisory, the bytes
-decide" (`:365-366`), and that is true of exactly one of the four
+decide" (`:392-393`), and that is true of exactly one of the four
 hashed inputs. `container.digest`, `sdk.sha256` and `target.board` are
 read straight out of the declared manifest when the actual ID is
-recomputed (`:391-395`), and the manifest is itself excluded from the
+recomputed (`:418-422`), and the manifest is itself excluded from the
 integrity list by construction — deliberately, so it cannot influence
-its own ID (`mcuhome/context.py:333-341`, `mcuhome/contextdir.py:90`).
+its own ID (`mcuhome/model/context.py:333-341`, `mcuhome/workbench/contextdir.py:116`).
 The consequence nobody had written down:
 **a self-consistently forged manifest passes with `ok == True`.** The
 file hashes match, the recomputed ID matches, and all three declared

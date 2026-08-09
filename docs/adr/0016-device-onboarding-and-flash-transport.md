@@ -180,7 +180,7 @@ documentation depends on it.
 The commissioning-code half of onboarding is done, not proposed
 (builder pairing block, commit `7c9266b`): `mcuhome init-pairing` draws
 per-device credentials from the system CSPRNG once, into the user's own
-configuration; `mcuhome/pairing.py` emits all seven
+configuration; `mcuhome/model/pairing.py` emits all seven
 `CONFIG_CHIP_DEVICE_*` symbols as one indivisible Kconfig group,
 because CHIP checks none of them against each other on Zephyr; and
 `validate`, `build` and `init-pairing` print the manual pairing code

@@ -84,7 +84,7 @@ in place — `mcuboot` and `zcbor` are in the `west.yml` name-allowlist.
 
 ### 2. The update scheme is per-board registry data, never a global constant
 
-`BoardDef` in `mcuhome/registry.py` gains the bootloader, update-scheme
+`BoardDef` in `mcuhome/model/registry.py` gains the bootloader, update-scheme
 and staging metadata as ordinary properties, next to the transports,
 Kconfig and overlay it already carries: which MCUboot mode the board
 uses, where the staging area lives (internal, external part, or none),
@@ -452,7 +452,7 @@ The class-A layout of decision 3, as amended:
 "swap needs one sector layout across both slots" — the two stay equal
 by definition, not by a second measurement); `storage_partition` is
 untouched, so this amendment carries none of decision 3's
-re-commissioning risk. `mcuhome/registry.py`'s `PartitionDef` sizes, the
+re-commissioning risk. `mcuhome/model/registry.py`'s `PartitionDef` sizes, the
 `nrf7002dk/nrf5340/cpuapp` partition overlay (now restating
 `boot_partition` too, since 80 KiB is no longer the board's upstream
 default the way 64 KiB was) and `CONFIG_BOOT_MAX_IMG_SECTORS` carry these

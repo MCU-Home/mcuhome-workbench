@@ -75,7 +75,7 @@
 >   mandatory for a successful `build` (contract §5.4, §7.2). Producing
 >   it belongs to stage 5 and therefore to `mcuhome-compiler`, which
 >   runs inside the build container (ADR 0020 decision 1) — §7's
->   "implemented (`mcuhome/manifest.py`)" describes that document's
+>   "implemented (`mcuhome/model/manifest.py`)" describes that document's
 >   implementation, not a host-side step after the build.
 >
 > The contract governs the names and roles under which artifacts leave
@@ -294,7 +294,7 @@ sysbuild each image has its own sub-directory of the build tree
 | `build-manifest.json` | — | device model + versions + image hashes — consumed by the dashboard |
 | `memory-report.txt` | per image | ROM/RAM footprint — regression tracking |
 
-**`build-manifest.json` is implemented** (`mcuhome/manifest.py`). It sits
+**`build-manifest.json` is implemented** (`mcuhome/model/manifest.py`). It sits
 at the top of the build directory next to `device-model.json`, and every
 path in it is relative to that directory, because a manifest crosses a
 network (§6). It carries the device name, board and model version, the
@@ -311,7 +311,7 @@ partition table stage 4 rendered into the overlay; the fourth,
 is deterministic apart from the sizes and hashes it measures: no
 timestamps, no host names, no absolute paths.
 
-**The Matter OTA file is implemented** (`mcuhome/ota.py`, ADR 0015
+**The Matter OTA file is implemented** (`mcuhome/model/ota.py`, ADR 0015
 decision 5). It is written for a device that can actually receive one —
 the board's update scheme has a staging slot and the device has a Matter
 stack — and it wraps the **signed** application image, so an inline build

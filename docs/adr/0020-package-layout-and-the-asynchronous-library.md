@@ -268,7 +268,7 @@ number once; a compatibility matrix costs every reader of it, forever.
   `workspace.installed_module_dir()` as the answer the *command line*
   supplies because the command line is the local-dev case; the working
   directory and the environment are arguments everywhere; and
-  `mcuhome/userpaths.py` resolves the per-user directories from the
+  `mcuhome/model/userpaths.py` resolves the per-user directories from the
   environment it is handed — refusing rather than guessing when that
   environment names no home, because the directory in question holds a
   private signing key. `tests_py/test_userpaths.py::test_no_module_reads_process_state`
