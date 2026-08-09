@@ -102,10 +102,15 @@ ZEPHYR_LINE = "4.4.0"
 #: which is where the invocation ABI and the actions of §7 live. That
 #: module is **not** image content: it arrives with the SDK mount, so
 #: adding an action to it does not change this image and does not bump
-#: this number. Nothing invokes the program yet, and the image still
-#: carries no ``org.mcuhome.*`` label — whether it may claim conformance
-#: is a decision of its own (``containers/builder/Dockerfile``).
-IMAGE_REVISION = 4
+#: this number.
+#:
+#: r5 adds the ``org.mcuhome.*`` labels of §2.1 and nothing else. The
+#: conformance claim became true elsewhere — all three actions of §7
+#: implemented, and §4's D1 erratum sanctioning the declared SDK mount
+#: point — but a label is image metadata, and image metadata is an image
+#: change (the tag is the content identity, so a label under an old tag
+#: would make two different images answer to one name).
+IMAGE_REVISION = 5
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a

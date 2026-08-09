@@ -223,18 +223,25 @@ def test_the_record_is_outside_every_layer() -> None:
     assert f"--output {TOPDIR}/" not in text
 
 
-def test_the_image_claims_no_contract_conformance() -> None:
-    """``org.mcuhome.contract=1`` claims conformance with the contract.
+def test_the_image_carries_exactly_the_labels_of_section_two_one() -> None:
+    """Since r5 the image claims conformance, and the claim is true.
 
-    Since r4 the program at ``/mcuhome/run`` exists (§2.2), but it
-    implements ``describe`` and ``verify`` and refuses ``build`` with
-    ``unsupported.action`` — and §7 requires all three of a conforming
-    program. A label without the actions behind it is a false claim to
-    exactly the third parties the contract is written for, so the labels
-    arrive with ``build``, not with the program. See
-    ``tests_py/test_abi.py``.
+    The claim was withheld through r4 on purpose — a label without the
+    actions behind it is a false promise to exactly the third parties
+    the contract is written for — and became true in three steps, none
+    of them a label: all three actions of §7 implemented and reviewed,
+    and §4's D1 erratum sanctioning the one fixed path this image
+    depends on, the declared SDK mount point. The values are pinned
+    literals, not ARGs, so a ``--build-arg`` cannot make the scheduling
+    data lie about the baked workspace; this test holds them against
+    the pins the repository actually carries.
     """
-    assert "org.mcuhome." not in _dockerfile()
+    text = _dockerfile()
+    assert 'org.mcuhome.contract="1"' in text
+    assert 'org.mcuhome.zephyr="v4.4.0"' in text
+    assert 'org.mcuhome.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"' in text
+    assert "ZEPHYR_REVISION=v4.4.0" in text, "the label must match the baked pin"
+    assert "ZEPHYR_SDK_VERSION=1.0.1" in text, "the label must match the baked toolchain"
 
 
 # --------------------------------------------------------------------------

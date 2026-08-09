@@ -31,8 +31,9 @@
 # a thin launcher over mcuhome.abi, which is where the invocation ABI and
 # all three actions of §7 live. The abi module arrives with the SDK mount,
 # not with this image, so what the image contributes here is the launcher
-# and the fixed path. The image still carries no MCUHome contract label —
-# see the COPY in stage 3.
+# and the fixed path. Since r5 the image also carries the org.mcuhome.*
+# labels of §2.1 — see the LABEL block in stage 3 for what that claim
+# means and what it deliberately does not.
 #
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
@@ -43,7 +44,7 @@
 #
 # Build (from the repository root — the context is the REPOSITORY, not
 # this directory, because west.yml and patches/ live outside it):
-#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
+#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
 #         -f containers/builder/Dockerfile .
 #
 # Everything downloaded is checksum-verified. The checksums are the whole
@@ -405,15 +406,30 @@ COPY --from=workspace /mcuhome /mcuhome
 # After the COPY above, not before: that one lands the whole /mcuhome
 # namespace, and this file has to survive it.
 #
-# The image still carries no MCUHome contract label. Such a label claims
-# conformance of the IMAGE, and the program it launches is not in the
-# image: mcuhome.abi arrives with the SDK mount, and what it can do
-# depends on the SDK package a session was given. Whether this image may
-# claim conformance is therefore a decision of its own, taken once the
-# three actions have been reviewed against a real backend — not a side
-# effect of an action landing in the SDK.
 COPY containers/builder/run /mcuhome/run
 RUN chmod 0755 /mcuhome/run
+
+# The labels of §2.1 — "pre-start scheduling data": they let a backend
+# pick an image before paying for a container start, and they are NOT
+# authoritative about what the program can do; `describe` is (§7.1).
+#
+# `org.mcuhome.contract=1` claims conformance with contract v1, and the
+# claim became true in three steps, none of them here: the program
+# implements all three actions of §7 (`describe`, `verify`, `build` —
+# reviewed adversarially, exercised against this very image), and §4's
+# D1 erratum sanctions the one fixed path this image depends on, the
+# SDK mount point that `describe` declares in `program.trees`. The
+# program's *body* still arrives with the SDK mount — what the image
+# guarantees is the launcher, the workspace the actions run against,
+# and the toolchain, which is exactly what the three labels name.
+#
+# Values, not ARGs, on purpose: the Zephyr line is pinned by west.yml
+# and baked into the workspace above, so a label that could drift from
+# the baked reality via a --build-arg would be scheduling data lying
+# about the image. Bump them together with the pins, like the tag.
+LABEL org.mcuhome.contract="1" \
+      org.mcuhome.zephyr="v4.4.0" \
+      org.mcuhome.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"
 
 # Git refuses to operate in a repository owned by another user (the
 # CVE-2022-24765 hardening), and this is exactly that situation: the

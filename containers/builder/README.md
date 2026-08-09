@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r4   # or build it, below
+docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r5   # or build it, below
 mcuhome build <device>                                 # uses it by default
 ```
 
@@ -136,7 +136,7 @@ environment.
 ```sh
 # from the repository ROOT — the context is the repository, not this
 # directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
     -f containers/builder/Dockerfile .
 ```
 
@@ -187,7 +187,7 @@ build with `--image`, or for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
+docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
     cat /mcuhome/workspace.json
 ```
 
@@ -238,7 +238,7 @@ hash is safe.
 # what the cache is doing, with the same mount the builder uses
 docker run --rm --user "$(id -u):$(id -g)" \
     --volume ~/.cache/mcuhome/ccache:/ccache \
-    ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 ccache -s
+    ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 ccache -s
 ```
 
 ## Bumping Zephyr

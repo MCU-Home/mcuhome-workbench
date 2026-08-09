@@ -75,7 +75,8 @@ find". ``verify`` needs two of the seven. ``context`` is the directory
 ``verify`` result carry it "in every conforming invocation" — the row is
 conditional on §5.2 making the request carry it, so a request without it
 is the backend's breach of §5.2, and refusing under rule 3 is how this
-program reports a breach it will not paper over by inventing the echo. The other five (``out``, ``work``, ``tmp``, ``trees.sdk``,
+program reports a breach it will not paper over by inventing the echo.
+The other five (``out``, ``work``, ``tmp``, ``trees.sdk``,
 ``limits.jobs``) name work this action does not do: it "reads the context
 and nothing else" (§7.3), and §4.1 says "The program MUST NOT require an
 entry it does not need for the requested action". A backend that omits

@@ -180,7 +180,7 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 
 # Generate AND compile it (stages 4-5), from the workspace top directory.
 # Compiles in the builder image (ADR 0007) — pull it once:
-#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r4
+#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r5
 # Writes the application to build/<device>/app and the CMake tree to
 # build/<device>/build — one sub-directory per sysbuild image (ADR 0015:
 # mcuboot + the signed application) — and reports both with their
@@ -196,7 +196,7 @@ mcuhome build … --native
 # Build the builder image from source (containers/builder/README.md).
 # The context is the repository root, not containers/builder/: since r3
 # the image bakes a west workspace, so west.yml and patches/ are inputs.
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
   -f containers/builder/Dockerfile .
 
 # Python lint/format
