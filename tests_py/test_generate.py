@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import shutil
 import subprocess
 
@@ -596,6 +597,31 @@ def test_the_sample_and_the_generated_app_share_one_matter_build_glue(block: str
     sample = (SAMPLE_DIR / "CMakeLists.txt").read_text(encoding="utf-8")
     assert block in sample, "samples/matter-node/CMakeLists.txt drifted from the generator"
     assert block in _example_files()[CMAKE_PATH]
+
+
+def test_the_module_variable_the_generator_emits_is_the_one_zephyr_will_define() -> None:
+    """The generated CMakeLists reaches back into this repository by variable.
+
+    Read out of zephyr/module.yml rather than restated, because the two
+    ends of ``ZEPHYR_<NAME>_MODULE_DIR`` are written in different
+    languages and neither complains when they disagree: an undefined
+    CMake variable expands to the empty string, so a renamed module turns
+    into ``/app/src/main.c`` and a file-not-found in the configure step.
+    Renaming the module without renaming the variable fails here, which
+    is the point — and so does the reverse.
+    """
+    module_yml = (REPO_ROOT / "zephyr" / "module.yml").read_text(encoding="utf-8")
+    declared = re.search(r"^name:\s*(\S+)\s*$", module_yml, re.MULTILINE)
+    assert declared is not None, (
+        "zephyr/module.yml no longer declares a name, so Zephyr falls back to the "
+        "directory basename and the variable below depends on what the SDK is unpacked as"
+    )
+    # zephyr/scripts/zephyr_module.py sanitizes the name, and
+    # zephyr/cmake/modules/zephyr_module.cmake upper-cases it.
+    sanitized = re.sub(r"[^a-zA-Z0-9]", "_", declared.group(1)).upper()
+    source = (REPO_ROOT / "mcuhome" / "generate.py").read_text(encoding="utf-8")
+    used = set(re.findall(r"\$\{(ZEPHYR_\w+_MODULE_DIR)\}", source))
+    assert used == {f"ZEPHYR_{sanitized}_MODULE_DIR"}
 
 
 def test_the_generated_app_names_no_path_of_the_machine_that_wrote_it() -> None:
