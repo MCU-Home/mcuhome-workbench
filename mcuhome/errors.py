@@ -21,6 +21,13 @@ Rendered shape (stable; asserted by the test suite)::
 A user must never see a Python traceback: the CLI catches everything
 derived from :class:`MCUHomeError` and prints the rendering above.
 
+:meth:`MCUHomeError.render` takes the directory file names are shortened
+against as an argument — the CLI passes its working directory, a server
+passes nothing and gets absolute paths. Nothing in this module reads the
+process's working directory, because "where the caller stands" is not a
+property of the error, and a long-lived server renders errors about
+directories it does not stand in.
+
 **Serialized shape (stable; part of the public API of** :mod:`mcuhome.api`
 **).** :meth:`ConfigError.to_dict` answers the same three questions as
 fields rather than as prose, for a caller that puts them in an editor's
@@ -57,10 +64,19 @@ __all__ = [
 ]
 
 
-def _display_path(path: Path) -> str:
-    """Render *path* relative to the working directory when that is shorter."""
+def _display_path(path: Path, base: Path | None) -> str:
+    """Render *path* relative to *base* when that is shorter.
+
+    *base* is passed in rather than read from the process: a long-lived
+    server renders an error about a directory that is not its own, and a
+    path relative to *its* working directory would name a file that does
+    not exist. Without a base the path is rendered as it is, which is why
+    this module needs no filesystem at all.
+    """
+    if base is None:
+        return str(path)
     try:
-        relative = os.path.relpath(path, Path.cwd())
+        relative = os.path.relpath(path, base)
     except ValueError:  # different drive on Windows
         return str(path)
     return relative if len(relative) < len(str(path)) else str(path)
@@ -83,11 +99,16 @@ class Location:
     def with_key(self, key: str) -> Location:
         return Location(file=self.file, line=self.line, column=self.column, key=key)
 
-    def describe(self) -> str:
-        """Human-readable "where", without the leading ``in``."""
+    def describe(self, base: Path | None = None) -> str:
+        """Human-readable "where", without the leading ``in``.
+
+        *base* is the directory the file is named relative to — the
+        caller's working directory on a terminal, nothing at all in a
+        server. See :func:`_display_path`.
+        """
         parts: list[str] = []
         if self.file is not None:
-            parts.append(_display_path(self.file))
+            parts.append(_display_path(self.file, base))
         if self.line is not None:
             parts.append(f"line {self.line}")
         if self.column is not None:
@@ -123,7 +144,8 @@ class Location:
 class MCUHomeError(Exception):
     """Base class for every error the CLI is allowed to show to a user."""
 
-    def render(self) -> str:  # pragma: no cover - overridden everywhere
+    def render(self, base: Path | None = None) -> str:  # pragma: no cover - overridden everywhere
+        del base  # nothing to make relative
         return str(self)
 
     def to_dict(self, *, root: Path | None = None) -> dict[str, Any]:
@@ -165,9 +187,9 @@ class ConfigError(MCUHomeError):
         self.location = location or Location()
         self.hint = hint
 
-    def render(self) -> str:
+    def render(self, base: Path | None = None) -> str:
         lines = [f"Error: {self.message}"]
-        where = self.location.describe()
+        where = self.location.describe(base)
         if where:
             lines.append(f"  in {where}")
         if self.hint:
@@ -238,8 +260,8 @@ class ConfigErrorGroup(MCUHomeError):
         self.errors = sorted(errors, key=lambda e: e.location.sort_key())
         super().__init__(f"{len(self.errors)} configuration problem(s)")
 
-    def render(self) -> str:
-        body = "\n\n".join(error.render() for error in self.errors)
+    def render(self, base: Path | None = None) -> str:
+        body = "\n\n".join(error.render(base) for error in self.errors)
         count = len(self.errors)
         noun = "problem" if count == 1 else "problems"
         return f"{body}\n\n{count} {noun} found."

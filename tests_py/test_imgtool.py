@@ -23,6 +23,7 @@ and it is exactly the one a verifier cares about.
 
 from __future__ import annotations
 
+import os
 import struct
 import subprocess
 import sys
@@ -51,7 +52,7 @@ def test_the_workspaces_own_mcuboot_wins(tmp_path) -> None:
     script = tmp_path / imgtool.MCUBOOT_IMGTOOL
     script.parent.mkdir(parents=True)
     script.write_text("", "utf-8")
-    assert imgtool.find_imgtool(topdir=tmp_path, env={}) == [sys.executable, str(script)]
+    assert imgtool.find_imgtool(env={}, topdir=tmp_path) == [sys.executable, str(script)]
 
 
 def test_the_environment_variable_beats_everything(tmp_path) -> None:
@@ -60,7 +61,7 @@ def test_the_environment_variable_beats_everything(tmp_path) -> None:
     script.write_text("", "utf-8")
     other = tmp_path / "other-imgtool.py"
     other.write_text("", "utf-8")
-    found = imgtool.find_imgtool(topdir=tmp_path, env={imgtool.IMGTOOL_VAR: str(other)})
+    found = imgtool.find_imgtool(env={imgtool.IMGTOOL_VAR: str(other)}, topdir=tmp_path)
     assert found == [sys.executable, str(other)]
 
 
@@ -70,7 +71,7 @@ def test_a_program_name_is_taken_as_a_program() -> None:
 
 def test_no_imgtool_anywhere_is_a_refusal_that_says_where_to_get_one(tmp_path) -> None:
     with pytest.raises(BuildError) as caught:
-        imgtool.require_imgtool(topdir=tmp_path, env={"PATH": str(tmp_path)})
+        imgtool.require_imgtool(env={"PATH": str(tmp_path)}, topdir=tmp_path)
     assert "pip install imgtool" in caught.value.hint
     assert imgtool.IMGTOOL_VAR in caught.value.hint
 
@@ -196,8 +197,40 @@ def test_signing_never_generates_a_key(tmp_path, monkeypatch) -> None:
     """A build has to be signed with the key its bootloader already carries."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
     with pytest.raises(BuildError) as caught:
-        imgtool.sign_build(_build_dir(tmp_path))
+        imgtool.sign_build(
+            _build_dir(tmp_path),
+            env=dict(os.environ),
+            topdir=workspace.find_topdir(workspace.installed_module_dir(), tmp_path),
+        )
     assert "no such file" in caught.value.message
+
+
+def test_the_workspace_it_was_given_is_the_one_it_signs_with(tmp_path) -> None:
+    """*topdir* reaches :func:`find_imgtool`, or the tool version drifts.
+
+    Dropping the forwarding is invisible: signing keeps working, out of
+    whatever ``imgtool`` is on ``PATH`` — a different version from the
+    one the build used, on an image whose header that version writes.
+    ``PATH`` is emptied here so the workspace is the only answer left,
+    and a fallback would show up as a refusal rather than as silence.
+    """
+    out_dir = _build_dir(tmp_path)
+    key = _key(tmp_path)
+    topdir = tmp_path / "workspace"
+    script = topdir / imgtool.MCUBOOT_IMGTOOL
+    script.parent.mkdir(parents=True)
+    script.write_text("", "utf-8")
+
+    ran: list[tuple[str, ...]] = []
+    plan = imgtool.sign_build(
+        out_dir,
+        env={"PATH": str(tmp_path / "nothing-here")},
+        topdir=topdir,
+        key=key,
+        runner=lambda command: (ran.append(tuple(command)), (0, ""))[1],
+    )
+    assert plan.commands[0][1][:2] == (sys.executable, str(script))
+    assert ran and ran[0][:2] == (sys.executable, str(script))
 
 
 # --------------------------------------------------------------------------
@@ -245,8 +278,8 @@ def _parse_image(data: bytes) -> dict:
 
 
 def _imgtool_or_skip() -> list[str]:
-    topdir = workspace.find_topdir(workspace.MODULE_DIR, Path.cwd())
-    program = imgtool.find_imgtool(topdir=topdir)
+    topdir = workspace.find_topdir(workspace.installed_module_dir())
+    program = imgtool.find_imgtool(env=dict(os.environ), topdir=topdir)
     if program is None:  # pragma: no cover - depends on the machine
         pytest.skip("imgtool is not available here")
     probe = subprocess.run([*program, "sign", "--help"], capture_output=True, check=False)

@@ -26,7 +26,7 @@ BOARD = "nrf7002dk/nrf5340/cpuapp"
 
 def test_it_creates_the_device_folder(tmp_path) -> None:
     (tmp_path / DEVICES_DIR).mkdir()
-    created = scaffold.new_device("bench-node", board=BOARD, config_root=tmp_path)
+    created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, config_root=tmp_path)
     assert created.entry == tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY
     assert created.entry.is_file()
     assert created.created_tree is False
@@ -37,7 +37,7 @@ def test_without_a_tree_it_starts_one(tmp_path) -> None:
     created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path)
     assert created.created_tree is True
     assert is_config_root(tmp_path)
-    assert open_config_tree(tmp_path).root == tmp_path
+    assert open_config_tree(tmp_path, cwd=tmp_path).root == tmp_path
 
 
 def test_it_finds_the_tree_above_the_working_directory(tmp_path) -> None:
@@ -54,10 +54,10 @@ def test_it_finds_the_tree_above_the_working_directory(tmp_path) -> None:
 
 
 def test_it_never_overwrites_a_device(tmp_path) -> None:
-    scaffold.new_device("bench-node", board=BOARD, config_root=tmp_path)
+    scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, config_root=tmp_path)
     before = (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY).read_text("utf-8")
     with pytest.raises(ConfigError) as caught:
-        scaffold.new_device("bench-node", board=BOARD, config_root=tmp_path)
+        scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, config_root=tmp_path)
     assert "already a device" in caught.value.message
     assert (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY).read_text("utf-8") == before
 
@@ -65,27 +65,27 @@ def test_it_never_overwrites_a_device(tmp_path) -> None:
 @pytest.mark.parametrize("name", ["Bench Node", "bench_node", "bench-", "-bench", "x" * 40])
 def test_a_name_that_cannot_be_a_hostname_is_refused(tmp_path, name: str) -> None:
     with pytest.raises(ConfigError) as caught:
-        scaffold.new_device(name, board=BOARD, config_root=tmp_path)
+        scaffold.new_device(name, board=BOARD, cwd=tmp_path, config_root=tmp_path)
     assert "usable device name" in caught.value.message
     assert not (tmp_path / DEVICES_DIR).exists()
 
 
 def test_an_unknown_board_lists_the_ones_that_exist(tmp_path) -> None:
     with pytest.raises(ConfigError) as caught:
-        scaffold.new_device("bench-node", board="nrf99dk", config_root=tmp_path)
+        scaffold.new_device("bench-node", board="nrf99dk", cwd=tmp_path, config_root=tmp_path)
     assert BOARD in caught.value.hint
 
 
 def test_a_planned_board_says_why_it_is_not_there_yet(tmp_path) -> None:
     planned = next(iter(registry.PLANNED_BOARDS))
     with pytest.raises(ConfigError) as caught:
-        scaffold.new_device("bench-node", board=planned, config_root=tmp_path)
+        scaffold.new_device("bench-node", board=planned, cwd=tmp_path, config_root=tmp_path)
     assert registry.PLANNED_BOARDS[planned] in caught.value.message
 
 
 def test_a_configuration_root_that_is_not_there_is_a_refusal(tmp_path) -> None:
     with pytest.raises(ConfigError) as caught:
-        scaffold.new_device("bench-node", board=BOARD, config_root=tmp_path / "nope")
+        scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, config_root=tmp_path / "nope")
     assert "does not exist" in caught.value.message
 
 
@@ -130,7 +130,7 @@ def test_the_scaffold_is_deterministic() -> None:
 
 def test_new_then_init_pairing_then_validate(tmp_path) -> None:
     """The three commands the scaffold's own header names, in that order."""
-    created = scaffold.new_device("bench-node", board=BOARD, config_root=tmp_path)
+    created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, config_root=tmp_path)
     tree = created.tree
 
     # Before the credentials exist, validation says exactly which command

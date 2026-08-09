@@ -94,13 +94,24 @@ def test_error_rendering_is_stable() -> None:
     )
 
 
-def test_rendering_names_the_file(write_config, monkeypatch) -> None:
+def test_rendering_names_the_file(write_config) -> None:
     entry = write_config(VALID_CONFIG.replace("sampling: 10s", "sampling: 10"))
-    monkeypatch.chdir(entry.parent)
     errors = expect_failure(entry)
-    rendered = errors[0].render()
+    rendered = errors[0].render(entry.parent)
     assert "in main.yaml, line" in rendered
     assert "Traceback" not in rendered
+
+
+def test_rendering_without_a_base_names_the_file_absolutely(write_config) -> None:
+    """The base directory is the caller's to supply; the module reads no cwd.
+
+    Rendering the same error from a server that happens to stand in the
+    config's directory must not silently produce a relative path — the
+    shortening is a decision the caller makes, not one the error makes.
+    """
+    entry = write_config(VALID_CONFIG.replace("sampling: 10s", "sampling: 10"))
+    errors = expect_failure(entry)
+    assert f"in {entry}, line" in errors[0].render()
 
 
 def test_an_unquoted_version_says_to_quote_it(write_config) -> None:

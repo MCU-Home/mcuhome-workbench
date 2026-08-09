@@ -61,8 +61,7 @@ __all__ = [
     "CMAKE_JOBS_VAR",
     "JOBS_VAR",
     "MERGED_IMAGE_GLOB",
-    "MODULE_DIR",
-    "PYSHIM_DIR",
+    "PYSHIM_SUBDIR",
     "SIGNING_KEY_OPTION",
     "TOOLS",
     "BuildPlan",
@@ -77,6 +76,7 @@ __all__ = [
     "build_images",
     "detect_jobs",
     "find_topdir",
+    "installed_module_dir",
     "merged_image",
     "missing_tools",
     "parse_image_memory_report",
@@ -91,14 +91,33 @@ __all__ = [
     "west_build_command",
 ]
 
-#: The MCUHome repository this builder is part of — the Zephyr module that
-#: carries the generic application main and the framework ZAP the generated
-#: application refers to. ``mcuhome/mcuhome/workspace.py`` -> ``mcuhome/``.
-MODULE_DIR = Path(__file__).resolve().parent.parent
-
 #: Stand-in for CHIP's missing ``python_path`` helper (see the module
-#: docstring and ``scripts/pyshim/README.md``).
-PYSHIM_DIR = MODULE_DIR / "scripts" / "pyshim"
+#: docstring and ``scripts/pyshim/README.md``), **relative to the MCUHome
+#: module directory**. A pure value: which module directory it applies to
+#: is an argument every time (:func:`plan_build`).
+PYSHIM_SUBDIR = Path("scripts") / "pyshim"
+
+
+def installed_module_dir() -> Path:
+    """The MCUHome Zephyr module directory of a source checkout.
+
+    The Zephyr module that carries the generic application main and the
+    framework ZAP the generated application refers to, derived from where
+    this package is installed: ``mcuhome/mcuhome/workspace.py`` ->
+    ``mcuhome/``.
+
+    **This answer is only correct for a local-dev install** — the git
+    checkout that is also the west manifest repository of a workspace.
+    Installed as an ordinary pip package, or mounted into a build
+    container as an SDK, the Python package and the Zephyr module are not
+    in that relationship, and the caller knows where the module is while
+    this function can only guess. That is why the module directory is a
+    parameter of :func:`plan_build` rather than a constant here, and why
+    this function is called (by the command line, which *is* the
+    local-dev case) rather than evaluated at import time.
+    """
+    return Path(__file__).resolve().parent.parent
+
 
 #: Sub-directory of the build directory that holds the CMake/ninja tree.
 #: It is a sibling of the generated ``app/`` rather than the same
@@ -333,7 +352,7 @@ class ResolvedJobs:
     source: str
 
 
-def resolve_jobs(*, cli_jobs: int | None = None, env: dict[str, str] | None = None) -> ResolvedJobs:
+def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> ResolvedJobs:
     """The parallelism this build uses, and why — the single resolution point.
 
     Precedence, most specific wins: ``--jobs`` on the command line, then
@@ -353,11 +372,14 @@ def resolve_jobs(*, cli_jobs: int | None = None, env: dict[str, str] | None = No
     unset rather than refused: a typo in a shell rc file should not be
     able to break every build until someone finds it, and auto-detection
     is always a reasonable answer.
+
+    *env* is stated, never read from the process: one process serves
+    several sessions, and "the environment" of a server is the operator's
+    rather than any requesting user's. The command line passes its own.
     """
     if cli_jobs is not None:
         return ResolvedJobs(cli_jobs, "flag")
-    environment = os.environ if env is None else env
-    raw = environment.get(JOBS_VAR)
+    raw = env.get(JOBS_VAR)
     if raw:
         try:
             parsed = int(raw)
@@ -373,11 +395,15 @@ def resolve_jobs(*, cli_jobs: int | None = None, env: dict[str, str] | None = No
 # --------------------------------------------------------------------------
 
 
-def build_environment(env: dict[str, str] | None = None, *, jobs: int) -> dict[str, str]:
-    """*env* plus what the Matter build needs, without mutating the input."""
-    prepared = dict(os.environ if env is None else env)
+def build_environment(env: dict[str, str], *, jobs: int, pyshim_dir: Path) -> dict[str, str]:
+    """*env* plus what the Matter build needs, without mutating the input.
+
+    *env* is stated rather than read from the process, for the reason
+    :func:`resolve_jobs` gives.
+    """
+    prepared = dict(env)
     existing = prepared.get("PYTHONPATH", "")
-    entries = [str(PYSHIM_DIR), *[entry for entry in existing.split(os.pathsep) if entry]]
+    entries = [str(pyshim_dir), *[entry for entry in existing.split(os.pathsep) if entry]]
     # Deduplicate while keeping order: re-running the builder inside its own
     # environment must not grow PYTHONPATH one copy at a time.
     seen: dict[str, None] = {}
@@ -558,8 +584,9 @@ def plan_build(
     bootloader_snippets: tuple[str, ...] = (),
     signing_key: Path | None = None,
     detached_signing: bool = False,
-    env: dict[str, str] | None = None,
-    cwd: Path | None = None,
+    env: dict[str, str],
+    module_dir: Path,
+    cwd: Path,
     jobs: int,
 ) -> BuildPlan:
     """Resolve workspace, environment and command, or refuse with a reason.
@@ -567,9 +594,16 @@ def plan_build(
     Executes nothing. Every refusal a user can hit before the compiler
     starts is raised here, which is also what makes stage 5 testable
     without a toolchain.
+
+    *module_dir* is where the MCUHome Zephyr module is — the first place
+    the west workspace is looked for, and the source of the pyshim on
+    ``PYTHONPATH``. It is required because only the caller knows: see
+    :func:`installed_module_dir`. *cwd* is the second place to look, and
+    is required for the same reason the configuration tree's is
+    (:func:`mcuhome.tree.open_tree`).
     """
-    topdir = require_topdir(MODULE_DIR, cwd or Path.cwd())
-    prepared = build_environment(env, jobs=jobs)
+    topdir = require_topdir(module_dir, cwd)
+    prepared = build_environment(env, jobs=jobs, pyshim_dir=module_dir / PYSHIM_SUBDIR)
     # ``west build`` does not export ZEPHYR_BASE (it resolves Zephyr through
     # the manifest and the CMake package registry), yet CMake code outside
     # Zephyr's own — the generated application's search for the Matter SDK,

@@ -62,10 +62,19 @@ def test_a_directory_that_is_not_a_workspace_is_not_one(tmp_path) -> None:
     assert workspace.find_topdir(tmp_path) is None
 
 
-def test_the_builder_is_installed_in_a_workspace_of_its_own() -> None:
-    """A precondition of every native build; wrong, and nothing compiles."""
-    assert (workspace.MODULE_DIR / "west.yml").is_file()
-    assert (workspace.PYSHIM_DIR / "python_path.py").is_file()
+def test_the_installed_module_dir_is_the_repository_it_says_it_is() -> None:
+    """A precondition of every native build; wrong, and nothing compiles.
+
+    ``installed_module_dir()`` claims to answer "where is the MCUHome
+    Zephyr module" for a local-dev install, and this test suite runs from
+    exactly such an install — so it is the one place the claim can be
+    checked. Two markers, because the two consumers are different: the
+    west manifest is what makes workspace discovery start here, and the
+    pyshim is what goes on ``PYTHONPATH``.
+    """
+    module_dir = workspace.installed_module_dir()
+    assert (module_dir / "west.yml").is_file()
+    assert (module_dir / workspace.PYSHIM_SUBDIR / "python_path.py").is_file()
 
 
 def test_no_workspace_is_refused_with_both_ways_out(tmp_path) -> None:
@@ -145,34 +154,40 @@ def test_detect_jobs_survives_an_unknown_cpu_count(monkeypatch) -> None:
     assert workspace.detect_jobs() == 1
 
 
-def test_a_command_line_flag_beats_everything(monkeypatch) -> None:
-    monkeypatch.setenv(workspace.JOBS_VAR, "6")
-    resolved = workspace.resolve_jobs(cli_jobs=3)
+def test_a_command_line_flag_beats_everything() -> None:
+    """The environment is passed in, so it has to be passed in here too.
+
+    This test used to `monkeypatch.setenv` and hand `resolve_jobs` an
+    empty environment, which stopped meaning anything once `env` became
+    a required argument: it proved "flag beats auto-detection", which the
+    next test over already covers, under a name promising more.
+    """
+    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "6"}, cli_jobs=3)
     assert (resolved.value, resolved.source) == (3, "flag")
 
 
 def test_the_environment_variable_beats_auto_detection(monkeypatch) -> None:
     monkeypatch.setattr(workspace, "detect_jobs", lambda: pytest.fail("auto-detection ran"))
-    resolved = workspace.resolve_jobs(cli_jobs=None, env={workspace.JOBS_VAR: "6"})
+    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "6"})
     assert (resolved.value, resolved.source) == (6, "env")
 
 
 def test_neither_flag_nor_environment_falls_back_to_auto_detection(monkeypatch) -> None:
     monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
-    resolved = workspace.resolve_jobs(cli_jobs=None, env={})
+    resolved = workspace.resolve_jobs(env={})
     assert (resolved.value, resolved.source) == (5, "auto")
 
 
 def test_a_nonsense_environment_value_is_treated_as_unset(monkeypatch) -> None:
     """A typo in a shell rc file falls back to auto rather than breaking every build."""
     monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
-    resolved = workspace.resolve_jobs(cli_jobs=None, env={workspace.JOBS_VAR: "not-a-number"})
+    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "not-a-number"})
     assert (resolved.value, resolved.source) == (5, "auto")
 
 
 def test_a_zero_environment_value_is_also_treated_as_unset(monkeypatch) -> None:
     monkeypatch.setattr(workspace, "detect_jobs", lambda: 5)
-    resolved = workspace.resolve_jobs(cli_jobs=None, env={workspace.JOBS_VAR: "0"})
+    resolved = workspace.resolve_jobs(env={workspace.JOBS_VAR: "0"})
     assert (resolved.value, resolved.source) == (5, "auto")
 
 
@@ -182,22 +197,26 @@ def test_a_zero_environment_value_is_also_treated_as_unset(monkeypatch) -> None:
 
 
 def test_the_codegen_shim_goes_on_pythonpath_in_front() -> None:
-    env = workspace.build_environment({"PYTHONPATH": "/somewhere/else"}, jobs=2)
-    assert env["PYTHONPATH"].split(os.pathsep) == [str(workspace.PYSHIM_DIR), "/somewhere/else"]
+    env = workspace.build_environment(
+        {"PYTHONPATH": "/somewhere/else"}, jobs=2, pyshim_dir=Path("/shim")
+    )
+    assert env["PYTHONPATH"].split(os.pathsep) == ["/shim", "/somewhere/else"]
 
 
 def test_pythonpath_is_set_even_when_there_was_none() -> None:
-    assert workspace.build_environment({}, jobs=2)["PYTHONPATH"] == str(workspace.PYSHIM_DIR)
+    env = workspace.build_environment({}, jobs=2, pyshim_dir=Path("/shim"))
+    assert env["PYTHONPATH"] == "/shim"
 
 
 def test_running_the_builder_inside_its_own_environment_does_not_grow_pythonpath() -> None:
-    once = workspace.build_environment({}, jobs=2)
-    assert workspace.build_environment(once, jobs=2)["PYTHONPATH"] == once["PYTHONPATH"]
+    once = workspace.build_environment({}, jobs=2, pyshim_dir=Path("/shim"))
+    twice = workspace.build_environment(once, jobs=2, pyshim_dir=Path("/shim"))
+    assert twice["PYTHONPATH"] == once["PYTHONPATH"]
 
 
 def test_the_callers_environment_is_not_modified() -> None:
     original = {"PYTHONPATH": "/x"}
-    workspace.build_environment(original, jobs=2)
+    workspace.build_environment(original, jobs=2, pyshim_dir=Path("/shim"))
     assert original == {"PYTHONPATH": "/x"}
 
 
@@ -207,11 +226,13 @@ def test_the_chip_gn_sub_build_gets_the_same_job_cap() -> None:
     (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
     config/common/cmake/chip_gn.cmake.)
     """
-    assert workspace.build_environment({}, jobs=2)[workspace.CHIP_JOBS_VAR] == "2"
+    env = workspace.build_environment({}, jobs=2, pyshim_dir=Path("/shim"))
+    assert env[workspace.CHIP_JOBS_VAR] == "2"
 
 
 def test_an_explicit_jobs_value_reaches_the_chip_gn_sub_build_too() -> None:
-    assert workspace.build_environment({}, jobs=4)[workspace.CHIP_JOBS_VAR] == "4"
+    env = workspace.build_environment({}, jobs=4, pyshim_dir=Path("/shim"))
+    assert env[workspace.CHIP_JOBS_VAR] == "4"
 
 
 # --------------------------------------------------------------------------
@@ -401,26 +422,41 @@ def test_a_device_without_snippets_gets_none() -> None:
 
 def test_the_plan_puts_the_build_tree_next_to_the_application(tmp_path, monkeypatch) -> None:
     top = _fake_workspace(tmp_path / "ws")
-    monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
+    module_dir = top / "mcuhome"
     monkeypatch.setattr(workspace, "require_tools", lambda env: None)
     out_dir = top / "build" / "node"
 
-    plan = workspace.plan_build(out_dir=out_dir, app_subdir="app", board="x", env={}, jobs=2)
+    plan = workspace.plan_build(
+        out_dir=out_dir,
+        app_subdir="app",
+        board="x",
+        env={},
+        module_dir=module_dir,
+        cwd=top,
+        jobs=2,
+    )
 
     assert plan.topdir == top
     assert plan.app_dir == out_dir / "app"
     assert plan.build_dir == out_dir / "build"
-    assert plan.env["PYTHONPATH"] == str(workspace.PYSHIM_DIR)
+    assert plan.env["PYTHONPATH"] == str(module_dir / workspace.PYSHIM_SUBDIR)
     assert plan.env[workspace.CHIP_JOBS_VAR] == "2"
 
 
 def test_zephyr_base_is_filled_in_because_west_does_not_export_it(tmp_path, monkeypatch) -> None:
     top = _fake_workspace(tmp_path / "ws")
     (top / "zephyr").mkdir()
-    monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     monkeypatch.setattr(workspace, "require_tools", lambda env: None)
 
-    plan = workspace.plan_build(out_dir=top / "out", app_subdir="app", board="x", env={}, jobs=2)
+    plan = workspace.plan_build(
+        out_dir=top / "out",
+        app_subdir="app",
+        board="x",
+        env={},
+        module_dir=top / "mcuhome",
+        cwd=top,
+        jobs=2,
+    )
     assert plan.env["ZEPHYR_BASE"] == str(top / "zephyr")
 
 
@@ -428,7 +464,6 @@ def test_a_zephyr_base_someone_set_on_purpose_is_left_alone(tmp_path, monkeypatc
     """West follows it too; disagreeing with the tool we drive helps nobody."""
     top = _fake_workspace(tmp_path / "ws")
     (top / "zephyr").mkdir()
-    monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     monkeypatch.setattr(workspace, "require_tools", lambda env: None)
 
     plan = workspace.plan_build(
@@ -436,17 +471,25 @@ def test_a_zephyr_base_someone_set_on_purpose_is_left_alone(tmp_path, monkeypatc
         app_subdir="app",
         board="x",
         env={"ZEPHYR_BASE": "/elsewhere/zephyr"},
+        module_dir=top / "mcuhome",
+        cwd=top,
         jobs=2,
     )
     assert plan.env["ZEPHYR_BASE"] == "/elsewhere/zephyr"
 
 
-def test_the_plan_refuses_before_it_decides_anything_else(tmp_path, monkeypatch) -> None:
+def test_the_plan_refuses_before_it_decides_anything_else(tmp_path) -> None:
     """A missing prerequisite is reported, not discovered by the compiler."""
-    monkeypatch.setattr(workspace, "MODULE_DIR", _fake_workspace(tmp_path / "ws"))
+    top = _fake_workspace(tmp_path / "ws")
     with pytest.raises(BuildError) as caught:
         workspace.plan_build(
-            out_dir=tmp_path / "out", app_subdir="app", board="x", env={"PATH": ""}, jobs=2
+            out_dir=tmp_path / "out",
+            app_subdir="app",
+            board="x",
+            env={"PATH": ""},
+            module_dir=top,
+            cwd=top,
+            jobs=2,
         )
     assert "cannot compile without" in caught.value.message
 

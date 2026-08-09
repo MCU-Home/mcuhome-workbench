@@ -54,6 +54,7 @@ from pathlib import Path
 
 from mcuhome import p256
 from mcuhome.errors import BuildError
+from mcuhome.userpaths import expand, home
 
 __all__ = [
     "KEY_FILE",
@@ -102,31 +103,31 @@ _EC_PUBLIC_KEY_OID_DER = bytes.fromhex("06072a8648ce3d0201")
 # --------------------------------------------------------------------------
 
 
-def default_key_path(env: dict[str, str] | None = None) -> Path:
+def default_key_path(env: dict[str, str]) -> Path:
     """``$XDG_CONFIG_HOME/mcuhome/signing.key``, or the ``~/.config`` form.
 
     A configuration directory rather than a cache or a state directory:
     the key is not derivable, not reproducible and not disposable. Losing
     it means every device signed with it needs the bootstrap operation of
     ADR 0016 again.
+
+    *env* is stated, never read from the process: this resolves the path
+    of a private key, and a server process must resolve it from what it
+    was given rather than from the environment it happens to run in.
     """
-    environment = os.environ if env is None else env
-    config_home = environment.get("XDG_CONFIG_HOME")
-    base = Path(config_home).expanduser() if config_home else Path.home() / ".config"
+    config_home = env.get("XDG_CONFIG_HOME")
+    base = expand(config_home, env) if config_home else home(env) / ".config"
     return base / "mcuhome" / KEY_FILE
 
 
-def resolve_key_path(
-    override: Path | str | None = None, *, env: dict[str, str] | None = None
-) -> Path:
+def resolve_key_path(override: Path | str | None = None, *, env: dict[str, str]) -> Path:
     """Which key file this build signs with: flag, then variable, then default."""
     if override:
-        return Path(override).expanduser()
-    environment = os.environ if env is None else env
-    from_env = environment.get(KEY_VAR)
+        return expand(override, env)
+    from_env = env.get(KEY_VAR)
     if from_env:
-        return Path(from_env).expanduser()
-    return default_key_path(environment)
+        return expand(from_env, env)
+    return default_key_path(env)
 
 
 # --------------------------------------------------------------------------
@@ -369,7 +370,7 @@ def _refuse_unwritable(path: Path, reason: str) -> BuildError:
 def signing_key(
     override: Path | str | None = None,
     *,
-    env: dict[str, str] | None = None,
+    env: dict[str, str],
     create: bool = True,
 ) -> SigningKey:
     """The key file to sign with, generating one on first need.

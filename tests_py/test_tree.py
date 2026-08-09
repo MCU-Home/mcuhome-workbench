@@ -47,14 +47,14 @@ def test_discovery_stops_at_the_filesystem_root(tmp_path: Path) -> None:
 
 def test_open_tree_rejects_a_directory_that_is_not_a_tree(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as caught:
-        open_tree(tmp_path)
+        open_tree(tmp_path, cwd=tmp_path)
     assert "does not look like an MCUHome configuration tree" in caught.value.message
     assert "devices/" in (caught.value.hint or "")
 
 
 def test_open_tree_rejects_a_missing_directory(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as caught:
-        open_tree(tmp_path / "nope")
+        open_tree(tmp_path / "nope", cwd=tmp_path)
     assert "does not exist" in caught.value.message
 
 

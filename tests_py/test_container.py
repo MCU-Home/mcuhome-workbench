@@ -55,7 +55,6 @@ class _Runner:
 
 def _plan(tmp_path: Path, monkeypatch, **kwargs):
     top = _fake_workspace(tmp_path / "ws")
-    monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     environment = {container.CCACHE_DIR_VAR: str(tmp_path / "cache")}
     environment.update(kwargs.pop("env", {}))
     kwargs.setdefault("jobs", 2)
@@ -64,6 +63,8 @@ def _plan(tmp_path: Path, monkeypatch, **kwargs):
         app_subdir="app",
         board=kwargs.pop("board", "nrf7002dk/nrf5340/cpuapp"),
         env=environment,
+        module_dir=top / "mcuhome",
+        cwd=top,
         runner=_Runner(0, 0),
         **kwargs,
     )
@@ -131,9 +132,9 @@ def test_the_cache_follows_the_xdg_variable(tmp_path) -> None:
     assert container.ccache_directory(env) == tmp_path / "xdg" / "mcuhome" / "ccache"
 
 
-def test_without_xdg_the_cache_is_under_the_home_directory(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
-    assert container.ccache_directory({}) == tmp_path / "home" / ".cache" / "mcuhome" / "ccache"
+def test_without_xdg_the_cache_is_under_the_home_directory(tmp_path) -> None:
+    env = {"HOME": str(tmp_path / "home")}
+    assert container.ccache_directory(env) == tmp_path / "home" / ".cache" / "mcuhome" / "ccache"
 
 
 def test_the_cache_can_be_put_anywhere(tmp_path) -> None:
@@ -141,9 +142,9 @@ def test_the_cache_can_be_put_anywhere(tmp_path) -> None:
     assert container.ccache_directory(env) == tmp_path / "fast-disk"
 
 
-def test_a_tilde_in_the_cache_path_is_a_home_directory(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    assert container.ccache_directory({container.CCACHE_DIR_VAR: "~/c"}) == tmp_path / "home" / "c"
+def test_a_tilde_in_the_cache_path_is_a_home_directory(tmp_path) -> None:
+    env = {"HOME": str(tmp_path / "home"), container.CCACHE_DIR_VAR: "~/c"}
+    assert container.ccache_directory(env) == tmp_path / "home" / "c"
 
 
 # --------------------------------------------------------------------------
@@ -200,12 +201,16 @@ def test_the_container_environment_caps_the_chip_gn_sub_build_too(tmp_path) -> N
     (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
     config/common/cmake/chip_gn.cmake.)
     """
-    env = container.container_environment(topdir=tmp_path / "ws", jobs=2)
+    env = container.container_environment(
+        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=2
+    )
     assert env[workspace.CHIP_JOBS_VAR] == "2"
 
 
 def test_a_different_jobs_value_reaches_the_chip_gn_sub_build_too(tmp_path) -> None:
-    env = container.container_environment(topdir=tmp_path / "ws", jobs=4)
+    env = container.container_environment(
+        topdir=tmp_path / "ws", pyshim_dir=tmp_path / "shim", jobs=4
+    )
     assert env[workspace.CHIP_JOBS_VAR] == "4"
 
 
@@ -330,12 +335,13 @@ def test_the_process_runner_is_resolved_at_call_time(tmp_path, monkeypatch) -> N
 
     monkeypatch.setattr(container, "_run_quiet", fake)
     top = _fake_workspace(tmp_path / "ws")
-    monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     container.plan_build(
         out_dir=top / "build" / "node",
         app_subdir="app",
         board="x",
         env={container.CCACHE_DIR_VAR: str(tmp_path / "cache")},
+        module_dir=top / "mcuhome",
+        cwd=top,
         jobs=2,
     )
     assert [command[1] for command in calls] == ["version", "image"]
@@ -474,15 +480,16 @@ def test_a_build_directory_outside_the_workspace_is_still_visible(tmp_path, monk
     assert f"{outside}:{outside}" in volumes
 
 
-def test_the_plan_refuses_before_it_decides_anything_else(tmp_path, monkeypatch) -> None:
+def test_the_plan_refuses_before_it_decides_anything_else(tmp_path) -> None:
     top = _fake_workspace(tmp_path / "ws")
-    monkeypatch.setattr(workspace, "MODULE_DIR", top / "mcuhome")
     with pytest.raises(BuildError) as caught:
         container.plan_build(
             out_dir=top / "build" / "node",
             app_subdir="app",
             board="x",
             env={container.CCACHE_DIR_VAR: str(tmp_path / "cache")},
+            module_dir=top / "mcuhome",
+            cwd=top,
             runner=_Runner(0, 1),
             jobs=2,
         )

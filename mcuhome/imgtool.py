@@ -36,11 +36,17 @@ workspace, which is what a dashboard host looks like (ADR 0003: the
 dashboard never compiles). Signing does not run in the builder container:
 handing a private key to a container to save a pip install is the wrong
 trade, and this step needs no toolchain.
+
+**Which is why the workspace arrives as an argument.** Every entry point
+here takes *topdir* and none of them looks for one, so nothing in this
+module knows what a west workspace is or where this package is installed
+— the two facts that only hold on a developer's machine. It is the one
+signing step of ADR 0015 decision 8, and it has to run where none of
+them do.
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -49,9 +55,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mcuhome import manifest as manifest_module
-from mcuhome import signing, workspace
+from mcuhome import signing
 from mcuhome.errors import BuildError
 from mcuhome.manifest import MANIFEST_FILE, SigningParameters
+from mcuhome.userpaths import expand
 
 __all__ = [
     "IMGTOOL_VAR",
@@ -81,19 +88,20 @@ MCUBOOT_IMGTOOL = Path("bootloader") / "mcuboot" / "scripts" / "imgtool.py"
 Runner = Callable[[list[str]], tuple[int, str]]
 
 
-def find_imgtool(
-    *, topdir: Path | None = None, env: dict[str, str] | None = None
-) -> list[str] | None:
+def find_imgtool(*, env: dict[str, str], topdir: Path | None = None) -> list[str] | None:
     """The argv prefix that runs imgtool, or None if there is none.
 
     A list rather than a path because the two answers have different
     shapes: a script needs an interpreter in front of it, a program does
     not.
+
+    *env* is stated, never read from the process: which imgtool runs is
+    part of what a build is, and one process may serve several callers
+    with different answers.
     """
-    environment = os.environ if env is None else env
-    override = environment.get(IMGTOOL_VAR)
+    override = env.get(IMGTOOL_VAR)
     if override:
-        candidate = Path(override).expanduser()
+        candidate = expand(override, env)
         if candidate.suffix == ".py" or candidate.is_file():
             return [sys.executable, str(candidate)]
         return [override]
@@ -101,15 +109,15 @@ def find_imgtool(
         script = topdir / MCUBOOT_IMGTOOL
         if script.is_file():
             return [sys.executable, str(script)]
-    found = shutil.which("imgtool", path=environment.get("PATH"))
+    found = shutil.which("imgtool", path=env.get("PATH"))
     if found:
         return [found]
     return None
 
 
-def require_imgtool(*, topdir: Path | None = None, env: dict[str, str] | None = None) -> list[str]:
+def require_imgtool(*, env: dict[str, str], topdir: Path | None = None) -> list[str]:
     """:func:`find_imgtool`, or a refusal that says where to get one."""
-    program = find_imgtool(topdir=topdir, env=env)
+    program = find_imgtool(env=env, topdir=topdir)
     if program is not None:
         return program
     raise BuildError(
@@ -206,7 +214,7 @@ def plan_signing(
     target: Path,
     *,
     key: Path,
-    env: dict[str, str] | None = None,
+    env: dict[str, str],
     topdir: Path | None = None,
 ) -> SignPlan:
     """Read a build manifest and decide how to sign what it describes.
@@ -231,7 +239,7 @@ def plan_signing(
     inputs = block.get("inputs") or {}
     outputs = block.get("outputs") or {}
 
-    program = require_imgtool(topdir=topdir, env=env)
+    program = require_imgtool(env=env, topdir=topdir)
     commands: list[tuple[str, tuple[str, ...], Path]] = []
     for form in sorted(inputs):
         source = out_dir / str(inputs[form])
@@ -316,9 +324,9 @@ def _run(command: list[str]) -> tuple[int, str]:
 def sign_build(
     target: Path,
     *,
+    env: dict[str, str],
+    topdir: Path | None = None,
     key: Path | str | None = None,
-    env: dict[str, str] | None = None,
-    cwd: Path | None = None,
     runner: Runner | None = None,
 ) -> SignPlan:
     """Sign the application image a build directory holds, and say where.
@@ -329,13 +337,18 @@ def sign_build(
     produced elsewhere has to be signed with the key its device's
     bootloader carries, and inventing one at this point would produce
     firmware that nothing accepts.
+
+    *topdir* is a west workspace to take MCUboot's bundled ``imgtool``
+    from when there is none on ``PATH``; None says there is no workspace
+    here, which is the normal case for a machine that signs (ADR 0003:
+    the dashboard never compiles). **Finding one is the caller's job.**
+    Locating a workspace means knowing where this package is installed
+    and where the caller stands, and this module has to stay usable where
+    neither question has an answer — which is exactly where signing
+    happens (ADR 0020 decision 3). A caller that has a workspace passes
+    ``workspace.find_topdir(...)``.
     """
     resolved = signing.signing_key(key, env=env, create=False)
-    plan = plan_signing(
-        target,
-        key=resolved.path,
-        env=env,
-        topdir=workspace.find_topdir(workspace.MODULE_DIR, cwd or Path.cwd()),
-    )
+    plan = plan_signing(target, key=resolved.path, env=env, topdir=topdir)
     run_signing(plan, runner=runner)
     return plan

@@ -66,7 +66,7 @@ def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
 def test_find_device_resolves_a_name_against_the_tree(tmp_path) -> None:
     (tmp_path / "devices" / "bench-node").mkdir(parents=True)
     (tmp_path / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
-    tree, entry = api.find_device("bench-node", config_root=tmp_path)
+    tree, entry = api.find_device("bench-node", cwd=tmp_path, config_root=tmp_path)
     assert tree.root == tmp_path
     assert entry == tmp_path / "devices" / "bench-node" / "main.yaml"
 
@@ -217,7 +217,7 @@ def test_registry_data_and_schema_are_reachable_from_the_api() -> None:
 
 
 def test_the_example_still_resolves_through_the_api() -> None:
-    tree, entry = api.find_device(str(EXAMPLE))
+    tree, entry = api.find_device(str(EXAMPLE), cwd=EXAMPLES_DIR)
     assert api.load_model(entry, tree=tree).device.name == "bmp180-node"
 
 
@@ -228,7 +228,7 @@ def test_the_example_still_resolves_through_the_api() -> None:
 
 def test_read_model_round_trips_a_resolved_model(tmp_path) -> None:
     """The model is the wire format, so it has to survive the trip."""
-    tree, entry = api.find_device("bench-node", config_root=FIXTURE_TREE)
+    tree, entry = api.find_device("bench-node", cwd=FIXTURE_TREE, config_root=FIXTURE_TREE)
     original = api.load_model(entry, tree=tree)
     path = tmp_path / "device-model.json"
     path.write_text(original.to_json(), encoding="utf-8")

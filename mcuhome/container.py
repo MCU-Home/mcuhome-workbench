@@ -38,6 +38,7 @@ from pathlib import Path
 
 from mcuhome import workspace
 from mcuhome.errors import BuildError
+from mcuhome.userpaths import expand, home
 
 __all__ = [
     "CCACHE_DIR_VAR",
@@ -173,9 +174,9 @@ def ccache_directory(env: dict[str, str]) -> Path:
     """
     override = env.get(CCACHE_DIR_VAR)
     if override:
-        return Path(override).expanduser()
+        return expand(override, env)
     cache_home = env.get("XDG_CACHE_HOME")
-    base = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+    base = expand(cache_home, env) if cache_home else home(env) / ".cache"
     return base / "mcuhome" / "ccache"
 
 
@@ -297,7 +298,7 @@ def mount_points(topdir: Path, *extras: Path) -> list[Path]:
 def container_environment(
     *,
     topdir: Path,
-    pyshim_dir: Path | None = None,
+    pyshim_dir: Path,
     jobs: int,
 ) -> dict[str, str]:
     """What the build needs set inside the container, and nothing else.
@@ -311,7 +312,7 @@ def container_environment(
     return {
         # CHIP's codegen imports a helper its release tarball is missing
         # (scripts/pyshim/README.md).
-        "PYTHONPATH": str(workspace.PYSHIM_DIR if pyshim_dir is None else pyshim_dir),
+        "PYTHONPATH": str(pyshim_dir),
         # west does not export it, and the generated CMakeLists looks for
         # the Matter SDK next to it.
         "ZEPHYR_BASE": str(topdir / "zephyr"),
@@ -408,8 +409,9 @@ def plan_build(
     bootloader_snippets: tuple[str, ...] = (),
     signing_key: Path | None = None,
     detached_signing: bool = False,
-    env: dict[str, str] | None = None,
-    cwd: Path | None = None,
+    env: dict[str, str],
+    module_dir: Path,
+    cwd: Path,
     jobs: int,
     image: str | None = None,
     runner: Runner | None = None,
@@ -420,9 +422,15 @@ def plan_build(
     and only because docker would otherwise create the bind-mount source
     itself, owned by root, in a build that is meant to leave no
     root-owned anything behind.
+
+    *module_dir* and *cwd* mean what they mean in
+    :func:`mcuhome.workspace.plan_build`, and are required for the same
+    reason: on this path the module directory is additionally a mount,
+    because the builder may be installed next to the workspace rather
+    than in it.
     """
-    topdir = workspace.require_topdir(workspace.MODULE_DIR, cwd or Path.cwd())
-    host_env = dict(os.environ if env is None else env)
+    topdir = workspace.require_topdir(module_dir, cwd)
+    host_env = dict(env)
     docker = docker_program(host_env)
     reference = image_reference(host_env, override=image)
     preflight(docker, reference, env=host_env, runner=runner)
@@ -450,10 +458,14 @@ def plan_build(
         command=docker_run_command(
             docker=docker,
             image=reference,
-            mounts=mount_points(topdir, out_dir, workspace.MODULE_DIR),
+            mounts=mount_points(topdir, out_dir, module_dir),
             ccache_dir=cache,
             workdir=topdir,
-            environment=container_environment(topdir=topdir, jobs=jobs),
+            environment=container_environment(
+                topdir=topdir,
+                pyshim_dir=module_dir / workspace.PYSHIM_SUBDIR,
+                jobs=jobs,
+            ),
             command=inner,
             user=_current_user(),
             # Contract §9 makes the isolation the backend's job, so it is

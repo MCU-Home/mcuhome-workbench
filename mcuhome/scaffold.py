@@ -181,8 +181,8 @@ def new_device(
     name: str,
     *,
     board: str,
+    cwd: Path,
     config_root: Path | None = None,
-    cwd: Path | None = None,
 ) -> NewDevice:
     """Create ``devices/<name>/main.yaml``, or refuse and change nothing.
 
@@ -191,10 +191,14 @@ def new_device(
     up, and a device that already exists — the last one loudly, because
     overwriting somebody's configuration is not a scaffold's business.
 
-    Without a configuration tree around the working directory this creates
-    one, which is the same zero-ceremony rule tree discovery already uses:
-    a directory with a ``devices/`` folder in it *is* a configuration tree
+    Without a configuration tree around *cwd* this creates one, which is
+    the same zero-ceremony rule tree discovery already uses: a directory
+    with a ``devices/`` folder in it *is* a configuration tree
     (:mod:`mcuhome.tree`), so making the folder is making the tree.
+
+    *cwd* is required rather than defaulted, for the reason
+    :func:`mcuhome.tree.open_tree` gives: this function creates
+    directories, and where it creates them must be an argument.
     """
     if not schema.DEVICE_NAME_RE.match(name) or name.endswith("-"):
         raise _refuse_bad_name(name)
@@ -203,7 +207,7 @@ def new_device(
     if board not in registry.BOARDS:
         raise _refuse_unknown_board(board)
 
-    here = (cwd or Path.cwd()).resolve()
+    here = cwd.resolve()
     if config_root is not None:
         root = config_root.resolve()
         if not root.is_dir():

@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import base64
 import stat
-from pathlib import Path
 
 import pytest
 
 from mcuhome import p256, signing
-from mcuhome.errors import BuildError
+from mcuhome.errors import BuildError, ConfigError
 
 #: One key the suite can compare bytes against, so nothing here draws a
 #: random one and nothing here goes near the developer's own.
@@ -51,9 +50,33 @@ def test_the_default_is_under_the_xdg_config_directory(tmp_path) -> None:
     assert signing.default_key_path(env) == tmp_path / "cfg" / "mcuhome" / "signing.key"
 
 
-def test_without_the_variable_it_is_under_the_home_directory(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    assert signing.default_key_path({}) == tmp_path / ".config" / "mcuhome" / "signing.key"
+def test_without_the_variable_it_is_under_the_home_directory(tmp_path) -> None:
+    env = {"HOME": str(tmp_path)}
+    assert signing.default_key_path(env) == tmp_path / ".config" / "mcuhome" / "signing.key"
+
+
+def test_the_home_directory_comes_from_the_environment_it_was_given(monkeypatch, tmp_path) -> None:
+    """The process may run as someone else entirely — one server, many sessions.
+
+    Resolving a *private key* out of the process environment while
+    holding an ``env`` argument that says otherwise is the failure
+    ADR 0020 rules out: the server would hand a session its own key.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path / "the-server"))
+    env = {"HOME": str(tmp_path / "the-caller")}
+    assert signing.default_key_path(env).is_relative_to(tmp_path / "the-caller")
+
+
+def test_an_environment_without_a_home_directory_is_refused(monkeypatch, tmp_path) -> None:
+    """A service started without a login session has no HOME at all.
+
+    Falling back to the account database would resolve *some* key, which
+    is the one outcome worth refusing outright.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with pytest.raises(ConfigError) as caught:
+        signing.default_key_path({})
+    assert "HOME" in str(caught.value)
 
 
 def test_the_environment_variable_moves_it(tmp_path) -> None:
@@ -67,9 +90,9 @@ def test_the_flag_beats_the_variable(tmp_path) -> None:
     assert signing.resolve_key_path(tmp_path / "from-flag", env=env) == tmp_path / "from-flag"
 
 
-def test_a_tilde_is_a_home_directory(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert signing.resolve_key_path("~/keys/mine.key", env={}) == tmp_path / "keys" / "mine.key"
+def test_a_tilde_is_a_home_directory(tmp_path) -> None:
+    env = {"HOME": str(tmp_path)}
+    assert signing.resolve_key_path("~/keys/mine.key", env=env) == tmp_path / "keys" / "mine.key"
 
 
 # --------------------------------------------------------------------------
@@ -179,7 +202,7 @@ def test_the_second_build_reuses_the_first_ones_key(tmp_path) -> None:
 def test_a_key_from_elsewhere_is_used_as_it_is(tmp_path) -> None:
     path = tmp_path / "imported.key"
     path.write_text(IMGTOOL_KEY, encoding="utf-8")
-    key = signing.signing_key(path)
+    key = signing.signing_key(path, env={})
     assert key.created is False
     assert path.read_text(encoding="utf-8") == IMGTOOL_KEY
 
@@ -191,7 +214,7 @@ def test_an_explicit_path_that_does_not_exist_yet_is_created(tmp_path) -> None:
     and has it generated on first need there, so an explicit path is a
     place to put one, not a promise that one is already there.
     """
-    key = signing.signing_key(tmp_path / "config" / "mcuhome" / "signing.key")
+    key = signing.signing_key(tmp_path / "config" / "mcuhome" / "signing.key", env={})
     assert key.created is True
     assert key.path.is_file()
 
@@ -199,7 +222,7 @@ def test_an_explicit_path_that_does_not_exist_yet_is_created(tmp_path) -> None:
 def test_generation_can_be_refused_outright(tmp_path) -> None:
     """For a caller that wants to sign, not to enrol — a later detached step."""
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(tmp_path / "nowhere.key", create=False)
+        signing.signing_key(tmp_path / "nowhere.key", env={}, create=False)
     assert "no such file" in caught.value.render()
 
 
@@ -208,7 +231,7 @@ def test_a_file_that_is_not_a_key_is_never_overwritten(tmp_path) -> None:
     path.write_text("this is my shopping list\n", encoding="utf-8")
 
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(path)
+        signing.signing_key(path, env={})
     rendered = caught.value.render()
     assert "not an ECDSA P-256 private key" in rendered
     assert "imgtool keygen -t ecdsa-p256" in rendered
@@ -219,13 +242,13 @@ def test_binary_rubbish_is_refused_as_a_key_rather_than_as_an_encoding(tmp_path)
     path = tmp_path / "signing.key"
     path.write_bytes(b"\xff\xfe\x00\x01")
     with pytest.raises(BuildError, match="not an ECDSA P-256 private key"):
-        signing.signing_key(path)
+        signing.signing_key(path, env={})
 
 
 def test_a_directory_where_the_key_should_be_is_a_plain_refusal(tmp_path) -> None:
     (tmp_path / "signing.key").mkdir()
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(tmp_path / "signing.key")
+        signing.signing_key(tmp_path / "signing.key", env={})
     assert "it is a directory" in caught.value.render()
 
 
@@ -233,7 +256,7 @@ def test_a_place_the_key_cannot_be_written_says_where(tmp_path) -> None:
     blocker = tmp_path / "blocker"
     blocker.write_text("", encoding="utf-8")
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(blocker / "mcuhome" / "signing.key")
+        signing.signing_key(blocker / "mcuhome" / "signing.key", env={})
     rendered = caught.value.render()
     assert "cannot create the firmware signing key" in rendered
     assert signing.KEY_VAR in rendered
@@ -244,7 +267,7 @@ def test_no_refusal_ever_prints_the_key(tmp_path) -> None:
     path = tmp_path / "signing.key"
     path.write_text(IMGTOOL_KEY.replace("PRIVATE KEY", "RSA PRIVATE KEY"), encoding="utf-8")
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(path)
+        signing.signing_key(path, env={})
     rendered = caught.value.render()
     assert "MIGHAgEAMBMGByqGSM49" not in rendered
 

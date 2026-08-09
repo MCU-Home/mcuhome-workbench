@@ -113,9 +113,14 @@ def find_config_root(start: Path) -> Path | None:
     return None
 
 
-def open_tree(config_root: Path | None, *, cwd: Path | None = None) -> ConfigTree:
-    """Resolve the config tree from an explicit root or by discovery."""
-    cwd = (cwd or Path.cwd()).resolve()
+def open_tree(config_root: Path | None, *, cwd: Path) -> ConfigTree:
+    """Resolve the config tree from an explicit root or by discovery.
+
+    *cwd* is the directory discovery walks up from, and it is required:
+    "where the caller stands" is the caller's to state. A server handling
+    two requests from two configuration trees stands in neither.
+    """
+    cwd = cwd.resolve()
     if config_root is not None:
         root = config_root.resolve()
         if not root.is_dir():
@@ -174,14 +179,18 @@ def _entry_for_path(path: Path, spec: str) -> Path:
 def resolve_device(
     spec: str,
     *,
+    cwd: Path,
     config_root: Path | None = None,
-    cwd: Path | None = None,
 ) -> tuple[ConfigTree, Path]:
     """Resolve a ``<device>`` CLI argument to its tree and entry file.
 
     Returns ``(tree, entry_file)``. See the module docstring for the rules.
+    *cwd* is required, for the reason :func:`open_tree` gives: a relative
+    ``<device>`` path means nothing without the directory it is relative
+    to, and reading that from the process makes the answer depend on who
+    is asking rather than on what was asked.
     """
-    cwd = (cwd or Path.cwd()).resolve()
+    cwd = cwd.resolve()
     candidate_path = (cwd / spec).resolve()
 
     # 1. Device name against the config tree, unless the argument is

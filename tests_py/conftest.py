@@ -47,6 +47,7 @@ def package_modules() -> list[Path]:
     assert found, "the invariant searches would examine nothing"
     return sorted(found)
 
+
 #: A configuration that passes every check, used as the baseline the
 #: gate tests break one thing at a time.
 VALID_CONFIG = """\
@@ -90,9 +91,22 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     machine running this suite is a real, long-lived private key. A test
     that reaches it would either read a secret it has no business
     reading or — worse — create one silently outside a temporary
-    directory. Point the variable at the test's own tmp_path instead;
+    directory. Point the variables at the test's own tmp_path instead;
     tests that care about the resolution rules pass an explicit ``env``.
+
+    ``HOME`` is redirected as well, and not for symmetry: without
+    ``XDG_CONFIG_HOME`` the key sits under ``~/.config``, so the two
+    variables are two names for the same directory and covering one of
+    them covers half the paths that lead there.
+
+    **What this fixture no longer has to catch.** The package itself
+    stopped reading the process — ``tests_py/test_userpaths.py`` proves
+    it for every module — so nothing here resolves a key out of the
+    environment pytest happens to run in. What is left for this fixture
+    is everything that hands the process environment *in*: the command
+    line's ``env=os.environ``, and any test that does the same.
     """
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.delenv("MCUHOME_SIGNING_KEY", raising=False)
 
