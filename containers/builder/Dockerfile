@@ -26,6 +26,13 @@
 # outside the container). Switching the run-time side over is a separate
 # change; until it lands, this workspace is carried and not read.
 #
+# Since r4 there is a third thing: the PROGRAM of the build-container
+# contract at /mcuhome/run (docs/design/build-container-contract.md §2.2),
+# a thin launcher over mcuhome.abi. It implements the invocation ABI and
+# the `describe` action; `build` and `verify` refuse with
+# `unsupported.action`, which is why the image still carries no MCUHome
+# contract label — see the COPY in stage 3.
+#
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
 # truth for it is mcuhome/container.py. Bump the revision whenever
@@ -35,7 +42,7 @@
 #
 # Build (from the repository root — the context is the REPOSITORY, not
 # this directory, because west.yml and patches/ live outside it):
-#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 \
+#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
 #         -f containers/builder/Dockerfile .
 #
 # Everything downloaded is checksum-verified. The checksums are the whole
@@ -383,6 +390,26 @@ COPY --from=fetch /opt/zap /opt/zap
 # whole /mcuhome namespace is ours (build-container-contract.md §2.2), and
 # nothing else in the image writes there.
 COPY --from=workspace /mcuhome /mcuhome
+
+# The program of the build-container contract (§2.2): a fixed absolute
+# path, never looked up on PATH, and a thin launcher over mcuhome.abi.
+#
+# 0755 rather than the mode git happens to carry, because §2.2 requires it
+# to be executable by EVERY user the backend may exec as — the backend
+# runs the program as the calling user where it can (the `--user` argument
+# in mcuhome/container.py), and that user owns nothing in this image and
+# has no /etc/passwd entry here. Set with a RUN rather than with COPY
+# --chmod so the classic builder can build this image too.
+#
+# After the COPY above, not before: that one lands the whole /mcuhome
+# namespace, and this file has to survive it.
+#
+# The image still carries no MCUHome contract label. Such a label claims
+# conformance, and conformance means all three actions of §7 — this
+# program implements `describe` and refuses `build` and `verify` with
+# `unsupported.action`. The labels arrive with the actions.
+COPY containers/builder/run /mcuhome/run
+RUN chmod 0755 /mcuhome/run
 
 # Git refuses to operate in a repository owned by another user (the
 # CVE-2022-24765 hardening), and this is exactly that situation: the

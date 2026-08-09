@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r3   # or build it, below
+docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r4   # or build it, below
 mcuhome build <device>                                 # uses it by default
 ```
 
@@ -21,6 +21,7 @@ mcuhome build <device>                                 # uses it by default
 | `zap-cli` — Matter root-node data model | `v2025.10.23-nightly` |
 | ccache | Debian 13 stock |
 | **a west workspace at `/mcuhome/workspace`** (since r3) | the revisions [`west.yml`](../../west.yml) pins |
+| **the contract program at `/mcuhome/run`** (since r4) | [`run`](run), a launcher over `mcuhome.abi` |
 
 Not in it, on purpose: the Zephyr SDK's other ~20 target toolchains and
 its host-tool bundle (qemu, openocd — flashing does not happen in a
@@ -86,10 +87,27 @@ no build output. Switching the run-time side over — `ZEPHYR_BASE`,
 `imgtool`, which `mcuhome sign` resolves out of the *host* workspace
 today — is a separate change.
 
-The image carries **no `org.mcuhome.*` labels**. `org.mcuhome.contract=1`
-would claim conformance with the build-container contract, and §2.2 of
-that contract requires the program `/mcuhome/run` for it. The program does
-not exist yet; the labels arrive with it.
+## The contract program at `/mcuhome/run` (r4)
+
+The executable §2.2 of the [build-container
+contract](../../docs/design/build-container-contract.md) fixes at that
+absolute path, invoked as `/mcuhome/run <action> <absolute path of the
+request document>`. It is [`run`](run) in this directory, installed mode
+0755 — §2.2 requires it to be executable by *every* user the backend may
+exec as — and it is a thin launcher: it puts the mounted SDK on
+`PYTHONPATH` and executes `mcuhome.abi`, which is where the invocation
+ABI actually lives, because the contract's `subprocess` profile runs the
+same code with no image around it.
+
+**One action is implemented: `describe`.** `build` and `verify` answer
+`status: "unsupported"`, `reason: "unsupported.action"`, exit 1 — the
+legible refusal §7 prescribes for an action a program does not implement.
+
+That is also why the image still carries **no `org.mcuhome.*` labels**.
+`org.mcuhome.contract=1` claims conformance, and conformance means all
+three actions of §7; a label the program cannot back is a false claim to
+exactly the third parties the contract is written for. The labels arrive
+with `build` and `verify`.
 
 ## Versioning
 
@@ -118,7 +136,7 @@ environment.
 ```sh
 # from the repository ROOT — the context is the repository, not this
 # directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 \
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
     -f containers/builder/Dockerfile .
 ```
 
@@ -169,7 +187,7 @@ build with `--image`, or for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 \
+docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 \
     cat /mcuhome/workspace.json
 ```
 
@@ -220,7 +238,7 @@ hash is safe.
 # what the cache is doing, with the same mount the builder uses
 docker run --rm --user "$(id -u):$(id -g)" \
     --volume ~/.cache/mcuhome/ccache:/ccache \
-    ghcr.io/mcu-home/builder:zephyr-4.4.0-r3 ccache -s
+    ghcr.io/mcu-home/builder:zephyr-4.4.0-r4 ccache -s
 ```
 
 ## Bumping Zephyr

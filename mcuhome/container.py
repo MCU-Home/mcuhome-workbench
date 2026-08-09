@@ -96,7 +96,14 @@ ZEPHYR_LINE = "4.4.0"
 #: From r3 on, ``west.yml`` and ``patches/`` are image inputs too: a
 #: change to either needs a revision bump just as ``containers/builder/``
 #: does.
-IMAGE_REVISION = 3
+#:
+#: r4 installs the program of the build-container contract at
+#: ``/mcuhome/run`` (§2.2) — a thin launcher over :mod:`mcuhome.abi`,
+#: which implements the invocation ABI and the ``describe`` action.
+#: Nothing invokes it yet, and the image still carries no
+#: ``org.mcuhome.*`` label, because a label claims conformance and
+#: conformance means all three actions of §7.
+IMAGE_REVISION = 4
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a
