@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,31 @@ EXAMPLES_DIR = REPO_ROOT / "docs" / "design" / "examples"
 DATA_DIR = TESTS_DIR / "data"
 FIXTURE_TREE = DATA_DIR / "tree"
 GOLDEN_DIR = DATA_DIR / "golden"
+
+#: The packages the whole-package invariant searches must cover. ADR 0020
+#: splits this one distribution into ``mcuhome-model``,
+#: ``mcuhome-workbench`` and ``mcuhome-compiler``; when that lands the
+#: names go here, and the searches keep reaching every module.
+PACKAGES = ("mcuhome",)
+
+
+def package_modules() -> list[Path]:
+    """Every ``.py`` file of every package the invariants have to cover.
+
+    Derived from the importable packages rather than from one module's
+    directory. A directory glob reads "every module there is" only while
+    there is one package; after the split it would keep passing while
+    quietly examining fewer files, which is worse than not searching at
+    all. Callers assert that a module they know must be examined came
+    back, so the day this list falls behind is the day a test fails.
+    """
+    found: list[Path] = []
+    for name in PACKAGES:
+        spec = importlib.util.find_spec(name)
+        assert spec is not None and spec.origin is not None, f"{name} is not importable"
+        found.extend(Path(spec.origin).parent.glob("*.py"))
+    assert found, "the invariant searches would examine nothing"
+    return sorted(found)
 
 #: A configuration that passes every check, used as the baseline the
 #: gate tests break one thing at a time.

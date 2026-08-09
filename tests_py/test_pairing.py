@@ -19,7 +19,7 @@ import base64
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, resolve_file
+from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, package_modules, resolve_file
 
 from mcuhome import pairing, provision
 from mcuhome.errors import ConfigError
@@ -224,9 +224,20 @@ def test_the_whole_group_comes_from_one_call(monkeypatch) -> None:
 
 
 def test_no_other_module_spells_an_identity_symbol() -> None:
-    """The names exist in exactly one file, which is why one call suffices."""
-    package = Path(pairing.__file__).parent
-    for module in sorted(package.glob("*.py")):
+    """The names exist in exactly one file, which is why one call suffices.
+
+    ``generate.py`` is the only module that emits Kconfig at all, so it
+    is the only plausible place a second spelling could appear — and
+    ADR 0020 moves it into another distribution. Asserting it was
+    examined is what keeps this test from passing while looking at less
+    than it did yesterday.
+    """
+    modules = package_modules()
+    assert any(path.name == "generate.py" for path in modules), (
+        "the search no longer reaches generate.py, where a second spelling "
+        "would appear — extend conftest.PACKAGES"
+    )
+    for module in modules:
         if module.name == "pairing.py":
             continue
         text = module.read_text(encoding="utf-8")

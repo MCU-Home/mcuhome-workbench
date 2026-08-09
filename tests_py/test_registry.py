@@ -22,6 +22,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from conftest import package_modules
 
 from mcuhome import registry
 
@@ -240,8 +241,12 @@ def test_no_module_outside_the_registry_names_a_board(name: str) -> None:
     code, that stops being true and nobody notices until the second
     board.
     """
-    package = Path(registry.__file__).parent
-    for module in sorted(package.glob("*.py")):
+    modules = package_modules()
+    assert any(path.name == "generate.py" for path in modules), (
+        "the search no longer reaches generate.py, where a board name would "
+        "first appear in code — extend conftest.PACKAGES"
+    )
+    for module in modules:
         if module.name == "registry.py":
             continue
         assert name not in _code_of(module), f"{module.name} names the board {name}"

@@ -33,7 +33,7 @@ tells callers with an event loop to use an executor (`api.py:47-48`);
 the dashboard repeats that instruction for its own wrapper
 (`dashboard/backend/mcuhome_dashboard/builder.py:105-106`) and offloads
 every call with `asyncio.to_thread`
-(`dashboard/backend/mcuhome_dashboard/commands.py:235`, `:467`). That
+(`dashboard/backend/mcuhome_dashboard/commands.py:246`, `:408`). That
 was adequate while the surface was YAML parsing. It is not adequate for
 a surface whose principal operations are a compile and a session
 protocol.
@@ -104,7 +104,8 @@ failure.
 The build-server code already performs this reduction on its own
 account: it spawns the build program as a subprocess and imports the
 library only for the version constants
-(`build-server/mcuhome_buildserver/builder.py:30-32`) — which are
+(`build-server/mcuhome_buildserver/builder.py:30-32`, until that file
+went with the job protocol) — which are
 `mcuhome-model` contents.
 
 ### 5. Everything a caller waits on is awaitable
@@ -146,7 +147,9 @@ layout cannot express. The dashboard embeds the library in-process and
 offloads it with `asyncio.to_thread`, which can neither stream a
 subprocess's output nor cancel it — which is precisely why the build
 server imports nothing and spawns the CLI instead, and says so with its
-three reasons (`build-server/mcuhome_buildserver/builder.py:3-28`).
+three reasons (`build-server/mcuhome_buildserver/builder.py:3-28`,
+read at `8b8ceb4`; the file has since been removed with the job
+protocol, and the build server imports nothing from this package today).
 Streaming is what ADR 0019 §3's typed progress stream and separate raw
 log stream *are*; cancellation is the precondition for any verb that
 aborts a running invocation. Both are unreachable across a thread
@@ -248,7 +251,7 @@ number once; a compatibility matrix costs every reader of it, forever.
   holding at the build methods and the session client. Both docstrings
   are rewritten to state synchrony per operation, and the dashboard's
   `asyncio.to_thread` offload sites
-  (`dashboard/backend/mcuhome_dashboard/commands.py:235`, `:467`)
+  (`dashboard/backend/mcuhome_dashboard/commands.py:246`, `:408`)
   become direct awaits as the operations they wrap become awaitable.
 - **Process-global state has to go, and it is not incidental.**
   `MODULE_DIR` (`mcuhome/mcuhome/workspace.py:97`) is
@@ -257,7 +260,7 @@ number once; a compatibility matrix costs every reader of it, forever.
   `local-dev` and false for every other execution site in decision 1.
   Alongside it sit the call-time reads of process-global state:
   `Path.cwd()` and `os.environ` are consulted when a function runs
-  (`workspace.py:571`, `container.py:377-378`, `tree.py:118`,
+  (`workspace.py:571`, `container.py:424-425`, `tree.py:118`,
   `errors.py:63`), so one process cannot serve two concurrent sessions
   with different working directories and environments. Decision 5 makes
   concurrent sessions in one process the normal case; both must be
