@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``build-manifest.json`` — what a build produced (builder-pipeline.md §7).
+"""``build-manifest.json`` — the format (builder-pipeline.md §7).
 
 A build directory is a pile of files with conventions attached. The
 manifest is the machine-readable answer to "what is in here": which
@@ -9,11 +9,25 @@ the part that makes detached signing possible at all — the exact
 ``imgtool`` parameters the application image is signed with, whether or
 not this build signed it.
 
+**This module is the format, not the measurement.** Producing a manifest
+from a build directory is :mod:`mcuhome.report`, which needs a build
+directory, a west workspace and the registry's board layout to do it.
+Everything here needs none of those: the document's shape, its constants,
+its round trips, and the two edits a signer makes to a manifest it did
+not write. ADR 0020 puts the two halves in different packages for that
+reason — a dashboard reads manifests and must never carry a toolchain,
+and the build server shares the vocabulary without the build logic.
+
 **Why hashes.** Dashboard ADR 0010 wants an artifact set whose integrity
 can be checked after it crossed a network, and ADR 0006/0007 make that
 network normal: the build server is a different machine, possibly a
 different architecture. A SHA-256 per file is what turns "the build
-returned some bytes" into "the build returned *these* bytes".
+returned some bytes" into "the build returned *these* bytes". Measuring
+one file into a :class:`FileEntry` therefore lives here as
+:meth:`FileEntry.measure`, with the format rather than with either
+producer: the compiler hashes a fresh artifact and ``mcuhome sign``
+re-hashes the one it just signed, on a machine that has no compiler at
+all (ADR 0015 decision 8), and the two must not be two computations.
 
 **Deterministic except for what it measures.** Everything in the manifest
 either comes from the configuration, from the registry, or from the
@@ -26,10 +40,7 @@ artifact set describes itself the same way wherever it is unpacked.
 **The signing block is a contract, not a report.** It states the four
 ``imgtool sign`` arguments (``--version``, ``--header-size``,
 ``--align``, ``--slot-size``) with imgtool's own option names as keys, so
-a consumer does not have to know how Zephyr derives them. Three of the
-four come from the registry — ADR 0015 decision 2 makes the partition
-table per-board data, and the builder is what wrote it into the overlay —
-and the fourth from the application image's own Kconfig.
+a consumer does not have to know how Zephyr derives them.
 :mod:`mcuhome.imgtool` is what turns the block back into a command.
 """
 
@@ -41,29 +52,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcuhome import __version__, ota, pairing, registry, workspace
+from mcuhome import ota, pairing, registry
 from mcuhome.errors import BuildError
 from mcuhome.model import DeviceModel
 
 __all__ = [
     "MANIFEST_FILE",
     "MANIFEST_VERSION",
-    "SIGN_VERSION_DEFAULT",
     "BuildManifest",
     "FileEntry",
     "ImageEntry",
     "OtaEntry",
     "SigningBlock",
     "SigningParameters",
-    "build_manifest",
     "dump_manifest",
     "ota_entry",
     "ota_parameters",
     "read_manifest",
     "record_ota",
     "record_signature",
-    "signing_parameters",
-    "write_manifest",
 ]
 
 #: Where the manifest lands: the top of the build directory, next to
@@ -78,27 +85,17 @@ MANIFEST_FILE = "build-manifest.json"
 #: it stays readable).
 MANIFEST_VERSION = 1
 
-#: Kconfig symbol carrying imgtool's ``--version`` on the application
-#: image, and the value Zephyr defaults it to. Read from the built image
-#: rather than assumed, because it is the one of the four parameters the
-#: builder does not itself decide.
-SIGN_VERSION_SYMBOL = "CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION"
-SIGN_VERSION_DEFAULT = "0.0.0+0"
-
-#: Kconfig symbol carrying the MCUboot header offset the application was
-#: linked with — imgtool's ``--header-size``. Cross-checked against the
-#: registry rather than trusted blindly: a disagreement between what the
-#: builder thinks the layout is and what the image was actually linked
-#: for is exactly the kind of silent mismatch that produces firmware
-#: which builds, flashes and then does not boot.
-HEADER_SIZE_SYMBOL = "CONFIG_ROM_START_OFFSET"
-
-#: Sub-directory of an image's build directory that holds its artifacts.
-_OUTPUT_DIR = "zephyr"
-
 #: Read in blocks rather than whole: a Matter image is most of a megabyte
 #: and there is no reason for it to be in memory twice.
 _HASH_BLOCK = 1 << 20
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(_HASH_BLOCK):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 # --------------------------------------------------------------------------
@@ -115,6 +112,15 @@ class FileEntry:
     path: str
     size: int
     sha256: str
+
+    @classmethod
+    def measure(cls, path: Path, *, out_dir: Path) -> FileEntry:
+        """Hash a file that is actually there, as *out_dir* would name it."""
+        return cls(
+            path=path.resolve().relative_to(out_dir.resolve()).as_posix(),
+            size=path.stat().st_size,
+            sha256=_sha256(path),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {"path": self.path, "size": self.size, "sha256": self.sha256}
@@ -336,114 +342,8 @@ class BuildManifest:
 
 
 # --------------------------------------------------------------------------
-# Reading a build directory
+# The Matter OTA block
 # --------------------------------------------------------------------------
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while block := handle.read(_HASH_BLOCK):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _file_entry(path: Path, *, out_dir: Path) -> FileEntry:
-    return FileEntry(
-        path=path.resolve().relative_to(out_dir.resolve()).as_posix(),
-        size=path.stat().st_size,
-        sha256=_sha256(path),
-    )
-
-
-def read_kconfig(path: Path) -> dict[str, str]:
-    """A Zephyr ``.config`` as ``symbol -> value``, quotes stripped.
-
-    Deliberately not a Kconfig parser: the file is already the *result*
-    of one, one assignment per line, and the builder reads two symbols
-    out of it.
-    """
-    values: dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return values
-    for line in text.splitlines():
-        if not line.startswith("CONFIG_") or "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        values[name.strip()] = value.strip().strip('"')
-    return values
-
-
-def _as_int(text: str, fallback: int) -> int:
-    try:
-        return int(text, 0)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def signing_parameters(
-    scheme: registry.UpdateSchemeDef, *, kconfig: dict[str, str] | None = None
-) -> SigningParameters:
-    """The arguments the inline build signs with, from board data.
-
-    Three of the four are the registry's: the header offset and the write
-    alignment are properties of the part, and the slot size is the
-    partition table ADR 0015 decision 2 makes per-board data — the same
-    table the builder rendered into the overlay this image was linked
-    against, which is why it can state them without asking the build.
-
-    *kconfig* is the built application's ``.config`` when there is one.
-    It carries imgtool's ``--version``, which the builder does not decide,
-    and it is where the header offset is cross-checked: a linker that
-    reserved a different offset than the layout assumes produces firmware
-    that builds and does not boot, and that is worth a refusal rather than
-    a manifest stating something untrue.
-    """
-    values = kconfig or {}
-    header_size = _as_int(values.get(HEADER_SIZE_SYMBOL, ""), scheme.header_size)
-    if header_size != scheme.header_size:
-        raise BuildError(
-            f"The application was linked with a {header_size}-byte MCUboot header "
-            f"offset, but this board's layout says {scheme.header_size}.",
-            hint=(
-                f"{HEADER_SIZE_SYMBOL} and the board's header_size in "
-                "mcuhome/registry.py have to agree — an image signed against the "
-                "wrong offset boots nowhere. This is a builder bug worth reporting."
-            ),
-        )
-    return SigningParameters(
-        header_size=scheme.header_size,
-        align=scheme.write_block_size,
-        slot_size=scheme.imgtool_slot.size,
-        version=values.get(SIGN_VERSION_SYMBOL) or SIGN_VERSION_DEFAULT,
-    )
-
-
-def _signing_block(
-    *,
-    out_dir: Path,
-    build_dir: Path,
-    app_image: str,
-    scheme: registry.UpdateSchemeDef,
-    signed_by_the_build: bool,
-) -> SigningBlock:
-    output = build_dir / app_image / _OUTPUT_DIR
-    relative = (output.resolve().relative_to(out_dir.resolve())).as_posix()
-    return SigningBlock(
-        image=app_image,
-        signed_by_the_build=signed_by_the_build,
-        signature_type=registry.SIGNATURE_TYPE,
-        parameters=signing_parameters(
-            scheme, kconfig=read_kconfig(build_dir / app_image / _OUTPUT_DIR / ".config")
-        ),
-        inputs={"bin": f"{relative}/zephyr.bin", "hex": f"{relative}/zephyr.hex"},
-        outputs={
-            "bin": f"{relative}/zephyr.signed.bin",
-            "hex": f"{relative}/zephyr.signed.hex",
-        },
-    )
 
 
 def ota_parameters(model: DeviceModel) -> OtaEntry | None:
@@ -474,74 +374,13 @@ def ota_entry(image: ota.OtaImage, *, out_dir: Path) -> OtaEntry:
         software_version=image.software_version,
         vendor_id=image.vendor_id,
         product_id=image.product_id,
-        file=_file_entry(image.path, out_dir=out_dir),
+        file=FileEntry.measure(image.path, out_dir=out_dir),
     )
 
 
-def build_manifest(
-    model: DeviceModel,
-    *,
-    out_dir: Path,
-    build_dir: Path,
-    app_image: str,
-    images: list[workspace.ImageArtifacts],
-    snippets: tuple[str, ...] = (),
-    bootloader_snippets: tuple[str, ...] = (),
-    jobs: int,
-    signed_by_the_build: bool,
-    merged: Path | None = None,
-    ota_image: ota.OtaImage | None = None,
-) -> BuildManifest:
-    """Describe what came out of stage 5, hashing every file it names."""
-    board = registry.BOARDS.get(model.device.board)
-    scheme = None if board is None else board.update_scheme
-    return BuildManifest(
-        device=model.device.name,
-        friendly_name=model.device.friendly_name,
-        board=model.device.board,
-        version=model.device.version,
-        model_version=model.model_version,
-        builder_version=__version__,
-        snippets=tuple(snippets),
-        bootloader_snippets=tuple(bootloader_snippets),
-        jobs=jobs,
-        images=tuple(
-            ImageEntry(
-                name=image.name,
-                role=image.role,
-                flash_bytes=image.flash_bytes,
-                files=tuple(_file_entry(path, out_dir=out_dir) for path in image.files),
-            )
-            for image in images
-        ),
-        signing=(
-            None
-            if scheme is None
-            else _signing_block(
-                out_dir=out_dir,
-                build_dir=build_dir,
-                app_image=app_image,
-                scheme=scheme,
-                signed_by_the_build=signed_by_the_build,
-            )
-        ),
-        merged=None if merged is None else _file_entry(merged, out_dir=out_dir),
-        ota=(ota_parameters(model) if ota_image is None else ota_entry(ota_image, out_dir=out_dir)),
-    )
-
-
-def write_manifest(manifest: BuildManifest, *, out_dir: Path) -> Path:
-    """Write the manifest into the build directory and return its path."""
-    path = out_dir / MANIFEST_FILE
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(manifest.to_json(), encoding="utf-8")
-    except OSError as error:
-        raise BuildError(
-            f"The build manifest {path} cannot be written: {error.strerror}.",
-            hint="pick a writable location with --build-dir",
-        ) from error
-    return path
+# --------------------------------------------------------------------------
+# Reading, and the two edits a signer makes
+# --------------------------------------------------------------------------
 
 
 def record_signature(data: dict[str, Any], *, out_dir: Path, files: list[Path]) -> dict[str, Any]:
@@ -561,7 +400,7 @@ def record_signature(data: dict[str, Any], *, out_dir: Path, files: list[Path]) 
             continue
         entries = list(image.get("files") or [])
         for path in files:
-            fresh = _file_entry(path, out_dir=out_dir).to_dict()
+            fresh = FileEntry.measure(path, out_dir=out_dir).to_dict()
             for index, entry in enumerate(entries):
                 if isinstance(entry, dict) and entry.get("path") == fresh["path"]:
                     entries[index] = fresh

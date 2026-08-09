@@ -16,12 +16,24 @@ Pipeline (builder-pipeline.md §3), by module:
 :mod:`mcuhome.generate`      stage 4: the per-device build tree
 :mod:`mcuhome.container`     stage 5: compile in the builder image
 :mod:`mcuhome.workspace`     stage 5: compile on the host (``--native``)
+:mod:`mcuhome.report`        stage 5: measure the build directory
 :mod:`mcuhome.manifest`      what came out: ``build-manifest.json``
-:mod:`mcuhome.context`       the remote-build context (ADR 0018)
+:mod:`mcuhome.context`       the remote-build context format (ADR 0018)
+:mod:`mcuhome.contextdir`    creating and verifying a context directory
 :mod:`mcuhome.imgtool`       signing the image afterwards (ADR 0015 §8)
-:mod:`mcuhome.export`        the registry and the YAML schema, as data
+:mod:`mcuhome.ota`           the device version, and what derives from it
+:mod:`mcuhome.otafile`       wrapping a signed image in a Matter .ota
+:mod:`mcuhome.export`        the registry, as data
+:mod:`mcuhome.configschema`  the JSON Schema for ``main.yaml``
 :mod:`mcuhome.scaffold`      a new device's first configuration file
 ===========================  ======================================
+
+Several of those names come in pairs — ``context``/``contextdir``,
+``manifest``/``report``, ``ota``/``otafile``, ``export``/``configschema``.
+The first of each is a *format* or a piece of vocabulary and touches
+nothing outside itself; the second uses it against a filesystem or a
+build. ADR 0020 splits this package along exactly that line, into what
+runs everywhere, what drives a build and what compiles.
 
 **Importing this package from another program?** Use :mod:`mcuhome.api`
 and nothing else. It is the supported surface and the only part covered

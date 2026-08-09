@@ -17,7 +17,7 @@ import re
 import pytest
 from conftest import GOLDEN_DIR
 
-from mcuhome import __version__, export, registry, schema
+from mcuhome import __version__, configschema, export, registry, schema
 from mcuhome.model import MODEL_VERSION
 
 REGISTRY_GOLDEN = GOLDEN_DIR / "registry.json"
@@ -43,14 +43,16 @@ def test_the_registry_export_is_what_it_was() -> None:
 
 
 def test_the_config_schema_is_what_it_was() -> None:
-    assert _stable(export.to_json(export.config_json_schema())) == SCHEMA_GOLDEN.read_text("utf-8")
+    assert _stable(export.to_json(configschema.config_json_schema())) == SCHEMA_GOLDEN.read_text(
+        "utf-8"
+    )
 
 
 def test_both_documents_are_deterministic() -> None:
     """Same process, same bytes — twice, so nothing leaks in from a set."""
     assert export.to_json(export.registry_data()) == export.to_json(export.registry_data())
-    assert export.to_json(export.config_json_schema()) == export.to_json(
-        export.config_json_schema()
+    assert export.to_json(configschema.config_json_schema()) == export.to_json(
+        configschema.config_json_schema()
     )
 
 
@@ -122,13 +124,13 @@ def test_the_export_states_the_model_version() -> None:
 
 
 def test_the_schema_offers_the_boards_the_registry_has() -> None:
-    device = export.config_json_schema()["properties"]["device"]
+    device = configschema.config_json_schema()["properties"]["device"]
     assert device["properties"]["board"]["enum"] == sorted(registry.BOARDS)
     assert device["required"] == ["name", "board"]
 
 
 def test_the_schema_offers_the_drivers_clusters_and_device_types() -> None:
-    document = export.config_json_schema()
+    document = configschema.config_json_schema()
     peripherals = document["properties"]["hardware"]["properties"]["peripherals"]
     assert peripherals["additionalProperties"]["properties"]["driver"]["enum"] == sorted(
         registry.DRIVERS
@@ -140,14 +142,16 @@ def test_the_schema_offers_the_drivers_clusters_and_device_types() -> None:
 
 def test_the_schema_rejects_a_section_the_parser_rejects() -> None:
     """`additionalProperties: false` mirrors the parser's reject_unknown."""
-    document = export.config_json_schema()
+    document = configschema.config_json_schema()
     assert document["additionalProperties"] is False
     assert document["properties"]["device"]["additionalProperties"] is False
 
 
 def test_peripheral_properties_stay_open() -> None:
     """Driver properties are per-driver; only the validator can check them."""
-    peripherals = export.config_json_schema()["properties"]["hardware"]["properties"]["peripherals"]
+    peripherals = configschema.config_json_schema()["properties"]["hardware"]["properties"][
+        "peripherals"
+    ]
     assert peripherals["additionalProperties"]["additionalProperties"] is True
 
 
@@ -164,7 +168,7 @@ def test_peripheral_properties_stay_open() -> None:
 )
 def test_the_duration_pattern_agrees_with_the_parser(text: str, accepted: bool) -> None:
     """An editor that underlines what the builder accepts is a liar."""
-    assert bool(re.match(export._DURATION_PATTERN, text)) is accepted
+    assert bool(re.match(configschema._DURATION_PATTERN, text)) is accepted
     assert bool(schema._DURATION_RE.match(text)) is accepted
 
 
@@ -173,18 +177,18 @@ def test_the_duration_pattern_agrees_with_the_parser(text: str, accepted: bool) 
     [("400kHz", True), ("100KHZ", True), ("1mhz", True), ("400", False), ("400 k", False)],
 )
 def test_the_frequency_pattern_agrees_with_the_parser(text: str, accepted: bool) -> None:
-    assert bool(re.match(export._FREQUENCY_PATTERN, text)) is accepted
+    assert bool(re.match(configschema._FREQUENCY_PATTERN, text)) is accepted
     assert bool(schema._FREQUENCY_RE.match(text)) is accepted
 
 
 @pytest.mark.parametrize(("text", "accepted"), [("gpio0.26", True), ("P0.26", False)])
 def test_the_pin_pattern_agrees_with_the_parser(text: str, accepted: bool) -> None:
-    assert bool(re.match(export._PIN_PATTERN, text)) is accepted
+    assert bool(re.match(configschema._PIN_PATTERN, text)) is accepted
     assert bool(schema._PIN_RE.match(text)) is accepted
 
 
 def test_the_device_name_pattern_is_the_parsers_own() -> None:
-    name = export.config_json_schema()["properties"]["device"]["properties"]["name"]
+    name = configschema.config_json_schema()["properties"]["device"]["properties"]["name"]
     assert name["pattern"] == schema.DEVICE_NAME_RE.pattern
     assert name["maxLength"] == schema.DEVICE_NAME_MAX
 
@@ -196,7 +200,7 @@ def test_the_schema_validates_the_example_when_a_validator_is_installed() -> Non
 
     from mcuhome.loader import load_yaml_file
 
-    document = export.config_json_schema()
+    document = configschema.config_json_schema()
     jsonschema.Draft202012Validator.check_schema(document)
     data = load_yaml_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
     jsonschema.Draft202012Validator(document).validate(json.loads(json.dumps(data, default=str)))

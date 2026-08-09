@@ -50,7 +50,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-#: Written by ``mcuhome.manifest.write_manifest`` into the build directory.
+#: Written by ``mcuhome.report.write_manifest`` into the build directory.
 MANIFEST_FILE = "build-manifest.json"
 
 #: Sysbuild's name for the bootloader image, fixed by Zephyr.

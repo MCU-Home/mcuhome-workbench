@@ -7,6 +7,11 @@ The manifest is the machine-readable half of a build directory
 deterministic apart from the sizes and hashes it measures, and its
 signing block states the arguments the *inline* build would have used —
 which is the whole basis of detached signing (ADR 0015 decision 8).
+
+Covers both halves of the document, because the document is one thing:
+:mod:`mcuhome.manifest` is its format and :mod:`mcuhome.report` measures
+a build directory into it (ADR 0020 puts the two in different packages —
+a manifest is read where no toolchain may be installed).
 """
 
 from __future__ import annotations
@@ -24,12 +29,10 @@ from mcuhome import __version__, pairing, registry, workspace
 from mcuhome import manifest as manifest_module
 from mcuhome.errors import BuildError
 from mcuhome.generate import APP_DIR, BOOTLOADER_IMAGE
-from mcuhome.manifest import (
-    MANIFEST_FILE,
+from mcuhome.manifest import MANIFEST_FILE, SigningParameters, read_manifest
+from mcuhome.report import (
     SIGN_VERSION_DEFAULT,
-    SigningParameters,
     build_manifest,
-    read_manifest,
     signing_parameters,
     write_manifest,
 )

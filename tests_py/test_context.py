@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """The build context and its normative ID.
 
+Covers both halves: :mod:`mcuhome.context` is the format and the ID rule,
+:mod:`mcuhome.contextdir` is the directory the rule is applied to (ADR
+0020 puts them in different packages — a build server recomputes the ID
+from bytes off a socket and carries no build logic).
+
 The context ID rule (build-container-contract.md §3.3, ADR 0018) is
 locked with ``context`` format version 1 and can never change
 afterwards — every archived context, every artifact attribution and
@@ -22,6 +27,7 @@ from conftest import EXAMPLES_DIR, resolve_file
 
 from mcuhome.context import (
     BACKEND_DIR,
+    CONTEXT_ID_VECTORS,
     CONTEXT_VERSION,
     MANIFEST_FILE,
     MODEL_FILE,
@@ -31,6 +37,9 @@ from mcuhome.context import (
     SdkPin,
     canonical_json,
     context_id,
+    vector_id,
+)
+from mcuhome.contextdir import (
     create_context,
     read_context_manifest,
     verify_context,
@@ -125,6 +134,35 @@ def test_the_golden_vector_never_changes() -> None:
     """The regression anchor of the whole format. See GOLDEN_ID."""
     computed = context_id(container_digest=DIGEST, sdk_sha256=SDK_SHA, board=BOARD, files=FILES)
     assert computed == GOLDEN_ID
+
+
+@pytest.mark.parametrize("vector", CONTEXT_ID_VECTORS, ids=lambda vector: vector["name"])
+def test_the_conformance_vectors_hold(vector) -> None:
+    """The suite a *second* implementation is checked against.
+
+    The golden vector above proves this builder does not drift. It cannot
+    prove anything about the build server, which ADR 0019 §8 obliges to
+    recompute the same ID from the bytes it received — and which, per ADR
+    0020 decision 4, is entitled to do so with nothing but the model
+    package. :data:`CONTEXT_ID_VECTORS` ships inside that package so the
+    obligation is checkable rather than asserted, and this test is the
+    Python side running it.
+
+    A failure here is never fixed in the data: version 1's vectors are
+    frozen exactly as :data:`GOLDEN_ID` is.
+    """
+    assert vector_id(vector) == vector["id"]
+
+
+def test_the_golden_vector_is_one_of_the_conformance_vectors() -> None:
+    """Two frozen constants that disagree would be worse than one.
+
+    The vector this file has pinned since the format was written is in
+    the package's own suite, so a second implementation is checked
+    against the same value the test suite is — not a second one that
+    happens to look like it.
+    """
+    assert GOLDEN_ID in {vector["id"] for vector in CONTEXT_ID_VECTORS}
 
 
 def test_the_golden_vectors_canonical_form_never_changes() -> None:

@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Any
 
 from mcuhome import __version__
+from mcuhome.configschema import config_json_schema
 from mcuhome.errors import (
     BuildError,
     ConfigError,
@@ -65,7 +66,7 @@ from mcuhome.errors import (
     MCUHomeError,
     error_dicts,
 )
-from mcuhome.export import config_json_schema, registry_data
+from mcuhome.export import registry_data
 from mcuhome.loader import load_config
 from mcuhome.manifest import MANIFEST_FILE, read_manifest
 from mcuhome.model import MODEL_VERSION, DeviceModel

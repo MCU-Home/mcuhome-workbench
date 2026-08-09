@@ -11,10 +11,12 @@ by name and by field, not only by behaviour.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
+from conftest import EXAMPLES_DIR, FIXTURE_TREE, REPO_ROOT, VALID_CONFIG
 
 from mcuhome import api
 from mcuhome.errors import (
@@ -247,3 +249,38 @@ def test_read_model_refuses_another_model_version(tmp_path) -> None:
     # And it serializes, because a dashboard renders it rather than
     # printing it.
     assert error.value.to_dict()["message"].startswith("The device model")
+
+
+def test_the_supported_surface_pulls_in_no_compiler() -> None:
+    """The dashboard imports this module, and must not get a toolchain.
+
+    ADR 0017 §2 states it plainly: depending on the package must not drag
+    in the toolchain, the C sources or the west manifest. Before the
+    boundary work of ADR 0020, ``import mcuhome.api`` reached
+    ``manifest`` → ``workspace`` → ``generate``, so every dashboard
+    install carried the code generator and the west driver it can never
+    run — silently, because nothing failed.
+
+    Measured in a subprocess rather than asserted about the source: an
+    import graph is a runtime property, and reading the ``import`` lines
+    of one module says nothing about what the modules it imports drag
+    along. This is the one property the split exists to establish, and
+    without a test it can fall back the first time somebody adds a
+    convenience import.
+    """
+    probe = (
+        "import sys; import mcuhome.api; "
+        "print(' '.join(sorted(m for m in sys.modules if m.startswith('mcuhome.'))))"
+    )
+    loaded = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    ).stdout.split()
+    forbidden = {"mcuhome.generate", "mcuhome.workspace", "mcuhome.report", "mcuhome.container"}
+    assert not forbidden & set(loaded), (
+        f"importing mcuhome.api now loads {sorted(forbidden & set(loaded))} — "
+        "a consumer of the supported surface would install a toolchain it cannot use"
+    )

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The device version and the Matter OTA file (:mod:`mcuhome.ota`).
+"""The device version (:mod:`mcuhome.ota`) and the Matter OTA file
+(:mod:`mcuhome.otafile`).
 
 Three things are worth pinning here and each one is a different kind of
 claim:
@@ -28,7 +29,7 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
-from mcuhome import ota, pairing
+from mcuhome import ota, otafile, pairing
 from mcuhome.errors import BuildError
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
@@ -138,12 +139,12 @@ def _payload(tmp_path: Path, size: int = 4096) -> Path:
 
 def test_the_file_name_carries_the_version(tmp_path: Path) -> None:
     """An OTA provider directory holds every image it might ever serve."""
-    assert ota.ota_file_name("bedroom-climate", "1.4.0") == "bedroom-climate-1.4.0.ota"
+    assert otafile.ota_file_name("bedroom-climate", "1.4.0") == "bedroom-climate-1.4.0.ota"
 
 
 def test_the_image_is_the_header_plus_the_payload_verbatim(tmp_path: Path) -> None:
     payload = _payload(tmp_path)
-    result = ota.write_ota_image(
+    result = otafile.write_ota_image(
         payload=payload,
         output=tmp_path / "out.ota",
         vendor_id=0xFFF1,
@@ -153,7 +154,7 @@ def test_the_image_is_the_header_plus_the_payload_verbatim(tmp_path: Path) -> No
     raw = result.path.read_bytes()
     magic, total, header_size = struct.unpack("<IQI", raw[:16])
 
-    assert magic == ota.OTA_MAGIC
+    assert magic == otafile.OTA_MAGIC
     assert total == len(raw)
     assert header_size == len(raw) - 16 - payload.stat().st_size
     # Byte for byte: the payload is what MCUboot verifies, so nothing may
@@ -206,7 +207,7 @@ def test_the_header_is_the_shape_the_firmware_parser_expects(tmp_path: Path) -> 
     in the ascending order CHIP's own TLV writer produces.
     """
     payload = _payload(tmp_path)
-    result = ota.write_ota_image(
+    result = otafile.write_ota_image(
         payload=payload,
         output=tmp_path / "out.ota",
         vendor_id=0xFFF1,
@@ -225,7 +226,7 @@ def test_the_header_is_the_shape_the_firmware_parser_expects(tmp_path: Path) -> 
     assert values[2] == 0x00010000  # software version
     assert values[3] == "0.1.0"  # version string
     assert values[4] == payload.stat().st_size  # payload size
-    assert values[8] == ota.DIGEST_TYPE_SHA256
+    assert values[8] == otafile.DIGEST_TYPE_SHA256
     assert len(values[9]) == 32  # digest
 
 
@@ -233,7 +234,7 @@ def test_an_empty_image_is_refused(tmp_path: Path) -> None:
     payload = tmp_path / "zephyr.signed.bin"
     payload.write_bytes(b"")
     with pytest.raises(BuildError, match="nothing to update to"):
-        ota.write_ota_image(
+        otafile.write_ota_image(
             payload=payload,
             output=tmp_path / "out.ota",
             vendor_id=1,
@@ -244,7 +245,7 @@ def test_an_empty_image_is_refused(tmp_path: Path) -> None:
 
 def test_a_missing_image_says_to_sign_first(tmp_path: Path) -> None:
     with pytest.raises(BuildError) as error:
-        ota.write_ota_image(
+        otafile.write_ota_image(
             payload=tmp_path / "nothing.bin",
             output=tmp_path / "out.ota",
             vendor_id=1,
@@ -263,8 +264,8 @@ def test_writing_the_same_image_twice_gives_the_same_bytes(tmp_path: Path) -> No
         "product_id": pairing.PRODUCT_ID,
         "version": "0.1.0",
     }
-    first = ota.write_ota_image(output=tmp_path / "a.ota", **arguments)
-    second = ota.write_ota_image(output=tmp_path / "b.ota", **arguments)
+    first = otafile.write_ota_image(output=tmp_path / "a.ota", **arguments)
+    second = otafile.write_ota_image(output=tmp_path / "b.ota", **arguments)
     assert first.path.read_bytes() == second.path.read_bytes()
 
 
@@ -282,7 +283,7 @@ def test_the_file_is_byte_identical_to_the_one_chips_tool_writes(
     a contributor's workspace, CI — this compares the bytes.
     """
     payload = _payload(tmp_path)
-    mine = ota.write_ota_image(
+    mine = otafile.write_ota_image(
         payload=payload,
         output=tmp_path / "mine.ota",
         vendor_id=pairing.VENDOR_ID,
