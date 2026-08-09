@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The invocation ABI of the build container contract, and ``describe``.
+"""The invocation ABI of the build container contract, ``describe``, ``verify``.
 
 ``docs/design/build-container-contract.md`` §5 is frozen. A backend runs
 
@@ -12,11 +12,19 @@ This module is that ABI: argv, the request document's five parsing rules
 (§5.4). ``containers/builder/run`` is the thin launcher the image
 installs at that fixed path; everything it does is call :func:`main`.
 
-**One action is implemented: ``describe`` (§7.1).** ``build`` and
-``verify`` are not, and they refuse the way §7 says an unimplemented
-action refuses — ``status: "unsupported"``, ``reason:
+**Two actions are implemented: ``describe`` (§7.1) and ``verify``
+(§7.3).** ``build`` is not, and it refuses the way §7 says an
+unimplemented action refuses — ``status: "unsupported"``, ``reason:
 "unsupported.action"``, exit 1 — which is a legible answer a backend can
 reschedule on rather than a crash.
+
+``verify`` computes nothing itself. Every hash and the effective context
+ID come from :func:`~mcuhome.contextdir.verify_context`, the one
+implementation of §3.3's normative rule in this project: "Implementations
+on both sides of the contract MUST compute the ID independently from the
+bytes they actually hold", which is only worth anything while each side
+has *one* implementation. A second one here is the failure ADR 0018 §6
+freezes the rule against.
 
 Where the contract is silent this module does the smallest thing, and
 says which line it is standing on. The full list:
@@ -48,15 +56,74 @@ either way.
 argv arity (3), parse (4), preamble (5), action (6), ``required`` (7),
 the remaining fields (8).
 
-*``program.actions`` lists ``describe`` alone.* §7.1.1 calls it "the
-action names the program implements" and in the same breath requires it
-to "include ``describe``, ``verify`` and ``build``". Both cannot hold for
-a program that implements one of the three. Listing an action that
-answers ``unsupported.action`` would be the worse lie of the two — a
-backend MUST NOT invoke what is absent from the list, so the honest list
-costs a refusal nobody has to reschedule. This is also why the image
-carries no ``org.mcuhome.contract`` label yet: it is not a conforming
-image, and it does not claim to be.
+*``program.actions`` lists what is implemented, not what is required.*
+§7.1.1 calls it "the action names the program implements" and in the same
+breath requires it to "include ``describe``, ``verify`` and ``build``".
+Both cannot hold for a program that implements two of the three. Listing
+an action that answers ``unsupported.action`` would be the worse lie of
+the two — a backend MUST NOT invoke what is absent from the list, so the
+honest list costs a refusal nobody has to reschedule. This is also why
+the image carries no ``org.mcuhome.contract`` label yet: it is not a
+conforming image, and it does not claim to be.
+
+*What ``verify`` needs out of the request document.* §5.2 makes seven
+fields mandatory for every working action, and rule 3 refuses over a
+narrower thing: "A field the program needs for this action and does not
+find". ``verify`` needs two of the seven. ``context`` is the directory
+§7.3 defines the action over. ``session`` is needed because §5.4 makes it
+mandatory in a ``verify`` result *and* forbids inventing one — "a program
+MUST NOT invent a value for a field it was never given" — so a ``verify``
+without it has no conforming result to write, and refusing is the only
+answer left. The other five (``out``, ``work``, ``tmp``, ``trees.sdk``,
+``limits.jobs``) name work this action does not do: it "reads the context
+and nothing else" (§7.3), and §4.1 says "The program MUST NOT require an
+entry it does not need for the requested action". A backend that omits
+them is in breach of §5.2, but that is a defect in the backend's request
+and not in this invocation's answer, and this program is not the thing
+that reports it.
+
+*A manifest that cannot be read at all is ``error.context.mismatch``.*
+The registry of §5.4 defines eleven reasons and none of them is "the
+manifest is corrupt": ``error.context.incomplete`` is "missing a file the
+action needs", which a present-but-unreadable manifest is not, and
+``unsupported.context`` is reserved for a format version this program
+does not implement. What is left is the one ``verify`` failure §7.3
+names — "measured the materialized context and it is not the context
+``manifest.yaml`` describes" — which holds of a manifest that describes
+no context at all. **This is a gap in contract v1**, recorded here rather
+than papered over: a backend cannot tell a corrupt manifest from a
+tampered file by ``reason`` alone, only from ``error.message``.
+
+*A manifest that states no format version is not ``unsupported.context``
+either.* That reason means the program "found a ``context`` format
+version it does not implement", and §3.2 explains the status by "nothing
+about this context is broken". A manifest with no ``context`` key is
+broken, and answering ``unsupported`` would tell a backend to go and find
+another image for a context no image can read. It is the previous case.
+
+*The key names inside ``error.details``.* The contract fixes exactly one
+— "``error.details.required`` for ``unsupported.required``" (§5.4.1) —
+and otherwise says only which *facts* go there. So: ``context`` carries
+"the version it found" (§3.2), under the name the manifest key already
+has; ``missing`` carries "the missing path" (§7.2); ``paths`` carries
+"the offending paths" (§7.3). ``paths`` is empty when the disagreement
+names no content file — a spoofed ``id``, or a manifest that could not be
+read — because ``manifest.yaml`` is not a content file (§3.2) and naming
+it under "the offending paths" would put a file in that list that can
+never be in the integrity list.
+
+*A failing ``verify`` reports ``context`` exactly when it measured one.*
+§5.4's table qualifies the row with "MUST, on success" and the paragraph
+below it says what the qualification is for: "The rows qualified 'on
+success' are the ones that report *measured* work. An invocation that
+failed before it got that far reports what it measured and nothing more:
+… a ``verify`` that could not read ``manifest.yaml`` has no effective
+context ID." The criterion is measurement, not status — so an integrity
+mismatch, which measured the effective ID on the way to finding it,
+reports it, and a manifest this program refused to hash does not.
+``layers`` never appears at all: §5.4 forbids it for ``verify``, because
+"it reports work that was actually done, and ``verify`` does not do that
+work".
 
 *``trees`` is read from the image's own record.* The image writes
 ``/mcuhome/workspace.json`` (``containers/builder/workspace-record.py``,
@@ -84,6 +151,9 @@ from pathlib import Path
 from typing import Any
 
 from mcuhome import __version__
+from mcuhome.context import MANIFEST_FILE
+from mcuhome.contextdir import ContextFormatVersionError, verify_context
+from mcuhome.errors import BuildError
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -124,9 +194,9 @@ RESULT_VERSION = RESULT_VERSIONS[0]
 PROGRAM_ID = "org.mcuhome.build-container"
 
 #: Every action this program implements, and the whole of ``describe``'s
-#: ``program.actions``. See the module docstring for why ``build`` and
-#: ``verify`` are not in it.
-IMPLEMENTED_ACTIONS = ("describe",)
+#: ``program.actions``. See the module docstring for why ``build`` is not
+#: in it.
+IMPLEMENTED_ACTIONS = ("describe", "verify")
 
 #: The layer registry of contract v1 §1.1, in the order ``describe``
 #: reports them. Third-party layers carry an ``x-`` prefix and reach the
@@ -155,11 +225,15 @@ EXIT_FAILURE = 1
 EXIT_UNUSABLE = 66
 
 _STATUS_SUCCESS = "success"
+_STATUS_FAILURE = "failure"
 _STATUS_UNSUPPORTED = "unsupported"
 
 _REASON_REQUEST = "unsupported.request"
 _REASON_REQUIRED = "unsupported.required"
 _REASON_ACTION = "unsupported.action"
+_REASON_CONTEXT = "unsupported.context"
+_REASON_INCOMPLETE = "error.context.incomplete"
+_REASON_MISMATCH = "error.context.mismatch"
 
 # --------------------------------------------------------------------------
 # The request document (§5.2)
@@ -209,17 +283,61 @@ def _is_absolute_path(value: Any) -> bool:
 #: The JSON Pointers this program honours, each with the values it can
 #: honour there (§5.2 rule 2: "knowing the path is not enough").
 #:
-#: Three, and no more. ``/request`` and ``/result`` are the immortal
-#: preamble and this program acts on both; ``/session`` it echoes, which
-#: is the whole of what §5.2 permits anyone to do with it. Every other
-#: pointer — ``/out``, ``/work``, ``/context``, ``/trees/sdk``,
-#: ``/limits/jobs``, ``/params/mode`` — belongs to a working action this
-#: program does not implement, so a backend that demands it is told so
-#: instead of being quietly served something else.
+#: Four, one per thing this program actually acts on. A pointer in this
+#: list is a promise to act on the *value* found there, so each is here
+#: for a reason of its own:
+#:
+#: * ``/request`` — acted on: a version outside :data:`REQUEST_VERSIONS`
+#:   is refused rather than parsed hopefully.
+#: * ``/result`` — acted on: the result document is written to exactly
+#:   that path, which is why the value has to be an absolute one.
+#: * ``/session`` — echoed, which is the whole of what §5.2 permits
+#:   anyone to do with it, and honourable only as the opaque *string*
+#:   token the contract defines. A backend demanding that a number be
+#:   honoured there is told which pointer failed.
+#: * ``/context`` — read: it is the directory ``verify`` is defined over
+#:   (§7.3), and an absolute path is the only value that names one, since
+#:   §5.1 forbids resolving a relative one against a ``cwd``.
+#:
+#: Everything else stays out, and ``verify``'s own mandatory fields are
+#: the interesting half of that. ``/out``, ``/work``, ``/tmp``,
+#: ``/trees/sdk`` and ``/limits/jobs`` reach this program on every
+#: ``verify`` (§5.2 makes them mandatory for a working action) and it does
+#: nothing whatever with them: §7.3's ``verify`` "reads the context and
+#: nothing else", §9.2 point 10 forbids it to write into ``work`` or a
+#: tree, and it declares no artifacts, so there is no value at any of
+#: those pointers it could promise to honour. ``/params/mode`` belongs to
+#: ``build``, which this program does not implement. A backend that
+#: demands any of them is told so instead of being quietly served
+#: something else.
 HONOURED_REQUIRED: dict[str, Callable[[Any], bool]] = {
     "/request": _is_request_version,
     "/result": _is_absolute_path,
     "/session": lambda value: isinstance(value, str),
+    "/context": _is_absolute_path,
+}
+
+
+def _is_present(value: Any) -> bool:
+    """Anything at all, as opposed to :data:`_MISSING`."""
+    return value is not _MISSING
+
+
+#: What each action needs to find in the request document, as a JSON
+#: Pointer and the values that are usable there. Rule 3 of §5.2: "A field
+#: the program needs for this action and does not find … ⇒ ``status:
+#: "unsupported"``, ``reason: "unsupported.request"``".
+#:
+#: ``describe`` "needs only the preamble" (§5.2) and so is absent here.
+#: ``verify`` needs two of the seven fields §5.2 makes mandatory for a
+#: working action, and the module docstring says why the other five are
+#: not demanded back. ``/session`` is checked for presence and not for
+#: type: §5.4's echo rule says a program echoes what it was given,
+#: verbatim, and §5.2 forbids composing a path from it, so its type never
+#: has to be believed. A backend that wants the token's type honoured
+#: names it in ``required``, and :data:`HONOURED_REQUIRED` answers that.
+_NEEDED_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
+    "verify": {"/context": _is_absolute_path, "/session": _is_present},
 }
 
 
@@ -338,6 +456,24 @@ def _unhonourable(document: dict[str, Any]) -> list[str] | None:
     return offending
 
 
+def _not_found(action: str, document: dict[str, Any]) -> list[str]:
+    """The fields *action* needs and this document does not supply (rule 3).
+
+    Named as pointers rather than as field names so the refusal reads in
+    the same vocabulary ``required`` does, and so a nested field can be
+    named the day one is needed. The list is :data:`_NEEDED_FIELDS`, which
+    is deliberately *not* §5.2's list of fields mandatory for a working
+    action: rule 3 refuses over what the program needs, and §4.1 forbids
+    requiring what it does not.
+    """
+    needed = _NEEDED_FIELDS.get(action, {})
+    return [
+        pointer
+        for pointer, usable in needed.items()
+        if not usable(_resolve_pointer(document, pointer))
+    ]
+
+
 def _relative_paths(document: dict[str, Any]) -> list[str]:
     """Every known path field of *document* whose value is not absolute.
 
@@ -381,6 +517,7 @@ def _result_document(
     *,
     reason: str | None = None,
     error: dict[str, Any] | None = None,
+    context: str | None = None,
     program: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A result document in the field order §5.4 prints it in.
@@ -390,15 +527,20 @@ def _result_document(
     document carried it. "A program MUST NOT invent a value for a field it
     was never given" (§5.4).
 
-    ``context``, ``layers`` and ``artifacts`` never appear. They are the
-    "MUST NOT" row of §5.4's table for ``describe``, and for the two
-    actions this program refuses they would report work that did not
-    happen.
+    *context* is passed exactly when the effective context ID was
+    measured, which is what §5.4's "MUST, on success" row is about — see
+    the module docstring. ``layers`` and ``artifacts`` never appear at
+    all: the first is the "MUST NOT" row for both actions implemented
+    here, and the second would declare output this program does not
+    produce (``verify`` MAY declare diagnostic output; this one writes
+    none, so there is nothing to declare).
     """
     result: dict[str, Any] = {"result": RESULT_VERSION, "status": status}
     result.update(echo)
     result["reason"] = reason
     result["error"] = error
+    if context is not None:
+        result["context"] = context
     if program is not None:
         result["program"] = program
     return result
@@ -427,6 +569,35 @@ def _refusal(
         reason=reason,
         error={"retryable": False, "message": message, "details": details or {}},
         program=program,
+    )
+
+
+def _failure(
+    echo: dict[str, Any],
+    reason: str,
+    message: str,
+    *,
+    details: dict[str, Any] | None = None,
+    context: str | None = None,
+) -> dict[str, Any]:
+    """A ``failure`` result: the work ran and did not succeed (§5.3).
+
+    The other half of the "not ``success``" space, and the one §5.4's
+    registry reserves its ``error.*`` reasons for. ``retryable`` is false
+    for every failure this program produces, for the same reason it is
+    false for every refusal: it is "the program's promise about its own
+    failure, and about nothing else" (§5.4.1), and a context that
+    disagrees with its own integrity list disagrees with it just as much
+    on a second reading. Nothing here is a transient condition the program
+    could wait out — the remedy is a different context, which is a
+    different invocation.
+    """
+    return _result_document(
+        echo,
+        _STATUS_FAILURE,
+        reason=reason,
+        error={"retryable": False, "message": message, "details": details or {}},
+        context=context,
     )
 
 
@@ -544,6 +715,114 @@ def _describe(echo: dict[str, Any], record: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# verify (§7.3)
+# --------------------------------------------------------------------------
+
+
+def _reportable(value: Any) -> Any:
+    """*value* as something :func:`json.dumps` can write.
+
+    The declared ``context`` format version reaches ``error.details``
+    straight out of a YAML document, where a scalar can parse as a date,
+    a mapping or anything else. The result document is the last write
+    action of the invocation (§5.4), so a value the JSON encoder chokes on
+    there would cost the whole invocation its answer — nothing written and
+    exit 66, for a context this program diagnosed perfectly well. Carrying
+    the value as text is the smaller loss, and the field exists so a
+    backend can see what it sent.
+    """
+    return value if isinstance(value, bool | int | str) else str(value)
+
+
+def _verify(echo: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
+    """``verify``: the materialized context against its own integrity list.
+
+    §7.3: "Asserts that the materialized context is the context the
+    manifest describes. It checks the **effective** context — the file set
+    as materialized, against the integrity list in ``manifest.yaml`` … —
+    and reports the resulting ``context`` ID in its result. A file that is
+    missing, a file whose bytes hash to something else, and a file present
+    but absent from the list are one outcome and one typed answer:
+    ``status: "failure"``, ``reason: "error.context.mismatch"``, the
+    offending paths in ``error.details``."
+
+    Every hash and the ID itself come from
+    :func:`~mcuhome.contextdir.verify_context`, never from this module —
+    see the module docstring for why a second implementation of §3.3 here
+    would be the defect that rule exists against. Its
+    :attr:`~mcuhome.contextdir.ContextVerification.ok` covers one case
+    §7.3 does not enumerate and §3.3 demands anyway: a manifest whose
+    declared ``id`` is not the ID its own contents yield. "Implementations
+    … MUST NOT trust a declared ``id`` value" — and a declared value
+    nobody checks is one nothing in the system would ever catch, since
+    every other party recomputes and would agree with itself.
+
+    **This invocation writes nothing but its result document.** §9.2 point
+    10 forbids a ``verify`` to "Apply a patch, write into a ``trees``
+    entry, or write into ``work``"; this one needs none of those paths at
+    all. No event is written either: ``events`` is optional in both
+    directions (§8) and "a program that offers fewer names than the table
+    is conforming". ``cancel`` is not polled, which §8 leaves as a SHOULD
+    "so that a fifty-line third-party program stays possible" — this
+    action is one pass over one directory, and the backend's SIGTERM
+    remains the hard path.
+    """
+    root = Path(document["context"])
+    if not (root / MANIFEST_FILE).is_file():
+        # "is missing a file the action needs … the missing path in
+        # error.details" (§5.4). §3.1 makes this *the* file: "manifest.yaml
+        # is the program's entry point; a program MUST NOT require any
+        # out-of-band knowledge beyond it and this contract." A context
+        # directory that is not there at all lands here too, which is
+        # right — from the program's side the two are the same absence.
+        return _failure(
+            echo,
+            _REASON_INCOMPLETE,
+            f"the context at {root} carries no {MANIFEST_FILE}",
+            details={"missing": [MANIFEST_FILE]},
+        )
+
+    try:
+        verification = verify_context(root)
+    except ContextFormatVersionError as unimplemented:
+        if unimplemented.found is None:
+            return _failure(
+                echo,
+                _REASON_MISMATCH,
+                f"the context at {root} states no {MANIFEST_FILE} format version",
+                details={"paths": []},
+            )
+        return _refusal(
+            echo,
+            _REASON_CONTEXT,
+            unimplemented.message,
+            details={"context": _reportable(unimplemented.found)},
+        )
+    except (BuildError, OSError) as unreadable:
+        # A manifest that parses as nothing, states a hash in a spelling
+        # §3.3.1 refuses, or a file that cannot be read at all. The
+        # contract types none of these; see the module docstring.
+        detail = unreadable.message if isinstance(unreadable, BuildError) else str(unreadable)
+        return _failure(
+            echo,
+            _REASON_MISMATCH,
+            f"the context at {root} cannot be read as one: {detail}",
+            details={"paths": []},
+        )
+
+    if not verification.ok:
+        return _failure(
+            echo,
+            _REASON_MISMATCH,
+            "; ".join(verification.problems()),
+            details={"paths": [mismatch.path for mismatch in verification.mismatches]},
+            # Measured, so reported — the module docstring quotes the line.
+            context=verification.actual_id,
+        )
+    return _result_document(echo, _STATUS_SUCCESS, context=verification.actual_id)
+
+
+# --------------------------------------------------------------------------
 # The invocation (§5.1)
 # --------------------------------------------------------------------------
 
@@ -602,6 +881,16 @@ def _invoke(action: str, document: dict[str, Any], record: Path) -> dict[str, An
             f"every path value is absolute; these are not: {', '.join(relative)}",
         )
 
+    unfound = _not_found(action, document)
+    if unfound:
+        return refuse(
+            _REASON_REQUEST,
+            f"{action!r} needs {', '.join(unfound)}, and this request document "
+            f"supplies no usable value there",
+        )
+
+    if action == "verify":
+        return _verify(echo, document)
     return _describe(echo, record)
 
 

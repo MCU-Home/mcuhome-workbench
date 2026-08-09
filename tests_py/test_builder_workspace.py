@@ -227,12 +227,12 @@ def test_the_image_claims_no_contract_conformance() -> None:
     """``org.mcuhome.contract=1`` claims conformance with the contract.
 
     Since r4 the program at ``/mcuhome/run`` exists (§2.2), but it
-    implements ``describe`` alone and refuses ``build`` and ``verify``
-    with ``unsupported.action`` — and §7 requires all three of a
-    conforming program. A label without the actions behind it is a false
-    claim to exactly the third parties the contract is written for, so
-    the labels arrive with ``build`` and ``verify``, not with the
-    program. See ``tests_py/test_abi.py``.
+    implements ``describe`` and ``verify`` and refuses ``build`` with
+    ``unsupported.action`` — and §7 requires all three of a conforming
+    program. A label without the actions behind it is a false claim to
+    exactly the third parties the contract is written for, so the labels
+    arrive with ``build``, not with the program. See
+    ``tests_py/test_abi.py``.
     """
     assert "org.mcuhome." not in _dockerfile()
 

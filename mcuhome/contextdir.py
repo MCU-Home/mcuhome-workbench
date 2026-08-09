@@ -46,6 +46,7 @@ from mcuhome.errors import BuildError
 from mcuhome.model import DeviceModel
 
 __all__ = [
+    "ContextFormatVersionError",
     "ContextVerification",
     "FileMismatch",
     "create_context",
@@ -60,6 +61,37 @@ _PATCH_NAME = re.compile(r"[0-9]{4}-[A-Za-z0-9._-]+\.patch\Z")
 #: Read in blocks rather than whole — same reasoning as in
 #: :mod:`mcuhome.manifest`: a context can carry large patches.
 _HASH_BLOCK = 1 << 20
+
+
+class ContextFormatVersionError(BuildError):
+    """The manifest states a ``context`` format version nothing here implements.
+
+    A type of its own, and for this one refusal only, because the build
+    container contract answers it differently from every other manifest
+    this package cannot read: "A program MUST check the ``context`` format
+    version and, for a version it does not implement, fail the invocation
+    with ``status: "unsupported"``, ``reason: "unsupported.context"`` …
+    and the version it found in ``error.details``"
+    (build-container-contract.md §3.2). ``unsupported`` and not
+    ``failure``, "because the program is refusing a document written to a
+    specification it does not have, which a backend can act on by choosing
+    another image — nothing about this context is broken".
+
+    A caller that cannot tell this refusal from a truncated one cannot
+    make that distinction, and would have to either re-parse the manifest
+    to recover the number or match on an error message. :attr:`found` is
+    what it reports instead. Rendered it is an ordinary
+    :class:`~mcuhome.errors.BuildError`, so a caller that does not care
+    keeps catching what it caught before.
+    """
+
+    def __init__(self, message: str, *, hint: str, found: object) -> None:
+        super().__init__(message, hint=hint)
+        #: What the manifest's ``context`` key carried, verbatim and
+        #: unvalidated — ``None`` when it carried nothing at all, which is
+        #: a manifest that names no format version rather than one that
+        #: names an unknown version.
+        self.found = found
 
 
 # --------------------------------------------------------------------------
@@ -276,7 +308,7 @@ def read_context_manifest(path: Path) -> ContextManifest:
 
     found = data.get("context")
     if found != CONTEXT_VERSION:
-        raise BuildError(
+        raise ContextFormatVersionError(
             f"The context manifest {path} has format version {found!r}, and this "
             f"builder implements version {CONTEXT_VERSION}.",
             hint=(
@@ -284,6 +316,7 @@ def read_context_manifest(path: Path) -> ContextManifest:
                 "that names both numbers, never a guess. Recreate the context with a "
                 "matching mcuhome version."
             ),
+            found=found,
         )
     try:
         manifest = ContextManifest.from_dict(data)

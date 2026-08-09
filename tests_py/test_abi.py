@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The invocation ABI, which is frozen, and the one action implemented on it.
+"""The invocation ABI, which is frozen, and the actions implemented on it.
 
 ``docs/design/build-container-contract.md`` §5 is the one interface in
 this project that can never be changed: a third party writes a build
@@ -28,6 +28,7 @@ with the request document in it (§5.1 step 1), never inside a context.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,15 @@ from typing import Any
 import pytest
 
 from mcuhome import __version__, abi
+from mcuhome.context import (
+    MANIFEST_FILE,
+    ContainerPin,
+    ContextFile,
+    ContextManifest,
+    SdkPin,
+    context_id,
+)
+from mcuhome.contextdir import write_context_manifest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "containers" / "builder" / "Dockerfile"
@@ -106,6 +116,84 @@ class Backend:
 @pytest.fixture
 def backend(tmp_path: Path) -> Backend:
     return Backend(tmp_path / "s-42" / "inv-7")
+
+
+# --------------------------------------------------------------------------
+# A locked context to point `verify` at (§3)
+# --------------------------------------------------------------------------
+
+#: The resolved pins the contexts below carry. Synthetic on purpose:
+#: ``verify`` measures the materialized file set against the integrity
+#: list and never looks a pin up — cross-checking them against what was
+#: actually pulled is the backend's duty (§9.1) — so nothing here has to
+#: name a container or an SDK package that exists.
+CONTAINER = ContainerPin(
+    image="ghcr.io/mcu-home/build-container",
+    tag="zephyr-4.4.0-r4",
+    digest="sha256:" + "ab" * 32,
+)
+SDK = SdkPin(
+    constraint="^0.1.0",
+    version="0.1.0",
+    url="https://example.invalid/mcuhome-sdk-0.1.0.tar.zst",
+    sha256="cd" * 32,
+)
+
+#: What a context carries here: the canonical device model and one patch,
+#: at the two locations §3.1 fixes. The bytes are irrelevant to ``verify``
+#: — it hashes whatever is there — and the paths are not. There is no
+#: ``keys/signing.pub``, deliberately: §7.2 scopes that file to ``build``.
+CONTEXT_FILES = {
+    "model/device-model.json": '{"model": 1}\n',
+    "patches/zephyr/0001-fix.patch": "--- a\n+++ b\n",
+}
+
+
+def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextManifest:
+    """A context directory as ``lock-context`` leaves one (§3.2).
+
+    Written file by file rather than through
+    :func:`~mcuhome.contextdir.create_context`, because half of these
+    tests need a context no builder would ever produce: one file short,
+    one file too many, a manifest that lies about its own ID. What is
+    *not* rebuilt here is the ID rule — it comes from
+    :func:`~mcuhome.context.context_id`, the same function the program
+    under test reaches through, because §3.3 is locked and a second
+    implementation of it in a test file would be the first place the two
+    sides of the contract could drift apart.
+    """
+    contents = CONTEXT_FILES if files is None else files
+    entries = []
+    for name, text in sorted(contents.items()):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        entries.append(ContextFile(path=name, sha256=digest))
+    manifest = ContextManifest(
+        created="2026-08-09T10:00:00Z",
+        sdk=SDK,
+        container=CONTAINER,
+        board="nrf7002dk/nrf5340/cpuapp",
+        files=tuple(entries),
+        id=context_id(
+            container_digest=CONTAINER.digest,
+            sdk_sha256=SDK.sha256,
+            board="nrf7002dk/nrf5340/cpuapp",
+            files=entries,
+        ),
+    )
+    write_context_manifest(manifest, out_dir=root)
+    return manifest
+
+
+@pytest.fixture
+def context(tmp_path: Path) -> Path:
+    """A clean locked context, at a path nothing in the contract fixes (§4)."""
+    root = tmp_path / "s-42" / "ctx"
+    root.mkdir(parents=True)
+    locked_context(root)
+    return root
 
 
 # --------------------------------------------------------------------------
@@ -504,7 +592,7 @@ def test_a_refusal_carries_the_three_subfields_of_the_error_object(backend: Back
     is the structured half and a consumer should not have to type-check it
     per reason.
     """
-    assert backend.run("verify") == abi.EXIT_FAILURE
+    assert backend.run("build") == abi.EXIT_FAILURE
     error = backend.document()["error"]
     assert error["retryable"] is False
     assert isinstance(error["message"], str) and error["message"]
@@ -522,13 +610,14 @@ def test_a_describe_that_refuses_still_says_what_the_program_is(backend: Backend
 
     ``verify`` and ``build`` are the other side of the same table row, a
     MAY, and this program leaves the block out there — asserted by
-    :func:`test_an_action_this_program_does_not_implement_refuses_legibly`.
+    :func:`test_an_action_this_program_does_not_implement_refuses_legibly`
+    and by :func:`test_a_clean_context_verifies_and_reports_its_own_id`.
     """
     assert backend.run(document={"request": 99, "result": str(backend.result)}) == abi.EXIT_FAILURE
     document = backend.document()
     assert document["reason"] == "unsupported.request"
     assert document["program"]["request"] == [1]
-    assert document["program"]["actions"] == ["describe"]
+    assert document["program"]["actions"] == ["describe", "verify"]
 
 
 def test_the_exit_code_and_the_status_say_the_same_thing(backend: Backend) -> None:
@@ -550,7 +639,7 @@ def test_the_exit_code_and_the_status_say_the_same_thing(backend: Backend) -> No
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("action", ["build", "verify", "x-vendor-thing", ""])
+@pytest.mark.parametrize("action", ["build", "x-vendor-thing", ""])
 def test_an_action_this_program_does_not_implement_refuses_legibly(
     backend: Backend, action: str
 ) -> None:
@@ -558,10 +647,10 @@ def test_an_action_this_program_does_not_implement_refuses_legibly(
     can reschedule on, which is exactly what the removed exit code 64
     could not deliver".
 
-    ``build`` and ``verify`` are in the list on purpose. They are the two
-    actions contract v1 requires of a conforming program, and this program
-    implements neither yet; refusing them by name is what keeps that
-    visible instead of letting a half-built action report success.
+    ``build`` is in the list on purpose. It is one of the three actions
+    contract v1 requires of a conforming program and this program does not
+    implement it yet; refusing it by name is what keeps that visible
+    instead of letting a half-built action report success.
     """
     assert backend.run(action) == abi.EXIT_FAILURE
     document = backend.document()
@@ -598,14 +687,418 @@ def test_the_action_list_is_what_the_program_implements(backend: Backend) -> Non
     """ "A backend MUST NOT invoke an action absent from the list" (§7.1.1).
 
     §7.1.1 also requires the list to include ``describe``, ``verify`` and
-    ``build``, and both cannot hold for a program that implements one of
+    ``build``, and both cannot hold for a program that implements two of
     the three. Listing an action that answers ``unsupported.action`` is
     the worse of the two lies: it is the one a backend acts on. So the
     list is the truth, and the image claims no contract conformance
-    (``tests_py/test_builder_workspace.py``) until the other two exist.
+    (``tests_py/test_builder_workspace.py``) until ``build`` exists too.
     """
     assert backend.run() == abi.EXIT_SUCCESS
-    assert backend.document()["program"]["actions"] == ["describe"]
+    assert backend.document()["program"]["actions"] == ["describe", "verify"]
+
+
+# --------------------------------------------------------------------------
+# verify (§7.3)
+# --------------------------------------------------------------------------
+
+
+def verify_request(backend: Backend, context: Path, **fields: Any) -> dict[str, Any]:
+    """The two fields a ``verify`` needs, plus whatever a test adds.
+
+    §5.2 makes seven fields mandatory for a working action and this
+    program refuses over two of them — see :mod:`mcuhome.abi`'s docstring.
+    The other five are added by the tests that are about them, so that
+    every test here states its own reason for the fields it sends.
+    """
+    return backend.preamble(session="s-42", context=str(context), **fields)
+
+
+def test_a_clean_context_verifies_and_reports_its_own_id(backend: Backend, context: Path) -> None:
+    """§7.3: "reports the resulting ``context`` ID in its result".
+
+    The ID is the one the context's own manifest declares, and it has to
+    be — the program recomputed it from the bytes on disk, and §3.3 makes
+    the two the same value whenever nothing was tampered with. The
+    document's whole field set is asserted, because three of §5.4's rows
+    are about what a ``verify`` result must *not* carry: ``layers``
+    unconditionally ("it reports work that was actually done, and
+    ``verify`` does not do that work"), ``artifacts`` because this
+    implementation writes no diagnostic output, and ``program`` because
+    the block is a MAY outside ``describe``.
+    """
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_SUCCESS
+    document = backend.document()
+    assert set(document) == {"result", "status", "action", "session", "reason", "error", "context"}
+    assert document["status"] == "success"
+    assert document["action"] == "verify"
+    assert document["session"] == "s-42"
+    assert document["reason"] is None
+    assert document["error"] is None
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", document["context"])
+
+
+def test_the_reported_id_is_measured_and_not_the_declared_one(
+    backend: Backend, context: Path
+) -> None:
+    """ "computed by the program itself" (§5.4), from the bytes it holds.
+
+    §3.3: "Implementations on both sides of the contract MUST compute the
+    ID independently from the bytes they actually hold and MUST NOT trust
+    a declared ``id`` value." A program that echoed ``manifest.yaml``'s
+    ``id`` would pass every test above and be worthless, since the backend
+    compares ``result.context`` against its own measurement (§9.3) — so
+    this asserts the value against a manifest the test itself hashed.
+    """
+    declared = locked_context(context)
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_SUCCESS
+    assert backend.document()["context"] == declared.id
+
+
+def test_a_context_without_a_signing_key_is_not_a_verify_failure(
+    backend: Backend, context: Path
+) -> None:
+    """§7.2: "The requirement is scoped to ``build`` alone."
+
+    "``verify`` compares the materialized file set against the integrity
+    list and ``describe`` does not touch the context at all …; neither
+    needs a verification key, and neither may refuse a context for the
+    absence of one. A context that will only ever be verified or described
+    is complete without ``keys/signing.pub``."
+    """
+    assert not (context / "keys" / "signing.pub").exists()
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_SUCCESS
+
+
+@pytest.mark.parametrize(
+    ("what", "break_it"),
+    [
+        ("a file whose bytes hash to something else", "tamper"),
+        ("a file that is missing", "remove"),
+        ("a file present but absent from the list", "smuggle"),
+    ],
+)
+def test_the_three_shapes_of_a_broken_context_are_one_typed_answer(
+    backend: Backend, context: Path, what: str, break_it: str
+) -> None:
+    """§7.3 states all three in one sentence, and one answer for them.
+
+    "A file that is missing, a file whose bytes hash to something else,
+    and a file present but absent from the list are one outcome and one
+    typed answer: ``status: "failure"``, ``reason:
+    "error.context.mismatch"``, the offending paths in ``error.details``."
+    It is a ``failure`` and not an ``unsupported``: the program implements
+    everything asked of it, and no other image would fare better with this
+    context.
+    """
+    victim = context / "patches" / "zephyr" / "0001-fix.patch"
+    if break_it == "tamper":
+        victim.write_text("--- a\n+++ EVIL\n", encoding="utf-8")
+        offending = "patches/zephyr/0001-fix.patch"
+    elif break_it == "remove":
+        victim.unlink()
+        offending = "patches/zephyr/0001-fix.patch"
+    else:
+        (context / "patches" / "sdk").mkdir()
+        (context / "patches" / "sdk" / "0001-smuggled.patch").write_text("x\n", encoding="utf-8")
+        offending = "patches/sdk/0001-smuggled.patch"
+
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE, what
+    document = backend.document()
+    assert document["status"] == "failure"
+    assert document["reason"] == "error.context.mismatch"
+    assert document["error"]["details"]["paths"] == [offending]
+    assert document["error"]["retryable"] is False
+
+
+def test_a_mismatch_still_reports_the_id_it_measured(backend: Backend, context: Path) -> None:
+    """§5.4: "An invocation that failed before it got that far reports what
+    it measured and nothing more."
+
+    The criterion the paragraph gives for the "MUST, on success" rows is
+    measurement, not status: "a ``verify`` that could not read
+    ``manifest.yaml`` has no effective context ID" — and one that read it,
+    hashed every file and found a disagreement does have one. It is the ID
+    of the context *as materialized*, so it is not the declared one, and
+    that is exactly the number a backend needs to see next to its own.
+    """
+    declared = locked_context(context)
+    (context / "model" / "device-model.json").write_text('{"model": 2}\n', encoding="utf-8")
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", document["context"])
+    assert document["context"] != declared.id
+
+
+def test_a_manifest_that_lies_about_its_own_id_does_not_verify(
+    backend: Backend, context: Path
+) -> None:
+    """Every file matches the list, and the context still does not verify.
+
+    §3.3 forbids trusting a declared ``id``, which is only meaningful if
+    somebody checks it: every other party in the system recomputes the ID
+    and would therefore agree with itself, so a manifest whose ``id`` is
+    not the ID of its own contents would travel unnoticed forever. It
+    names no offending *file*, because there is none — ``paths`` is empty
+    and ``error.message`` carries the two IDs.
+    """
+    manifest = locked_context(context)
+    write_context_manifest(
+        ContextManifest(
+            created=manifest.created,
+            sdk=SDK,
+            container=CONTAINER,
+            board=manifest.board,
+            files=manifest.files,
+            id="sha256:" + "00" * 32,
+        ),
+        out_dir=context,
+    )
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["reason"] == "error.context.mismatch"
+    assert document["error"]["details"]["paths"] == []
+    assert "context id" in document["error"]["message"]
+
+
+def test_a_context_without_a_manifest_is_incomplete(backend: Backend, context: Path) -> None:
+    """§3.1: "``manifest.yaml`` is the program's entry point".
+
+    So a context that carries none is "missing a file the action needs",
+    which §5.4's registry answers with ``error.context.incomplete`` and
+    "the missing path in ``error.details``". Nothing was measured, so
+    nothing is reported: there is no ``context`` ID in this document, and
+    §5.4 says why — "Fabricating either would be worse than omitting it,
+    since the backend compares both against its own values".
+    """
+    (context / MANIFEST_FILE).unlink()
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["status"] == "failure"
+    assert document["reason"] == "error.context.incomplete"
+    assert document["error"]["details"]["missing"] == [MANIFEST_FILE]
+    assert "context" not in document
+
+
+def test_a_context_directory_that_is_not_there_is_the_same_absence(
+    backend: Backend, context: Path
+) -> None:
+    """From the program's side a missing directory and a missing manifest
+    are one thing: the file it has to start from is not there."""
+    document = verify_request(backend, context / "does-not-exist")
+    assert backend.run("verify", document) == abi.EXIT_FAILURE
+    assert backend.document()["reason"] == "error.context.incomplete"
+
+
+def test_a_context_format_version_this_program_does_not_implement(
+    backend: Backend, context: Path
+) -> None:
+    """§3.2, the one context problem that is ``unsupported`` and not a failure.
+
+    "A program MUST check the ``context`` format version and, for a
+    version it does not implement, fail the invocation with ``status:
+    "unsupported"``, ``reason: "unsupported.context"`` … and the version
+    it found in ``error.details``. It is ``unsupported`` and not
+    ``failure`` … because the program is refusing a document written to a
+    specification it does not have, which a backend can act on by choosing
+    another image — nothing about this context is broken." Nothing is
+    hashed on the way out either: the rule for hashing a version 2 context
+    is written in a document this program does not have.
+    """
+    path = context / MANIFEST_FILE
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("context: 1", "context: 2"), encoding="utf-8"
+    )
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["status"] == "unsupported"
+    assert document["reason"] == "unsupported.context"
+    assert document["error"]["details"]["context"] == 2
+    assert "context" not in document
+
+
+def test_a_format_version_that_is_not_json_is_still_reported(
+    backend: Backend, context: Path
+) -> None:
+    """The result document is "the **last write action** of the invocation"
+    (§5.4), so it must never be the thing that fails.
+
+    ``context: 2026-08-09`` is a date to a YAML parser, and a date is not
+    something :func:`json.dumps` can write. Passing it through would cost
+    this invocation its whole answer — nothing written and exit 66 (§5.2
+    rule 5), for a context the program diagnosed perfectly well. So the
+    value reaches ``error.details`` as text, which is all a backend needs
+    to see what it sent.
+    """
+    path = context / MANIFEST_FILE
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("context: 1", "context: 2026-08-09"),
+        encoding="utf-8",
+    )
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["reason"] == "unsupported.context"
+    assert document["error"]["details"]["context"] == "2026-08-09"
+
+
+def test_a_manifest_that_states_no_format_version_is_not_unsupported(
+    backend: Backend, context: Path
+) -> None:
+    """A broken manifest, and ``unsupported.context`` would say it is not.
+
+    That reason means the program "found a ``context`` format version it
+    does not implement" (§5.4) and §3.2 justifies the status with "nothing
+    about this context is broken". A manifest with no ``context`` key is
+    broken, and telling a backend to go and find another image for it
+    would send it looking for something no image has. So it is the failure
+    every unreadable manifest is — see :mod:`mcuhome.abi`'s docstring for
+    the gap in contract v1 this stands in.
+    """
+    path = context / MANIFEST_FILE
+    kept = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if not line.startswith("context:")
+    ]
+    path.write_text("".join(kept), encoding="utf-8")
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["status"] == "failure"
+    assert document["reason"] == "error.context.mismatch"
+
+
+@pytest.mark.parametrize(
+    ("what", "text"),
+    [
+        ("not YAML at all", "files: [unclosed\n"),
+        ("not a mapping", "- one\n- two\n"),
+        ("a manifest missing a section", "context: 1\nid: sha256:x\n"),
+        (
+            "a hash spelled a second way",
+            "context: 1\ncreated: 2026-08-09T10:00:00Z\n"
+            "mcuhome:\n  constraint: '^0.1.0'\n  version: 0.1.0\n"
+            "  package: {url: 'https://example.invalid/x', sha256: " + "CD" * 32 + "}\n"
+            "container: {image: i, tag: t, digest: 'sha256:" + "ab" * 32 + "'}\n"
+            "target: {board: nrf7002dk/nrf5340/cpuapp}\nfiles: []\nid: 'sha256:"
+            + "ab" * 32
+            + "'\n",
+        ),
+    ],
+)
+def test_a_manifest_that_cannot_be_read_is_a_failure(
+    backend: Backend, context: Path, what: str, text: str
+) -> None:
+    """Contract v1 types none of these, and this is where they land.
+
+    §3.3.1 requires the last case — one spelling per hash — to be refused
+    rather than normalized: "An implementation that encounters one MUST
+    refuse the manifest, naming the offending value, and MUST NOT compute
+    an ID from it." Which is also why no ``context`` comes back from any
+    of them: nothing was measured.
+    """
+    (context / MANIFEST_FILE).write_text(text, encoding="utf-8")
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE, what
+    document = backend.document()
+    assert document["status"] == "failure"
+    assert document["reason"] == "error.context.mismatch"
+    assert "context" not in document
+    assert document["error"]["details"]["paths"] == []
+
+
+def test_a_verify_needs_a_context_and_a_session(backend: Backend, context: Path) -> None:
+    """Rule 3 (§5.2), over the two fields this action actually needs.
+
+    ``context`` because §7.3 defines ``verify`` over it. ``session``
+    because §5.4 makes it mandatory in a ``verify`` result *and* forbids
+    inventing one — "a program MUST NOT invent a value for a field it was
+    never given" — so a ``verify`` without it has no conforming result to
+    write at all, and refusing is the only answer left.
+    """
+    for document in (
+        backend.preamble(session="s-42"),
+        backend.preamble(context=str(context)),
+        backend.preamble(session="s-42", context=42),
+    ):
+        assert backend.run("verify", document) == abi.EXIT_FAILURE, document
+        result = backend.document()
+        assert result["status"] == "unsupported"
+        assert result["reason"] == "unsupported.request"
+        assert "context" not in result
+
+
+def test_a_verify_does_not_demand_the_fields_it_does_not_use(
+    backend: Backend, context: Path
+) -> None:
+    """§4.1: "The program MUST NOT require an entry it does not need for
+    the requested action."
+
+    §5.2 makes ``out``, ``work``, ``tmp``, ``trees.sdk`` and
+    ``limits.jobs`` mandatory for every working action, and a backend that
+    omits them is in breach of it — but this ``verify`` can answer
+    correctly without them, and §7.3 says why: it "reads the context and
+    nothing else". Refusing here would report the backend's defect by
+    withholding an answer this program already has.
+    """
+    assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_SUCCESS
+    assert backend.document()["status"] == "success"
+
+
+def test_the_context_pointer_is_honoured_and_the_unused_ones_are_not(
+    backend: Backend, context: Path
+) -> None:
+    """§5.2 rule 2, on the fields a conforming backend sends every time.
+
+    ``/context`` is honoured because the program acts on the value: it
+    opens that directory. ``/trees/sdk`` is not, although a conforming
+    request always carries it, because a ``verify`` does nothing with a
+    source tree (§7.3, §9.2 point 10) — "a program that knows
+    ``/params/mode`` but not the value ``reproducible`` MUST refuse with
+    ``unsupported.required`` rather than accept the job and quietly
+    deliver something else", and a promise to honour a value nothing reads
+    is that same lie in its cheapest form.
+    """
+    honoured = verify_request(backend, context, required=["/context", "/session", "/result"])
+    assert backend.run("verify", honoured) == abi.EXIT_SUCCESS
+
+    trees = {"sdk": {"path": str(context), "writable": False}}
+    refused = verify_request(backend, context, trees=trees, required=["/trees/sdk"])
+    assert backend.run("verify", refused) == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["reason"] == "unsupported.required"
+    assert document["error"]["details"]["required"] == ["/trees/sdk"]
+
+
+def test_a_verify_writes_nothing_but_its_result_document(
+    backend: Backend, context: Path, tmp_path: Path
+) -> None:
+    """§9.2 point 10: no patch, no write into a ``trees`` entry, no ``work``.
+
+    §7.3 is where the reason is: a ``verify`` that patched "would consume
+    the 'applied once per session' budget before the first build, it would
+    make a read-only check into a writing one, and it would make a cheap
+    pre-flight check cost a patch application". So the full set of paths a
+    conforming backend hands over is passed here, every one of them
+    writable, and every one of them has to come back untouched — the
+    context included, because §3.1 makes it "a read-only input for the
+    whole life of a session".
+    """
+    areas = {name: tmp_path / "s-42" / name for name in ("out", "work", "tmp", "view")}
+    for path in areas.values():
+        path.mkdir(parents=True)
+    before = sorted(path.relative_to(context).as_posix() for path in context.rglob("*"))
+
+    document = verify_request(
+        backend,
+        context,
+        out=str(areas["out"]),
+        work=str(areas["work"]),
+        tmp=str(areas["tmp"]),
+        trees={"zephyr": {"path": str(areas["view"]), "writable": True}},
+        limits={"jobs": 4},
+    )
+    assert backend.run("verify", document) == abi.EXIT_SUCCESS
+    for name, path in areas.items():
+        assert list(path.iterdir()) == [], f"a verify wrote into {name}"
+    assert sorted(p.relative_to(context).as_posix() for p in context.rglob("*")) == before
 
 
 # --------------------------------------------------------------------------
