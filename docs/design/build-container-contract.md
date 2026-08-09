@@ -75,8 +75,12 @@ profile is a subprocess and not a library call on purpose: a build
 running inside the server process cannot be cancelled without killing
 the server, an out-of-memory kill or a segfault takes the queue with
 it, and only a separate process is honest about the interface — the
-build server's own code states all three (build-server repo,
-`mcuhome_buildserver/builder.py:5-28`).
+build server's own code stated all three (build-server repo,
+`mcuhome_buildserver/builder.py:5-28`, read at `8b8ceb4`; the file has
+since been removed with the job protocol, and the build server imports
+nothing from this package today). The argument outlived the file: it is
+the reason this profile is a subprocess rather than the in-process
+embedding it superficially resembles.
 
 Because the filesystem is shared, nothing in this profile may depend on
 a fixed path: several concurrent sessions live side by side in one
@@ -145,7 +149,7 @@ SDK release is actually coupled to.
   `[a-z][a-z0-9]*(-[a-z0-9]+)*` and a dotted numeric version part after
   the final hyphen. MCUHome's own image builds with the Zephyr SDK, so
   its value is `zephyr-sdk-<version>` — `zephyr-sdk-1.0.1` for the
-  version the image pins (`containers/builder/Dockerfile:47`). A
+  version the image pins (`containers/builder/Dockerfile:69`). A
   third-party image using a vendor toolchain names it in the same shape.
 
 The identity part is **opaque and compared only for equality**; it is
@@ -213,7 +217,7 @@ The image MUST provide an executable at the fixed absolute path
 `/mcuhome/run` (script or binary) implementing the invocation ABI of
 §5. It MUST be executable by **every** user the backend may exec as —
 the backend runs the program as the calling user where it can
-(`mcuhome/container.py:331-332`).
+(`mcuhome/container.py:394-395`).
 
 The path is absolute and fixed, and the program is **not** looked up on
 `PATH`. Three reasons, all of which are properties of a filesystem this
@@ -283,7 +287,7 @@ context/
   applied in ascending lexicographic filename order (the `NNNN-` prefix
   convention; ADR 0018 decision 2).
 - `keys/signing.pub` is the **public** half of the user's MCUboot
-  signing key (`mcuhome/signing.py:80`). It is context content and an
+  signing key (`mcuhome/signing.py:81`). It is context content and an
   ordinary entry of the `files` list, which is correct: MCUboot
   verifies against a key compiled into the bootloader, so two builds
   with different keys produce different bootloaders and must not share
@@ -435,8 +439,8 @@ hashed inputs — `container.digest`, `sdk.sha256` and `target.board` —
 are read from `manifest.yaml`, which is not itself in the integrity
 list, so a self-consistently forged manifest recomputes to its own
 declared ID. The reference implementation has exactly this shape
-(`mcuhome/context.py:694-730`, pins taken from the declared manifest at
-`:724-726`, only `files` measured). Closing it is a backend duty and it
+(`mcuhome/contextdir.py:362-398`, pins taken from the declared manifest at
+`:392-394`, only `files` measured). Closing it is a backend duty and it
 is stated as one in §9.1.
 
 #### 3.3.1 The lexical form of a hash value — normative
@@ -474,15 +478,15 @@ already enforces, with two separate regular expressions and no
 normalization path between them:
 `_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")` and
 `_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")`
-(`mcuhome/context.py:127-128`), applied by `_require_sha256`
-(`:285-294`) and `_require_digest` (`:297-302`) to every input of
-`context_id` before it hashes anything (`:374-378`). The first states
+(`mcuhome/context.py:126-127`), applied by `_require_sha256`
+(`:278-287`) and `_require_digest` (`:290-295`) to every input of
+`context_id` before it hashes anything (`:368-371`). The first states
 the reason in its own refusal — "one spelling per hash, so two
-manifests can never name the same bytes differently" (`:290-292`) — and
+manifests can never name the same bytes differently" (`:283-286`) — and
 the function's docstring states the other half: inputs are "checked
 strictly rather than normalized: an ID computed over a mistyped digest
 would be silently wrong forever, and normalizing (say, uppercase hex)
-would give the same bytes two names" (`:369-372`).
+would give the same bytes two names" (`:362-365`).
 
 The rendering of a hash **outside** the hashed structure follows one
 rule, so that no reader has to look a field up: the algorithm is named
@@ -659,7 +663,7 @@ inside the context**.
 
 **Field-name grammar (frozen):** `[a-z][a-z0-9_-]*`, plus the `x-`
 prefix for third parties. Hyphens are required because layer names
-admit them (`mcuhome/context.py:129`) and a layer named `some-layer`
+admit them (`mcuhome/contextdir.py:57`) and a layer named `some-layer`
 must be addressable from `required`.
 
 **Mandatory in v1:** `request` and `result` for **every** action.
@@ -705,9 +709,9 @@ more field for a third party to get right for nothing.
 `limits.jobs` is **authoritative** and mandatory for working actions.
 It is not a hint: MCUHome's own implementation needs three separate
 channels to get a job count into a build because none of them inherits
-(`mcuhome/workspace.py:116`, `:126`, `:136`) and resolves the number
+(`mcuhome/workspace.py:135`, `:145`, `:155`) and resolves the number
 host-side on purpose, because the container sees the host CPU count but
-not the RAM budget (`mcuhome/workspace.py:336-368`, `:503`). In the
+not the RAM budget (`mcuhome/workspace.py:355-390`, `:529`). In the
 `subprocess` profile the program runs directly on a shared host, so
 `nproc` reports the whole machine, and several concurrent sessions at
 `nproc` jobs each is an out-of-memory kill. An optional field would be worthless here: a
@@ -1418,7 +1422,7 @@ can sign.
 There is **no `ota` role in v1.** Contract v1 as first drafted listed
 "the unsigned OTA payload" among the expected artifacts; it is
 unbuildable as specified and is struck. The OTA wrapper's payload "has
-to be the **signed** binary" (`mcuhome/ota.py:295-301`) and the same
+to be the **signed** binary" (`mcuhome/otafile.py:154-160`) and the same
 contract forbids the program to sign, so the requirement cancelled
 itself. A gap is better than a frozen contradiction.
 
@@ -1434,7 +1438,7 @@ typed — `status: "failure"`, `reason: "error.context.incomplete"`, the
 missing path in `error.details` — and the program MUST NOT build
 anyway. There is no fallback to MCUboot's
 default key, because that default is MCUboot's demo key
-(`mcuhome/workspace.py:511-519`) and **its private half is published**:
+(`mcuhome/workspace.py:503-506`) and **its private half is published**:
 the key MCUboot's Kconfig names as the default,
 `root-ec-p256.pem` (`bootloader/mcuboot/boot/zephyr/Kconfig:471`), is a
 PEM private key checked into the MCUboot repository. Firmware built
@@ -1488,10 +1492,10 @@ the only party holding the private key.
   which MCUboot compares monotonically; `header-size` and `slot-size` are
   byte counts; `align` is the write block size. These are exactly the
   four the reference implementation carries and the four its signer
-  passes (`mcuhome/manifest.py:202-224`, `mcuhome/imgtool.py:144-159`),
+  passes (`mcuhome/manifest.py:208-230`, `mcuhome/imgtool.py:155-162`),
   and three of them are board data the build already had to know
   (ADR 0015 decision 2) while `version` comes from the built
-  application's own Kconfig (`mcuhome/manifest.py:404-421`).
+  application's own Kconfig (`mcuhome/report.py:99-134`).
 - `signing.signature_type` — the key type MCUboot was configured to
   verify with, so a client can refuse a mismatched key instead of
   producing an unbootable image. MCUHome's own value is `ecdsa-p256`
@@ -1503,8 +1507,8 @@ the only party holding the private key.
   with exactly the fields of the `build.memory.region` event (§8):
   `image`, `region`, `used`, `total`, `percent`. It is the footprint
   table the linker actually enforced, parsed rather than recomputed
-  (`mcuhome/workspace.py:748-761`, parser at `:775-797`, image
-  attribution at `:807-825`). A build that relinked nothing reports none,
+  (`mcuhome/workspace.py:809-817`, parser at `:818-831`, image
+  attribution at `:841-880`). A build that relinked nothing reports none,
   which is correct rather than incomplete.
 
 **The report format is versioned by `report` and is deliberately not
@@ -1516,7 +1520,7 @@ asked for is gone: the container digest and the effective context ID are
 values the backend computed itself and MUST use its own copy of anyway
 (§9.3); warnings are log text (§8); ccache statistics had no named
 reader; and the reference implementation's `signed`, `signed_by_the_build`,
-`inputs` and `outputs` (`mcuhome/manifest.py:267-282`) are all decided
+`inputs` and `outputs` (`mcuhome/manifest.py:273-288`) are all decided
 elsewhere — a build container never signs (§9.2 point 6), the input is
 the `firmware` artifact, and where the signed output goes is the
 signer's business, on the signer's machine.
@@ -1554,7 +1558,7 @@ extensions: under contract v1 as first drafted, `manifest.yaml` was
 frozen for the session while the session protocol allowed extension, so
 every added file was reported as "present but not in the integrity
 list" and the check returned `ok == False` by construction
-(`mcuhome/context.py:655-656`, `:679-681`). `lock-context` closes that
+(`mcuhome/contextdir.py:322-324`, `:347-349`). `lock-context` closes that
 by giving the integrity list a defined moment at which it is written:
 after the last extension, before the first working action.
 
@@ -1616,12 +1620,12 @@ report. `build.image.started` is the only marker a sysbuild log actually
 contains that says whose output follows: the outer build prints
 `Performing build step for '<image>'`, and the reference implementation
 matches exactly that to attribute everything after it
-(`mcuhome/workspace.py:800-804`). `build.memory.region` is one row of
+(`mcuhome/workspace.py:834-838`). `build.memory.region` is one row of
 Zephyr's footprint table, which is parsed rather than recomputed because
 it is the number the linker script actually enforced
-(`mcuhome/workspace.py:764-797`), and it carries `image` because the
+(`mcuhome/workspace.py:782-817`), and it carries `image` because the
 table itself names no image and is attributed by the banner above it
-(`:807-825`). `artifact.collected` follows the collection step that
+(`:841-880`). `artifact.collected` follows the collection step that
 walks each image's output directory (`mcuhome/workspace.py:690-734`).
 `context.checked`, `patch.layer.applied` and the two `invocation.*`
 events are the contract's own phases — §3.3, §6.2 and §5.1 step 10.
@@ -1647,7 +1651,7 @@ a process that starts west, cmake, ninja, gn and zap — all of which
 write to stdout. A Go implementer writing the idiomatic `cmd.Stdout =
 os.Stdout` corrupts the event stream and never notices locally;
 MCUHome's own reference implementation already merges the two streams
-(`mcuhome/workspace.py:620-625`), which is the same observation from
+(`mcuhome/workspace.py:658-659`), which is the same observation from
 the other side. A named file removes the failure mode structurally,
 survives an out-of-memory kill readably, and gives a reconnecting
 client the resume-from-offset that ADR 0019 §2 requires anyway.
@@ -1808,7 +1812,7 @@ store.
 Note a cost the contract does not remove: cache hit rates depend on
 stable paths. MCUHome's own container mounts the workspace at its own
 host path and sets `CCACHE_BASEDIR` to exactly one prefix
-(`mcuhome/container.py:289`) — a single prefix does not normalize the
+(`mcuhome/container.py:324`) — a single prefix does not normalize the
 independent roots `context`, `trees`, `work` and `tmp`. Keeping those
 paths stable per session, or using `-ffile-prefix-map`, is backend
 policy, not contract.

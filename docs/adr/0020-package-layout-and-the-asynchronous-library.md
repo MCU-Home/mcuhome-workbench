@@ -253,18 +253,27 @@ number once; a compatibility matrix costs every reader of it, forever.
   `asyncio.to_thread` offload sites
   (`dashboard/backend/mcuhome_dashboard/commands.py:246`, `:408`)
   become direct awaits as the operations they wrap become awaitable.
-- **Process-global state has to go, and it is not incidental.**
-  `MODULE_DIR` (`mcuhome/mcuhome/workspace.py:97`) is
-  `Path(__file__).resolve().parent.parent` — it encodes the assumption
-  that *this library lives inside a west workspace*, which is true for
-  `local-dev` and false for every other execution site in decision 1.
-  Alongside it sit the call-time reads of process-global state:
-  `Path.cwd()` and `os.environ` are consulted when a function runs
-  (`workspace.py:571`, `container.py:424-425`, `tree.py:118`,
-  `errors.py:63`), so one process cannot serve two concurrent sessions
-  with different working directories and environments. Decision 5 makes
-  concurrent sessions in one process the normal case; both must be
-  fixed on the way, not after.
+- **Process-global state has to go, and it is not incidental.** Two
+  shapes of it. The first is the installed-location assumption:
+  `MODULE_DIR` was `Path(__file__).resolve().parent.parent`, which says
+  *this library lives inside a west workspace* — true for `local-dev`
+  and false for every other execution site in decision 1. The second is
+  the call-time read: a function that consults `Path.cwd()`,
+  `os.environ` or `Path.home()` when it runs answers from the process
+  rather than from what it was given, so one process cannot serve two
+  concurrent sessions with different working directories and
+  environments. Decision 5 makes concurrent sessions in one process the
+  normal case, so both were fixed on the way rather than after. The
+  module directory is now a parameter of `plan_build`, with
+  `workspace.installed_module_dir()` as the answer the *command line*
+  supplies because the command line is the local-dev case; the working
+  directory and the environment are arguments everywhere; and
+  `mcuhome/userpaths.py` resolves the per-user directories from the
+  environment it is handed — refusing rather than guessing when that
+  environment names no home, because the directory in question holds a
+  private signing key. `tests_py/test_userpaths.py::test_no_module_reads_process_state`
+  reads every module of the package as a syntax tree and fails the suite
+  if any of them reaches for the process again.
 - The plain distribution name `mcuhome` (decision 2) collides with the
   import package this repository ships under that name today. Resolving
   it — import names for the three packages, and what a caller writes

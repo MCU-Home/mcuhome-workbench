@@ -366,10 +366,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Editable, and that is not a style preference: mcuhome.workspace
-      # resolves MODULE_DIR from the package's own location and the
-      # container mounts it, so a copy in site-packages would take the
-      # Python half of the SDK into the build and leave the Zephyr module
+      # Editable, and that is not a style preference: mcuhome.workspace's
+      # installed_module_dir() resolves the module directory from the
+      # package's own location and the container mounts it, so a copy in
+      # site-packages would take the Python half of the SDK into the
+      # build and leave the Zephyr module
       # — components/, compat/, scripts/pyshim/ — behind.
       - name: Install the builder and its command line
         run: |
