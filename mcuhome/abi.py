@@ -71,11 +71,11 @@ list that ran ahead of the code would be the one lie a backend acts on.
 fields mandatory for every working action, and rule 3 refuses over a
 narrower thing: "A field the program needs for this action and does not
 find". ``verify`` needs two of the seven. ``context`` is the directory
-§7.3 defines the action over. ``session`` is needed because §5.4 makes it
-mandatory in a ``verify`` result *and* forbids inventing one — "a program
-MUST NOT invent a value for a field it was never given" — so a ``verify``
-without it has no conforming result to write, and refusing is the only
-answer left. The other five (``out``, ``work``, ``tmp``, ``trees.sdk``,
+§7.3 defines the action over. ``session`` is needed because §5.4 has a
+``verify`` result carry it "in every conforming invocation" — the row is
+conditional on §5.2 making the request carry it, so a request without it
+is the backend's breach of §5.2, and refusing under rule 3 is how this
+program reports a breach it will not paper over by inventing the echo. The other five (``out``, ``work``, ``tmp``, ``trees.sdk``,
 ``limits.jobs``) name work this action does not do: it "reads the context
 and nothing else" (§7.3), and §4.1 says "The program MUST NOT require an
 entry it does not need for the requested action". A backend that omits
@@ -86,24 +86,24 @@ them, which is why :data:`HONOURED_REQUIRED` is a table per action rather
 than one list: the same pointer is honourable for one action and a lie
 for another.
 
-*A manifest that cannot be read at all is ``error.context.mismatch``.*
-The registry of §5.4 defines eleven reasons and none of them is "the
-manifest is corrupt": ``error.context.incomplete`` is "missing a file the
-action needs", which a present-but-unreadable manifest is not, and
-``unsupported.context`` is reserved for a format version this program
-does not implement. What is left is the one ``verify`` failure §7.3
-names — "measured the materialized context and it is not the context
-``manifest.yaml`` describes" — which holds of a manifest that describes
-no context at all. **This is a gap in contract v1**, recorded here rather
-than papered over: a backend cannot tell a corrupt manifest from a
-tampered file by ``reason`` alone, only from ``error.message``.
+*A manifest that cannot be read at all is ``error.context.unreadable``.*
+"found ``manifest.yaml`` and cannot read it as one: broken YAML, a
+missing section, or a hash in a spelling §3.3.1 refuses" — the reason
+§5.4's registry provides, distinct from ``error.context.mismatch`` so a
+backend can tell a corrupt manifest from a tampered context file by
+``reason`` alone. This implementation once answered ``mismatch`` here
+because the registry had no better value; the gap was recorded, taken to
+the product owner, and closed as an erratum (E36) — which is the working
+order of this contract: the reference implementation surfaces the gap,
+the registry gains the value, the implementation follows the registry.
 
-*A manifest that states no format version is not ``unsupported.context``
-either.* That reason means the program "found a ``context`` format
-version it does not implement", and §3.2 explains the status by "nothing
-about this context is broken". A manifest with no ``context`` key is
-broken, and answering ``unsupported`` would tell a backend to go and find
-another image for a context no image can read. It is the previous case.
+*A manifest that states no format version is unreadable too, not
+``unsupported.context``.* That reason means the program "found a
+``context`` format version it does not implement", and §3.2 explains the
+status by "nothing about this context is broken". A manifest with no
+``context`` key is broken — §7.3 now says it in as many words: "no other
+image would fare better with it, so there is nothing for a backend to
+reschedule onto".
 
 *The key names inside ``error.details``.* The contract fixes exactly one
 — "``error.details.required`` for ``unsupported.required``" (§5.4.1) —
@@ -193,13 +193,12 @@ layer for ``error.layer.unknown`` and ``error.patch.incomplete``, and
 ``error.work.foreign`` carries "the two session IDs" as ``session`` (the
 one this invocation was given) and ``found`` (the one in ``work``).
 
-*Two artifacts carry role ``firmware``.* §7.2 says "the unsigned image
-with role ``firmware`` (MCUHome's own container writes ``firmware.hex``
-and ``firmware.bin``)" and §7.2.1 then says the signing parameters apply
-to "the artifact declared with role ``firmware``", singular. Both files
-are the same image in two containers and take the same four ``imgtool``
-arguments, so declaring both is the reading that loses nothing; the
-singular reference is a gap in contract v1, recorded here.
+*Two artifacts carry role ``firmware``, and §7.2.1 says so.* "The
+parameters apply to **every** artifact declared with role ``firmware``.
+There is one unsigned image, and a build may declare it in more than one
+encoding" — hex to flash, bin to sign, the same four ``imgtool``
+arguments describing each. The section once said "the artifact",
+singular, against §7.2's own two files; closed as an erratum (E36/D2).
 
 *The bootloader is declared, and sysbuild's combined hex is not.* §7.2
 requires "at least two" artifacts and makes only ``firmware`` and
@@ -420,6 +419,7 @@ _REASON_ACTION = "unsupported.action"
 _REASON_CONTEXT = "unsupported.context"
 _REASON_INCOMPLETE = "error.context.incomplete"
 _REASON_MISMATCH = "error.context.mismatch"
+_REASON_UNREADABLE = "error.context.unreadable"
 _REASON_LAYER = "error.layer.unknown"
 _REASON_PATCH = "error.patch.incomplete"
 _REASON_WORK = "error.work.foreign"
@@ -1003,13 +1003,13 @@ def trees(record: Path = WORKSPACE_RECORD) -> dict[str, dict[str, Any]]:
     built. ``describe`` is "**authoritative** about what the program can
     do" (§7.1), so it says the path the SDK has to be mounted at.
 
-    That closes the contradiction and not the question under it: whether
-    an image may require a fixed mount point at all is §4's ("a program
-    that *depends* on them is not conforming"), it is a product-owner
-    decision, and it is recorded as **D1 in the workspace-level
-    ``OFFENE-ENTSCHEIDUNGEN.md``** with its three options. Nothing here
-    pre-empts it — this function reports what this image needs, which is
-    true under every one of them.
+    §4 sanctions this since the D1 erratum: "A ``trees`` entry is the
+    one thing a program may have a fixed path for", because a tree is a
+    property of the *image* rather than of the session — "a declared
+    path is then a requirement the backend MUST satisfy for that image,
+    and not a convention". Declaring it here, in ``describe``, is the
+    mechanism the erratum names: the backend learns the requirement
+    before it starts a session, not from a refusal in the middle of one.
 
     ``version`` is the revision the record carries, and is omitted rather
     than guessed where there is none — §7.1.1 makes it optional for
@@ -1140,9 +1140,8 @@ def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
             raise _Refused(
                 _failure(
                     echo,
-                    _REASON_MISMATCH,
+                    _REASON_UNREADABLE,
                     f"the context at {root} states no {MANIFEST_FILE} format version",
-                    details={"paths": []},
                 )
             ) from unimplemented
         raise _Refused(
@@ -1154,16 +1153,17 @@ def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
             )
         ) from unimplemented
     except (BuildError, OSError) as unreadable:
-        # A manifest that parses as nothing, states a hash in a spelling
-        # §3.3.1 refuses, or a file that cannot be read at all. The
-        # contract types none of these; see the module docstring.
+        # "found ``manifest.yaml`` and cannot read it as one: broken YAML,
+        # a missing section, or a hash in a spelling §3.3.1 refuses" — the
+        # reason §5.4's registry provides for exactly this case, distinct
+        # from a mismatch so a backend can tell a corrupt manifest from a
+        # tampered context file without parsing untrusted message text.
         detail = unreadable.message if isinstance(unreadable, BuildError) else str(unreadable)
         raise _Refused(
             _failure(
                 echo,
-                _REASON_MISMATCH,
+                _REASON_UNREADABLE,
                 f"the context at {root} cannot be read as one: {detail}",
-                details={"paths": []},
             )
         ) from unreadable
 

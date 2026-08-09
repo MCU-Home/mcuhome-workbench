@@ -955,10 +955,11 @@ def test_a_manifest_that_states_no_format_version_is_not_unsupported(
     That reason means the program "found a ``context`` format version it
     does not implement" (§5.4) and §3.2 justifies the status with "nothing
     about this context is broken". A manifest with no ``context`` key is
-    broken, and telling a backend to go and find another image for it
-    would send it looking for something no image has. So it is the failure
-    every unreadable manifest is — see :mod:`mcuhome.abi`'s docstring for
-    the gap in contract v1 this stands in.
+    broken — §7.3 says it in as many words since the E36 erratum: "no
+    other image would fare better with it, so there is nothing for a
+    backend to reschedule onto". So it is ``error.context.unreadable``,
+    the reason the registry provides for every manifest that cannot be
+    read as one.
     """
     path = context / MANIFEST_FILE
     kept = [
@@ -970,7 +971,7 @@ def test_a_manifest_that_states_no_format_version_is_not_unsupported(
     assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
     document = backend.document()
     assert document["status"] == "failure"
-    assert document["reason"] == "error.context.mismatch"
+    assert document["reason"] == "error.context.unreadable"
 
 
 @pytest.mark.parametrize(
@@ -994,31 +995,33 @@ def test_a_manifest_that_states_no_format_version_is_not_unsupported(
 def test_a_manifest_that_cannot_be_read_is_a_failure(
     backend: Backend, context: Path, what: str, text: str
 ) -> None:
-    """Contract v1 types none of these, and this is where they land.
+    """``error.context.unreadable`` — the registry row these cases got.
 
-    §3.3.1 requires the last case — one spelling per hash — to be refused
-    rather than normalized: "An implementation that encounters one MUST
-    refuse the manifest, naming the offending value, and MUST NOT compute
-    an ID from it." Which is also why no ``context`` comes back from any
-    of them: nothing was measured.
+    "found ``manifest.yaml`` and cannot read it as one: broken YAML, a
+    missing section, or a hash in a spelling §3.3.1 refuses" (§5.4). The
+    reason is distinct from ``mismatch`` on purpose: a backend can tell
+    a corrupt manifest from a tampered context file without parsing
+    untrusted message text. §3.3.1 requires the last case — one spelling
+    per hash — to be refused rather than normalized, and no ``context``
+    comes back from any of them: nothing was measured.
     """
     (context / MANIFEST_FILE).write_text(text, encoding="utf-8")
     assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE, what
     document = backend.document()
     assert document["status"] == "failure"
-    assert document["reason"] == "error.context.mismatch"
+    assert document["reason"] == "error.context.unreadable"
     assert "context" not in document
-    assert document["error"]["details"]["paths"] == []
+    assert document["error"]["details"] == {}
 
 
 def test_a_verify_needs_a_context_and_a_session(backend: Backend, context: Path) -> None:
     """Rule 3 (§5.2), over the two fields this action actually needs.
 
     ``context`` because §7.3 defines ``verify`` over it. ``session``
-    because §5.4 makes it mandatory in a ``verify`` result *and* forbids
-    inventing one — "a program MUST NOT invent a value for a field it was
-    never given" — so a ``verify`` without it has no conforming result to
-    write at all, and refusing is the only answer left.
+    because §5.4 has a conforming invocation carry it — the row is
+    conditional on §5.2 making the request carry it, so a request
+    without it is the backend's breach, and refusing under rule 3 is how
+    this program reports a breach instead of inventing the echo.
     """
     for document in (
         backend.preamble(session="s-42"),
@@ -2243,10 +2246,10 @@ def test_the_trees_come_from_the_images_own_record(backend: Backend) -> None:
     ``build`` contradict each other: a backend arranged by our own
     ``describe`` could never have built. ``null`` remains for the case it
     is true of — a layer the record does not place, like ``mcuboot``
-    below. Whether an image may *require* a fixed mount point at all is
-    §4's open question, recorded as D1 in the workspace-level
-    OFFENE-ENTSCHEIDUNGEN.md; this test pins only that the two actions
-    tell one story.
+    below. §4 sanctions the requirement since the D1 erratum — "A
+    ``trees`` entry is the one thing a program may have a fixed path
+    for" — and this test pins both halves: the declaration is truthful,
+    and the two actions tell one story.
     """
     backend.record.write_text(
         json.dumps(
