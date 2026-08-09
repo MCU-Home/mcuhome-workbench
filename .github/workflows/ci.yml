@@ -439,6 +439,16 @@ jobs:
               west init -l mcuhome
               west update --narrow -o=--depth=1
             '
+          # A shallow clone cannot see the tag it is pinned to, so
+          # `git describe` falls back to the commit and Zephyr stamps
+          # BUILD_VERSION with a hash rather than `v4.4.0`. The image this
+          # job produces is therefore a few bytes larger than the same
+          # example built from a full checkout (measured 2026-08-09:
+          # 748964 against 748960). It is not a defect and this job does
+          # not compare sizes across machines — but it is the reason the
+          # two differ, and it stops mattering once the workspace is baked
+          # into the build container, where the git state becomes a
+          # property of the image digest (ADR 0020, decision E5).
 
       # `git apply` and nothing else: no --3way, no --reject, no retry.
       # A patch that no longer applies to the revision west.yml pins is

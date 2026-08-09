@@ -49,6 +49,7 @@ __all__ = [
     "IMAGE_REVISION",
     "IMAGE_TAG",
     "IMAGE_VAR",
+    "NETWORK_VAR",
     "ZEPHYR_LINE",
     "ccache_directory",
     "container_environment",
@@ -107,6 +108,16 @@ CCACHE_DIR_VAR = "MCUHOME_CCACHE_DIR"
 #: for everything used here; it is not tested, hence a variable and not a
 #: documented feature.
 DOCKER_VAR = "MCUHOME_DOCKER"
+
+#: Lets a build see the network. **Not a feature — a bisect tool.**
+#: ``build-container-contract.md`` §9 makes "no network during commands" a
+#: backend-enforced guarantee the build is allowed to rely on: everything
+#: a build needs is mounted or in the image, and anything that reaches out
+#: is by definition an undeclared input. Set it to ``1`` only to find out
+#: *what* reaches out when a build unexpectedly needs the network; leave
+#: it alone otherwise, because a build that quietly succeeds only with
+#: network access is not reproducible anywhere else.
+NETWORK_VAR = "MCUHOME_BUILD_NETWORK"
 
 #: Where the ccache is mounted inside the container. Matches the
 #: ``CCACHE_DIR`` the image already sets, so ``docker run <image> ccache
@@ -315,12 +326,23 @@ def docker_run_command(
     command: Sequence[str],
     user: str | None = None,
     read_only_mounts: Sequence[Path] = (),
+    network: bool = False,
 ) -> list[str]:
     """``docker run`` around *command*, with the workspace mounted.
 
     ``--rm`` because the container is a process, not a place: everything
     worth keeping is on a mount. ``--init`` because a build spawns
     hundreds of short-lived children and PID 1 has to reap them.
+
+    ``--network none`` because the contract says so and because it is the
+    only way the statement can be true. "Everything a build needs is
+    mounted or in the image" is not a property one can read off a build
+    log: a step that fetches something succeeds silently on the machine
+    that has the network and fails on the one that does not, which is
+    exactly the class of defect that hid three undeclared build inputs
+    until 2026-08-09. Taking the network away turns the claim into
+    something the build either satisfies or does not. *network* is the
+    bisect escape hatch of :data:`NETWORK_VAR`, not an option.
 
     *read_only_mounts* are single files rather than trees, and there is
     exactly one today: the key file the build is given. On a normal build
@@ -334,6 +356,8 @@ def docker_run_command(
     single named file rather than a directory in either case.
     """
     argv = [docker, "run", "--rm", "--init"]
+    if not network:
+        argv.append("--network=none")
     if user is not None:
         argv += ["--user", user]
     for mount in mounts:
@@ -415,6 +439,9 @@ def plan_build(
             environment=container_environment(topdir=topdir, jobs=jobs),
             command=inner,
             user=_current_user(),
+            # Contract §9 makes the isolation the backend's job, so it is
+            # the default here and the variable is the way out, not in.
+            network=host_env.get(NETWORK_VAR, "") not in ("", "0"),
             # The key file itself, not its directory: the container needs
             # to read exactly one secret and gets exactly that one.
             read_only_mounts=() if signing_key is None else (signing_key,),

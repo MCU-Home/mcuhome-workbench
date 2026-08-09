@@ -231,6 +231,7 @@ def test_the_run_command_mounts_paths_onto_themselves(tmp_path) -> None:
         "run",
         "--rm",
         "--init",
+        "--network=none",
         "--user",
         "1000:1000",
         "--volume",
@@ -485,3 +486,44 @@ def test_the_plan_refuses_before_it_decides_anything_else(tmp_path, monkeypatch)
     assert "is not on this machine" in caught.value.message
     # Nothing was created for a build that was never going to happen.
     assert not (tmp_path / "cache").exists()
+
+
+def test_the_build_gets_no_network() -> None:
+    """Contract §9 makes the isolation the backend's obligation.
+
+    "Everything a build needs is mounted or in the image" cannot be read
+    off a build log: a step that fetches something succeeds on the
+    machine that has the network and fails on the one that does not.
+    Three undeclared build inputs survived until 2026-08-09 for exactly
+    that reason. Taking the network away is what turns the sentence into
+    a property the build either has or does not.
+    """
+    command = container.docker_run_command(
+        docker="docker",
+        image="img:tag",
+        mounts=[Path("/ws")],
+        ccache_dir=Path("/c"),
+        workdir=Path("/ws"),
+        environment={},
+        command=["west", "build"],
+    )
+    assert "--network=none" in command
+
+
+def test_the_network_can_be_restored_for_a_bisect() -> None:
+    """The escape hatch exists to find what reaches out, not to build with.
+
+    A build that needs it is a build with an undeclared input, so the
+    variable's only legitimate use is finding out which one.
+    """
+    command = container.docker_run_command(
+        docker="docker",
+        image="img:tag",
+        mounts=[Path("/ws")],
+        ccache_dir=Path("/c"),
+        workdir=Path("/ws"),
+        environment={},
+        command=["west", "build"],
+        network=True,
+    )
+    assert not any(argument.startswith("--network") for argument in command)
