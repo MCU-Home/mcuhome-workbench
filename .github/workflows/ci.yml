@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# CI for the MCUHome firmware framework. Two gates:
+# CI for the MCUHome firmware framework. Three gates:
 #
 #   lint     — the same ruff/REUSE/debug-output checks
 #              .pre-commit-config.yaml runs locally. Needs nothing but
@@ -11,6 +11,13 @@
 #              one `mcuhome build` uses, which is the point of having one:
 #              "passes in CI" and "builds on my machine" mean the same
 #              thing or the container strategy is not worth its weight.
+#   matter   — one real Matter firmware, built end to end the way a user
+#              builds one: patched west projects, the builder image, the
+#              generator, `mcuhome build`. The expensive gate, and the
+#              only one that touches the Matter SDK at all; it runs only
+#              when something that can break it changed. `matter-gate`
+#              below decides that, and the head comment of `matter` says
+#              why the job exists.
 #
 # All actions are pinned to commit SHAs, not tags (see dependabot.yml,
 # which keeps the pins current via its github-actions ecosystem entry).
@@ -21,6 +28,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs exist for the `matter` gate: it is path-triggered, and
+  # "run it anyway" (after a builder-image publish, before a release, to
+  # reproduce a bench failure) has to be possible without an empty
+  # commit. lint and twister come along, which costs a minute.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -175,3 +187,332 @@ jobs:
             --volume "$PWD:$PWD" --workdir "$PWD" \
             '${{ steps.image.outputs.reference }}' \
             west twister -T mcuhome/tests --integration --inline-logs -v -j 2
+
+  # ------------------------------------------------------------------
+  # The trigger for the `matter` job below.
+  #
+  # A Matter build is a quarter of an hour of runner time (13:38 cold on
+  # four cores, REMOTE-BUILD.md), so it must not run on every pull
+  # request — but GitHub has no per-job path filter, and the workflow's
+  # own `on:` block is shared with lint and twister, which DO run on
+  # everything. Hence this gate: ten seconds of plain git, no third-party
+  # action, deciding from the diff whether anything that can break a
+  # Matter build was touched.
+  #
+  # The path list is the firmware and the builder, named explicitly:
+  #
+  #   west.yml                  the pinned Zephyr/CHIP revisions the
+  #                             patches are generated against
+  #   patches/                  the patch set itself
+  #   compat/                   headers on CHIP's include path that are
+  #                             not in any patch (compat/README.md)
+  #   containers/builder/       the build environment, contents included
+  #   components/, app/, lib/, include/, drivers/, dts/, boards/,
+  #   snippets/, CMakeLists.txt, Kconfig, zephyr/
+  #                             everything that gets compiled into the
+  #                             image or decides how
+  #   mcuhome/                  the generator and the build orchestration
+  #   scripts/                  pyshim (CHIP codegen imports it) and this
+  #                             job's artifact check
+  #   the reference example     what the job builds
+  #   this workflow             so a change to the job runs the job
+  #
+  # Deliberately NOT in the list: docs/ other than that one example,
+  # tests/, tests_py/, samples/ and the community files. A change there
+  # cannot alter the firmware this job produces — samples/matter-node is
+  # generator OUTPUT (ADR 0014), compared byte for byte by the pytest
+  # suite, so a real change to it arrives together with a change under
+  # mcuhome/ that is in the list.
+  #
+  # Fail-open: if the base commit cannot be resolved (a force push, a new
+  # branch, a shallow history), the job runs. A missed regression is more
+  # expensive than a wasted quarter of an hour.
+  matter-gate:
+    name: Matter build — does this change touch it?
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      # No sub-directory here: this job builds nothing, so it needs no
+      # west workspace and no topdir rule. Full history, because the diff
+      # reaches back to the base of the pull request or the push.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Decide
+        id: decide
+        run: |
+          paths='
+            .github/workflows/ci.yml
+            CMakeLists.txt
+            Kconfig
+            west.yml
+            app
+            boards
+            compat
+            components
+            containers/builder
+            docs/design/examples/00-bmp180-two-endpoints.yaml
+            drivers
+            dts
+            include
+            lib
+            mcuhome
+            patches
+            scripts
+            snippets
+            zephyr
+          '
+          case '${{ github.event_name }}' in
+            workflow_dispatch) base='' ;;
+            pull_request)      base='${{ github.event.pull_request.base.sha }}' ;;
+            *)                 base='${{ github.event.before }}' ;;
+          esac
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "::notice::No base commit to compare against — running the Matter build."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --quiet "$base" HEAD -- $paths; then
+            echo "Nothing on the Matter build path changed since $base."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed on the Matter build path since $base:"
+            git diff --name-only "$base" HEAD -- $paths
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ------------------------------------------------------------------
+  # WHY THIS JOB EXISTS. On 2026-08-08 three build inputs turned out to
+  # be missing, all three found by hand, none of them by CI:
+  #
+  #   1. the mbedTLS shim headers the CHIP patch puts on the include path
+  #      lived in an untracked directory outside every repository (they
+  #      are compat/mbedtls/ now);
+  #   2. build_overrides/pigweed_environment.gni was a hand-written stub
+  #      sitting in CHIP's own .gitignore and in no patch — every fresh
+  #      workspace was one file short (it is a new-file hunk now);
+  #   3. `cryptography` was absent from the builder image although
+  #      sysbuild runs `imgtool getpub` on EVERY build, signing or not,
+  #      and imgtool imports it at module load (image revision r2).
+  #
+  # Three independent blind spots hid the same gap: the twister job
+  # filters the `matter` west group out, the suites in tests/ are
+  # CHIP-free by design (ADR 0014), and every Matter build anyone ran
+  # locally used --native, where the host interpreter quietly supplied
+  # what the image lacked. Nothing had ever walked the container path for
+  # a Matter build. This job is that walk — patch set, compat headers,
+  # image contents, west pins, generator and `mcuhome build`, exercised
+  # together on the example the node on the bench was commissioned from.
+  # Delete it and those three classes of failure become invisible again.
+  matter:
+    name: Matter firmware build (nRF7002-DK, in the builder image)
+    needs: matter-gate
+    if: needs.matter-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Pull only. Publishing the builder image is the twister job's
+      # business (it runs on the same events and owns the tag).
+      packages: read
+    env:
+      # Pins the host-side ccache directory into the workspace so the
+      # cache action has a path it can name. Without it
+      # mcuhome.container falls back to $XDG_CACHE_HOME/$HOME, which is
+      # the runner's business and not stable across runner images.
+      # `mcuhome build` creates the directory and mounts it at /ccache.
+      MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      # Same topdir rule as the twister job: the workspace top directory
+      # must not be a git repository, so this repo goes one level down.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: mcuhome
+
+      # The `mcuhome` command is a thin shell in its own repository
+      # (ADR 0017) and this job needs the command, not just the library.
+      # While both repositories are private that means a read-only deploy
+      # key, mirroring what mcu-home/cli already does in the other
+      # direction. To rotate it (repository settings, no tooling):
+      #
+      #   1. ssh-keygen -t ed25519 -N '' -C ci-mcuhome-read -f cli-deploy-key
+      #   2. mcu-home/cli → Settings → Deploy keys → add
+      #      cli-deploy-key.pub, read-only
+      #   3. mcu-home/mcuhome → Settings → Secrets and variables →
+      #      Actions → secret CLI_DEPLOY_KEY with the private key's content
+      #   4. delete both local key files
+      #
+      # If the secret is missing this step fails, which is correct: a
+      # gate that cannot run is not a gate that passes. Once the packages
+      # are published this becomes a plain pip install and the key goes.
+      - name: Checkout the mcuhome command line
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/cli
+          ssh-key: ${{ secrets.CLI_DEPLOY_KEY }}
+          path: .deps/cli
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # Editable, and that is not a style preference: mcuhome.workspace
+      # resolves MODULE_DIR from the package's own location and the
+      # container mounts it, so a copy in site-packages would take the
+      # Python half of the SDK into the build and leave the Zephyr module
+      # — components/, compat/, scripts/pyshim/ — behind.
+      - name: Install the builder and its command line
+        run: |
+          python -m pip install --disable-pip-version-check -e ./mcuhome
+          python -m pip install --disable-pip-version-check -e ./.deps/cli
+
+      # A hosted runner has on the order of 14 GB free on /, and this job
+      # wants the builder image (2.74 GB), the CHIP clone with its four
+      # submodules, a restored compiler cache (up to the 5 GB
+      # /etc/ccache.conf allows) and the build tree, all at once. The
+      # preinstalled Android/.NET/Haskell toolchains are worth tens of
+      # gigabytes and nothing here uses them. Cheap insurance; drop this
+      # step if a Matter build ever fits without it.
+      - name: Make room on the runner
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      # Same resolution as the twister job, and for the same reason: the
+      # builder decides what the image is called, nothing else does.
+      - name: Resolve the builder image reference
+        id: image
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import sys
+          sys.path.insert(0, "mcuhome")
+          from mcuhome.container import IMAGE
+          print(f"reference={IMAGE}")
+          PY
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pull-or-build, as in the twister job, minus the publish: the two
+      # jobs run on the same event and would otherwise race for the tag.
+      # This one builds its own copy when the tag is not published yet —
+      # which is exactly the case a revision bump creates, and precisely
+      # the case whose image contents this job is here to exercise.
+      - name: Pull the builder image, or build it
+        run: |
+          reference='${{ steps.image.outputs.reference }}'
+          if docker pull --quiet "$reference"; then
+            echo "Using the published image."
+          else
+            echo "::notice::$reference is not published yet — building it."
+            docker build --tag "$reference" mcuhome/containers/builder
+          fi
+
+      # WITH the `matter` group — the whole point of this job. west.yml
+      # declares no group-filter, so a plain `west update` fetches
+      # connectedhomeip and its four submodules; the twister job's
+      # `west config manifest.group-filter -- -matter` is what excludes
+      # them there, and its absence here is deliberate.
+      #
+      # Not cached, unlike the twister job's workspace. Two reasons: the
+      # CHIP clone with submodules is the multi-gigabyte thing that job's
+      # cache exists to keep out of CI, and an entry that size in the
+      # repository's shared cache budget would evict the cheap one that
+      # every pull request depends on. It also keeps the next step
+      # honest — a pristine tree every run means `git apply` never meets
+      # a tree it has already patched, so a drifted patch fails here
+      # instead of being silently skipped.
+      - name: Initialize the west workspace, Matter included
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" \
+            --volume "$PWD:$PWD" --workdir "$PWD" \
+            '${{ steps.image.outputs.reference }}' \
+            sh -euc '
+              west init -l mcuhome
+              west update --narrow -o=--depth=1
+            '
+
+      # `git apply` and nothing else: no --3way, no --reject, no retry.
+      # A patch that no longer applies to the revision west.yml pins is
+      # the drift this job exists to catch, and any workaround here would
+      # hide it. git apply is all-or-nothing per patch, so a failure
+      # leaves the project tree as it found it.
+      #
+      # Applying them by hand is still the documented state of affairs
+      # (patches/README.md): the build-container contract specifies
+      # automatic application, nothing implements it yet. When something
+      # does, this step goes away and the build step covers it.
+      - name: Apply the workspace patches
+        run: |
+          apply_patch() {
+            project="$1"
+            patch="$2"
+            echo "--- $patch -> $project"
+            if ! git -C "$project" apply --verbose "$PWD/mcuhome/patches/$patch"; then
+              echo "::error file=mcuhome/patches/$patch::Does not apply to $project"
+              echo "The patch and the revision west.yml pins have drifted apart."
+              echo "Regenerate it against the pinned tag (patches/README.md), and"
+              echo "mind the pigweed_environment.gni hunk: CHIP gitignores that"
+              echo "file, so a plain 'git diff > patch' drops it without a word."
+              exit 1
+            fi
+          }
+          apply_patch zephyr zephyr-v4.4.0-nrf53-spinel-stack.patch
+          apply_patch modules/lib/connectedhomeip \
+            connectedhomeip-v1.5.1.0-vanilla-zephyr.patch
+
+      # Carrying the compiler cache is what makes this job affordable to
+      # run twice in a row (13:38 cold against 2:02 warm on four cores,
+      # REMOTE-BUILD.md). It works across runners only because the image
+      # is configured for it: compiler_check = content survives a docker
+      # pull where the default mtime check does not, and CCACHE_BASEDIR
+      # normalizes the workspace path (containers/builder/Dockerfile,
+      # mcuhome/container.py). Nothing had to be invented here.
+      #
+      # Restore always, save only from main: an entry may approach the
+      # 5 GB the image allows, and a pull request saving one per run
+      # would spend the repository's cache budget and evict the twister
+      # job's west workspace.
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-matter-1-${{ runner.os }}-
+
+      # The example the bench node was commissioned from — the YAML form
+      # of samples/matter-node — built the way AGENTS.md documents it:
+      # from the workspace top directory, in the builder image (the
+      # default path, not --native, which is the whole point), with the
+      # RTT snippet the debug-output directive requires. The signing key
+      # is generated on first use and dies with the runner; nothing
+      # commissions this image, and no key of any consequence exists on a
+      # CI runner. Job count is left to the builder's own CPU/RAM
+      # detection (mcuhome.workspace.auto_jobs).
+      - name: Build the reference Matter device
+        run: |
+          mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
+            --build-dir build/bmp180-node -S debug-rtt
+
+      # A green build that produced nothing is worse than a red one.
+      # Checks the bootloader, the signed application in both formats,
+      # the merged hex and build-manifest.json, and verifies every file
+      # the manifest lists by size and SHA-256.
+      - name: Check the artifact set
+        run: python3 mcuhome/scripts/check_build_artifacts.py build/bmp180-node
+
+      - name: Save the compiler cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ccache
+          key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}

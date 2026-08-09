@@ -235,6 +235,24 @@ the twister suites, the latter inside the same builder image, with the
 `matter` west group excluded because every suite in `tests/` is CHIP-free
 by design (ADR 0014).
 
+A third job, `matter`, covers what that exclusion leaves uncovered: it
+materialises a west workspace **with** the `matter` group, applies both
+files in `patches/` with `git apply` (a patch that has drifted from its
+pinned upstream fails the job — there is no `--3way`, no fallback), and
+runs `mcuhome build` on
+`docs/design/examples/00-bmp180-two-endpoints.yaml` in the builder image,
+i.e. the container path rather than `--native`. `scripts/check_build_artifacts.py`
+then asserts the artifact set — MCUboot image, signed application, merged
+hex, `build-manifest.json`, every file checked against the size and
+SHA-256 the manifest recorded. It exists because three build inputs went
+missing at once without CI noticing (`compat/mbedtls/` outside every
+repository, the `pigweed_environment.gni` stub in no patch, `cryptography`
+absent from the image); the job's head comment in the workflow tells that
+story. Because a Matter build costs a quarter of an hour of runner time,
+it is triggered by a path gate (`matter-gate`) rather than by every pull
+request — the path list, and what is deliberately not on it, is in the
+workflow. `workflow_dispatch` runs it on demand.
+
 ## Coding standards
 
 - **C:** Zephyr coding style (`.clang-format`, tabs). Static allocation
