@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from conftest import line_of
 
-from mcuhome.errors import ConfigError
-from mcuhome.loader import load_config, load_yaml_file
+from mcuhome.model.errors import ConfigError
+from mcuhome.workbench.loader import load_config, load_yaml_file
 
 CONFIG_WITH_SECRET = """\
 device:

@@ -38,8 +38,9 @@ from typing import Any
 import pytest
 from conftest import VALID_CONFIG, resolve_file
 
-from mcuhome import __version__, abi
-from mcuhome.context import (
+from mcuhome.compiler import abi
+from mcuhome.model import __version__
+from mcuhome.model.context import (
     MANIFEST_FILE,
     ContainerPin,
     ContextFile,
@@ -47,8 +48,8 @@ from mcuhome.context import (
     SdkPin,
     context_id,
 )
-from mcuhome.contextdir import write_context_manifest
-from mcuhome.errors import BuildError
+from mcuhome.model.errors import BuildError
+from mcuhome.workbench.contextdir import write_context_manifest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "containers" / "builder" / "Dockerfile"
@@ -156,11 +157,11 @@ def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextMa
     """A context directory as ``lock-context`` leaves one (§3.2).
 
     Written file by file rather than through
-    :func:`~mcuhome.contextdir.create_context`, because half of these
+    :func:`~mcuhome.workbench.contextdir.create_context`, because half of these
     tests need a context no builder would ever produce: one file short,
     one file too many, a manifest that lies about its own ID. What is
     *not* rebuilt here is the ID rule — it comes from
-    :func:`~mcuhome.context.context_id`, the same function the program
+    :func:`~mcuhome.model.context.context_id`, the same function the program
     under test reaches through, because §3.3 is locked and a second
     implementation of it in a test file would be the first place the two
     sides of the contract could drift apart.
@@ -693,7 +694,7 @@ def test_the_action_list_is_what_the_program_implements(backend: Backend) -> Non
 
     §7.1.1 also requires the list to include ``describe``, ``verify`` and
     ``build``, and all three are here now — but the list is asserted
-    against :data:`~mcuhome.abi.IMPLEMENTED_ACTIONS` and not against the
+    against :data:`~mcuhome.compiler.abi.IMPLEMENTED_ACTIONS` and not against the
     contract's sentence, because a list that ran ahead of the code is the
     one lie a backend acts on. ``generate`` stays out of it forever
     (§6.1).
@@ -713,7 +714,7 @@ def verify_request(backend: Backend, context: Path, **fields: Any) -> dict[str, 
     """The two fields a ``verify`` needs, plus whatever a test adds.
 
     §5.2 makes seven fields mandatory for a working action and this
-    program refuses over two of them — see :mod:`mcuhome.abi`'s docstring.
+    program refuses over two of them — see :mod:`mcuhome.compiler.abi`'s docstring.
     The other five are added by the tests that are about them, so that
     every test here states its own reason for the fields it sends.
     """
@@ -1117,7 +1118,7 @@ def test_a_verify_writes_nothing_but_its_result_document(
 
 #: A sysbuild log carrying one memory report per image, each preceded by
 #: the build-step banner that is the only thing in a sysbuild log saying
-#: whose output follows (``mcuhome/workspace.py:838``). The report itself
+#: whose output follows (``mcuhome/compiler/workspace.py:838``). The report itself
 #: names no image, which is exactly why the banner has to be there.
 BUILD_LOG = """\
 [1/2] Performing build step for 'mcuboot'
@@ -1131,12 +1132,12 @@ Memory region         Used Size  Region Size  %age Used
 #: What the built application's ``.config`` says. imgtool's ``--version``
 #: is the one of the four signing arguments the builder does not itself
 #: decide, and ``CONFIG_ROM_START_OFFSET`` is the header offset the image
-#: was really linked with — ``mcuhome/report.py`` cross-checks it against
+#: was really linked with — ``mcuhome/compiler/report.py`` cross-checks it against
 #: the board's layout, so it has to be the registry's 512 here.
 BUILD_KCONFIG = 'CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="1.4.0+0"\nCONFIG_ROM_START_OFFSET=0x200\n'
 
 #: The board every fixture below builds for, and the four ``imgtool sign``
-#: arguments ``mcuhome/registry.py`` states for it.
+#: arguments ``mcuhome/model/registry.py`` states for it.
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 SIGNING_ARGUMENTS = {"version": "1.4.0+0", "header-size": 512, "align": 4, "slot-size": 933888}
 
@@ -1155,7 +1156,7 @@ def device_model_json(tmp_path_factory) -> str:
     """The canonical model a locked context carries, as JSON.
 
     Resolved from a real configuration rather than hand-written: §3.1 puts
-    ``model/device-model.json`` in the context and ``mcuhome.api.read_model``
+    ``model/device-model.json`` in the context and ``mcuhome.workbench.api.read_model``
     refuses anything that is not one, so a fixture that faked it would test
     the fake.
     """
@@ -1226,7 +1227,7 @@ class BuildSetup:
 
         #: The environment the backend states (§6.1: ``PATH`` "arrives with
         #: the environment the caller stated"). Three empty executables are
-        #: enough for :func:`~mcuhome.workspace.require_tools`, which asks
+        #: enough for :func:`~mcuhome.compiler.workspace.require_tools`, which asks
         #: whether the tools *can start*, not whether they work — the
         #: compile behind them is stubbed anyway. A test that wants the
         #: typed missing-tool refusal passes ``env={}`` instead.
@@ -1240,7 +1241,7 @@ class BuildSetup:
 
         #: Every child process the program started, in order.
         self.children: list[dict[str, Any]] = []
-        #: Every :class:`~mcuhome.workspace.BuildPlan` it would have run.
+        #: Every :class:`~mcuhome.compiler.workspace.BuildPlan` it would have run.
         self.plans: list[Any] = []
         self.child_code = 0
         self.build_code = 0
@@ -1367,7 +1368,7 @@ def test_a_successful_build_declares_the_firmware_and_the_report(build: BuildSet
     the client therefore has to: a build whose parameters the client
     cannot read produces an image nobody can sign." The bootloader is
     declared on top of the floor and sysbuild's combined hex is not — see
-    :mod:`mcuhome.abi`'s docstring for both.
+    :mod:`mcuhome.compiler.abi`'s docstring for both.
     """
     assert build.run() == abi.EXIT_SUCCESS
     artifacts = build.document()["artifacts"]
@@ -1509,7 +1510,7 @@ def test_a_context_without_a_signing_key_fails_the_invocation_typed(build: Build
 def test_the_command_and_the_environment_a_build_would_run(build: BuildSetup) -> None:
     """Stage 5 assembles both, and §6.1 says what has to be in them.
 
-    The command is :func:`~mcuhome.workspace.west_build_command`'s, so the
+    The command is :func:`~mcuhome.compiler.workspace.west_build_command`'s, so the
     per-image snippet rule and the board come out of the device model in
     the context rather than out of the request. The environment is built
     from nothing: ``ZEPHYR_BASE`` because "it finds Zephyr via
@@ -1543,7 +1544,7 @@ def test_limits_jobs_is_authoritative_and_nothing_re_detects_it(
     In the ``subprocess`` profile the program shares a host with other
     sessions, so ``nproc`` jobs each is an out-of-memory kill. The number
     reaches all three channels that do not inherit it, and
-    :func:`~mcuhome.workspace.resolve_jobs` — the host-side resolver with
+    :func:`~mcuhome.compiler.workspace.resolve_jobs` — the host-side resolver with
     the auto-detection in it — is made to explode so that calling it would
     fail this test rather than pass it quietly.
     """
@@ -1608,7 +1609,7 @@ def test_the_second_incremental_of_a_session_keeps_what_the_first_left(
     session" (§5.2), and the marker §6.3 permits is what lets the program
     tell "mine" from "no idea". Only then does ``incremental`` mean
     anything at all, which is why this program writes one — see
-    :mod:`mcuhome.abi`'s docstring.
+    :mod:`mcuhome.compiler.abi`'s docstring.
     """
     assert build.run() == abi.EXIT_SUCCESS
     (build.work / abi.WORK_TREE / "keep-me").write_text("x\n", encoding="utf-8")
@@ -1628,7 +1629,7 @@ def test_a_mode_this_program_does_not_implement_is_refused_rather_than_downgrade
     ``reproducible`` MUST refuse … rather than accept the job and quietly
     deliver something else." §7.2 enumerates two values and says nothing
     about a third arriving unannounced; executing it as ``clean`` would be
-    the same lie one channel down. See :mod:`mcuhome.abi`'s docstring.
+    the same lie one channel down. See :mod:`mcuhome.compiler.abi`'s docstring.
     """
     assert build.run(params={"mode": "reproducible"}) == abi.EXIT_FAILURE
     document = build.document()
@@ -1854,7 +1855,7 @@ def test_a_tree_this_program_cannot_move_its_workspace_to_is_refused(
     invocation time. So a ``trees`` entry naming somewhere other than
     where this image keeps the layer is ``error.build.failed`` — never a
     build against a tree the backend did not name. See
-    :mod:`mcuhome.abi`'s docstring for what would replace it.
+    :mod:`mcuhome.compiler.abi`'s docstring for what would replace it.
     """
     trees = build.trees()
     trees["zephyr"] = {"path": str(build.root / "elsewhere" / "zephyr"), "writable": True}
@@ -2324,14 +2325,14 @@ def test_the_program_is_copied_after_the_namespace_it_lives_in() -> None:
 def test_the_launcher_is_a_launcher() -> None:
     """ "a script or binary" (§2.2) — and this one is thin on purpose.
 
-    The ABI lives in :mod:`mcuhome.abi` because the ``subprocess`` profile
+    The ABI lives in :mod:`mcuhome.compiler.abi` because the ``subprocess`` profile
     runs the same code with no image and no launcher around it (§1.2). If
     this file ever grows a second job, the two profiles stop being one
     implementation.
     """
     text = LAUNCHER.read_text(encoding="utf-8")
     assert text.startswith("#!/bin/sh")
-    assert "exec" in text and "mcuhome.abi" in text
+    assert "exec" in text and "mcuhome.compiler.abi" in text
     assert LAUNCHER.suffix == "", "§2.2: no extension — a third party may ship a binary here"
     assert os.access(LAUNCHER, os.X_OK), "the file in the repository is executable"
 
@@ -2367,16 +2368,16 @@ def test_the_sdk_package_declares_its_entry_point() -> None:
 def test_the_entry_point_generates_the_real_tree(tmp_path, device_model_json: str) -> None:
     """The real stage 4, reached the way a build container reaches it.
 
-    In-process through :func:`mcuhome.sdkentry.main` — the launcher adds
+    In-process through :func:`mcuhome.compiler.sdkentry.main` — the launcher adds
     nothing but ``sys.path`` — with a real context directory and a real
     resolved model. The tree it writes is compared against
-    :func:`mcuhome.generate.generate` for the same model, which is the
+    :func:`mcuhome.compiler.generate.generate` for the same model, which is the
     byte-identity the module docstring promises: a remote build's
     application tree is not a second code path.
     """
-    from mcuhome import sdkentry
-    from mcuhome.api import read_model
-    from mcuhome.generate import generate
+    from mcuhome.compiler import sdkentry
+    from mcuhome.compiler.generate import generate
+    from mcuhome.workbench.api import read_model
 
     context = tmp_path / "ctx"
     (context / "model").mkdir(parents=True)
@@ -2417,7 +2418,7 @@ def test_the_entry_point_refuses_what_it_cannot_generate(tmp_path) -> None:
     in that vocabulary means the message a user finally sees carries the
     actual cause instead of a generic wrapper around a lost detail.
     """
-    from mcuhome import sdkentry
+    from mcuhome.compiler import sdkentry
 
     context = tmp_path / "ctx"
     context.mkdir()

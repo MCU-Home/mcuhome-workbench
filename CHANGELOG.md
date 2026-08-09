@@ -335,6 +335,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Python package is three packages** (ADR 0020 decision 1). `mcuhome/`
+  became a PEP 420 namespace directory — no `__init__.py`, no module of its
+  own — holding `mcuhome.model` (the shared vocabulary: device model,
+  registry, the context and build-manifest formats, the frozen context-ID
+  rule, error types; no build machinery and no third-party dependency),
+  `mcuhome.workbench` (stages 1-3, context creation, the build methods,
+  signing; `mcuhome.workbench.api` is the supported surface) and
+  `mcuhome.compiler` (stages 4-5 and the invocation-ABI adapter, which is
+  what ships in the SDK package and runs in the build container). The line
+  is *where the code has to run*, not what it is about. Published as
+  `mcuhome-model`, `mcuhome-workbench` and `mcuhome-compiler` from
+  `packaging/`, one project file each, all reading one version out of
+  `mcuhome/model/__init__.py` (ADR 0017 §3, ADR 0020 decision 8), so no
+  compatibility matrix exists to consult. Imports moved with them:
+  `from mcuhome.api import …` is now `from mcuhome.workbench.api import …`,
+  and so on for every module. One edge crossed the cut the wrong way and
+  moved rather than being tolerated — `sha256_file` left `contextdir` for
+  `mcuhome/model/hashes.py`, because both sides of build-container-contract
+  §3.3 compute it and the build server carries no workbench.
+  Packaging-level proof that the split is real: in a fresh environment,
+  `mcuhome-model` alone imports and `import mcuhome.workbench` raises, and
+  `mcuhome.workbench.api` imports with `mcuhome-compiler` not installed at
+  all — which is ADR 0017 §2's "must not drag in the toolchain" as a pip
+  fact rather than an import-graph one.
+- The repository root ships no distribution. The plain name `mcuhome` is
+  reserved for the command line (ADR 0020 decision 2), and the root
+  `pyproject.toml` keeps the shared tool configuration and nothing else;
+  a contributor installs `-e ./packaging/model -e ./packaging/workbench
+  -e ./packaging/compiler` in one pip invocation.
+- Builder image **r6** (`ghcr.io/mcu-home/builder:zephyr-4.4.0-r6`): the
+  contract program at `/mcuhome/run` follows the package split and execs
+  `mcuhome.compiler.abi`. Nothing else about the image changed — the ABI
+  module itself is not image content, it arrives with the SDK mount.
 - The RTT log backend runs in OVERWRITE mode instead of DROP, in both
   images (`snippets/debug-rtt/debug-rtt.conf` and the class-A bootloader
   lever in `mcuhome/registry.py`) — a safety setting, not a preference,

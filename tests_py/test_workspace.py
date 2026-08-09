@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Stage 5, the parts that decide things (``mcuhome/workspace.py``).
+"""Stage 5, the parts that decide things (``mcuhome/compiler/workspace.py``).
 
 **No build runs here, ever.** Compiling a Matter node takes minutes and a
 toolchain the test suite has no business requiring — the pytest half of
@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome import generate, workspace
-from mcuhome.errors import BuildError
+from mcuhome.compiler import generate, workspace
+from mcuhome.model.errors import BuildError
 
 _GIB = 1024**3
 
@@ -71,10 +71,19 @@ def test_the_installed_module_dir_is_the_repository_it_says_it_is() -> None:
     checked. Two markers, because the two consumers are different: the
     west manifest is what makes workspace discovery start here, and the
     pyshim is what goes on ``PYTHONPATH``.
+
+    The third assertion is the answer's *derivation*: the function counts
+    directory levels up from its own file, and the ADR 0020 split moved
+    that file one level deeper. A miscount lands on the namespace
+    directory, which has neither marker — but it would also pass silently
+    the day somebody moves the module again and fixes only the markers,
+    so the relationship between the two is stated as well.
     """
     module_dir = workspace.installed_module_dir()
     assert (module_dir / "west.yml").is_file()
     assert (module_dir / workspace.PYSHIM_SUBDIR / "python_path.py").is_file()
+    here = module_dir / "mcuhome" / "compiler" / "workspace.py"
+    assert Path(workspace.__file__).resolve() == here
 
 
 def test_no_workspace_is_refused_with_both_ways_out(tmp_path) -> None:

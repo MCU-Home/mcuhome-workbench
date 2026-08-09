@@ -48,14 +48,15 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 |---|---|
 | `west.yml` | West manifest pinning Zephyr and modules |
 | `zephyr/module.yml` | Zephyr module definition (boards, DTS, snippets roots) |
-| `mcuhome/` | Python package: YAML config validation, codegen, build orchestration; `mcuhome.api` is the supported surface (the `mcuhome` command is its own repo, [mcu-home/cli](https://github.com/mcu-home/cli)) |
+| `mcuhome/` | Python source tree: a PEP 420 namespace with one subpackage per published distribution (ADR 0020) — `model/` (shared vocabulary), `workbench/` (config pipeline, build methods, signing), `compiler/` (codegen, west orchestration). `mcuhome.workbench.api` is the supported surface (the `mcuhome` command is its own repo, [mcu-home/cli](https://github.com/mcu-home/cli)) |
+| `packaging/` | The project file of each distribution: `mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler` — one version, one tag, one release |
 | `components/` | MCUHome components (Python schema + C sources side by side) |
 | `app/` | The generic application main every generated device shares |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree Zephyr hardware support |
 | `snippets/` | Connectivity/device-class variants (wifi, thread-sed, …) |
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
-| `tests_py/` | pytest suite of the builder package |
+| `tests_py/` | pytest suite of the three Python packages |
 | `containers/builder/` | The builder image: the one build environment (ADR 0007) |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |
@@ -79,7 +80,7 @@ the MCUHome builder image
 versioned in lockstep with the pinned Zephyr release:
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r5
+docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r6
 ```
 
 Then build a device from its YAML description. The `mcuhome` command is
@@ -88,7 +89,9 @@ a thin shell in its own repository
 are published it is installed from a checkout next to this one:
 
 ```sh
-pip install -e mcuhome            # the builder library
+pip install -e mcuhome/packaging/model \
+            -e mcuhome/packaging/workbench \
+            -e mcuhome/packaging/compiler   # the three Python packages
 git clone https://github.com/mcu-home/cli
 pip install -e cli                # the `mcuhome` command
 mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
@@ -165,12 +168,12 @@ mcuhome schema registry             # boards, drivers, clusters, device types
 
 ### Using the builder from Python
 
-`mcuhome.api` is the supported programmatic surface, and the only part of
-the package covered by the SemVer promise of
+`mcuhome.workbench.api` is the supported programmatic surface, and the
+only part of these packages covered by the SemVer promise of
 [ADR 0005](docs/adr/0005-semver-and-conventional-commits.md):
 
 ```python
-from mcuhome import api
+from mcuhome.workbench import api
 
 tree, entry = api.find_device("bedroom-climate", config_root=root)
 result = api.validate_device(entry, tree=tree)
@@ -186,8 +189,8 @@ else:
 first, which is what lets an editor show a whole configuration's markers
 in one pass. `api.registry_data()` and `api.config_json_schema()` are the
 same documents `mcuhome schema` prints; `api.read_manifest()` loads a
-build manifest. Everything else in the package is an implementation
-detail and may change between releases.
+build manifest. Everything else in the three packages is an
+implementation detail and may change between releases.
 
 To see the framework run without the builder in the picture, build the
 reference sample by hand:

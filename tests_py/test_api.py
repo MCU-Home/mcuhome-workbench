@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The public API surface, and the serialized shape of an error.
 
-:mod:`mcuhome.api` is what a program embedding the builder imports, and
-:meth:`mcuhome.errors.ConfigError.to_dict` is what it puts in an editor's
+:mod:`mcuhome.workbench.api` is what a program embedding the builder imports, and
+:meth:`mcuhome.model.errors.ConfigError.to_dict` is what it puts in an editor's
 gutter. Both are covered by the SemVer promise, so both are pinned here
 by name and by field, not only by behaviour.
 """
@@ -18,8 +18,7 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, REPO_ROOT, VALID_CONFIG
 
-from mcuhome import api
-from mcuhome.errors import (
+from mcuhome.model.errors import (
     BuildError,
     ConfigError,
     ConfigErrorGroup,
@@ -27,6 +26,7 @@ from mcuhome.errors import (
     MCUHomeError,
     error_dicts,
 )
+from mcuhome.workbench import api
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -52,7 +52,7 @@ def test_the_supported_names_are_all_there() -> None:
 
 
 def test_the_version_is_the_package_version() -> None:
-    from mcuhome import __version__
+    from mcuhome.model import __version__
 
     assert __version__ == api.VERSION
 
@@ -256,7 +256,7 @@ def test_the_supported_surface_pulls_in_no_compiler() -> None:
 
     ADR 0017 §2 states it plainly: depending on the package must not drag
     in the toolchain, the C sources or the west manifest. Before the
-    boundary work of ADR 0020, ``import mcuhome.api`` reached
+    boundary work of ADR 0020, ``import mcuhome.workbench.api`` reached
     ``manifest`` → ``workspace`` → ``generate``, so every dashboard
     install carried the code generator and the west driver it can never
     run — silently, because nothing failed.
@@ -267,9 +267,14 @@ def test_the_supported_surface_pulls_in_no_compiler() -> None:
     along. This is the one property the split exists to establish, and
     without a test it can fall back the first time somebody adds a
     convenience import.
+
+    Since the packages became three distributions the assertion names no
+    modules at all: ``mcuhome-compiler`` may not be *installed* in a
+    dashboard, so any module of it appearing here is the defect,
+    including one that does not exist yet.
     """
     probe = (
-        "import sys; import mcuhome.api; "
+        "import sys; import mcuhome.workbench.api; "
         "print(' '.join(sorted(m for m in sys.modules if m.startswith('mcuhome.'))))"
     )
     loaded = subprocess.run(  # noqa: S603 - fixed argv, no shell
@@ -279,8 +284,8 @@ def test_the_supported_surface_pulls_in_no_compiler() -> None:
         check=True,
         cwd=REPO_ROOT,
     ).stdout.split()
-    forbidden = {"mcuhome.generate", "mcuhome.workspace", "mcuhome.report", "mcuhome.container"}
-    assert not forbidden & set(loaded), (
-        f"importing mcuhome.api now loads {sorted(forbidden & set(loaded))} — "
-        "a consumer of the supported surface would install a toolchain it cannot use"
+    compiler = sorted(name for name in loaded if name.startswith("mcuhome.compiler"))
+    assert not compiler, (
+        f"importing mcuhome.workbench.api now loads {compiler} — a consumer of "
+        "the supported surface would need a distribution it can never run"
     )

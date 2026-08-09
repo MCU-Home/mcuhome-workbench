@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The build context and its normative ID.
 
-Covers both halves: :mod:`mcuhome.context` is the format and the ID rule,
-:mod:`mcuhome.contextdir` is the directory the rule is applied to (ADR
+Covers both halves: :mod:`mcuhome.model.context` is the format and the ID rule,
+:mod:`mcuhome.workbench.contextdir` is the directory the rule is applied to (ADR
 0020 puts them in different packages — a build server recomputes the ID
 from bytes off a socket and carries no build logic).
 
@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
-from mcuhome.context import (
+from mcuhome.model.context import (
     BACKEND_DIR,
     CONTEXT_ID_VECTORS,
     CONTEXT_VERSION,
@@ -39,14 +39,14 @@ from mcuhome.context import (
     context_id,
     vector_id,
 )
-from mcuhome.contextdir import (
+from mcuhome.model.errors import BuildError
+from mcuhome.model.model import DeviceModel
+from mcuhome.workbench.contextdir import (
     create_context,
     read_context_manifest,
     verify_context,
     write_context_manifest,
 )
-from mcuhome.errors import BuildError
-from mcuhome.model import DeviceModel
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 

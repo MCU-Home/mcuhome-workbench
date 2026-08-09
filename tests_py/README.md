@@ -1,11 +1,19 @@
 # tests_py/
 
-Python tests for the builder package (`mcuhome/`), run with pytest:
+Python tests for the three packages under `mcuhome/` (ADR 0020:
+`mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler`), run with
+pytest:
 
 ```sh
-pip install -e '.[dev]'
+pip install -e ./packaging/model -e ./packaging/workbench \
+            -e ./packaging/compiler 'pytest>=8.0'
 pytest
 ```
+
+The installs are **editable** and the suite depends on it: the
+whole-package invariants read the source of every module of every
+package, and `conftest.package_modules()` refuses to run against modules
+that are not the ones in this checkout.
 
 **Why not `tests/`?** That directory holds Zephyr twister suites
 (`testcase.yaml` per subdirectory) and twister recurses into whatever it
@@ -34,11 +42,12 @@ second — they are the fast half of the strategy in
 | `test_generate.py` | stage 4: every generated artifact, byte-exact, plus its error paths |
 | `test_workspace.py` | stage 5 on the host: workspace discovery, prerequisites, the sysbuild command, per-image artifacts and memory reports |
 | `test_container.py` | stage 5 in the image: image tag, mounts, environment, the three refusals |
-| `test_api.py` | the supported programmatic surface (`mcuhome.api`) and the serialized shape of an error |
+| `test_api.py` | the supported programmatic surface (`mcuhome.workbench.api`) and the serialized shape of an error |
 | `test_manifest.py` | `build-manifest.json`: its fields, its determinism, and the signing parameters it states |
 | `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
 | `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
 | `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that init-pairing then validate works on it |
+| `test_packaging.py` | the ADR 0020 layout: one distribution per subpackage, one version for all three, and the two files outside Python that name an import path |
 
 The command-surface tests (exit codes, summary output, `--json`
 documents) live with the command: `tests/test_cli.py` in the
@@ -84,7 +93,7 @@ Regenerate deliberately, never automatically — from the repository root:
 
 ```sh
 # the device model
-python -c "from pathlib import Path; from mcuhome.api import ConfigTree, load_model; \
+python -c "from pathlib import Path; from mcuhome.workbench.api import ConfigTree, load_model; \
 p = Path('docs/design/examples/00-bmp180-two-endpoints.yaml').resolve(); \
 print(load_model(p, tree=ConfigTree(root=p.parent, discovered=False)).to_json(), end='')" \
   > tests_py/data/golden/00-bmp180-two-endpoints.device-model.json

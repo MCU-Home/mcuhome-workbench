@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome import container
-from mcuhome.api import load_model
-from mcuhome.errors import ConfigError, ConfigErrorGroup
-from mcuhome.model import DeviceModel
-from mcuhome.tree import ConfigTree, find_config_root
+from mcuhome.compiler import container
+from mcuhome.model.errors import ConfigError, ConfigErrorGroup
+from mcuhome.model.model import DeviceModel
+from mcuhome.workbench.api import load_model
+from mcuhome.workbench.tree import ConfigTree, find_config_root
 
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
@@ -22,11 +22,21 @@ DATA_DIR = TESTS_DIR / "data"
 FIXTURE_TREE = DATA_DIR / "tree"
 GOLDEN_DIR = DATA_DIR / "golden"
 
-#: The packages the whole-package invariant searches must cover. ADR 0020
-#: splits this one distribution into ``mcuhome-model``,
-#: ``mcuhome-workbench`` and ``mcuhome-compiler``; when that lands the
-#: names go here, and the searches keep reaching every module.
-PACKAGES = ("mcuhome",)
+#: The import package the three distributions of ADR 0020 share, and the
+#: directory it is assembled from in this checkout. It is a PEP 420
+#: namespace package, which is why the directory is named here at all:
+#: the import system cannot enumerate one. ``find_spec("mcuhome")``
+#: answers with ``origin is None`` and a search-location list that holds
+#: path-hook tokens rather than directories under an editable install, so
+#: "what is under the namespace" is a question about the tree.
+NAMESPACE = "mcuhome"
+NAMESPACE_DIR = REPO_ROOT / NAMESPACE
+
+#: The packages the whole-package invariant searches must cover — the
+#: three distributions of ADR 0020 decision 1, by import name.
+#: :func:`package_modules` checks this list against what is actually in
+#: :data:`NAMESPACE_DIR`, so a fourth subpackage cannot arrive unsearched.
+PACKAGES = ("mcuhome.compiler", "mcuhome.model", "mcuhome.workbench")
 
 
 def package_modules() -> list[Path]:
@@ -34,16 +44,58 @@ def package_modules() -> list[Path]:
 
     Derived from the importable packages rather than from one module's
     directory. A directory glob reads "every module there is" only while
-    there is one package; after the split it would keep passing while
-    quietly examining fewer files, which is worse than not searching at
-    all. Callers assert that a module they know must be examined came
-    back, so the day this list falls behind is the day a test fails.
+    there is one package; after the ADR 0020 split it would keep passing
+    while quietly examining fewer files, which is worse than not
+    searching at all. Callers assert that a module they know must be
+    examined came back, so the day this list falls behind is the day a
+    test fails.
+
+    Three things are checked here rather than left to those callers,
+    because none of them has a module a caller could name:
+
+    * ``mcuhome`` is still a namespace package. An ``__init__.py`` there
+      would have to belong to one of three distributions that all deliver
+      into that directory, and PEP 420 forbids it for exactly that reason.
+    * No module sits directly under the namespace directory. Such a file
+      is in no distribution, ships with none of the three, and is
+      invisible to every search below.
+    * :data:`PACKAGES` lists every subpackage there is, and each one is
+      imported *from this checkout*. The second half matters as much as
+      the first: against a non-editable install the searches would read
+      copies in ``site-packages`` while the tests exercise the tree.
     """
+    spec = importlib.util.find_spec(NAMESPACE)
+    assert spec is not None, f"{NAMESPACE} is not importable"
+    assert spec.origin is None, (
+        f"{NAMESPACE} has become a regular package (origin={spec.origin}). "
+        "PEP 420 forbids an __init__.py there — three distributions deliver "
+        "into that directory and only one of them could own the file."
+    )
+
+    loose = sorted(path.name for path in NAMESPACE_DIR.glob("*.py"))
+    assert not loose, (
+        f"{loose} sit directly under {NAMESPACE_DIR} — no distribution "
+        "ships them and no invariant searches them"
+    )
+    subpackages = {
+        path.name for path in NAMESPACE_DIR.iterdir() if (path / "__init__.py").is_file()
+    }
+    expected = {name.rpartition(".")[2] for name in PACKAGES}
+    assert subpackages == expected, (
+        f"the namespace holds {sorted(subpackages)} but the searches cover "
+        f"{sorted(expected)} — extend conftest.PACKAGES"
+    )
+
     found: list[Path] = []
     for name in PACKAGES:
         spec = importlib.util.find_spec(name)
         assert spec is not None and spec.origin is not None, f"{name} is not importable"
-        found.extend(Path(spec.origin).parent.glob("*.py"))
+        directory = Path(spec.origin).parent
+        assert directory == NAMESPACE_DIR / name.rpartition(".")[2], (
+            f"{name} imports from {directory}, not from this checkout — the "
+            "invariants would search files the tests do not run"
+        )
+        found.extend(directory.glob("*.py"))
     assert found, "the invariant searches would examine nothing"
     return sorted(found)
 

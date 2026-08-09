@@ -88,7 +88,7 @@ jobs:
           path: mcuhome
 
       # One source of truth for the image name, and it is the builder's:
-      # mcuhome/container.py carries the Zephyr line and the image
+      # mcuhome/compiler/container.py carries the Zephyr line and the image
       # revision, and the builder resolves the very same string when a
       # developer runs `mcuhome build`. Importing it needs no third-party
       # package — that module is standard library only, on purpose.
@@ -98,7 +98,7 @@ jobs:
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           sys.path.insert(0, "mcuhome")
-          from mcuhome.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_LINE
+          from mcuhome.compiler.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_LINE
           print(f"reference={IMAGE}")
           print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_LINE}")
           PY
@@ -326,7 +326,7 @@ jobs:
     env:
       # Pins the host-side ccache directory into the workspace so the
       # cache action has a path it can name. Without it
-      # mcuhome.container falls back to $XDG_CACHE_HOME/$HOME, which is
+      # mcuhome.compiler.container falls back to $XDG_CACHE_HOME/$HOME, which is
       # the runner's business and not stable across runner images.
       # `mcuhome build` creates the directory and mounts it at /ccache.
       MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -366,15 +366,26 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Editable, and that is not a style preference: mcuhome.workspace's
+      # Editable, and that is not a style preference: mcuhome.compiler.workspace's
       # installed_module_dir() resolves the module directory from the
       # package's own location and the container mounts it, so a copy in
       # site-packages would take the Python half of the SDK into the
       # build and leave the Zephyr module
       # — components/, compat/, scripts/pyshim/ — behind.
+      #
+      # Three project directories since ADR 0020: this repository
+      # publishes mcuhome-model, mcuhome-workbench and mcuhome-compiler
+      # out of one source tree (packaging/), and there is deliberately no
+      # aggregate to install instead — see the head comment of the root
+      # pyproject.toml. One pip invocation installs all three; the order
+      # is the dependency order, which pip does not need but a reader
+      # does. This job builds firmware, so it needs the compiler too.
       - name: Install the builder and its command line
         run: |
-          python -m pip install --disable-pip-version-check -e ./mcuhome
+          python -m pip install --disable-pip-version-check \
+            -e ./mcuhome/packaging/model \
+            -e ./mcuhome/packaging/workbench \
+            -e ./mcuhome/packaging/compiler
           python -m pip install --disable-pip-version-check -e ./.deps/cli
 
       # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
@@ -401,7 +412,7 @@ jobs:
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           sys.path.insert(0, "mcuhome")
-          from mcuhome.container import IMAGE
+          from mcuhome.compiler.container import IMAGE
           print(f"reference={IMAGE}")
           PY
 
@@ -466,7 +477,7 @@ jobs:
           # The image bakes its own workspace as of r3 (ADR 0020 decision
           # E5) and fetches the tag ref back, so the git state is a
           # property of the image digest there. This job still does not
-          # use it: mcuhome/container.py mounts the host workspace and
+          # use it: mcuhome/compiler/container.py mounts the host workspace and
           # builds out of that. This step, the patch step below and this
           # note all go away in the same change that switches the
           # run-time side over.
@@ -506,7 +517,7 @@ jobs:
       # is configured for it: compiler_check = content survives a docker
       # pull where the default mtime check does not, and CCACHE_BASEDIR
       # normalizes the workspace path (containers/builder/Dockerfile,
-      # mcuhome/container.py). Nothing had to be invented here.
+      # mcuhome/compiler/container.py). Nothing had to be invented here.
       #
       # Restore always, save only from main: an entry may approach the
       # 5 GB the image allows, and a pull request saving one per run
@@ -528,7 +539,7 @@ jobs:
       # is generated on first use and dies with the runner; nothing
       # commissions this image, and no key of any consequence exists on a
       # CI runner. Job count is left to the builder's own CPU/RAM
-      # detection (mcuhome.workspace.auto_jobs).
+      # detection (mcuhome.compiler.workspace.auto_jobs).
       - name: Build the reference Matter device
         run: |
           mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \

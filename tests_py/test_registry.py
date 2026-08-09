@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from conftest import package_modules
 
-from mcuhome import registry
+from mcuhome.model import registry
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 SCHEME = registry.BOARDS[BOARD].update_scheme

@@ -17,8 +17,9 @@ import stat
 
 import pytest
 
-from mcuhome import p256, signing
-from mcuhome.errors import BuildError, ConfigError
+from mcuhome.model import p256
+from mcuhome.model.errors import BuildError, ConfigError
+from mcuhome.workbench import signing
 
 #: One key the suite can compare bytes against, so nothing here draws a
 #: random one and nothing here goes near the developer's own.

@@ -8,10 +8,10 @@
 #
 #     /mcuhome/run <action> <absolute path of the request document>
 #
-# Everything it does is call mcuhome.abi.main() with that argv. The ABI —
-# argv, the request document, the exit codes, the result document — lives
-# there and not here, because the `subprocess` profile (§1.2) runs the
-# same code with no image and no launcher around it.
+# Everything it does is call mcuhome.compiler.abi.main() with that argv.
+# The ABI — argv, the request document, the exit codes, the result
+# document — lives there and not here, because the `subprocess` profile
+# (§1.2) runs the same code with no image and no launcher around it.
 #
 # No extension, because §2.2 says so: a third party may ship a compiled
 # binary at this path and `.sh` would then be a lie. /bin/sh rather than a
@@ -40,11 +40,11 @@ SDK=/mcuhome/workspace/mcuhome
 # {0, 1, 66} as "the program died. Undefined forever.", which is exactly
 # what this is — the SDK the program lives in was never mounted. Saying so
 # on stderr is worth more than a Python traceback about an import.
-if [ ! -f "$SDK/mcuhome/abi.py" ]; then
+if [ ! -f "$SDK/mcuhome/compiler/abi.py" ]; then
     echo "/mcuhome/run: no MCUHome SDK at $SDK — the backend did not mount it" >&2
     exit 70
 fi
 
 PYTHONPATH="$SDK${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
-exec "$INTERPRETER" -m mcuhome.abi "$@"
+exec "$INTERPRETER" -m mcuhome.compiler.abi "$@"

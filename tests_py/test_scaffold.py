@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from mcuhome import provision, registry, scaffold
-from mcuhome.api import load_model, open_config_tree, validate_device
-from mcuhome.errors import ConfigError
-from mcuhome.tree import DEVICE_ENTRY, DEVICES_DIR, is_config_root
+from mcuhome.model import registry
+from mcuhome.model.errors import ConfigError
+from mcuhome.workbench import provision, scaffold
+from mcuhome.workbench.api import load_model, open_config_tree, validate_device
+from mcuhome.workbench.tree import DEVICE_ENTRY, DEVICES_DIR, is_config_root
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 

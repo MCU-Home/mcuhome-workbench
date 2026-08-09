@@ -33,7 +33,7 @@ wrote one) is additionally verified by size and SHA-256, which is what
 catches a truncated or half-written artifact rather than an absent one.
 
 The image and file names below are written out rather than imported from
-:mod:`mcuhome.generate`: this is an independent oracle for a regression
+:mod:`mcuhome.compiler.generate`: this is an independent oracle for a regression
 gate, and one that imported its expectations from the code under test
 would follow that code silently wherever it went. Standard library only,
 for the same reason.
@@ -50,13 +50,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-#: Written by ``mcuhome.report.write_manifest`` into the build directory.
+#: Written by ``mcuhome.compiler.report.write_manifest`` into the build directory.
 MANIFEST_FILE = "build-manifest.json"
 
 #: Sysbuild's name for the bootloader image, fixed by Zephyr.
 BOOTLOADER_IMAGE = "mcuboot"
 
-#: The role ``mcuhome.workspace.build_images`` gives the application image.
+#: The role ``mcuhome.compiler.workspace.build_images`` gives the application image.
 APPLICATION_ROLE = "application"
 
 #: File names that must be present per image role. The bootloader is not

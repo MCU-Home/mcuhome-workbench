@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The device version (:mod:`mcuhome.ota`) and the Matter OTA file
-(:mod:`mcuhome.otafile`).
+"""The device version (:mod:`mcuhome.model.ota`) and the Matter OTA file
+(:mod:`mcuhome.workbench.otafile`).
 
 Three things are worth pinning here and each one is a different kind of
 claim:
@@ -29,8 +29,9 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
-from mcuhome import ota, otafile, pairing
-from mcuhome.errors import BuildError
+from mcuhome.model import ota, pairing
+from mcuhome.model.errors import BuildError
+from mcuhome.workbench import otafile
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 

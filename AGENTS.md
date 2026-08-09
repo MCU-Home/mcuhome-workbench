@@ -31,10 +31,11 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | Path | Role |
 |---|---|
 | `west.yml` | West manifest (T2 topology) — Zephyr + modules, pinned revisions |
-| `mcuhome-sdk.json`, `bin/generate` | The SDK package's §6.1 interface: the metadata file names `bin/generate` as the code-generation entry point a build container invokes as a child process (body: `mcuhome/sdkentry.py`) |
+| `mcuhome-sdk.json`, `bin/generate` | The SDK package's §6.1 interface: the metadata file names `bin/generate` as the code-generation entry point a build container invokes as a child process (body: `mcuhome/compiler/sdkentry.py`) |
 | `zephyr/module.yml` | Makes this repo consumable as a Zephyr module |
 | `CMakeLists.txt`, `Kconfig` | Zephyr module build entry points |
-| `mcuhome/` | Python package: YAML validation, codegen, build orchestration; `mcuhome.api` is the supported surface. The `mcuhome` command line is a thin shell in its own repo ([mcu-home/cli](https://github.com/mcu-home/cli)) |
+| `mcuhome/` | Python source tree — a PEP 420 **namespace** with one subpackage per distribution (ADR 0020): `model/` the shared vocabulary, `workbench/` stages 1-3 plus the build methods and signing, `compiler/` stages 4-5 plus the invocation-ABI adapter. No `__init__.py` at this level and no module directly under it. `mcuhome.workbench.api` is the supported surface. The `mcuhome` command line is a thin shell in its own repo ([mcu-home/cli](https://github.com/mcu-home/cli)) |
+| `packaging/` | One project file per published distribution — `mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler` — each shipping exactly its subpackage out of the shared tree above. The version is read from `mcuhome/model/__init__.py`, so all three carry one number (ADR 0020 decision 8) |
 | `components/` | Components: Python schema + C sources side by side |
 | `app/` | The generic application main every generated device shares — **not** a buildable app |
 | `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree hardware support |
@@ -43,7 +44,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | `lib/` | Portable, `native_sim`-testable libraries |
 | `compat/` | Headers that bridge a version mismatch between two pinned upstreams (today: mbedTLS 4's moved legacy headers, for connectedhomeip). Each entry names its own deletion condition — see `compat/README.md` |
 | `tests/`, `samples/` | Twister suites and samples |
-| `tests_py/` | pytest suite of the builder package (kept apart from twister's `tests/`) |
+| `tests_py/` | pytest suite of the three Python packages (kept apart from twister's `tests/`) |
 | `containers/builder/` | The builder image (ADR 0007) — the one build environment |
 | `scripts/` | Dev tooling, future custom west extension commands |
 | `docs/adr/` | Architecture decision records (MADR-style) |
@@ -72,7 +73,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
   configure time and says so. Anything device-, board- or
   peripheral-specific is a contract violation there — see `app/README.md`.
 - **A device's commissioning identity is emitted by one function.**
-  `mcuhome/pairing.py::kconfig_lines()` writes all of
+  `mcuhome/model/pairing.py::kconfig_lines()` writes all of
   `CONFIG_CHIP_DEVICE_{VENDOR_ID,PRODUCT_ID,DISCRIMINATOR,SPAKE2_PASSCODE,
   SPAKE2_IT,SPAKE2_SALT,SPAKE2_TEST_VERIFIER}` from one tuple, and
   `tests_py/test_pairing.py` asserts no other module even names them. CHIP
@@ -80,7 +81,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
   Zephyr, so anything that could write one without the other yields
   firmware that builds, boots and then refuses every commissioner.
 - **A device's version is emitted by one function too.**
-  `mcuhome/ota.py::kconfig_lines()` writes
+  `mcuhome/model/ota.py::kconfig_lines()` writes
   `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION` together with
   `CONFIG_CHIP_DEVICE_SOFTWARE_VERSION{,_STRING}` from one SemVer string
   (ADR 0015 decision 9). A build in which MCUboot's image version and
@@ -98,7 +99,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
   builds, which is only possible if the configuration is the source
   (yaml-schema.md §4.1).
 - **Two files carry the Matter build glue** — `samples/matter-node/
-  CMakeLists.txt` and the one `mcuhome/generate.py` emits — and
+  CMakeLists.txt` and the one `mcuhome/compiler/generate.py` emits — and
   `tests_py/test_generate.py` asserts the shared blocks stay byte-equal.
   A CMake fix found on the bench goes into both, in the same commit.
 
@@ -153,8 +154,15 @@ west twister -T mcuhome/tests --integration --inline-logs -v
 # Builder (Python): install once, then run its tests (tests_py/) — no
 # Zephyr and no west workspace needed, ~1 s. The `mcuhome` *command*
 # comes from the sibling cli repo (github.com/mcu-home/cli, cloned next
-# to this one); this package is the library it shells out to.
-pip install -e '.[dev]'
+# to this one); the three distributions below are what it calls into.
+#
+# Three paths and no `.[dev]`: the repository root ships no distribution
+# any more (ADR 0020 decision 2 reserves the plain name `mcuhome` for the
+# command), and an aggregate that pulled the three from an index would
+# undo the editable installs it was asked for. The root pyproject.toml
+# says so at the top and keeps the tool configuration.
+pip install -e ./packaging/model -e ./packaging/workbench \
+            -e ./packaging/compiler 'pytest>=8.0'
 pip install -e ../cli
 pytest
 
@@ -163,7 +171,7 @@ mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
 # The machine-readable surface (dashboard ADR 0011 "Block 0"): --json on
 # validate/build, the registry and the main.yaml JSON Schema as data, and
-# a scaffold for a new device. `mcuhome.api` is the same thing in process.
+# a scaffold for a new device. `mcuhome.workbench.api` is the same thing in process.
 mcuhome validate <device> --json
 mcuhome schema registry
 mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
@@ -180,7 +188,7 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 
 # Generate AND compile it (stages 4-5), from the workspace top directory.
 # Compiles in the builder image (ADR 0007) — pull it once:
-#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r5
+#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r6
 # Writes the application to build/<device>/app and the CMake tree to
 # build/<device>/build — one sub-directory per sysbuild image (ADR 0015:
 # mcuboot + the signed application) — and reports both with their
@@ -196,7 +204,7 @@ mcuhome build … --native
 # Build the builder image from source (containers/builder/README.md).
 # The context is the repository root, not containers/builder/: since r3
 # the image bakes a west workspace, so west.yml and patches/ are inputs.
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
   -f containers/builder/Dockerfile .
 
 # Python lint/format

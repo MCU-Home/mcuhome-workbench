@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from conftest import VALID_CONFIG, expect_failure, find_error, line_of, resolve_file
 
-from mcuhome.errors import ConfigError, Location
+from mcuhome.model.errors import ConfigError, Location
 
 
 def test_unknown_top_level_section(write_config) -> None:

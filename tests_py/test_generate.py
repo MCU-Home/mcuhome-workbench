@@ -30,9 +30,7 @@ import subprocess
 import pytest
 from conftest import EXAMPLES_DIR, GOLDEN_DIR, REPO_ROOT, resolve_file
 
-from mcuhome import pairing, registry
-from mcuhome.errors import GenerationError
-from mcuhome.generate import (
+from mcuhome.compiler.generate import (
     APP_DIR,
     BOOTLOADER_IMAGE,
     CHIP_PROJECT_CONFIG_PATH,
@@ -46,7 +44,9 @@ from mcuhome.generate import (
     generate,
     write_tree,
 )
-from mcuhome.model import (
+from mcuhome.model import pairing, registry
+from mcuhome.model.errors import GenerationError
+from mcuhome.model.model import (
     BusModel,
     DeviceMeta,
     DeviceModel,
@@ -521,7 +521,7 @@ def test_the_kconfig_fragment_is_the_models_list_plus_the_trees_own_paths() -> N
     is carried in the model: the health foundation, which is a property
     of every MCUHome application image rather than of this device
     (ADR 0015 health amendment); the commissioning identity, which
-    :mod:`mcuhome.pairing` computes from the model's pairing tuple in one
+    :mod:`mcuhome.model.pairing` computes from the model's pairing tuple in one
     call; and ``CONFIG_CHIP_PROJECT_CONFIG``, which names a file inside
     the generated tree and is therefore stage 4's fact. A remote build
     server derives all three from what it received rather than being told.
@@ -619,7 +619,7 @@ def test_the_module_variable_the_generator_emits_is_the_one_zephyr_will_define()
     # zephyr/scripts/zephyr_module.py sanitizes the name, and
     # zephyr/cmake/modules/zephyr_module.cmake upper-cases it.
     sanitized = re.sub(r"[^a-zA-Z0-9]", "_", declared.group(1)).upper()
-    source = (REPO_ROOT / "mcuhome" / "generate.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "mcuhome" / "compiler" / "generate.py").read_text(encoding="utf-8")
     used = set(re.findall(r"\$\{(ZEPHYR_\w+_MODULE_DIR)\}", source))
     assert used == {f"ZEPHYR_{sanitized}_MODULE_DIR"}
 

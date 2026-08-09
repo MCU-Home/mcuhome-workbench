@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r5   # or build it, below
+docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r6   # or build it, below
 mcuhome build <device>                                 # uses it by default
 ```
 
@@ -21,7 +21,7 @@ mcuhome build <device>                                 # uses it by default
 | `zap-cli` — Matter root-node data model | `v2025.10.23-nightly` |
 | ccache | Debian 13 stock |
 | **a west workspace at `/mcuhome/workspace`** (since r3) | the revisions [`west.yml`](../../west.yml) pins |
-| **the contract program at `/mcuhome/run`** (since r4) | [`run`](run), a launcher over `mcuhome.abi` |
+| **the contract program at `/mcuhome/run`** (since r4) | [`run`](run), a launcher over `mcuhome.compiler.abi` |
 
 Not in it, on purpose: the Zephyr SDK's other ~20 target toolchains and
 its host-tool bundle (qemu, openocd — flashing does not happen in a
@@ -95,9 +95,15 @@ absolute path, invoked as `/mcuhome/run <action> <absolute path of the
 request document>`. It is [`run`](run) in this directory, installed mode
 0755 — §2.2 requires it to be executable by *every* user the backend may
 exec as — and it is a thin launcher: it puts the mounted SDK on
-`PYTHONPATH` and executes `mcuhome.abi`, which is where the invocation
-ABI actually lives, because the contract's `subprocess` profile runs the
-same code with no image around it.
+`PYTHONPATH` and executes `mcuhome.compiler.abi`, which is where the
+invocation ABI actually lives, because the contract's `subprocess`
+profile runs the same code with no image around it.
+
+That module path is why **r6** exists: ADR 0020's package split moved the
+ABI from `mcuhome.abi` into `mcuhome.compiler.abi`, and this launcher is
+the one piece of *image* content that spells it. The module it launches
+is not image content — it arrives with the SDK mount — so nothing else
+about r6 differs from r5.
 
 **One action is implemented: `describe`.** `build` and `verify` answer
 `status: "unsupported"`, `reason: "unsupported.action"`, exit 1 — the
@@ -116,7 +122,7 @@ with `build` and `verify`.
 The Zephyr part is the `zephyr` revision pinned in
 [`west.yml`](../../west.yml); the revision counts rebuilds of the image
 for that same Zephyr release. The single source of truth for both is
-[`mcuhome/container.py`](../../mcuhome/container.py) — the builder, the CI
+[`mcuhome/compiler/container.py`](../../mcuhome/compiler/container.py) — the builder, the CI
 workflow and this file all read the tag from there, and `tests_py/
 test_container.py` asserts that it still agrees with `west.yml`.
 
@@ -136,7 +142,7 @@ environment.
 ```sh
 # from the repository ROOT — the context is the repository, not this
 # directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
     -f containers/builder/Dockerfile .
 ```
 
@@ -187,14 +193,14 @@ build with `--image`, or for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
+docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
     cat /mcuhome/workspace.json
 ```
 
 ## How the builder runs it
 
 `mcuhome build` assembles the invocation in
-[`mcuhome/container.py`](../../mcuhome/container.py); `mcuhome build …`
+[`mcuhome/compiler/container.py`](../../mcuhome/compiler/container.py); `mcuhome build …`
 prints it before it runs. In short:
 
 - `--user <your uid>:<your gid>` — nothing is left behind owned by root.
@@ -238,12 +244,12 @@ hash is safe.
 # what the cache is doing, with the same mount the builder uses
 docker run --rm --user "$(id -u):$(id -g)" \
     --volume ~/.cache/mcuhome/ccache:/ccache \
-    ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 ccache -s
+    ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 ccache -s
 ```
 
 ## Bumping Zephyr
 
 The Zephyr pin, the CHIP pin and this image move together (ADR 0008). In
-one commit: `west.yml`, `ZEPHYR_LINE` in `mcuhome/container.py`,
+one commit: `west.yml`, `ZEPHYR_LINE` in `mcuhome/compiler/container.py`,
 `IMAGE_REVISION` back to 1, and the SDK version and checksums in the
 `Dockerfile`.

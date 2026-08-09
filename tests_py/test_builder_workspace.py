@@ -239,7 +239,7 @@ def test_the_image_carries_exactly_the_labels_of_section_two_one() -> None:
     text = _dockerfile()
     assert 'org.mcuhome.contract="1"' in text
     assert 'org.mcuhome.zephyr="v4.4.0"' in text
-    assert 'org.mcuhome.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"' in text
+    assert 'org.mcuhome.model.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"' in text
     assert "ZEPHYR_REVISION=v4.4.0" in text, "the label must match the baked pin"
     assert "ZEPHYR_SDK_VERSION=1.0.1" in text, "the label must match the baked toolchain"
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Per-user directories come from the stated environment, not the process.
 
-Two things are pinned here. The first is what :mod:`mcuhome.userpaths`
+Two things are pinned here. The first is what :mod:`mcuhome.model.userpaths`
 answers. The second is bigger than that module: **no other module in the
 package may read process state at all** — ADR 0020 turns this library
 into one process serving several sessions, and a call-time read of
@@ -26,8 +26,8 @@ from pathlib import Path
 import pytest
 from conftest import package_modules
 
-from mcuhome import userpaths
-from mcuhome.errors import ConfigError
+from mcuhome.model import userpaths
+from mcuhome.model.errors import ConfigError
 
 # --------------------------------------------------------------------------
 # What it answers
@@ -82,22 +82,22 @@ def test_a_named_account_is_not_an_environment_question(tmp_path) -> None:
 
 #: ``attribute name`` → what to use instead. ``expanduser`` is on the list
 #: because it reads ``HOME`` out of the process just as ``Path.home()``
-#: does; the ``~user`` form in :mod:`mcuhome.userpaths` is the exception
+#: does; the ``~user`` form in :mod:`mcuhome.model.userpaths` is the exception
 #: that proves it, and that module is excluded wholesale.
 FORBIDDEN_ATTRIBUTES = {
     "environ": "take an env: dict[str, str] argument",
     "getenv": "take an env: dict[str, str] argument",
     "getcwd": "take the directory as an argument",
     "cwd": "take the directory as an argument",
-    "home": "mcuhome.userpaths.home(env)",
-    "expanduser": "mcuhome.userpaths.expand(path, env)",
+    "home": "mcuhome.model.userpaths.home(env)",
+    "expanduser": "mcuhome.model.userpaths.expand(path, env)",
 }
 
 #: Modules that may do it. One, and its reason is its docstring.
 EXEMPT = {"userpaths.py"}
 
 #: The modules these names mean something dangerous in. ``from
-#: mcuhome.userpaths import home`` is the *fix*, not the defect, so the
+#: mcuhome.model.userpaths import home`` is the *fix*, not the defect, so the
 #: import check asks where a name comes from rather than what it is.
 PROCESS_MODULES = {"os", "os.path", "pathlib", "posixpath", "ntpath"}
 

@@ -1,55 +1,30 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[project]
-name = "mcuhome"
-version = "0.1.0.dev0"
-description = "MCUHome firmware builder: compiles MCUHome YAML device configurations into Zephyr firmware images."
-readme = "README.md"
-requires-python = ">=3.11"
-license = "Apache-2.0"
-authors = [{ name = "The MCUHome Contributors" }]
-keywords = [
-  "zephyr",
-  "matter",
-  "thread",
-  "coap",
-  "home-assistant",
-  "firmware",
-  "esphome-alternative",
-]
-classifiers = [
-  "Development Status :: 1 - Planning",
-  "Intended Audience :: Developers",
-  "Programming Language :: Python :: 3",
-  "Topic :: Home Automation",
-]
-# One runtime dependency, on purpose: ruamel.yaml is the only YAML parser
-# that keeps line/column information on the parsed tree, and every
-# validation error in this builder points at a line. Everything else
-# (CLI, validation) is the standard library plus hand-written checks —
-# error messages are user interface here, and a schema library's generic
-# wording does not meet that bar.
-dependencies = ["ruamel.yaml>=0.18"]
-
-[project.optional-dependencies]
-dev = ["pytest>=8.0"]
-
-[project.urls]
-Homepage = "https://github.com/mcu-home/mcuhome"
-Issues = "https://github.com/mcu-home/mcuhome/issues"
-Changelog = "https://github.com/mcu-home/mcuhome/blob/main/CHANGELOG.md"
-
-# No console script here, deliberately: the `mcuhome` command is its own
-# thin package (github.com/mcu-home/cli) and this package is the library
-# it shells out to. Programs embed `mcuhome.api`.
-
-[tool.hatch.build.targets.wheel]
-packages = ["mcuhome"]
+#
+# TOOL CONFIGURATION ONLY — this file is not a distribution.
+#
+# It used to build one, named `mcuhome`. ADR 0020 ended that twice over:
+# decision 2 reserves the plain name for the command line, because `pip
+# install mcuhome` should yield the command a user expects; and decision
+# 1 splits what this repository publishes into three distributions, whose
+# project files are `packaging/{model,workbench,compiler}/pyproject.toml`.
+#
+# What is deliberately NOT here is a fourth, aggregate distribution. It
+# could not do the job it would exist for: a `[project]` table can depend
+# on `mcuhome-model` from an index, never on the copy in this working
+# tree, so `pip install -e '.[dev]'` would install three *published*
+# distributions over the three editable ones and quietly undo the setup
+# it was asked for. The three paths are named explicitly instead — one
+# pip invocation, and every word of it true (AGENTS.md, "Commands"):
+#
+#     pip install -e ./packaging/model -e ./packaging/workbench \
+#                 -e ./packaging/compiler 'pytest>=8.0'
+#
+# The tool sections below stay in one file because that is what they are:
+# settings for the repository, not for any one distribution. Splitting
+# them into ruff.toml + pytest.ini + .codespellrc would be three files
+# replacing one, for nothing. The project files under `packaging/` carry
+# no `[tool.ruff]` section, so ruff keeps resolving this one from there.
 
 [tool.ruff]
 line-length = 100
@@ -80,4 +55,3 @@ testpaths = ["tests_py"]
 [tool.codespell]
 ignore-words-list = "requestor,pase,ot,rsource"
 skip = "./components/matter/zap/*.matter"
-

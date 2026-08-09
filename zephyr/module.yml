@@ -11,7 +11,7 @@
 # defaulting to module_path.name), and the basename is whatever the
 # consumer happened to clone or unpack the SDK as. Generated CMakeLists
 # reach back into this module as ${ZEPHYR_MCUHOME_MODULE_DIR}
-# (mcuhome/generate.py), and an undefined CMake variable expands to the
+# (mcuhome/compiler/generate.py), and an undefined CMake variable expands to the
 # empty string rather than failing — so an inferred name turns a renamed
 # directory into a file-not-found halfway through the configure step.
 name: mcuhome

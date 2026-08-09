@@ -15,7 +15,7 @@ What it scans:
   board fragments, test fragments), and
 * Python sources of the ``mcuhome`` package, where the registry keeps
   the per-board config fragments as string tuples
-  (``mcuhome/registry.py``) — there the forbidden line must appear
+  (``mcuhome/model/registry.py``) — there the forbidden line must appear
   inside a string literal to count, so prose comments discussing a
   symbol never trip the check.
 
@@ -23,7 +23,7 @@ What it skips (host-side or generated, annotating them would be wrong):
 
 * ``tests_py/`` — pytest fixtures and the golden files, which are
   byte-compared generator output and must never be hand-edited; their
-  source of truth is ``mcuhome/registry.py``, which IS scanned;
+  source of truth is ``mcuhome/model/registry.py``, which IS scanned;
 * ``docs/``, ``containers/``, ``scripts/``, ``patches/``, ``.github/``,
   plus build output (``build/``, ``twister-out*``).
 
@@ -75,7 +75,7 @@ _FORBIDDEN = [
 CONF_HIT_RE = re.compile(r"^(?:" + "|".join(_FORBIDDEN) + r")\s*$")
 
 #: In Python sources the assignment must sit in a string literal — that
-#: is how mcuhome/registry.py carries the fragments it generates.
+#: is how mcuhome/model/registry.py carries the fragments it generates.
 PY_HIT_RE = re.compile(r"[\"'](?:" + "|".join(_FORBIDDEN) + r")[\"']")
 
 #: Directories never scanned, by name, at any depth.

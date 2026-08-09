@@ -20,7 +20,7 @@
 # context plus a pinned container digest reproduces the build. Baked, that
 # state becomes a property of the image digest, and the gap closes.
 #
-# Nothing uses the baked workspace yet: mcuhome/container.py still
+# Nothing uses the baked workspace yet: mcuhome/compiler/container.py still
 # bind-mounts the host's workspace at its own absolute path and builds out
 # of that (which is what makes a build directory usable from inside and
 # outside the container). Switching the run-time side over is a separate
@@ -28,7 +28,7 @@
 #
 # Since r4 there is a third thing: the PROGRAM of the build-container
 # contract at /mcuhome/run (docs/design/build-container-contract.md §2.2),
-# a thin launcher over mcuhome.abi, which is where the invocation ABI and
+# a thin launcher over mcuhome.compiler.abi, which is where the invocation ABI and
 # all three actions of §7 live. The abi module arrives with the SDK mount,
 # not with this image, so what the image contributes here is the launcher
 # and the fixed path. Since r5 the image also carries the org.mcuhome.*
@@ -37,14 +37,14 @@
 #
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
-# truth for it is mcuhome/container.py. Bump the revision whenever
+# truth for it is mcuhome/compiler/container.py. Bump the revision whenever
 # anything below changes; bump the Zephyr part when west.yml does. Since
 # r3 the revision also has to be bumped for west.yml and patches/, which
 # are image inputs now.
 #
 # Build (from the repository root — the context is the REPOSITORY, not
 # this directory, because west.yml and patches/ live outside it):
-#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r5 \
+#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
 #         -f containers/builder/Dockerfile .
 #
 # Everything downloaded is checksum-verified. The checksums are the whole
@@ -394,12 +394,12 @@ COPY --from=fetch /opt/zap /opt/zap
 COPY --from=workspace /mcuhome /mcuhome
 
 # The program of the build-container contract (§2.2): a fixed absolute
-# path, never looked up on PATH, and a thin launcher over mcuhome.abi.
+# path, never looked up on PATH, and a thin launcher over mcuhome.compiler.abi.
 #
 # 0755 rather than the mode git happens to carry, because §2.2 requires it
 # to be executable by EVERY user the backend may exec as — the backend
 # runs the program as the calling user where it can (the `--user` argument
-# in mcuhome/container.py), and that user owns nothing in this image and
+# in mcuhome/compiler/container.py), and that user owns nothing in this image and
 # has no /etc/passwd entry here. Set with a RUN rather than with COPY
 # --chmod so the classic builder can build this image too.
 #
@@ -429,7 +429,7 @@ RUN chmod 0755 /mcuhome/run
 # about the image. Bump them together with the pins, like the tag.
 LABEL org.mcuhome.contract="1" \
       org.mcuhome.zephyr="v4.4.0" \
-      org.mcuhome.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"
+      org.mcuhome.model.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"
 
 # Git refuses to operate in a repository owned by another user (the
 # CVE-2022-24765 hardening), and this is exactly that situation: the
@@ -455,7 +455,7 @@ RUN git config --system --add safe.directory '/mcuhome/workspace/*'
 # ccache configuration belongs to the image, not to every invocation: the
 # system-wide file is what a bare `docker run <image> ccache -s` sees too,
 # which is how the cache is inspected. CCACHE_DIR is a bind mount the
-# runner supplies (mcuhome/container.py) so the cache outlives the
+# runner supplies (mcuhome/compiler/container.py) so the cache outlives the
 # container.
 #
 #   compiler_check = content   the compilers here never change without the

@@ -9,7 +9,7 @@ signing block states the arguments the *inline* build would have used —
 which is the whole basis of detached signing (ADR 0015 decision 8).
 
 Covers both halves of the document, because the document is one thing:
-:mod:`mcuhome.manifest` is its format and :mod:`mcuhome.report` measures
+:mod:`mcuhome.model.manifest` is its format and :mod:`mcuhome.compiler.report` measures
 a build directory into it (ADR 0020 puts the two in different packages —
 a manifest is read where no toolchain may be installed).
 """
@@ -25,17 +25,18 @@ from unittest import mock
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
-from mcuhome import __version__, pairing, registry, workspace
-from mcuhome import manifest as manifest_module
-from mcuhome.errors import BuildError
-from mcuhome.generate import APP_DIR, BOOTLOADER_IMAGE
-from mcuhome.manifest import MANIFEST_FILE, SigningParameters, read_manifest
-from mcuhome.report import (
+from mcuhome.compiler import workspace
+from mcuhome.compiler.generate import APP_DIR, BOOTLOADER_IMAGE
+from mcuhome.compiler.report import (
     SIGN_VERSION_DEFAULT,
     build_manifest,
     signing_parameters,
     write_manifest,
 )
+from mcuhome.model import __version__, pairing, registry
+from mcuhome.model import manifest as manifest_module
+from mcuhome.model.errors import BuildError
+from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters, read_manifest
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 SCHEME = registry.BOARDS["nrf7002dk/nrf5340/cpuapp"].update_scheme

@@ -17,8 +17,9 @@ import re
 import pytest
 from conftest import GOLDEN_DIR
 
-from mcuhome import __version__, configschema, export, registry, schema
-from mcuhome.model import MODEL_VERSION
+from mcuhome.model import __version__, export, registry
+from mcuhome.model.model import MODEL_VERSION
+from mcuhome.workbench import configschema, schema
 
 REGISTRY_GOLDEN = GOLDEN_DIR / "registry.json"
 SCHEMA_GOLDEN = GOLDEN_DIR / "main.schema.json"
@@ -198,7 +199,7 @@ def test_the_schema_validates_the_example_when_a_validator_is_installed() -> Non
     jsonschema = pytest.importorskip("jsonschema")
     from conftest import EXAMPLES_DIR
 
-    from mcuhome.loader import load_yaml_file
+    from mcuhome.workbench.loader import load_yaml_file
 
     document = configschema.config_json_schema()
     jsonschema.Draft202012Validator.check_schema(document)

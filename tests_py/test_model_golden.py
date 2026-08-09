@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, GOLDEN_DIR, resolve_file
 
-from mcuhome.model import MODEL_VERSION, DeviceModel
+from mcuhome.model.model import MODEL_VERSION, DeviceModel
 
 GOLDEN = GOLDEN_DIR / "00-bmp180-two-endpoints.device-model.json"
 

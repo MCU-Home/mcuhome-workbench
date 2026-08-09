@@ -21,10 +21,11 @@ from pathlib import Path
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, package_modules, resolve_file
 
-from mcuhome import pairing, provision
-from mcuhome.errors import ConfigError
-from mcuhome.generate import APP_DIR, generate
-from mcuhome.model import PairingModel
+from mcuhome.compiler.generate import APP_DIR, generate
+from mcuhome.model import pairing
+from mcuhome.model.errors import ConfigError
+from mcuhome.model.model import PairingModel
+from mcuhome.workbench import provision
 
 # --------------------------------------------------------------------------
 # SPAKE2+ verifier

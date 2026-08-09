@@ -31,9 +31,10 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome import imgtool, signing, workspace
-from mcuhome.errors import BuildError
-from mcuhome.manifest import MANIFEST_FILE, SigningParameters
+from mcuhome.compiler import workspace
+from mcuhome.model.errors import BuildError
+from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
+from mcuhome.workbench import imgtool, signing
 
 PARAMETERS = SigningParameters(header_size=512, align=4, slot_size=933888, version="0.0.0+0")
 

@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from conftest import FIXTURE_TREE
 
-from mcuhome.errors import ConfigError
-from mcuhome.tree import ConfigTree, find_config_root, open_tree, resolve_device
+from mcuhome.model.errors import ConfigError
+from mcuhome.workbench.tree import ConfigTree, find_config_root, open_tree, resolve_device
 
 
 def make_tree(root: Path, *, marker_file: bool = False, devices: tuple[str, ...] = ()) -> Path:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Stage 5, container path (``mcuhome/container.py``).
+"""Stage 5, container path (``mcuhome/compiler/container.py``).
 
 **Docker never runs here.** Same rule as ``test_workspace.py``: the pytest
 half of the strategy (builder-pipeline.md §9) is the fast half, and a
@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome import container, workspace
-from mcuhome.errors import BuildError
+from mcuhome.compiler import container, workspace
+from mcuhome.model.errors import BuildError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
