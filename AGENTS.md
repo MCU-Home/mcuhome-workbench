@@ -40,6 +40,7 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | `snippets/` | Connectivity variants (wifi, thread-sed, …) as Zephyr snippets |
 | `include/mcuhome/` | Public C API headers |
 | `lib/` | Portable, `native_sim`-testable libraries |
+| `compat/` | Headers that bridge a version mismatch between two pinned upstreams (today: mbedTLS 4's moved legacy headers, for connectedhomeip). Each entry names its own deletion condition — see `compat/README.md` |
 | `tests/`, `samples/` | Twister suites and samples |
 | `tests_py/` | pytest suite of the builder package (kept apart from twister's `tests/`) |
 | `containers/builder/` | The builder image (ADR 0007) — the one build environment |
