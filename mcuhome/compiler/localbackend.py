@@ -389,6 +389,13 @@ class LocalOutcome:
     problems: tuple[str, ...] = ()
     violation: str | None = None
     artifacts: tuple[Artifact, ...] = field(default_factory=tuple)
+    #: The invocation's ``out`` directory on the host — where every
+    #: verified artifact in :attr:`artifacts` actually is (its ``path`` is
+    #: relative to here). Filled in by :meth:`LocalBackend._collect` so a
+    #: caller can read the delivered files back without re-deriving the
+    #: per-invocation layout; ``None`` on an outcome that never reached
+    #: egress (an image or SDK refusal raises before one exists).
+    out: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -1490,6 +1497,7 @@ class LocalBackend:
             context_id=context_id,
             patched_layers=patched,
         )
+        outcome.out = out
         if outcome.result is not None:
             declared, malformed = declared_artifacts(outcome.result)
             verified, problems = verify_artifacts(out, declared)

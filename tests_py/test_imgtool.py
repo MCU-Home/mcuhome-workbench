@@ -23,6 +23,7 @@ and it is exactly the one a verifier cares about.
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 import subprocess
@@ -34,6 +35,7 @@ import pytest
 from mcuhome.compiler import workspace
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
+from mcuhome.model.registry import SIGNATURE_TYPE
 from mcuhome.workbench import imgtool, signing
 
 PARAMETERS = SigningParameters(header_size=512, align=4, slot_size=933888, version="0.0.0+0")
@@ -183,6 +185,35 @@ def test_a_manifest_without_a_signing_block_is_a_refusal(tmp_path) -> None:
     with pytest.raises(BuildError) as caught:
         imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
     assert "'signing'" in caught.value.message
+
+
+def test_plan_signing_refuses_an_absolute_input(tmp_path) -> None:
+    """An absolute manifest input would read and sign a file outside the build.
+
+    ``out_dir / "/etc/passwd"`` is ``/etc/passwd``: ``Path`` join lets an
+    absolute right-hand side win. A crafted build-manifest.json handed to
+    ``mcuhome sign`` must not be able to name an arbitrary file to sign, so
+    the value is refused by name before it is joined.
+    """
+    manifest = json.loads(json.dumps(MANIFEST))
+    manifest["signing"]["inputs"] = {"bin": "/etc/passwd"}
+    out_dir = _build_dir(tmp_path, manifest=manifest)
+    with pytest.raises(BuildError) as caught:
+        imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
+    assert "/etc/passwd" in caught.value.message
+    assert "signing input" in caught.value.message
+
+
+def test_plan_signing_refuses_an_output_that_escapes_the_build_dir(tmp_path) -> None:
+    """A ``..`` manifest output would write the signed image outside the build."""
+    manifest = json.loads(json.dumps(MANIFEST))
+    manifest["signing"]["outputs"] = {"bin": "../../evil.signed.bin"}
+    out_dir = _build_dir(tmp_path, manifest=manifest)
+    with pytest.raises(BuildError) as caught:
+        imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
+    assert "evil.signed.bin" in caught.value.message
+    assert "signing output" in caught.value.message
+    assert not (tmp_path.parent / "evil.signed.bin").exists()
 
 
 def test_imgtool_failure_carries_imgtools_own_words(tmp_path) -> None:
@@ -348,3 +379,166 @@ def test_a_detached_signature_verifies_against_the_same_key(tmp_path) -> None:
         [*program, "verify", "--key", str(key), str(output)], capture_output=True, check=False
     )
     assert verified.returncode == 0, verified.stdout + verified.stderr
+
+
+# --------------------------------------------------------------------------
+# The §7.2.1 build report — the container backend's leaner report shape
+# --------------------------------------------------------------------------
+
+
+def _report(**overrides) -> dict:
+    report = {
+        "report": imgtool.REPORT_VERSION,
+        "signing": {
+            "signature_type": "ecdsa-p256",
+            "arguments": {
+                "version": "1.2.3+4",
+                "header-size": 512,
+                "align": 4,
+                "slot-size": 933888,
+            },
+        },
+        "memory": [{"image": "app", "region": "FLASH", "used": 1, "total": 2, "percent": 50.0}],
+    }
+    report.update(overrides)
+    return report
+
+
+def _report_dir(tmp_path: Path, *, report: dict | None = None) -> Path:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "firmware.bin").write_bytes(bytes(16))
+    (out / "firmware.hex").write_text(":00000001FF\n", "utf-8")
+    (out / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(report or _report()), "utf-8")
+    return out
+
+
+def test_read_build_report_accepts_the_reference_shape(tmp_path) -> None:
+    out = _report_dir(tmp_path)
+    data = imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert data["signing"]["arguments"]["slot-size"] == 933888
+
+
+def test_read_build_report_refuses_a_foreign_version(tmp_path) -> None:
+    out = _report_dir(tmp_path, report=_report(report=2))
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "report format version 2" in caught.value.message
+    assert str(imgtool.REPORT_VERSION) in caught.value.message
+
+
+def test_read_build_report_refuses_a_report_without_a_signing_block(tmp_path) -> None:
+    report = _report()
+    del report["signing"]
+    out = _report_dir(tmp_path, report=report)
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "no signing parameters" in caught.value.message
+
+
+def test_read_build_report_refuses_a_file_that_is_not_json(tmp_path) -> None:
+    out = _report_dir(tmp_path)
+    (out / imgtool.BUILD_REPORT_FILE).write_text("this is not json {", "utf-8")
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "not valid JSON" in caught.value.message
+
+
+def test_read_build_report_refuses_a_report_that_is_not_an_object(tmp_path) -> None:
+    out = _report_dir(tmp_path)
+    (out / imgtool.BUILD_REPORT_FILE).write_text("[1, 2, 3]", "utf-8")
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "does not describe a build" in caught.value.message
+
+
+def test_read_build_report_refuses_malformed_arguments(tmp_path) -> None:
+    """A signing block whose arguments are not an object is truncated, not signable."""
+    report = _report()
+    report["signing"]["arguments"] = "not-an-object"
+    out = _report_dir(tmp_path, report=report)
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "no signing parameters" in caught.value.message
+
+
+def test_read_build_report_refuses_a_missing_signature_type(tmp_path) -> None:
+    """§7.2.1 makes signature_type mandatory so a client can refuse a mismatched key."""
+    report = _report()
+    del report["signing"]["signature_type"]
+    out = _report_dir(tmp_path, report=report)
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "signature_type" in caught.value.message
+    assert SIGNATURE_TYPE in caught.value.message
+
+
+def test_read_build_report_refuses_a_wrong_signature_type(tmp_path) -> None:
+    """A report that signs with another algorithm is refused, not signed anyway."""
+    report = _report(
+        signing={
+            "signature_type": "rsa-2048",
+            "arguments": {
+                "version": "1.2.3+4",
+                "header-size": 512,
+                "align": 4,
+                "slot-size": 933888,
+            },
+        }
+    )
+    out = _report_dir(tmp_path, report=report)
+    with pytest.raises(BuildError) as caught:
+        imgtool.read_build_report(out / imgtool.BUILD_REPORT_FILE)
+    assert "rsa-2048" in caught.value.message
+    assert SIGNATURE_TYPE in caught.value.message
+
+
+def test_plan_report_signing_signs_both_firmware_encodings(tmp_path) -> None:
+    """The §7.2.1 parameters apply to every firmware artifact: bin and hex."""
+    out = _report_dir(tmp_path)
+    key = _key(tmp_path)
+    plan = imgtool.plan_report_signing(out, key=key, env={imgtool.IMGTOOL_VAR: "imgtool"})
+    assert {path.name for path in plan.outputs} == {"firmware.signed.bin", "firmware.signed.hex"}
+    for _form, command, _dest in plan.commands:
+        assert command[command.index("--version") + 1] == "1.2.3+4"
+        assert command[command.index("--slot-size") + 1] == "933888"
+        assert command[command.index("--header-size") + 1] == "512"
+        assert command[command.index("--align") + 1] == "4"
+        assert command[command.index("--key") + 1] == str(key)
+
+
+def test_plan_report_signing_needs_a_firmware_to_sign(tmp_path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(_report()), "utf-8")
+    with pytest.raises(BuildError) as caught:
+        imgtool.plan_report_signing(out, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
+    assert "firmware" in caught.value.message
+
+
+def test_sign_report_runs_the_plan_and_never_generates_a_key(tmp_path) -> None:
+    out = _report_dir(tmp_path)
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> tuple[int, str]:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"signed")
+        return 0, ""
+
+    key = _key(tmp_path)
+    plan = imgtool.sign_report(out, env={imgtool.IMGTOOL_VAR: "imgtool"}, key=key, runner=runner)
+    assert len(commands) == 2
+    assert (out / "firmware.signed.bin").is_file()
+    assert (out / "firmware.signed.hex").is_file()
+    assert plan.parameters.slot_size == 933888
+
+
+def test_sign_report_refuses_a_missing_key_rather_than_making_one(tmp_path) -> None:
+    """A delivered build is signed with the key its bootloader carries, not a fresh one."""
+    out = _report_dir(tmp_path)
+    empty = tmp_path / "empty"
+    with pytest.raises(BuildError):
+        imgtool.sign_report(
+            out, env={"XDG_CONFIG_HOME": str(empty), imgtool.IMGTOOL_VAR: "imgtool"}, key=None
+        )
+    assert not (out / "firmware.signed.bin").exists()
