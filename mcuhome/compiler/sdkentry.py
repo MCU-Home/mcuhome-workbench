@@ -53,8 +53,9 @@ from typing import Any
 
 from mcuhome.compiler.abi import run_invocation
 from mcuhome.compiler.generate import write_tree
+from mcuhome.model.context import MODEL_FILE as CONTEXT_MODEL_FILE
 from mcuhome.model.errors import MCUHomeError
-from mcuhome.workbench.api import read_model
+from mcuhome.model.modelfile import read_model
 
 __all__ = [
     "GENERATE_ACTION",
@@ -70,8 +71,10 @@ GENERATE_ACTION = "generate"
 #: the program speaks, because §6.1 reuses it unchanged.
 REQUEST_VERSIONS = (1,)
 
-#: Where §3.1 puts the canonical device model inside a context.
-MODEL_FILE = "model/device-model.json"
+#: Where §3.1 puts the canonical device model inside a context — the
+#: model package's constant, re-exported because this module is the SDK
+#: entry point's body and callers read the location off it.
+MODEL_FILE = CONTEXT_MODEL_FILE
 
 _STATUS_SUCCESS = "success"
 _STATUS_FAILURE = "failure"

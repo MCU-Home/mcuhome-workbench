@@ -255,7 +255,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcuhome.compiler import report, workspace
 from mcuhome.compiler.generate import APP_DIR
@@ -263,12 +263,17 @@ from mcuhome.model import __version__, registry
 from mcuhome.model.context import MANIFEST_FILE, MODEL_FILE, PATCHES_DIR
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
-from mcuhome.workbench.api import read_model
-from mcuhome.workbench.contextdir import (
-    ContextFormatVersionError,
-    ContextVerification,
-    verify_context,
-)
+from mcuhome.model.modelfile import read_model
+
+# mcuhome.workbench.contextdir is imported inside _open_context, not
+# here: the SDK entry point (§6.1) imports this module for
+# run_invocation, and its runtime is what the SDK package declares — a
+# bare interpreter, no third-party packages. contextdir carries the YAML
+# emitter and pulls ruamel at import, which only the program's own
+# environment provides. tests_py/test_container_closure.py pins the
+# entry point's closure to stdlib plus mcuhome.
+if TYPE_CHECKING:
+    from mcuhome.workbench.contextdir import ContextVerification
 
 __all__ = [
     "BOOTLOADER_ARTIFACT",
@@ -1120,6 +1125,11 @@ def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
     a value "for comparison only" and never makes a mismatch a build
     failure.
     """
+    # Lazy on purpose — see the note at the module's import block: the
+    # SDK entry point imports this module under a bare runtime, and only
+    # the actions that measure a context may pull the YAML machinery.
+    from mcuhome.workbench.contextdir import ContextFormatVersionError, verify_context
+
     if not (root / MANIFEST_FILE).is_file():
         # "is missing a file the action needs … the missing path in
         # error.details" (§5.4). §3.1 makes this *the* file: "manifest.yaml
@@ -1984,8 +1994,8 @@ class _Build:
 
         The device model comes out of the context (§3.1 puts it at
         ``model/device-model.json``) through
-        :func:`~mcuhome.workbench.api.read_model`, which is documented as exactly
-        this receiving end. A board this builder has no update scheme for
+        :func:`~mcuhome.model.modelfile.read_model`, which is documented as
+        exactly this receiving end. A board this builder has no update scheme for
         is ``error.build.failed``: §7.2.1 makes the ``signing`` block
         mandatory, and there is nothing to put in it.
 
