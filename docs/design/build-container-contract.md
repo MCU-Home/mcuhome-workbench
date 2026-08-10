@@ -1222,15 +1222,26 @@ writable source tree. The contract guarantees the **behavior**, never
 the mechanism:
 
 - The **backend** MUST provide a *writable view* of each patched layer
-  and MUST name it in `trees` with `writable: true` (§4.1). The
-  reference mechanism is a copy-on-write overlay constructed
-  **host-side by the backend** (lowerdir = the pristine read-only
-  source, upperdir = per-session scratch on the host). Copying the
-  layer into a writable location is a conforming fallback.
-- The overlay, where used, MUST be constructed outside the container. A
-  container that executes untrusted patch code MUST NOT hold the mount
-  privileges (CAP_SYS_ADMIN) that in-container overlay mounting would
-  require.
+  and MUST name it in `trees` with `writable: true` (§4.1). **In the
+  `container` profile the container's own copy-on-write layer is that
+  view, and it costs nothing to provide**: the image's trees are
+  writable inside the container by construction, one session is one
+  container (ADR 0019 §2), and the container is discarded at
+  `close-session` — so a patched `zephyr` never outlives the session
+  that patched it, which is the whole isolation the view exists for.
+  The backend asserts `writable: true` for an in-image tree at the path
+  `describe` reported, and the assertion is truthful because the layer
+  makes it so. No overlay is mounted and no copy is made.
+- The `subprocess` profile has no container layer, so there the view is
+  the backend's to construct — a copy-on-write overlay on the host
+  (lowerdir = the pristine read-only source), or a copy as the
+  conforming fallback. An overlay, where used, MUST be constructed
+  outside any process that executes untrusted patch code: such a
+  process MUST NOT hold the mount privileges (CAP_SYS_ADMIN) that
+  overlay mounting requires. And because this profile's build
+  environment is persistent rather than discarded, patches mutate it
+  durably — which is why patch support there is opt-in, actively
+  configured, at the operator's own risk (ADR 0019).
 - The **program** MUST apply the patches of each patched layer to its
   view, in the order of §3.1, before building. It applies them **once
   per session**: the patch set of a locked context cannot change, so

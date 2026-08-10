@@ -785,3 +785,36 @@ sent but is empty may be locked: it has a well-defined ID, and the
 things a `build` needs beyond existence — `keys/signing.pub` above
 all — are checked by `build`, which is where the contract scopes
 them, not by the lock.
+
+## Amendment: the writable view is the container layer (2026-08-10, product owner)
+
+The supersession note above kept "the writable view, the host-side
+placement" from the layer-reset paragraph. Half of that survived one
+review too many: **in the container profile there is no host-side
+placement**, and the product owner's observation that dissolved it is
+recorded because it simplifies the backend to nothing.
+
+The image's trees are already CI-patched at image build (the baked
+workspace applies `patches/` — that is what the image *is* since r3),
+and inside the container they are writable through the container's own
+copy-on-write layer. One session is one container, and the container is
+discarded at `close-session` — so a context-patched `zephyr` never
+outlives the session that patched it, which is the entire isolation the
+writable view exists to provide. The backend therefore asserts
+`writable: true` for an in-image tree at the path `describe` reported,
+truthfully, and constructs nothing: no overlay, no copy, no volume. The
+program applies the context's patches in-container with the §6.2
+machinery it already has.
+
+Host-side construction remains real exactly where a container layer
+does not exist: the `subprocess` profile — whose build environment is
+persistent, which is why patches there are opt-in at the operator's own
+risk (decision E11), and why contract §6.2 now states the two profiles
+separately.
+
+`local-dev` has no context-patch step at all, by design rather than by
+gap: the developer's own west workspace is the build environment, and
+its patches are applied by the developer's hands — a locally modified
+Zephyr to chase a bug or work on MCUHome's core is the reason the mode
+exists. The workbench's `local-dev` method builds what is there and
+attributes it accordingly.
