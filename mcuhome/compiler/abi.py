@@ -2038,7 +2038,13 @@ class _Build:
         try:
             code, log = workspace.run_build(plan)
         except BuildError as failure:
-            raise self.fail(_REASON_BUILD, failure.message) from failure
+            # The hint carries what the message cannot — for a build that
+            # never started, the exact command line — and §5.4's details
+            # is the field that exists for it. Dropping it once reduced
+            # "could not start the build: No such file or directory" to a
+            # riddle with no file name in it.
+            details = {"hint": failure.hint} if failure.hint else None
+            raise self.fail(_REASON_BUILD, failure.message, details) from failure
         if code != 0:
             raise self.fail(_REASON_BUILD, f"west build exited with {code}")
         return scheme, build_dir, log
@@ -2380,6 +2386,14 @@ def run_invocation(
 
 
 if __name__ == "__main__":  # pragma: no cover - the launcher's entry point
+    import os
     import sys
 
-    raise SystemExit(main(sys.argv))
+    # THE process boundary, and the one place that may read process
+    # state: when this module is the process, it is "whoever started
+    # this program", and the environment it hands over is the image's
+    # own — PATH with the toolchain and west, exactly what
+    # :func:`main`'s docstring says the launcher owes its children.
+    # ``tests_py/test_userpaths.py`` exempts this guard by shape and
+    # pins the handover itself; library imports never execute it.
+    raise SystemExit(main(sys.argv, env=dict(os.environ)))

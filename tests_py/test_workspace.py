@@ -281,6 +281,19 @@ def test_a_single_missing_tool_reads_as_one_thing(tmp_path) -> None:
     assert caught.value.message == ("MCUHome cannot compile without gn, which is not on your PATH.")
 
 
+def test_an_environment_without_a_path_has_no_tools(tmp_path, monkeypatch) -> None:
+    """A stated env with no ``PATH`` misses everything — never the process's.
+
+    The regression this pins: ``shutil.which(path=None)`` answers from the
+    *process* environment, so a check that passed ``env.get("PATH")``
+    declared tools present that the build's children could never exec.
+    The process PATH below provably holds all three tools; the stated
+    environment still has none of them.
+    """
+    monkeypatch.setenv("PATH", _tool_dir(tmp_path, "west", "gn", "zap"))
+    assert [tool.name for tool in workspace.missing_tools({})] == ["west", "gn", "zap"]
+
+
 def test_zap_is_satisfied_by_any_of_its_spellings(tmp_path) -> None:
     assert not workspace.missing_tools({"PATH": _tool_dir(tmp_path, "west", "gn", "zap-cli")})
 

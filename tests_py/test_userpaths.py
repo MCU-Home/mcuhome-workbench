@@ -102,10 +102,42 @@ EXEMPT = {"userpaths.py"}
 PROCESS_MODULES = {"os", "os.path", "pathlib", "posixpath", "ntpath"}
 
 
+def _is_main_guard(node: ast.stmt) -> bool:
+    """``if __name__ == "__main__":`` — the launcher's process boundary.
+
+    The guard only runs when the module *is* the process, and then it is
+    "whoever started this program": the one caller that owes ``main`` a
+    stated environment and has nowhere to take it from but the process.
+    Library imports never execute it, so a read inside it can never make
+    two sessions answer each other's questions — which is the hazard this
+    whole check exists against.
+    """
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
 def _process_reads(source: str) -> list[str]:
     """Every access in *source* that reaches the process for an answer."""
     found: list[str] = []
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    guarded: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt) and _is_main_guard(node):
+            guarded.update(id(inner) for inner in ast.walk(node))
+    for node in ast.walk(tree):
+        if id(node) in guarded:
+            continue
         if isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_ATTRIBUTES:
             found.append(node.attr)
         elif isinstance(node, ast.ImportFrom) and node.module in PROCESS_MODULES:
@@ -135,3 +167,31 @@ def test_no_module_reads_process_state() -> None:
             f"{module.name} reaches the process for {sorted(set(reads))}; "
             f"use {FORBIDDEN_ATTRIBUTES[reads[0]]} instead"
         )
+
+
+def test_the_main_guard_is_a_boundary_and_nothing_else_is() -> None:
+    """The guard exemption is exactly as wide as the guard."""
+    inside = "if __name__ == '__main__':\n    import os\n    x = os.environ\n"
+    outside = "import os\nx = os.environ\n"
+    assert _process_reads(inside) == []
+    assert _process_reads(outside) == ["environ"]
+
+
+def test_the_launcher_hands_the_image_environment_to_main() -> None:
+    """``abi.py``'s main guard states ``os.environ`` — the container's PATH.
+
+    The gap this pins was predicted in ``main``'s own docstring and then
+    hit for real: a launcher that states nothing gives a build's children
+    an environment without ``PATH``, west is not found, and the §5.4
+    account is an ENOENT with no file name in it. The guard is the only
+    caller inside the image, so the handover has to happen there — and a
+    refactor that drops it would fail no other test until the next real
+    in-container compile.
+    """
+    source = next(m for m in package_modules() if m.name == "abi.py").read_text(encoding="utf-8")
+    guard = next(n for n in ast.parse(source).body if _is_main_guard(n))
+    rendered = ast.unparse(guard)
+    assert "env=dict(os.environ)" in rendered, (
+        "the launcher no longer hands the image environment to main(); "
+        "in-container builds lose PATH and cannot start west"
+    )

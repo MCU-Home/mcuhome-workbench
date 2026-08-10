@@ -219,7 +219,12 @@ class ToolNeed:
     source: str
 
     def satisfied_by(self, env: dict[str, str]) -> bool:
-        path = env.get("PATH")
+        # The default is "", never None: which(path=None) answers from
+        # the *process* environment, and this check exists to judge the
+        # **stated** one — the env a build's children will actually run
+        # in. A caller that states no PATH has no tools, and hears so as
+        # a typed refusal instead of a child that fails to exec.
+        path = env.get("PATH", "")
         if any(shutil.which(command, path=path) for command in self.commands):
             return True
         return any(env.get(name) for name in self.env_vars)
