@@ -1203,6 +1203,13 @@ class BuildSetup:
         }
         for path in self.layers.values():
             path.mkdir(parents=True)
+        # A west workspace has a local configuration by definition, and
+        # the program copies it into `work` so west's own writes (the
+        # zephyr.base cache) never touch the frozen workspace.
+        (self.workspace_dir / ".west").mkdir()
+        (self.workspace_dir / ".west" / "config").write_text(
+            "[manifest]\npath = mcuhome\nfile = west.yml\n", encoding="utf-8"
+        )
         (self.sdk / "bin").mkdir()
         (self.sdk / "bin" / "generate").write_text("#!/bin/sh\n", encoding="utf-8")
         self.write_sdk_metadata(SDK_METADATA)
@@ -1531,6 +1538,30 @@ def test_the_command_and_the_environment_a_build_would_run(build: BuildSetup) ->
     assert plan.env["TMPDIR"] == str(build.tmp)
     assert plan.env["PYTHONPATH"] == str(build.sdk / "scripts" / "pyshim")
     assert plan.env["CCACHE_BASEDIR"] == str(build.workspace_dir)
+    # West's first build writes its zephyr.base cache into the local
+    # config; the workspace is a frozen input, so west reads and writes a
+    # copy in `work` instead — same content, writable owner.
+    copied = Path(plan.env["WEST_CONFIG_LOCAL"])
+    assert copied == build.work / abi.WORK_WEST_CONFIG
+    assert copied.read_text(encoding="utf-8") == (
+        build.workspace_dir / ".west" / "config"
+    ).read_text(encoding="utf-8")
+
+
+def test_a_workspace_without_a_west_config_is_a_typed_refusal(build: BuildSetup) -> None:
+    """A baked workspace whose ``.west/config`` is unreadable cannot build.
+
+    The alternative — letting :func:`shutil.copyfile` raise — is exit
+    code 1 with no result document, which §5.3 forbids: exit 1 promises
+    an account, and this failure has a precise one.
+    """
+    (build.workspace_dir / ".west" / "config").unlink()
+    assert build.run() == abi.EXIT_FAILURE
+    document = build.document()
+    assert document["status"] == "failure"
+    assert document["reason"] == "error.build.failed"
+    assert ".west/config" in document["error"]["message"]
+    assert build.plans == []
 
 
 def test_limits_jobs_is_authoritative_and_nothing_re_detects_it(

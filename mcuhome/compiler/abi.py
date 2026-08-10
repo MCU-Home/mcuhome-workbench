@@ -382,6 +382,9 @@ WORK_TREE = "tree"
 WORK_BUILD = "build"
 WORK_CCACHE = "ccache"
 WORK_HOME = "home"
+#: The writable copy of the workspace's ``.west/config`` (see
+#: :meth:`_Invocation._environment`).
+WORK_WEST_CONFIG = "west-config"
 
 #: ``<sysbuild artifact> -> <name in out>`` for the unsigned application
 #: image, whose role is ``firmware``. §7.2: "MCUHome's own container
@@ -1755,6 +1758,26 @@ class _Build:
         """
         home = self.work_dir / WORK_HOME
         home.mkdir(parents=True, exist_ok=True)
+        # West caches what it derives: the first `west build` writes
+        # `zephyr.base` back into the workspace's own `.west/config`. The
+        # baked workspace belongs to whoever built the image, and §2.2
+        # runs this program as the calling user — but the deeper point is
+        # that the workspace is a frozen input this program never writes,
+        # incidental caches included. So the local config is copied into
+        # `work` once per session and ``WEST_CONFIG_LOCAL`` points west at
+        # the copy: topdir discovery still walks to `.west/`, only the
+        # file west reads and writes moves, and any west write invented
+        # later lands in `work` with it.
+        west_config = self.work_dir / WORK_WEST_CONFIG
+        if not west_config.exists():
+            try:
+                shutil.copyfile(topdir / ".west" / "config", west_config)
+            except OSError as error:
+                raise self.fail(
+                    _REASON_BUILD,
+                    f"the west workspace at {topdir} has no readable "
+                    f".west/config: {error.strerror}",
+                ) from error
         env = workspace.build_environment(
             self.base_env,
             jobs=self.jobs,
@@ -1763,6 +1786,7 @@ class _Build:
             tmpdir=self.tmp_dir,
             home=home,
         )
+        env["WEST_CONFIG_LOCAL"] = str(west_config)
         cache = self.document.get("ccache")
         shared = cache.get("path") if isinstance(cache, dict) else None
         if isinstance(cache, dict) and cache.get("writable") is True:
