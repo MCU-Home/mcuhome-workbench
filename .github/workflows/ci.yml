@@ -356,7 +356,7 @@ jobs:
   # Three independent blind spots hid the same gap: the twister job
   # filters the `matter` west group out, the suites in tests/ are
   # CHIP-free by design (ADR 0014), and every Matter build anyone ran
-  # locally used --native, where the host interpreter quietly supplied
+  # locally used the host method, where the host interpreter quietly supplied
   # what the image lacked. Nothing had ever walked the container path for
   # a Matter build. This job is that walk — patch set, compat headers,
   # image contents, west pins, generator and `mcuhome build`, exercised
@@ -560,7 +560,7 @@ jobs:
       # The example the bench node was commissioned from — the YAML form
       # of samples/matter-node — built the way AGENTS.md documents it:
       # from the workspace top directory, in the builder image (the
-      # default path, not --native, which is the whole point), against
+      # default path, not the host method, which is the whole point), against
       # the SDK archive built above, with the RTT snippet the
       # debug-output directive requires. The signing key is generated on
       # first use and dies with the runner; nothing commissions this

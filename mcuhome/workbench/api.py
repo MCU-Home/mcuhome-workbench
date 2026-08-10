@@ -43,19 +43,24 @@ What is here, in the order a caller needs it:
     ``main.yaml``, as data an editor or a picker can consume.
 ``read_manifest``
     ``build-manifest.json`` of a finished build.
+``run_build`` / ``BuildRequest`` / ``BuildOutcome``
+    The three build methods of ADR 0020 decision 6 behind one awaitable
+    call (E64). ``resolve_method`` turns a name — or nothing — into one
+    of ``LOCAL``, ``LOCAL_DEV``, ``REMOTE`` (``METHODS``,
+    ``DEFAULT_METHOD``), and ``UnknownMethod``, ``MethodUnavailable`` and
+    ``RemoteNotConfigured`` are the typed refusals a caller renders.
 
 Synchrony is a property of each operation here, not of the whole
-supported surface. These operations are synchronous and CPU-bound (YAML
+supported surface. Stages 1-3 are synchronous and CPU-bound (YAML
 parsing, mostly), and ADR 0020 decision 5 keeps them that way on purpose:
 making 40 ms of pure computation awaitable buys nothing against a build
 that blocks for minutes, and a synchronous core is what keeps synchronous
 embedding possible at all (an ``asyncio.run`` facade over an async core
 raises inside a caller that already has a loop). What that decision makes
-awaitable is the *waiting* — the three build methods and the session
-client (decision 6), which drive a subprocess or a socket and are not
-part of this module yet. So a caller with an event loop offloads one of
-these operations with ``asyncio.to_thread`` when it must, and will await
-the build methods directly once they land.
+awaitable is the *waiting* — :func:`run_build`, which drives a
+subprocess, a container or a socket. So a caller with an event loop
+awaits the build directly and offloads one of the synchronous operations
+with ``asyncio.to_thread`` when it must.
 """
 
 from __future__ import annotations
@@ -78,6 +83,20 @@ from mcuhome.model.export import registry_data
 from mcuhome.model.manifest import MANIFEST_FILE, read_manifest
 from mcuhome.model.model import MODEL_VERSION, DeviceModel
 from mcuhome.model.modelfile import read_model
+from mcuhome.workbench.buildmethods import (
+    DEFAULT_METHOD,
+    LOCAL,
+    LOCAL_DEV,
+    METHODS,
+    REMOTE,
+    BuildOutcome,
+    BuildRequest,
+    MethodUnavailable,
+    RemoteNotConfigured,
+    UnknownMethod,
+    resolve_method,
+    run_build,
+)
 from mcuhome.workbench.configschema import config_json_schema
 from mcuhome.workbench.loader import load_config
 from mcuhome.workbench.resolve import resolve
@@ -95,13 +114,20 @@ from mcuhome.workbench.tree import (
 from mcuhome.workbench.validate import validate
 
 __all__ = [
+    "DEFAULT_METHOD",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
+    "LOCAL",
+    "LOCAL_DEV",
     "MANIFEST_FILE",
+    "METHODS",
     "MODEL_VERSION",
+    "REMOTE",
     "SECRETS_FILE",
     "VERSION",
     "BuildError",
+    "BuildOutcome",
+    "BuildRequest",
     "ConfigError",
     "ConfigErrorGroup",
     "ConfigTree",
@@ -109,6 +135,9 @@ __all__ = [
     "GenerationError",
     "Location",
     "MCUHomeError",
+    "MethodUnavailable",
+    "RemoteNotConfigured",
+    "UnknownMethod",
     "ValidationResult",
     "config_json_schema",
     "error_dicts",
@@ -120,6 +149,8 @@ __all__ = [
     "read_manifest",
     "read_model",
     "registry_data",
+    "resolve_method",
+    "run_build",
     "validate_device",
 ]
 

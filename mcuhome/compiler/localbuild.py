@@ -145,7 +145,7 @@ def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tu
                 "package from operator-configured directories only (ADR 0018) — "
                 "point at one:\n"
                 "    mcuhome build <device> --sdk-source <dir>\n"
-                "or set MCUHOME_SDK_SOURCE. A --native build needs no SDK source."
+                "or set MCUHOME_SDK_SOURCE. --method local-dev needs no SDK source."
             ),
         )
     searched: list[str] = []
@@ -189,7 +189,7 @@ def _image_not_found(reference: str) -> BuildError:
         hint=(
             "the local build compiles in the MCUHome builder image and pulls "
             "nothing — pull or build the image (docker pull "
-            f"{container.IMAGE}), or point --image at one. A --native build "
+            f"{container.IMAGE}), or point --image at one. --method local-dev "
             "needs no image."
         ),
     )

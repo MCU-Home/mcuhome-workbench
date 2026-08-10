@@ -9,7 +9,7 @@ shapes, chosen by which description file is present:
 
 * the **default** container path delivers ``build-report.json`` beside the
   flat ``firmware.*`` / ``firmware.signed.*`` / ``*.ota`` set;
-* ``--native`` writes the fuller ``build-manifest.json`` over a sysbuild
+* ``--method local-dev`` writes the fuller ``build-manifest.json`` over a sysbuild
   layout, with a size and SHA-256 per file.
 
 The gate is only worth having if it fails on the very outputs a green-but-
@@ -184,7 +184,7 @@ def test_report_no_signing_block_is_a_finding(script, tmp_path):
     assert any("signing block" in finding for finding in findings)
 
 
-# --- the --native (build-manifest.json) shape ---------------------------
+# --- the local-dev (build-manifest.json) shape --------------------------
 
 
 def _entry(path: Path, out_dir: Path) -> dict:
@@ -197,7 +197,7 @@ def _entry(path: Path, out_dir: Path) -> dict:
 
 
 def make_manifest_dir(tmp: Path) -> Path:
-    """A complete --native build directory, every file hashed into the manifest."""
+    """A complete local-dev build directory, every file hashed into the manifest."""
     layout = {
         "mcuboot/zephyr/zephyr.hex": b"bootloader-image",
         "app/zephyr/zephyr.signed.hex": b"signed-application-hex",

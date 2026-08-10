@@ -57,6 +57,35 @@ def test_the_version_is_the_package_version() -> None:
     assert __version__ == api.VERSION
 
 
+def test_the_build_methods_are_part_of_the_surface() -> None:
+    """E64: driving a build is supported, not an implementation detail.
+
+    Re-exported rather than reimplemented — the same objects
+    :mod:`mcuhome.workbench.buildmethods` defines, so a caller that
+    monkeypatches or type-checks against either one is talking about the
+    same thing.
+    """
+    from mcuhome.workbench import buildmethods
+
+    exported = (
+        "run_build",
+        "resolve_method",
+        "BuildRequest",
+        "BuildOutcome",
+        "LOCAL",
+        "LOCAL_DEV",
+        "REMOTE",
+        "METHODS",
+        "DEFAULT_METHOD",
+        "UnknownMethod",
+        "MethodUnavailable",
+        "RemoteNotConfigured",
+    )
+    for name in exported:
+        assert name in api.__all__, name
+        assert getattr(api, name) is getattr(buildmethods, name), name
+
+
 def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG, "utf-8")

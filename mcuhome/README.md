@@ -15,7 +15,7 @@ mcuhome init-pairing <device>    # draw this device's commissioning credentials
 mcuhome validate <device>        # stages 1-3, prints the resolved device
 mcuhome build <device> --generate-only   # + stage 4, writes the application
 mcuhome build <device>           # + stage 5, compiles it in the builder image
-mcuhome build <device> --native  #   … or on this machine's own toolchain
+mcuhome build <device> --method local-dev   # … or on this machine's own toolchain
 pytest                           # the suite in ../tests_py/
 ```
 
@@ -91,7 +91,7 @@ is a per-user secret and is passed on the command line
 Stage 5 runs in the **builder image** (ADR 0007,
 [../containers/builder/](../containers/builder/README.md)): the host
 needs git and docker, the workspace is bind-mounted at its own absolute
-path, and the build runs as the calling user. `--native` compiles in the
+path, and the build runs as the calling user. `--method local-dev` compiles in the
 west workspace `mcuhome.compiler` is installed in instead — the escape
 hatch for MCUHome's own contributors.
 

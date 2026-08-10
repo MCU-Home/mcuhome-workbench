@@ -20,7 +20,7 @@ canonical device model), and `mcuhome build` goes all the way to a
 flashable image — stage 4 generates the per-device Zephyr application
 (tables, overlay, Kconfig fragment, CMakeLists) and stage 5 compiles it
 with `west build` inside the builder image (ADR 0007;
-`containers/builder/`), or on the host with `--native`. Note the
+`containers/builder/`), or on the host with `--method local-dev`. Note the
 consequence of ADR 0014:
 `samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
 and the pytest suite compares it byte for byte — never hand-edit it,
@@ -205,7 +205,7 @@ mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
   --build-dir build/bmp180-node -S debug-rtt
 
 # The same, on the host toolchain instead of in the container
-mcuhome build … --native
+mcuhome build … --method local-dev
 
 # Build the builder image from source (containers/builder/README.md).
 # The context is the repository root, not containers/builder/: since r3
@@ -243,8 +243,8 @@ A missing docker, a stopped daemon and a missing image are three
 different refusals with three different fixes, all raised before the
 build starts.
 
-`--native` compiles on the host instead, which is what MCUHome's own
-contributors do in this workspace. That path needs a west workspace plus
+`--method local-dev` compiles on the host instead, which is what MCUHome's
+own contributors do in this workspace. That path needs a west workspace plus
 three things a Zephyr installation does not bring:
 
 | Requirement | Why | Provided by the builder? |
@@ -269,8 +269,9 @@ files in `patches/` with `git apply` (a patch that has drifted from its
 pinned upstream fails the job — there is no `--3way`, no fallback), and
 runs `mcuhome build` on
 `docs/design/examples/00-bmp180-two-endpoints.yaml` in the builder image,
-i.e. the container path rather than `--native`. `scripts/check_build_artifacts.py`
-then asserts the artifact set — MCUboot image, signed application, merged
+i.e. the container path rather than `--method local-dev`.
+`scripts/check_build_artifacts.py` then asserts the artifact set —
+MCUboot image, signed application, merged
 hex, `build-manifest.json`, every file checked against the size and
 SHA-256 the manifest recorded. It exists because three build inputs went
 missing at once without CI noticing (`compat/mbedtls/` outside every

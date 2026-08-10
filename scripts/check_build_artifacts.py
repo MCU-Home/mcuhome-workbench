@@ -24,7 +24,7 @@ same fork ``mcuhome sign`` makes (``mcuhome/workbench/imgtool.py``):
   set is flat: ``firmware.{hex,bin}`` (unsigned), ``bootloader.hex`` when
   the build produced one, ``firmware.signed.{hex,bin}`` (host-signed) and
   one ``<device>-<version>.ota`` wrapped from the signed image.
-* ``--native`` compiles on the host with ``west`` and writes the fuller
+* ``--method local-dev`` compiles on the host with ``west`` and writes the fuller
   ``build-manifest.json`` over a sysbuild layout, signing inline.
 
 ``build-report.json`` present selects the first; ``build-manifest.json``
@@ -122,9 +122,9 @@ BOOTLOADER_FILE = "bootloader.hex"
 #: ``<device>-<version>.ota`` — matched by suffix, of which there is one.
 OTA_GLOB = "*.ota"
 
-# --- the --native (west/sysbuild) shape ---------------------------------
+# --- the local-dev (west/sysbuild) shape --------------------------------
 
-#: Written by ``mcuhome.compiler.report.write_manifest`` into a --native
+#: Written by ``mcuhome.compiler.report.write_manifest`` into a local-dev
 #: build directory, and the selector for that shape.
 MANIFEST_FILE = "build-manifest.json"
 
@@ -241,7 +241,7 @@ def describe_report(out_dir: Path) -> str:
     return f"{ota}: {', '.join(present)}"
 
 
-# --- the --native (west/sysbuild) shape ---------------------------------
+# --- the local-dev (west/sysbuild) shape --------------------------------
 
 
 def check_file(entry: dict[str, Any], *, out_dir: Path, what: str) -> list[str]:
@@ -301,7 +301,7 @@ def check_images(manifest: dict[str, Any], *, out_dir: Path) -> list[str]:
 
 
 def check_manifest(out_dir: Path) -> list[str]:
-    """Every finding about a --native build directory, in reading order."""
+    """Every finding about a local-dev build directory, in reading order."""
     manifest_path = out_dir / MANIFEST_FILE
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -332,7 +332,7 @@ def check_manifest(out_dir: Path) -> list[str]:
 
 
 def describe_manifest(out_dir: Path) -> str:
-    """One line naming what was checked in a --native build directory."""
+    """One line naming what was checked in a local-dev build directory."""
     manifest = json.loads((out_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
     device = manifest.get("device", {})
     images = ", ".join(str(image.get("name")) for image in manifest.get("images", []))

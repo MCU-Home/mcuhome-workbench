@@ -105,8 +105,8 @@ footprints and the flash layout they were built against. The first build
 also draws your own ECDSA P-256 signing key into
 `~/.config/mcuhome/signing.key` and says so: every device you flash
 verifies its firmware against it, so it is worth keeping (ADR 0015). `--generate-only` stops after the
-generating half, which needs nothing but Python; `--native` compiles on
-a host toolchain instead, for people working on MCUHome itself. Details,
+generating half, which needs nothing but Python; `--method local-dev`
+compiles on a host toolchain instead, for people working on MCUHome itself. Details,
 including how to build the image yourself, are in
 [containers/builder/README.md](containers/builder/README.md).
 

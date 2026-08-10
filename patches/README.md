@@ -26,8 +26,9 @@ Where they are applied depends on which workspace is being built in:
   decision E5). Nobody applies anything by hand there — and a patch that
   has drifted from the revision `west.yml` pins fails the *image* build.
 - **A hand-made workspace still needs the manual step**: `git apply
-  <patch>` inside the respective west project. That is what `--native`
-  builds against, what MCUHome's own contributors have in this workspace,
+  <patch>` inside the respective west project. That is what `--method
+  local-dev` builds against, what MCUHome's own contributors have in this
+  workspace,
   and — until `mcuhome build`'s container path is switched over to the
   baked workspace — what a container build mounts and compiles as well.
   The CI matter job does the same thing explicitly, per run.
@@ -102,7 +103,7 @@ variable at CMake configure time; unset or empty keeps the upstream
 default. The builder sets it to the same value as its own `-o=-jN` job
 cap — auto-detected from CPU count and available RAM, `--jobs`/
 `MCUHOME_JOBS` override it (`mcuhome.compiler.workspace.resolve_jobs`,
-`mcuhome.compiler.workspace.auto_jobs`) — in both the native environment
+`mcuhome.compiler.workspace.auto_jobs`) — in both the local-dev environment
 (`mcuhome/compiler/workspace.py:build_environment`) and the container
 environment (`mcuhome/compiler/container.py:container_environment`).
 

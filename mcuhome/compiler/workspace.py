@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Pipeline stage 5, native path: compiling the generated application.
+"""Pipeline stage 5, local-dev path: compiling the generated application.
 
 Stage 4 (:mod:`mcuhome.compiler.generate`) writes a standalone Zephyr application.
 This module turns it into an image, by driving ``west build`` in the west
@@ -8,8 +8,8 @@ workspace the builder itself lives in.
 
 **The escape hatch, not the normal path (ADR 0007).** ``mcuhome build``
 compiles inside the versioned builder image (:mod:`mcuhome.compiler.container`);
-``--native`` selects what is below, for people who already have a west
-workspace with a toolchain in it — MCUHome's own contributors. The two
+``--method local-dev`` selects what is below, for people who already have
+a west workspace with a toolchain in it — MCUHome's own contributors. The two
 paths meet at :func:`plan_build` and :class:`BuildPlan`: a command plus an
 environment. The container path assembles a different command in a
 different environment — using :func:`west_build_command` for the inner
@@ -36,7 +36,7 @@ release tarball is missing the ``python_path`` helper its codegen scripts
 import, which ``scripts/pyshim/`` stands in for — that one the builder can
 fix on its own, by putting the shim on ``PYTHONPATH``; the other two it
 can only check for and explain. The builder image provides all three,
-which is why this checking only happens on the ``--native`` path.
+which is why this checking only happens on the ``local-dev`` path.
 """
 
 from __future__ import annotations
@@ -401,7 +401,7 @@ def resolve_jobs(*, env: dict[str, str], cli_jobs: int | None = None) -> Resolve
     :data:`CHIP_JOBS_VAR` for the inner CHIP GN sub-build
     (:func:`build_environment`), and the container path
     (:mod:`mcuhome.compiler.container`), which receives it as a plain ``jobs``
-    argument like the native path does.
+    argument like the local-dev path does.
 
     A :data:`JOBS_VAR` that is not a positive whole number is treated as
     unset rather than refused: a typo in a shell rc file should not be
@@ -445,7 +445,7 @@ def build_environment(
     :func:`resolve_jobs` gives.
 
     **This is the one definition of a Matter build environment**, and all
-    three callers reach it: :func:`plan_build` for ``--native``,
+    three callers reach it: :func:`plan_build` for ``local-dev``,
     :func:`mcuhome.compiler.container.container_environment` for the ``docker
     run``, and :class:`mcuhome.compiler.abi` for the build-container contract's
     ``build`` action. Each adds what only it knows — a ccache location,
@@ -507,8 +507,8 @@ def _refuse_missing(tools: list[ToolNeed]) -> BuildError:
         lines.append(f"      from: {tool.source}")
     lines.append(
         "None of this is needed with --generate-only, and none of it is needed "
-        "in the MCUHome builder container — which is what compiles when you "
-        "leave --native off."
+        "in the MCUHome builder container — which is what --method local "
+        "compiles in, and what mcuhome build does when no method is named."
     )
     return BuildError(
         f"MCUHome cannot compile without {names}, which is not on your PATH."
@@ -635,7 +635,7 @@ class BuildPlan:
     """Everything stage 5 needs, decided before anything is executed.
 
     Shared by both paths: *command* is a ``west build`` invocation on the
-    native path and a ``docker run`` wrapped around one in the container,
+    local-dev path and a ``docker run`` wrapped around one in the container,
     and everything downstream treats it the same way. *image* is the one
     thing that differs enough to be worth naming — ``None`` means the
     build runs on this machine's own toolchain.

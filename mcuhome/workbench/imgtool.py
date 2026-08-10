@@ -13,7 +13,7 @@ somewhere else entirely.
 **One signing path, whatever built the image (E56).** Zephyr's
 ``cmake/mcuboot.cmake`` *can* sign inline, deriving the arguments from
 Kconfig and devicetree — but no MCUHome build method uses that any more:
-every build (container, ``--native``, ``--no-sign``) produces an
+every build (container, ``local-dev``, ``--no-sign``) produces an
 **unsigned** image and states those same arguments in its report
 (``build-manifest.json`` for a west build, the §7.2.1 ``build-report.json``
 for a container build). This module is the one place they are turned back

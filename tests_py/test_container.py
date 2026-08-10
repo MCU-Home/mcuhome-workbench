@@ -219,7 +219,7 @@ def test_the_run_command_mounts_paths_onto_themselves(tmp_path) -> None:
 
     Mounting the workspace at /workspace would make every path in the
     CMake cache a lie the moment anyone looked at the build directory
-    from the host — or ran the same build with --native.
+    from the host — or ran the same build with --method local-dev.
     """
     command = container.docker_run_command(
         docker="docker",
@@ -281,7 +281,7 @@ def test_no_docker_at_all_says_what_to_install() -> None:
     assert "cannot find docker on your PATH" in caught.value.message
     hint = caught.value.hint or ""
     assert "docs.docker.com" in hint
-    assert "--native" in hint
+    assert "--method local-dev" in hint
     # Asking an absent program a second question tells nobody anything.
     assert len(runner.commands) == 1
 
@@ -306,7 +306,7 @@ def test_a_missing_image_says_how_to_get_one_both_ways() -> None:
         in hint
     )
     assert container.IMAGE_VAR in hint
-    assert "--native" in hint
+    assert "--method local-dev" in hint
 
 
 def test_a_working_docker_with_the_image_says_nothing() -> None:
@@ -366,7 +366,7 @@ def test_the_plan_is_a_west_build_inside_a_docker_run(tmp_path, monkeypatch) -> 
     assert plan.build_dir == top / "build" / "node" / "build"
     assert plan.image == container.IMAGE
     assert plan.command[:4] == ["docker", "run", "--rm", "--init"]
-    # The inner half is the native path's command, character for character:
+    # The inner half is the local-dev path's command, character for character:
     # one build invocation, two ways of reaching a compiler.
     inner = plan.command[plan.command.index(container.IMAGE) + 1 :]
     assert inner == workspace.west_build_command(
@@ -379,7 +379,7 @@ def test_the_plan_is_a_west_build_inside_a_docker_run(tmp_path, monkeypatch) -> 
 
 
 def test_the_plan_caps_the_chip_gn_sub_build_in_the_container_too(tmp_path, monkeypatch) -> None:
-    """Same OOM risk as the native path, one process tree down.
+    """Same OOM risk as the local-dev path, one process tree down.
 
     (patches/connectedhomeip-v1.5.1.0-vanilla-zephyr.patch,
     config/common/cmake/chip_gn.cmake.)
@@ -404,7 +404,7 @@ def test_the_plan_needs_no_toolchain_on_the_host(tmp_path, monkeypatch) -> None:
     """The whole promise of ADR 0007, as an assertion.
 
     An empty PATH is what a user who installed nothing but docker has.
-    The native path refuses that by design; this one must not notice.
+    The local-dev path refuses that by design; this one must not notice.
     """
     _, plan = _plan(tmp_path, monkeypatch, env={"PATH": ""})
     assert plan.image == container.IMAGE
@@ -463,7 +463,7 @@ def test_without_a_key_nothing_extra_is_mounted(tmp_path, monkeypatch) -> None:
 
 
 def test_the_inner_command_is_a_sysbuild_build(tmp_path, monkeypatch) -> None:
-    """The container path builds exactly what the native path builds."""
+    """The container path builds exactly what the local-dev path builds."""
     _, plan = _plan(tmp_path, monkeypatch, snippets=("matter",), bootloader_snippets=("boot-mode",))
     assert "--sysbuild" in plan.command
     assert "-Dapp_SNIPPET=matter" in plan.command

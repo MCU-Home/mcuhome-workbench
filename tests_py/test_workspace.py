@@ -63,7 +63,7 @@ def test_a_directory_that_is_not_a_workspace_is_not_one(tmp_path) -> None:
 
 
 def test_the_installed_module_dir_is_the_repository_it_says_it_is() -> None:
-    """A precondition of every native build; wrong, and nothing compiles.
+    """A precondition of every local-dev build; wrong, and nothing compiles.
 
     ``installed_module_dir()`` claims to answer "where is the MCUHome
     Zephyr module" for a local-dev install, and this test suite runs from

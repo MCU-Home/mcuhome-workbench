@@ -5,13 +5,13 @@
 ADR 0007 makes the builder image *the* build environment: the host needs
 git and docker, everything else — Zephyr SDK, west, gn, zap, ccache —
 lives in an image versioned in lockstep with the Zephyr pin
-(``containers/builder/``). :mod:`mcuhome.compiler.workspace` keeps the ``--native``
-escape hatch for people who already have a west workspace with a
-toolchain in it, which is MCUHome's own contributors and nobody else.
+(``containers/builder/``). :mod:`mcuhome.compiler.workspace` keeps the
+``local-dev`` escape hatch for people who already have a west workspace
+with a toolchain in it, which is MCUHome's own contributors and nobody else.
 
 The seam block C left behind is exactly the one used here:
 :func:`plan_build` returns the same :class:`~mcuhome.compiler.workspace.BuildPlan`
-the native path returns — a command plus an environment — so everything
+the local-dev path returns — a command plus an environment — so everything
 after it (running the build, reading the memory report, listing the
 images) is shared code. The command happens to start with ``docker run``
 and the west invocation inside it is assembled by the very same
@@ -20,7 +20,7 @@ and the west invocation inside it is assembled by the very same
 **Same paths inside and outside.** The workspace is bind-mounted at the
 absolute path it has on the host, not at some ``/workspace``. A CMake
 build tree is full of absolute paths, so this is what makes a build
-directory usable from both sides — ``--native`` after a container build,
+directory usable from both sides — ``local-dev`` after a container build,
 a debugger on the host, an error message a human can copy. The price is
 that container paths mirror host paths, which is a price worth paying.
 
@@ -79,7 +79,7 @@ ZEPHYR_LINE = "4.4.0"
 #: so r1 could not build the MCUboot image at all: sysbuild runs
 #: ``imgtool getpub`` to generate ``autogen-pubkey.c`` on every build,
 #: signing or not. Every Matter image built before 2026-08-09 therefore
-#: came from ``--native``, where the host interpreter supplied it.
+#: came from the host method, where the host interpreter supplied it.
 #:
 #: r3 adds a real west workspace at ``/mcuhome/workspace`` (ADR 0020
 #: decision E5): Zephyr, its modules, MCUboot and the Matter SDK at the
@@ -248,7 +248,7 @@ def _refuse_no_docker(docker: str) -> BuildError:
             "same command again. That is the whole host setup: the Zephyr SDK, gn, "
             "zap and ccache live in the MCUHome builder image, not on your machine.\n"
             "If you already have a west workspace with a Zephyr toolchain in it, "
-            "--native compiles there instead."
+            "--method local-dev compiles there instead."
         ),
     )
 
@@ -261,7 +261,7 @@ def _refuse_no_daemon(docker: str) -> BuildError:
             "    sudo systemctl start docker      # Linux, system service\n"
             "    open -a Docker                   # macOS, Docker Desktop\n"
             f"If {docker} only works under sudo, add yourself to the `docker` group "
-            "and log in again. --native compiles on the host instead."
+            "and log in again. --method local-dev compiles on the host instead."
         ),
     )
 
@@ -276,7 +276,7 @@ def _refuse_missing_image(docker: str, reference: str) -> BuildError:
             "repository, because west.yml and patches/ are image inputs):\n"
             f"    {docker} build -t {reference} -f {DOCKERFILE_DIR}/Dockerfile .\n"
             f"{IMAGE_VAR} selects a different image, --image does it per build, and "
-            "--native skips the container altogether."
+            "--method local-dev skips the container altogether."
         ),
     )
 
@@ -374,7 +374,7 @@ def container_environment(
     env["CCACHE_DIR"] = CONTAINER_CCACHE_DIR
     # Absolute paths under the workspace are hashed relative to it, so one
     # cache serves several build directories — and, because the mount is
-    # path-identical, the same cache serves a --native build.
+    # path-identical, the same cache serves a local-dev build.
     env["CCACHE_BASEDIR"] = str(topdir)
     return env
 

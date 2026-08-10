@@ -229,7 +229,7 @@ set ([../../patches/](../../patches/)).
   route it through ccache (compiler-launcher wiring in the GN args).
 - Inside the Home Assistant add-on the same code path runs natively —
   the add-on container *is* the builder image plus dashboard.
-- `--native` escape hatch: developers with a local west workspace
+- `--method local-dev` escape hatch: developers with a local west workspace
   (contributors to MCUHome itself) can run stage 5 on the host. CI and
   end users always use the container.
 
@@ -380,7 +380,7 @@ mcuhome clean        <device|--all>
 (`devices/<name>/main.yaml`); an explicit path works too. Tree root:
 `--config-root`, else auto-discovered (cwd upwards). Everything else
 (`flash`, `logs`, `migrate`, `update`) arrives with its own design.
-Flags: `--native` (§5), `--keep-going` for CI, `-v`.
+Flags: `--method local-dev` (§5), `--keep-going` for CI, `-v`.
 
 `init-pairing` is the exception to "the builder never writes into the
 configuration tree" (§2), and it exists because of §1.4: a device needs

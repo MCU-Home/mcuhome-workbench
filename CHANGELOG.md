@@ -375,6 +375,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--native` is gone; `--method local-dev` is the only spelling** (E62).
+  The flag predated the build-method names and was kept as an alias for
+  them; it is removed rather than deprecated, because the project is not
+  public and no invocation outside these repositories can depend on it.
+  `mcuhome build --native` is now an unknown argument. Everything that
+  named the flag — help texts, refusal hints, `AGENTS.md`, the READMEs,
+  the CI comments — names the method instead.
+- **The build methods are part of `mcuhome.workbench.api`** (E64).
+  `run_build`, `BuildRequest`, `BuildOutcome`, `resolve_method`, the
+  method names (`LOCAL`, `LOCAL_DEV`, `REMOTE`, `METHODS`,
+  `DEFAULT_METHOD`) and the typed refusals (`UnknownMethod`,
+  `MethodUnavailable`, `RemoteNotConfigured`) are re-exported from the
+  supported surface, so an embedder drives a build without reaching past
+  it into `mcuhome.workbench.buildmethods`.
 - **The Python package is three packages** (ADR 0020 decision 1). `mcuhome/`
   became a PEP 420 namespace directory — no `__init__.py`, no module of its
   own — holding `mcuhome.model` (the shared vocabulary: device model,

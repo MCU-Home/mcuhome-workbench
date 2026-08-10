@@ -41,14 +41,14 @@
 #                               even with --no-sign, which is why the
 #                               container path had never produced a Matter
 #                               image before 2026-08-09 — every signed
-#                               artifact so far came from --native, where
-#                               the host interpreter supplies it.
+#                               artifact so far came from the host method,
+#                               where the host interpreter supplies it.
 #   ruamel.yaml               the MCUHome builder package itself
 #
 # CHIP's build requirements also list `python-path`. It is deliberately
 # absent: scripts/pyshim/ stands in for it and goes first on PYTHONPATH
 # (upstream candidate C1), and the container must not quietly behave
-# differently from a --native build there.
+# differently from a local-dev build there.
 #
 # Deliberately NOT here: pyocd, opencv-python, numpy, spdx-tools
 # (Zephyr's requirements-run-test.txt) — hardware runners and reporting
