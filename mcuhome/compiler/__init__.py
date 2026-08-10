@@ -15,12 +15,15 @@ and own Zephyr rather than own build logic. It is therefore not "the back
 half of the pipeline" but a deliverable of the SDK — and a consumer that
 only ever drives builds through a container never installs it at all.
 
-=================================  ==========================================
-:mod:`mcuhome.compiler.generate`   stage 4: the per-device build tree
-:mod:`mcuhome.compiler.workspace`  stage 5: compile in a west workspace
-:mod:`mcuhome.compiler.container`  stage 5: compile in the builder image
-:mod:`mcuhome.compiler.report`     stage 5: measure the build directory
-:mod:`mcuhome.compiler.abi`        the invocation ABI of the build container
-:mod:`mcuhome.compiler.sdkentry`   the SDK package's ``generate`` entry point
-=================================  ==========================================
+=====================================  ======================================
+:mod:`mcuhome.compiler.generate`       stage 4: the per-device build tree
+:mod:`mcuhome.compiler.workspace`      stage 5: compile in a west workspace
+:mod:`mcuhome.compiler.container`      stage 5: compile in the builder image
+:mod:`mcuhome.compiler.localbackend`   stage 5: drive a container through the
+                                       invocation ABI (the ``local`` method,
+                                       ADR 0020 E51 / E32) — no server, no key
+:mod:`mcuhome.compiler.report`         stage 5: measure the build directory
+:mod:`mcuhome.compiler.abi`            the invocation ABI of the build container
+:mod:`mcuhome.compiler.sdkentry`       the SDK package's ``generate`` entry point
+=====================================  ======================================
 """

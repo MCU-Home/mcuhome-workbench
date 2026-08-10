@@ -21,4 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from mcuhome.model import __version__  # noqa: E402 - needs the path above
 
-setup(install_requires=[f"mcuhome-workbench=={__version__}"])
+setup(
+    install_requires=[
+        f"mcuhome-workbench=={__version__}",
+        # The local build method (mcuhome.compiler.localbackend) unpacks the
+        # SDK package, and that package is a tar.zst (E41) — so it needs a
+        # zstd binding. zstandard is the one the build server already uses
+        # for the same archive family, kept the same here on purpose.
+        "zstandard>=0.22",
+    ]
+)
