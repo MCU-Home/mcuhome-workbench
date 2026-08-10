@@ -116,7 +116,23 @@ ZEPHYR_LINE = "4.4.0"
 #: ``/mcuhome/run`` is the one file that names it by its import path —
 #: image content, unlike the module it launches, which still arrives with
 #: the SDK mount.
-IMAGE_REVISION = 6
+#:
+#: r7 = ``/mcuhome/describe.json`` and the label grammar, which are the
+#: same subject seen twice: everything a backend may learn about this
+#: image *before* it starts a container. The file is §2.2's optional
+#: static self-description, and the Dockerfile generates it by running
+#: the program's own ``describe`` at image build time, so it cannot say
+#: anything the program would not. It matters because §6.1 splits this
+#: program in two — the launcher is image content, the body arrives with
+#: the SDK mount — and a backend that has not chosen a mount point yet
+#: therefore has no way to ask. The labels are the older half of the same
+#: promise and were unusable in all three spellings until here: a name
+#: ADR 0020's rename walked into, a Zephyr value carrying the ``v``
+#: §2.1.1 forbids, and a toolchain value with a ``/`` outside the
+#: permitted character class. A constraint is evaluated against those
+#: values, and "a container that does not carry a named label does not
+#: qualify" — so this image satisfied no SDK release's constraint at all.
+IMAGE_REVISION = 7
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a

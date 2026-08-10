@@ -261,6 +261,52 @@ path it configures. The argv shape, the request document, the result
 document and the exit codes are identical; only the path is the
 backend's business.
 
+#### 2.2.1 `/mcuhome/describe.json` — the optional static self-description
+
+An image MAY carry a file at the fixed absolute path
+`/mcuhome/describe.json`. It is **optional** in the strict sense: an
+image without it is fully conforming, and nothing else in this contract
+changes for either party.
+
+Its content is a `describe` result document (§5.4, §7.1.1) — exactly
+what invoking `describe` on this image answers, and nothing else. The
+strongest way to keep that true is to not write the answer twice:
+MCUHome's own image generates the file at image build time by *running*
+`describe` and storing the result document unread, so the file cannot
+state anything the program would not. An image author who assembles it
+by hand takes on the duty of keeping two answers equal, and that duty is
+the whole cost of the file.
+
+**What a backend does with it.** Where the file is present and parses as
+a result document, a backend MAY read it **instead of invoking
+`describe` before the container is arranged**. Where it is absent,
+unreadable, or where the backend would rather ask, the backend invokes
+`describe` exactly as it does today. There is no new failure mode in
+either direction, because the fallback is the thing that was already
+mandatory.
+
+`describe` remains **authoritative** (§7.1). This file is pre-start data,
+like the labels of §2.1, and it is bound by the same rule: a backend MUST
+NOT rely on a static answer that a `describe` contradicts, and an image
+whose file disagrees with its own program is in violation of this section
+exactly as an image whose label disagrees with `describe` is in violation
+of §2.1.
+
+**Why an image would carry it at all.** §6.1 permits a program whose
+*body* arrives with a mounted tree, and MCUHome's own image is the worked
+example: the launcher at `/mcuhome/run` is image content, the body
+arrives with `trees.sdk`, and the launcher cannot run without it. For
+such an image the `program` block is unobtainable until the backend has
+decided where to mount that tree — while `trees`, inside that same block,
+is precisely what tells the backend where the mount has to go. The image
+is undiscoverable before the mount point is known, and the mount point is
+what discovery would have supplied. That circle is what the static file
+cuts, and it cuts it without weakening §7.1: the image answers a question
+about itself with the answer its own program computed.
+
+The file has no meaning in the `subprocess` profile, where there is no
+image to carry it and `describe` is the only discovery channel there is.
+
 ## 3. The build context
 
 ### 3.1 Layout
@@ -1386,6 +1432,12 @@ context ID, and it echoes only the fields the request actually carried
 `describe` is **authoritative** about what the program can do. The
 image labels (§2.1) are a pre-start hint; a backend MUST verify them
 against `describe` and MUST NOT rely on a label `describe` contradicts.
+An image MAY also carry the same answer statically at
+`/mcuhome/describe.json` (§2.2.1), which is a pre-start hint under
+exactly that rule and never a replacement for this action: it exists for
+the image whose program body arrives with a mounted tree, and it is
+therefore read *before* a mount point is chosen and checked here
+afterwards.
 It is also the only discovery channel that exists in the `subprocess`
 profile, where there is no image and therefore no labels — and the only
 way a backend learns where a foreign image keeps its trees, without

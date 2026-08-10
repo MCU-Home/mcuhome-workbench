@@ -35,6 +35,13 @@
 # labels of §2.1 — see the LABEL block in stage 3 for what that claim
 # means and what it deliberately does not.
 #
+# Since r7 there is a fourth: /mcuhome/describe.json, §2.2's optional
+# static self-description, generated at image build time by running the
+# program's own `describe` (end of stage 2). It is what lets a backend
+# read this image's `program` block before it has a mount point to put
+# the SDK at — the labels of the same revision were repaired in the same
+# breath, because both are the pre-start half of §2.1/§2.2.
+#
 # Versioned in lockstep with the Zephyr pin in west.yml: the tag is
 # `zephyr-<zephyr version>-r<image revision>`, and the single source of
 # truth for it is mcuhome/compiler/container.py. Bump the revision whenever
@@ -42,9 +49,18 @@
 # r3 the revision also has to be bumped for west.yml and patches/, which
 # are image inputs now.
 #
+# Since r7 that rule reaches one step further, and only one: the baked
+# describe.json is the program's self-description, so it goes stale when
+# the `program` block does — the shared release version, or one of the
+# ABI constants behind `contract`, `request`, `result` and `actions`.
+# Everything else in mcuhome/ can change without touching this image,
+# because the body arrives with the SDK mount. The version half needs no
+# discipline: one tag cuts the wheels, the SDK archive and this image
+# (ADR 0020 decision 8), so a release rebuilds it anyway.
+#
 # Build (from the repository root — the context is the REPOSITORY, not
 # this directory, because west.yml and patches/ live outside it):
-#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
+#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
 #         -f containers/builder/Dockerfile .
 #
 # Everything downloaded is checksum-verified. The checksums are the whole
@@ -201,10 +217,16 @@ RUN apt-get update \
 # install west` can only resolve to the line already in it. One west lays
 # the workspace out and the same west reads it later — a version skew
 # between the two would be a difference nobody could see from outside.
+#
+# ruamel.yaml comes along for the LAST step of this stage, which runs the
+# program's own `describe` (see there): `mcuhome.compiler.abi` imports
+# `mcuhome.workbench.api` at module level, and the workbench's one
+# third-party dependency is that parser. Same constraint file, so the
+# parser this stage imports and the one the image ships are one version.
 COPY containers/builder/requirements.txt /tmp/requirements.txt
 RUN python3 -m venv /opt/west-venv \
  && /opt/west-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
-        --constraint /tmp/requirements.txt west
+        --constraint /tmp/requirements.txt west ruamel.yaml
 ENV PATH=/opt/west-venv/bin:/usr/local/bin:/usr/bin:/bin
 
 # `west init -l` needs exactly one file of the manifest repository:
@@ -323,6 +345,34 @@ RUN python3 /tmp/workspace-record.py \
 # and it needs no help from us.
 RUN rm -rf /mcuhome/workspace/mcuhome && mkdir /mcuhome/workspace/mcuhome
 
+# What this image answers to `describe`, written by the program that
+# answers it (§2.2's optional static self-description, r7). The file has
+# to hold "exactly what a describe invocation answers", and the strongest
+# way to keep that true is to generate it from one: this file IS the
+# program's answer, so there is no second implementation of the `program`
+# block to drift away from the first.
+#
+# Last in this stage on purpose. `trees` is read out of
+# /mcuhome/workspace.json, which the step above writes, so an answer
+# computed any earlier would describe an image that does not exist yet.
+#
+# The program body is BORROWED from the build context and never
+# installed: only /mcuhome leaves this stage, and PYTHONPATH points
+# outside it. An image carrying a copy of the SDK would contradict ADR
+# 0018, which makes the SDK a hash-pinned package fetched per build and
+# mounted — and would leave a second, older program body inside the image
+# for a mounted one to disagree with.
+#
+# The invocation is §5.1's, unabridged — action plus the absolute path of
+# a request document, and the answer where that document says. Anything
+# other than exit 0 stops the image build here, which is the right place
+# to find out that this image cannot describe itself.
+COPY mcuhome /tmp/program/mcuhome
+RUN printf '%s\n' '{"request": 1, "result": "/tmp/describe.json"}' > /tmp/describe-request.json \
+ && PYTHONPATH=/tmp/program /opt/west-venv/bin/python3 \
+        -m mcuhome.compiler.abi describe /tmp/describe-request.json \
+ && install -m 0644 /tmp/describe.json /mcuhome/describe.json
+
 # --------------------------------------------------------------------------
 # Stage 3: the image itself
 # --------------------------------------------------------------------------
@@ -388,8 +438,9 @@ COPY --from=fetch /opt/zephyr-sdk-${ZEPHYR_SDK_VERSION} /opt/zephyr-sdk-${ZEPHYR
 COPY --from=fetch /opt/gn /opt/gn
 COPY --from=fetch /opt/zap /opt/zap
 
-# The baked west workspace and the record of what it is. One COPY: the
-# whole /mcuhome namespace is ours (build-container-contract.md §2.2), and
+# The baked west workspace, the record of what it is, and since r7 the
+# static `describe` answer computed from that record. One COPY: the whole
+# /mcuhome namespace is ours (build-container-contract.md §2.2), and
 # nothing else in the image writes there.
 COPY --from=workspace /mcuhome /mcuhome
 
@@ -427,9 +478,34 @@ RUN chmod 0755 /mcuhome/run
 # and baked into the workspace above, so a label that could drift from
 # the baked reality via a --build-arg would be scheduling data lying
 # about the image. Bump them together with the pins, like the tag.
+#
+# All three spellings were wrong until r7, and each was wrong in a way
+# that made the label unusable rather than merely untidy — §2.1.1 fixes
+# the grammar precisely because a constraint is *evaluated* against these
+# values:
+#
+#   the NAME was org.mcuhome.model.toolchain — a casualty of ADR 0020's
+#       mcuhome.toolchain -> mcuhome.model.toolchain rename, which walked
+#       into a label the contract owns. A backend looks for
+#       org.mcuhome.toolchain (§2.1) and finds nothing, and "a container
+#       that does not carry a named label does not qualify": this image
+#       could satisfy no toolchain constraint at all.
+#   the ZEPHYR value was v4.4.0 — §2.1.1 asks for the version "**without**
+#       the leading `v` west uses: `4.4.0` for the `v4.4.0` this project
+#       pins", and the leading v is outside the value range as well, so no
+#       version comparison could be made against it.
+#   the TOOLCHAIN value was zephyr-sdk-1.0.1/arm-zephyr-eabi — a `/` that
+#       the character class does not admit, in a value whose shape is
+#       `<identity>-<version>`. The target triple moves out of the value
+#       rather than to the end of it: §2.1.1 names this image's value
+#       itself, `zephyr-sdk-<version>`, and the version part is what an
+#       SDK release compares, so a triple after the final hyphen would
+#       leave nothing numeric to compare. The triple is not lost — it is
+#       the ZEPHYR_TOOLCHAIN ARG at the top of this file, which is where
+#       an image input belongs.
 LABEL org.mcuhome.contract="1" \
-      org.mcuhome.zephyr="v4.4.0" \
-      org.mcuhome.model.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"
+      org.mcuhome.zephyr="4.4.0" \
+      org.mcuhome.toolchain="zephyr-sdk-1.0.1"
 
 # Git refuses to operate in a repository owned by another user (the
 # CVE-2022-24765 hardening), and this is exactly that situation: the

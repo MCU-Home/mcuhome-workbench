@@ -19,6 +19,11 @@
 #              below decides that, and the head comment of `matter` says
 #              why the job exists.
 #
+# And one job that is not a gate: `sdk-package` builds the
+# `mcuhome-sdk-<version>` archive on `main` and uploads it as a workflow
+# artifact. It publishes nothing and can fail nothing that a pull request
+# would notice; see its own head comment.
+#
 # All actions are pinned to commit SHAs, not tags (see dependabot.yml,
 # which keeps the pins current via its github-actions ecosystem entry).
 
@@ -558,3 +563,64 @@ jobs:
         with:
           path: .ccache
           key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}
+
+  # ------------------------------------------------------------------
+  # The SDK package (B2)
+  # ------------------------------------------------------------------
+  #
+  # ADR 0019's amendment says "CI builds and hashes the
+  # `mcuhome-sdk-<version>` archive"; this is that sentence. It is not a
+  # gate — nothing about it can fail a pull request, because it runs on
+  # `main` only — and it publishes nowhere. What it produces is a
+  # workflow artifact: a file an operator can download into the local
+  # source directory the build server searches first, which is "the whole
+  # first implementation" of the package index that same amendment
+  # describes.
+  #
+  # The pytest suite (tests_py/test_sdk_archive.py) is what proves the
+  # bytes are deterministic and the allowlist holds; this job's value is
+  # that the archive gets built from a clean checkout by something other
+  # than a developer's machine, which is the same reason the `matter` job
+  # exists.
+  sdk-package:
+    name: SDK package (build and upload)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # Pinned, because the compressor decides the bytes. Identical zstd
+      # parameters give identical output for one libzstd and not across
+      # two, and the archive's SHA-256 is what a build context pins (ADR
+      # 0018 §6) — so an unpinned compressor would quietly change the
+      # identity of every build that used the package.
+      - name: Install zstandard
+        run: python -m pip install --disable-pip-version-check zstandard==0.25.0
+
+      # HEAD, and therefore the commit — never the working tree. The
+      # script reads the release version out of that same commit, so the
+      # file name and the content cannot disagree.
+      - name: Build the archive
+        run: python scripts/build_sdk_archive.py --output-dir dist/sdk --revision HEAD
+
+      - name: Show what was built
+        run: |
+          ls -l dist/sdk
+          cat dist/sdk/index.json
+          (cd dist/sdk && sha256sum -c ./*.sha256)
+
+      # The archive, its sidecar and the index together: a downloaded
+      # artifact is then already a source directory the build server can
+      # be pointed at, rather than three things to reassemble.
+      - name: Upload the archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcuhome-sdk-package
+          path: dist/sdk
+          if-no-files-found: error

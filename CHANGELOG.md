@@ -332,6 +332,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONFIG_MCUHOME_WATCHDOG_TIMEOUT_S`) from one constant. Costs 1,152 B
   of bootloader flash, most of it the log lines that say whether the
   arming worked.
+- **The SDK package is buildable** (`scripts/build_sdk_archive.py`, B2).
+  ADR 0019's amendment asks CI to "build and hash the
+  `mcuhome-sdk-<version>` archive"; this builds it from a **commit** via
+  `git archive` — never the working tree — with the release version read
+  out of that same commit, so the file name and the content cannot
+  disagree. The bytes are reproducible on purpose, because ADR 0018 §6
+  hashes `mcuhome.package.sha256` into the context ID: PAX format,
+  entries sorted, one mtime (the commit's committer date), `uid`/`gid` 0
+  with empty `uname`/`gname`, modes narrowed to 0755/0644, one zstd
+  level. What goes in is an explicit allowlist with a named consumer per
+  entry — `patches/`, `packaging/`, `tests_py/`, `tests/`, `docs/` and
+  `containers/` are out, and anything new in the repository stays out
+  until somebody names it. Alongside the archive go a `sha256sum`-format
+  sidecar and a static `index.json` mapping `(name, version)` to file,
+  hash and size, with no URL in it: the source list is the operator's
+  configuration and `package.url` "is a hint only" nobody fetches. A new
+  CI job builds it on `main` and uploads it as a workflow artifact; it
+  publishes nowhere. `tests_py/test_sdk_archive.py` proves determinism by
+  building twice, pins the allowlist in both directions, and drives the
+  build server's own `sdkstore.acquire_sdk` over a real archive in
+  process — the one place where the two repositories' assumptions about
+  one file meet.
+- Builder image **r7** (`ghcr.io/mcu-home/builder:zephyr-4.4.0-r7`):
+  `/mcuhome/describe.json`, the optional static self-description of
+  contract §2.2.1, generated at image build time by *running* the
+  program's own `describe` against the baked workspace record and storing
+  the result document unread — so the file cannot say anything the
+  program would not. It exists because this image is §6.1's own split:
+  the launcher is image content, the program body arrives with the SDK
+  mount, and a backend that has not chosen a mount point yet therefore
+  has no way to ask — while `trees` in the answer is exactly what tells
+  it where the mount goes. The three coupling labels were repaired in the
+  same revision: the name is `org.mcuhome.toolchain` again (ADR 0020's
+  rename had walked into a label the contract owns), `org.mcuhome.zephyr`
+  drops west's leading `v` (`4.4.0`), and `org.mcuhome.toolchain` loses
+  the `/` the character class of §2.1.1 does not admit
+  (`zephyr-sdk-1.0.1`). None of the three was cosmetic — a constraint is
+  evaluated against those values, and a container that does not carry a
+  named label does not qualify, so the image satisfied no SDK release's
+  constraint at all.
 
 ### Changed
 

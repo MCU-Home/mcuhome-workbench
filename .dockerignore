@@ -5,10 +5,10 @@
 #
 # The context is this repository, not containers/builder/, because
 # west.yml and patches/ are image inputs since r3 — the image bakes a west
-# workspace and applies the patch set into it. The Dockerfile copies five
-# things and nothing else (west.yml, patches/, containers/builder/
-# requirements.txt, containers/builder/workspace-record.py, containers/
-# builder/run), so this file is about keeping the context small and
+# workspace and applies the patch set into it. The Dockerfile copies six
+# things and nothing else (west.yml, patches/, mcuhome/, containers/
+# builder/requirements.txt, containers/builder/workspace-record.py,
+# containers/builder/run), so this file is about keeping the context small and
 # reproducible rather than about secrecy: the whole repository is ~6 MB,
 # 2 MB of which is .git.
 #

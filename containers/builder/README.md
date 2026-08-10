@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r6   # or build it, below
+docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r7   # or build it, below
 mcuhome build <device>                                 # uses it by default
 ```
 
@@ -105,15 +105,47 @@ the one piece of *image* content that spells it. The module it launches
 is not image content — it arrives with the SDK mount — so nothing else
 about r6 differs from r5.
 
-**One action is implemented: `describe`.** `build` and `verify` answer
-`status: "unsupported"`, `reason: "unsupported.action"`, exit 1 — the
-legible refusal §7 prescribes for an action a program does not implement.
+**All three actions of §7 are implemented** — `describe`, `verify` and
+`build` — which is what let the image start claiming conformance in r5.
+The claim was withheld through r4 on purpose: `org.mcuhome.contract=1`
+claims conformance, conformance means all three actions, and a label the
+program cannot back is a false claim to exactly the third parties the
+contract is written for.
 
-That is also why the image still carries **no `org.mcuhome.*` labels**.
-`org.mcuhome.contract=1` claims conformance, and conformance means all
-three actions of §7; a label the program cannot back is a false claim to
-exactly the third parties the contract is written for. The labels arrive
-with `build` and `verify`.
+## The static self-description at `/mcuhome/describe.json` (r7)
+
+§2.2.1 of the contract lets an image carry its `describe` answer as a
+file, and this image does. It holds "exactly what a `describe`
+invocation answers", and the Dockerfile keeps that true the only way that
+needs no discipline: it **runs** `describe` at image build time, with the
+program body borrowed from the build context and the baked
+`/mcuhome/workspace.json` as its record, and stores the result document
+unread at mode 0644. There is no second implementation of the `program`
+block to drift away from the first.
+
+It exists because this image is §6.1's own split: the launcher is image
+content, the program *body* arrives with the SDK mount. A backend that
+has not yet chosen a mount point therefore cannot ask this image
+anything — while `trees` in the answer is precisely what tells it where
+the mount has to go. `describe` stays authoritative (§7.1); the file is
+pre-start data, like the labels.
+
+The three coupling labels were repaired in the same revision, because
+they are the other half of what a backend may learn before it starts a
+container:
+
+| Label | r5 and r6 | since r7 |
+|---|---|---|
+| name | `org.mcuhome.model.toolchain` | `org.mcuhome.toolchain` (§2.1) |
+| `org.mcuhome.zephyr` | `v4.4.0` | `4.4.0` — §2.1.1 asks for the version *without* west's leading `v` |
+| `org.mcuhome.toolchain` | `zephyr-sdk-1.0.1/arm-zephyr-eabi` | `zephyr-sdk-1.0.1` — `<identity>-<version>`, and `/` is outside the permitted character class |
+
+None of the three was cosmetic. A compatibility constraint is evaluated
+against these values, and "a container that does not carry a named label
+does not qualify" — so under the old spellings this image satisfied no
+SDK release's constraint at all. The target triple is not lost with the
+old value: it is the `ZEPHYR_TOOLCHAIN` build argument at the top of the
+`Dockerfile`, which is where an image input belongs.
 
 ## Versioning
 
@@ -137,12 +169,21 @@ CI derives "the image needs building" from the tag not existing in the
 registry, so a forgotten bump means the tests silently run in the old
 environment.
 
+Since r7 the rule reaches one step further, and only one: the baked
+`describe.json` is the program's self-description, so it goes stale when
+the `program` block does — the shared release version, or one of the ABI
+constants behind `contract`, `request`, `result` and `actions`.
+Everything else in `mcuhome/` can change without touching this image,
+because the body arrives with the SDK mount. The version half needs no
+discipline of its own: one tag cuts the wheels, the SDK archive and this
+image (ADR 0020 decision 8).
+
 ## Building it
 
 ```sh
 # from the repository ROOT — the context is the repository, not this
 # directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
+docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
     -f containers/builder/Dockerfile .
 ```
 
@@ -193,7 +234,7 @@ build with `--image`, or for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 \
+docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
     cat /mcuhome/workspace.json
 ```
 
@@ -244,7 +285,7 @@ hash is safe.
 # what the cache is doing, with the same mount the builder uses
 docker run --rm --user "$(id -u):$(id -g)" \
     --volume ~/.cache/mcuhome/ccache:/ccache \
-    ghcr.io/mcu-home/builder:zephyr-4.4.0-r6 ccache -s
+    ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 ccache -s
 ```
 
 ## Bumping Zephyr

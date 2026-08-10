@@ -224,7 +224,7 @@ def test_the_record_is_outside_every_layer() -> None:
 
 
 def test_the_image_carries_exactly_the_labels_of_section_two_one() -> None:
-    """Since r5 the image claims conformance, and the claim is true.
+    """Since r5 the image claims conformance; since r7 it does so legibly.
 
     The claim was withheld through r4 on purpose — a label without the
     actions behind it is a false promise to exactly the third parties
@@ -235,13 +235,95 @@ def test_the_image_carries_exactly_the_labels_of_section_two_one() -> None:
     literals, not ARGs, so a ``--build-arg`` cannot make the scheduling
     data lie about the baked workspace; this test holds them against
     the pins the repository actually carries.
+
+    r5 spelled all three wrong, and §2.1.1's grammar is what makes that
+    fatal rather than untidy: a constraint is evaluated against these
+    values, and "a container that does not carry a named label does not
+    qualify". So the name is the one §2.1 fixes, the Zephyr value drops
+    the ``v`` west uses, and the toolchain value is
+    ``<identity>-<version>`` out of the permitted character class — no
+    slash, and nothing non-numeric after the final hyphen, or there is
+    no version left for an SDK release to compare.
     """
     text = _dockerfile()
     assert 'org.mcuhome.contract="1"' in text
-    assert 'org.mcuhome.zephyr="v4.4.0"' in text
-    assert 'org.mcuhome.model.toolchain="zephyr-sdk-1.0.1/arm-zephyr-eabi"' in text
+    assert 'org.mcuhome.zephyr="4.4.0"' in text
+    assert 'org.mcuhome.toolchain="zephyr-sdk-1.0.1"' in text
+    assert 'org.mcuhome.model.toolchain="' not in text, "§2.1 fixes the label name"
     assert "ZEPHYR_REVISION=v4.4.0" in text, "the label must match the baked pin"
     assert "ZEPHYR_SDK_VERSION=1.0.1" in text, "the label must match the baked toolchain"
+
+
+def test_the_label_values_are_inside_the_grammar_of_section_two_one_one() -> None:
+    """The grammar itself, not just today's two strings.
+
+    §2.1.1 is where a third party looks to write a constraint, so the
+    values have to be checkable by the rules it states rather than by
+    recognising them: single-line, non-empty, drawn from
+    ``[A-Za-z0-9][A-Za-z0-9._+-]*``, the Zephyr one a dotted numeric
+    version, the toolchain one a lowercase identity with a dotted numeric
+    version after its final hyphen.
+    """
+    text = _dockerfile()
+    values = dict(re.findall(r'org\.mcuhome\.(zephyr|toolchain)="([^"]*)"', text))
+    assert set(values) == {"zephyr", "toolchain"}
+    for value in values.values():
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", value), value
+    assert re.fullmatch(r"\d+(\.\d+)*", values["zephyr"])
+    identity, _, version = values["toolchain"].rpartition("-")
+    assert re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", identity), identity
+    assert re.fullmatch(r"\d+(\.\d+)*", version), version
+
+
+# --------------------------------------------------------------------------
+# The static self-description (r7, §2.2)
+# --------------------------------------------------------------------------
+
+
+def test_describe_json_is_written_by_the_program_that_answers_describe() -> None:
+    """§2.2 asks for "exactly what a describe invocation answers".
+
+    The only way to keep that true without a second implementation is to
+    generate the file from an invocation, which is what the Dockerfile
+    does: the real module, the real request document, and the result
+    document copied over unread. A hand-written block, or one assembled
+    by a shell here, would be a second answer that drifts the first time
+    ``program`` gains a field.
+    """
+    text = _dockerfile()
+    assert "-m mcuhome.compiler.abi describe" in text, "the real program must answer"
+    assert "/mcuhome/describe.json" in text
+    assert re.search(r"install -m 0644 \S+ /mcuhome/describe\.json", text), (
+        "the result document is copied verbatim, mode 0644"
+    )
+
+
+def test_the_program_body_is_borrowed_for_that_and_never_installed() -> None:
+    """ADR 0018 makes the SDK a hash-pinned package fetched per build.
+
+    So the tree the describe step imports must live outside the ``/mcuhome``
+    namespace this stage exports, and reach the final image through
+    nothing. A copy of the SDK baked in would be a second, older program
+    body for the mounted one to disagree with.
+    """
+    text = _dockerfile()
+    found = re.search(r"^COPY mcuhome (\S+)$", text, re.MULTILINE)
+    assert found is not None, "the describe step no longer borrows the program body"
+    assert not found.group(1).startswith("/mcuhome/"), "the body must not land in the namespace"
+    assert "COPY --from=workspace /mcuhome /mcuhome" in text, "only /mcuhome leaves the stage"
+
+
+def test_describe_runs_after_the_record_it_describes() -> None:
+    """``trees`` is read out of the record, so the order is the answer's content.
+
+    A describe computed before ``workspace-record.py`` ran would describe
+    an image that does not exist yet — and it would fail soft, because a
+    missing record is reported as "no tree here" rather than as an error.
+    """
+    text = _dockerfile()
+    assert text.index("--output /mcuhome/workspace.json") < text.index(
+        "-m mcuhome.compiler.abi describe"
+    )
 
 
 # --------------------------------------------------------------------------
