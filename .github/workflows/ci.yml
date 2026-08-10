@@ -392,6 +392,14 @@ jobs:
             -e ./mcuhome/packaging/workbench \
             -e ./mcuhome/packaging/compiler
           python -m pip install --disable-pip-version-check -e ./.deps/cli
+          # The build container delivers an UNSIGNED image and the host
+          # signs it afterwards (ADR 0015 decision 8) — so signing is a
+          # host duty and imgtool a host tool. This job has no west
+          # workspace to borrow bootloader/mcuboot/scripts/imgtool.py
+          # from (the r7 image bakes its own), so it takes the pip
+          # release, pinned to the version the mcuboot pin in west.yml
+          # ships.
+          python -m pip install --disable-pip-version-check imgtool==2.4.0
 
       # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
       # step. That is comfortable for what the job wants at once — the
