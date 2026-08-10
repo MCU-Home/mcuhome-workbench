@@ -14,11 +14,15 @@ of the resolved versions, no integrity information, no room for the
 patches a development build needs, and nothing a build could be
 reproduced from years later.
 
-The device configuration pins versions as **constraints** (`^2.3.6`,
-`~2.3.6`, exact — ADR 0013's per-device pinning), which something must
-resolve to exact versions at a defined moment. And reproducibility has
-a boundary drawn by ADR 0015 §8: signing is detached and per-user, so
-the signature can never be part of what a build environment reproduces.
+The device configuration pins the SDK version as a **constraint** (a
+compatible-release `~=2.3`, a range `>=2.3.6,<3`, or an exact `==2.3.6`),
+which something must resolve to an exact version at a defined moment. The
+constraint grammar is PEP 440 (the amendment below, decision E52); it is
+a distinct thing from ADR 0013's per-device *Zephyr* pinning and blob
+policy, which an earlier draft of this ADR conflated it with. And
+reproducibility has a boundary drawn by ADR 0015 §8: signing is detached
+and per-user, so the signature can never be part of what a build
+environment reproduces.
 
 ## Decision
 
@@ -172,9 +176,11 @@ constraint.
   (dropped for v1, see decision 4 — the identity needed to add one
   later already exists, so nothing is burned).
 - Related standing decisions: ADR 0007 (containerized toolchain),
-  ADR 0008 (Zephyr pinning), ADR 0013 (constraint-based per-device
-  pinning), ADR 0015 §8 (detached signing — the unsigned-image
-  boundary), ADR 0017, ADR 0019; dashboard ADR 0007 (wire content).
+  ADR 0008 (Zephyr pinning), ADR 0013 (binary-blob policy, build
+  profiles, and per-device Zephyr pinning — *not* the SDK-constraint
+  grammar, which is PEP 440 per the amendment below), ADR 0015 §8
+  (detached signing — the unsigned-image boundary), ADR 0017, ADR 0019;
+  dashboard ADR 0007 (wire content).
 
 ## Amendment: request and result, the signing key in the context, and the explicit freeze (2026-08-09, product owner)
 
@@ -343,3 +349,42 @@ are fixed:
 - **The function** is corrected so that it cannot be mistaken for a
   complete check — what it measures is the `files` list, and it says
   so.
+
+## Amendment: the SDK-constraint grammar is PEP 440 (2026-08-10, product owner)
+
+Decision 3 says the device config carries constraints and the workbench
+resolves them at context creation, but it never fixed the constraint
+*grammar*. This resolves that, and corrects a misattribution that rode
+along with the gap.
+
+**The grammar is PEP 440 (decision E52).** An SDK constraint is a
+[PEP 440](https://peps.python.org/pep-0440/) version specifier, resolved
+with `packaging.specifiers.SpecifierSet` — `packaging` is already a
+dependency, and PEP 440 is the version grammar the Python ecosystem
+already agrees on, so a caret/tilde dialect of MCUHome's own would be one
+more thing to specify, implement and get wrong. A constraint resolves to
+the single **highest** available version that satisfies it, against a
+**local** set of versions (for the SDK, the keys of the `index.json` a
+source directory carries — `scripts/build_sdk_archive.py`); nothing is
+fetched to resolve. The reference implementation is
+`mcuhome/workbench/resolve_pins.py`.
+
+**Pre-release rule.** A dev or pre-release version (`2.5.0.dev0`,
+`2.5.0a1`) satisfies a constraint only when the constraint is itself a
+pre-release specifier (`==2.5.0.dev0`, `>=2.5.0a1`) or pre-releases are
+explicitly allowed — `SpecifierSet`'s own `prereleases` semantics. A
+stable constraint such as `~=2.3` never resolves to a pre-release.
+
+**The misattribution.** Earlier prose here (this ADR's Context, and the
+`SdkPin` docstring) spelled constraints as `^2.3.6`/`~2.3.6` and traced
+them to "ADR 0013's per-device pinning". Two things are wrong with that.
+The caret/tilde spelling is npm-style, not PEP 440 — `~=2.3.6`,
+`>=2.3.6,<3` and `==2.3.6` are the PEP 440 spellings of the same intents.
+And ADR 0013 is binary-blob policy, build profiles and per-device
+**Zephyr** pinning (`zephyr_version`, `blob_usage`); it never governed
+the SDK-version-constraint grammar. The two were distinct decisions that
+one sentence merged. The `^2.3.6` examples that remain in decision 6 and
+in `build-container-contract.md` §3.2 are illustrative and pre-date E52;
+read them as `~=2.3.6`. No normative rule changes: the constraint is
+recorded in `context.yaml` as intent and is never hashed (§6), so the
+grammar it is written in cannot affect a context ID.

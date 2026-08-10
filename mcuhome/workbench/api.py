@@ -44,8 +44,18 @@ What is here, in the order a caller needs it:
 ``read_manifest``
     ``build-manifest.json`` of a finished build.
 
-Everything here is synchronous and CPU-bound (YAML parsing, mostly). A
-caller with an event loop runs it in an executor.
+Synchrony is a property of each operation here, not of the whole
+supported surface. These operations are synchronous and CPU-bound (YAML
+parsing, mostly), and ADR 0020 decision 5 keeps them that way on purpose:
+making 40 ms of pure computation awaitable buys nothing against a build
+that blocks for minutes, and a synchronous core is what keeps synchronous
+embedding possible at all (an ``asyncio.run`` facade over an async core
+raises inside a caller that already has a loop). What that decision makes
+awaitable is the *waiting* — the three build methods and the session
+client (decision 6), which drive a subprocess or a socket and are not
+part of this module yet. So a caller with an event loop offloads one of
+these operations with ``asyncio.to_thread`` when it must, and will await
+the build methods directly once they land.
 """
 
 from __future__ import annotations

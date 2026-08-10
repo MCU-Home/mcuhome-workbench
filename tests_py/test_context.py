@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
+from ruamel.yaml import YAML
 
 from mcuhome.model.context import (
     BACKEND_DIR,
@@ -32,9 +34,11 @@ from mcuhome.model.context import (
     CONTEXT_VERSION,
     MANIFEST_FILE,
     MODEL_FILE,
+    SIGNING_KEY_FILE,
     ContainerPin,
     ContextFile,
     ContextManifest,
+    ContextRequest,
     SdkPin,
     canonical_json,
     context_id,
@@ -44,10 +48,13 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
 from mcuhome.workbench.contextdir import (
     create_context,
+    lock_context,
     read_context_manifest,
+    read_context_request,
     verify_context,
     write_context_manifest,
 )
+from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -66,15 +73,27 @@ FILES = (
 #: bug is in the code that made it necessary.
 GOLDEN_ID = "sha256:dde9df3b7ab59f8ad8197b6916f437ed3502ce88275b48f5e122b89e48b99c3f"
 
-#: Resolved pins for the create tests. The URL uses a reserved domain
-#: (RFC 2606): it is advisory data, and no test ever fetches it.
+#: Resolved pins for the create tests. The constraint is PEP 440 (ADR
+#: 0018's amendment, E52). The URL uses a reserved domain (RFC 2606): it
+#: is advisory data, and no test ever fetches it.
 SDK = SdkPin(
-    constraint="^0.1.0",
+    constraint="~=0.1.0",
     version="0.1.0",
     url="https://example.invalid/mcuhome-sdk-0.1.0.tar.zst",
     sha256=SDK_SHA,
 )
 CONTAINER = ContainerPin(image="ghcr.io/mcu-home/builder", tag="zephyr-4.4.0-r1", digest=DIGEST)
+
+#: The request timestamp, an explicit argument so two creations of the
+#: same inputs are byte-identical (ADR 0018: created is the one field
+#: allowed to differ, and only because the caller supplies it).
+CREATED = datetime(2026, 8, 10, 9, 0, 0, tzinfo=UTC)
+
+#: A fixed key pair so the public half is a constant — the context bytes
+#: have to be reproducible, which a fresh random key would break. The
+#: private half is kept around only to prove create_context refuses it.
+_PRIVATE_PEM = generate_key_pem(scalar=0x1234ABCD)
+SIGNING_PUB = public_key_pem(_PRIVATE_PEM)
 
 
 @pytest.fixture(scope="module")
@@ -82,10 +101,26 @@ def model() -> DeviceModel:
     return resolve_file(EXAMPLE)
 
 
-def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
-    arguments = {"sdk": SDK, "container": CONTAINER}
+def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextRequest:
+    arguments = {
+        "sdk": SDK,
+        "container": CONTAINER,
+        "signing_pub": SIGNING_PUB,
+        "created": CREATED,
+    }
     arguments.update(overrides)
     return create_context(model, out_dir=out_dir, **arguments)
+
+
+def _lock(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
+    """Create a base context and freeze it — what a local build method does.
+
+    ``create_context`` writes only the request; the ``files`` list and the
+    ID exist only once the context is locked, so every test that needs a
+    ``manifest.yaml`` goes through here rather than through create alone.
+    """
+    _create(model, out_dir, **overrides)
+    return lock_context(out_dir)
 
 
 def _patches_source(tmp_path: Path) -> Path:
@@ -298,7 +333,7 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
 
 def test_the_informational_fields_do_not_influence_the_id(model, tmp_path: Path) -> None:
     """created, constraint, version, url, image, tag — advisory, all of them."""
-    manifest = _create(model, tmp_path / "context")
+    manifest = _lock(model, tmp_path / "context")
     variants = [
         replace(manifest, sdk=replace(SDK, constraint="~9.9.9")),
         # The version and the URL are names for bytes the sha256 pins.
@@ -321,7 +356,7 @@ def test_the_manifest_carries_no_timestamp(model, tmp_path: Path) -> None:
     and a manifest that carries a stray ``created`` anyway is read under
     the unknown-field rule: ignored, not refused.
     """
-    manifest = _create(model, tmp_path / "one")
+    manifest = _lock(model, tmp_path / "one")
     assert "created" not in manifest.to_dict()
     assert manifest == ContextManifest.from_dict(
         {**manifest.to_dict(), "created": "1999-01-01T00:00:00Z"}
@@ -331,7 +366,7 @@ def test_the_manifest_carries_no_timestamp(model, tmp_path: Path) -> None:
 def test_yaml_formatting_is_irrelevant_to_the_id(model, tmp_path: Path) -> None:
     """The ID hashes values, never the manifest's bytes."""
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
+    manifest = _lock(model, out_dir)
     reordered = (
         "# a comment, and every section in a different order\n"
         f"id: {manifest.id}\n"
@@ -363,30 +398,35 @@ def test_a_created_context_carries_the_model_verbatim(model, tmp_path: Path) -> 
     assert (out_dir / MODEL_FILE).read_text(encoding="utf-8") == model.to_json()
 
 
-def test_the_manifest_lists_every_file_but_never_itself(model, tmp_path: Path) -> None:
+def test_the_signing_key_lands_in_the_context(model, tmp_path: Path) -> None:
+    """keys/signing.pub is context content (ADR 0018 amendment)."""
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
-    assert [entry.path for entry in manifest.files] == [MODEL_FILE]
+    _create(model, out_dir)
+    assert (out_dir / SIGNING_KEY_FILE).read_text(encoding="utf-8") == SIGNING_PUB
 
 
-def test_the_board_and_the_pins_are_recorded(model, tmp_path: Path) -> None:
-    manifest = _create(model, tmp_path / "context")
-    assert manifest.board == model.device.board
-    assert manifest.sdk == SDK
-    assert manifest.container == CONTAINER
-    assert manifest.context_version == CONTEXT_VERSION
+def test_the_locked_manifest_lists_every_content_file_but_neither_document(
+    model, tmp_path: Path
+) -> None:
+    """The freeze lists model and key, and never either context document."""
+    out_dir = tmp_path / "context"
+    manifest = _lock(model, out_dir)
+    assert [entry.path for entry in manifest.files] == [SIGNING_KEY_FILE, MODEL_FILE]
+    listed = {entry.path for entry in manifest.files}
+    assert MANIFEST_FILE not in listed
+    assert CONTEXT_FILE not in listed
 
 
 def test_the_declared_id_is_the_recomputed_id(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
+    manifest = _lock(model, out_dir)
     assert manifest.id == manifest.compute_id()
     assert verify_context(out_dir).ok
 
 
 def test_the_manifest_round_trips_through_yaml(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
+    manifest = _lock(model, out_dir)
     assert read_context_manifest(out_dir / MANIFEST_FILE) == manifest
 
 
@@ -408,14 +448,66 @@ def test_a_target_that_is_a_file_is_refused(model, tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# The request document — context.yaml
+# --------------------------------------------------------------------------
+
+
+def test_the_request_carries_pins_and_created_but_no_files_or_id(model, tmp_path: Path) -> None:
+    """context.yaml is the request: pins + intent + created, and nothing the freeze makes."""
+    _create(model, tmp_path / "context")
+    document = YAML(typ="safe").load(
+        (tmp_path / "context" / CONTEXT_FILE).read_text(encoding="utf-8")
+    )
+    assert document["context"] == CONTEXT_VERSION
+    assert document["created"] == "2026-08-10T09:00:00Z"
+    # Intent and resolution stand side by side (ADR 0018 decision 3).
+    assert document["mcuhome"]["constraint"] == SDK.constraint
+    assert document["mcuhome"]["version"] == SDK.version
+    assert document["mcuhome"]["package"] == {"url": SDK.url, "sha256": SDK.sha256}
+    assert document["container"] == {
+        "image": CONTAINER.image,
+        "tag": CONTAINER.tag,
+        "digest": CONTAINER.digest,
+    }
+    assert document["target"] == {"board": model.device.board}
+    # The freeze's outputs cannot exist yet: no integrity list, no identity.
+    assert "files" not in document
+    assert "id" not in document
+
+
+def test_the_request_round_trips_through_a_yaml_load(model, tmp_path: Path) -> None:
+    """read_context_request reads back exactly the request create_context wrote."""
+    out_dir = tmp_path / "context"
+    request = _create(model, out_dir)
+    assert read_context_request(out_dir / CONTEXT_FILE) == request
+
+
+def test_two_creations_of_the_same_inputs_are_byte_identical(model, tmp_path: Path) -> None:
+    """No clock leak: identical inputs (created included) yield identical bytes."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    _create(model, first)
+    _create(model, second)
+    for name in (CONTEXT_FILE, MODEL_FILE, SIGNING_KEY_FILE):
+        assert (first / name).read_bytes() == (second / name).read_bytes()
+
+
+def test_a_private_key_in_place_of_the_public_one_is_refused(model, tmp_path: Path) -> None:
+    """The private half must never reach a build (ADR 0015 decision 8)."""
+    with pytest.raises(BuildError) as caught:
+        _create(model, tmp_path / "context", signing_pub=_PRIVATE_PEM)
+    assert "public key" in caught.value.message
+
+
+# --------------------------------------------------------------------------
 # Patches are ordinary files
 # --------------------------------------------------------------------------
 
 
 def test_patches_pass_through_as_ordinary_integrity_entries(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir, patches_dir=_patches_source(tmp_path))
+    manifest = _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
     assert [entry.path for entry in manifest.files] == [
+        SIGNING_KEY_FILE,
         MODEL_FILE,
         "patches/sdk/0001-tweak.patch",
         "patches/zephyr/0001-fix-uart.patch",
@@ -427,8 +519,8 @@ def test_patches_pass_through_as_ordinary_integrity_entries(model, tmp_path: Pat
 
 
 def test_patches_change_the_id_like_any_other_file(model, tmp_path: Path) -> None:
-    plain = _create(model, tmp_path / "plain")
-    patched = _create(model, tmp_path / "patched", patches_dir=_patches_source(tmp_path))
+    plain = _lock(model, tmp_path / "plain")
+    patched = _lock(model, tmp_path / "patched", patches_dir=_patches_source(tmp_path))
     assert plain.id != patched.id
 
 
@@ -477,7 +569,7 @@ def test_a_missing_patches_directory_is_refused(model, tmp_path: Path) -> None:
 
 def test_a_pristine_context_verifies_clean(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    _create(model, out_dir, patches_dir=_patches_source(tmp_path))
+    _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
     report = verify_context(out_dir)
     assert report.ok
     assert report.mismatches == ()
@@ -487,7 +579,7 @@ def test_a_pristine_context_verifies_clean(model, tmp_path: Path) -> None:
 
 def test_a_tampered_file_is_detected(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir, patches_dir=_patches_source(tmp_path))
+    manifest = _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
     victim = out_dir / "patches" / "zephyr" / "0001-fix-uart.patch"
     victim.write_text("--- a\n+++ EVIL\n", encoding="utf-8")
     report = verify_context(out_dir)
@@ -503,7 +595,7 @@ def test_a_tampered_file_is_detected(model, tmp_path: Path) -> None:
 def test_a_spoofed_id_is_detected(model, tmp_path: Path) -> None:
     """Every file hash matches, only the declared ID lies."""
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
+    manifest = _lock(model, out_dir)
     _rewrite_manifest(out_dir, id="sha256:" + "00" * 32)
     report = verify_context(out_dir)
     assert not report.ok
@@ -515,7 +607,7 @@ def test_a_spoofed_id_is_detected(model, tmp_path: Path) -> None:
 
 def test_a_listed_but_missing_file_is_detected(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    _create(model, out_dir, patches_dir=_patches_source(tmp_path))
+    _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
     (out_dir / "patches" / "sdk" / "0001-tweak.patch").unlink()
     report = verify_context(out_dir)
     assert not report.ok
@@ -528,7 +620,7 @@ def test_a_listed_but_missing_file_is_detected(model, tmp_path: Path) -> None:
 def test_a_smuggled_file_is_detected(model, tmp_path: Path) -> None:
     """A file the integrity list does not cover is a finding, not a bonus."""
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
+    manifest = _lock(model, out_dir)
     (out_dir / "patches" / "zephyr").mkdir(parents=True)
     smuggled = out_dir / "patches" / "zephyr" / "0001-smuggled.patch"
     smuggled.write_text("--- a\n+++ b\n", encoding="utf-8")
@@ -544,7 +636,7 @@ def test_a_smuggled_file_is_detected(model, tmp_path: Path) -> None:
 def test_the_backend_directory_is_not_part_of_the_identity(model, tmp_path: Path) -> None:
     """A mounted context gains .mcuhome/command.json without changing ID."""
     out_dir = tmp_path / "context"
-    manifest = _create(model, out_dir)
+    manifest = _lock(model, out_dir)
     (out_dir / BACKEND_DIR).mkdir()
     (out_dir / BACKEND_DIR / "command.json").write_text("{}\n", encoding="utf-8")
     report = verify_context(out_dir)
@@ -561,7 +653,7 @@ def test_a_context_without_a_manifest_is_a_refusal(tmp_path: Path) -> None:
 def test_a_wrong_format_version_is_a_refusal(model, tmp_path: Path) -> None:
     """Named on both sides, never silently coerced."""
     out_dir = tmp_path / "context"
-    _create(model, out_dir)
+    _lock(model, out_dir)
     path = out_dir / MANIFEST_FILE
     text = path.read_text(encoding="utf-8").replace(f"context: {CONTEXT_VERSION}", "context: 99")
     path.write_text(text, encoding="utf-8")
@@ -573,7 +665,7 @@ def test_a_wrong_format_version_is_a_refusal(model, tmp_path: Path) -> None:
 
 def test_a_manifest_that_is_not_yaml_is_a_refusal(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    _create(model, out_dir)
+    _lock(model, out_dir)
     (out_dir / MANIFEST_FILE).write_text("files: [unclosed\n", encoding="utf-8")
     with pytest.raises(BuildError) as caught:
         verify_context(out_dir)
@@ -582,7 +674,7 @@ def test_a_manifest_that_is_not_yaml_is_a_refusal(model, tmp_path: Path) -> None
 
 def test_a_manifest_missing_a_section_is_a_refusal(model, tmp_path: Path) -> None:
     out_dir = tmp_path / "context"
-    _create(model, out_dir)
+    _lock(model, out_dir)
     path = out_dir / MANIFEST_FILE
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     kept = [line for line in lines if not line.startswith(("mcuhome:", "  "))]
@@ -595,7 +687,7 @@ def test_a_manifest_missing_a_section_is_a_refusal(model, tmp_path: Path) -> Non
 def test_a_manifest_with_a_spoofable_hash_spelling_is_a_refusal(model, tmp_path: Path) -> None:
     """Uppercase hex would give the same bytes a second identity."""
     out_dir = tmp_path / "context"
-    _create(model, out_dir)
+    _lock(model, out_dir)
     _rewrite_manifest(out_dir, sdk=replace(SDK, sha256=SDK_SHA.upper()))
     with pytest.raises(BuildError) as caught:
         verify_context(out_dir)

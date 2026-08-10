@@ -90,6 +90,7 @@ __all__ = [
     "ContainerPin",
     "ContextFile",
     "ContextManifest",
+    "ContextRequest",
     "SdkPin",
     "canonical_json",
     "context_id",
@@ -166,7 +167,8 @@ class SdkPin:
     """The resolved mcuhome pin — the manifest's ``mcuhome:`` section.
 
     ``constraint`` is the original intent from the device configuration
-    (``^2.3.6``); ``version`` and the package are what it resolved to at
+    (a PEP 440 specifier such as ``~=2.3.6`` — ADR 0018's PEP 440
+    amendment); ``version`` and the package are what it resolved to at
     context creation. Only ``sha256`` is part of the context's identity:
     the constraint is intent, and the version and URL are names for the
     bytes the hash already pins.
@@ -265,6 +267,81 @@ class ContextManifest:
                 ContextFile(path=item["path"], sha256=item["sha256"]) for item in data["files"]
             ),
             id=data["id"],
+        )
+
+
+@dataclass(frozen=True)
+class ContextRequest:
+    """``context.yaml``, as an object — the pinning *request* (ADR 0018 amendment).
+
+    The client-written half of the split ADR 0018 decision 6's single
+    document became: the ``lock-context`` freeze splits the manifest into
+    a *request* and a *result* (build-container-contract.md §3.2), and
+    this is the request. It carries the ``context`` format version, the
+    resolved pins and the original intent the session is admitted on — and
+    deliberately **nothing that depends on the final file set**: no
+    ``files`` list and no ``id``. Those are the result the locking party
+    computes and writes into :class:`ContextManifest`.
+
+    It repeats :class:`SdkPin` and :class:`ContainerPin` verbatim — the
+    same pins :class:`ContextManifest` later restates, so intent and
+    resolution stand side by side where a human reads back what was asked
+    for (decision 3) — and adds ``created``. That timestamp is "the one
+    field that does not travel" (ADR 0018): it dates the request, is never
+    hashed, and lives here alone.
+    """
+
+    sdk: SdkPin
+    container: ContainerPin
+    #: The target board — the request's ``target:`` section.
+    board: str
+    #: The instant the request was created, as an ISO 8601 UTC string
+    #: (e.g. ``2026-08-10T09:00:00Z``). Informational and never hashed;
+    #: carried as text so two requests differ only where their ``created``
+    #: does, and so the value round-trips through YAML without a parser
+    #: reinterpreting it as a native timestamp.
+    created: str
+    context_version: int = CONTEXT_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context": self.context_version,
+            "created": self.created,
+            "mcuhome": {
+                "constraint": self.sdk.constraint,
+                "version": self.sdk.version,
+                "package": {"url": self.sdk.url, "sha256": self.sdk.sha256},
+            },
+            "container": {
+                "image": self.container.image,
+                "tag": self.container.tag,
+                "digest": self.container.digest,
+            },
+            "target": {"board": self.board},
+        }
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> ContextRequest:
+        mcuhome = data["mcuhome"]
+        package = mcuhome["package"]
+        container = data["container"]
+        return ContextRequest(
+            context_version=int(data["context"]),
+            sdk=SdkPin(
+                constraint=str(mcuhome["constraint"]),
+                version=str(mcuhome["version"]),
+                url=str(package["url"]),
+                # Not coerced: the sha256 is identity, spelling-checked
+                # where it is used, not silently normalized on read.
+                sha256=package["sha256"],
+            ),
+            container=ContainerPin(
+                image=str(container["image"]),
+                tag=str(container["tag"]),
+                digest=container["digest"],
+            ),
+            board=data["target"]["board"],
+            created=str(data["created"]),
         )
 
 
