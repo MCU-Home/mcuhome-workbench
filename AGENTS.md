@@ -166,6 +166,12 @@ pip install -e ./packaging/model -e ./packaging/workbench \
 pip install -e ../cli
 pytest
 
+# The `remote` build method's tests need two more things: the optional
+# extra (aiohttp + zstandard) and the build server they drive the client
+# against as a real peer. Without them tests_py/test_sessionclient.py
+# skips itself with one reason naming what is missing (`pytest -rs`).
+pip install -e './packaging/workbench[remote]' -e ../build-server
+
 # Check one device configuration with the builder
 mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 

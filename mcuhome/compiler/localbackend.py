@@ -65,6 +65,13 @@ from typing import Any
 import zstandard
 
 from mcuhome.compiler import abi
+
+# `Artifact` is vocabulary, not backend machinery: the `remote` method
+# reports the same four fields off the session protocol's verdict and may
+# not import this module to say so (ADR 0020 decision 3), so the class
+# lives in `mcuhome-model` and is re-exported here — `localbackend.Artifact`
+# stays the name every caller already uses.
+from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextManifest
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
@@ -281,25 +288,6 @@ class TreeEntry:
 
     def to_dict(self) -> dict[str, Any]:
         return {"path": str(self.path), "writable": self.writable}
-
-
-@dataclass(frozen=True)
-class Artifact:
-    """One entry of ``artifacts[]``, ``root``/``path``/``role``/``sha256``.
-
-    An entry missing any of the four "is not resolvable, and a consumer
-    MUST skip it exactly as it skips an unknown ``root``" (§5.4);
-    :func:`declared_artifacts` does the skipping, so anything that reaches
-    here has all four.
-    """
-
-    root: str
-    path: str
-    role: str
-    sha256: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"root": self.root, "path": self.path, "role": self.role, "sha256": self.sha256}
 
 
 @dataclass(frozen=True)

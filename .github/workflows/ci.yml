@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# CI for the MCUHome firmware framework. Three gates:
+# CI for the MCUHome firmware framework. Four gates:
 #
 #   lint     — the same ruff/REUSE/debug-output checks
 #              .pre-commit-config.yaml runs locally. Needs nothing but
 #              Python.
+#   pytest   — the Python suite in tests_py/, the fast half of the test
+#              strategy. Needs nothing but Python either, which is why
+#              running it nowhere automated was never a cost worth
+#              paying.
 #   twister  — the Zephyr test suites in tests/, compiled and run inside
 #              the MCUHome builder image (ADR 0007). The image is the same
 #              one `mcuhome build` uses, which is the point of having one:
@@ -74,6 +78,46 @@ jobs:
       # `# debug-output: approved <reason>` marker.
       - name: Debug-output policy
         run: python scripts/check_debug_output.py
+
+  # The Python suite in tests_py/ — the fast half of the test strategy
+  # (docs/design/builder-pipeline.md §9), which until now ran nowhere
+  # automated at all: three distributions' worth of invariants, the
+  # golden generator output and every refusal message, none of them
+  # gated by anything but a developer remembering to run pytest.
+  #
+  # The `remote` extra is installed with the workbench, so the session
+  # protocol client's optional dependencies are resolved here too. Its
+  # test file needs one more thing this runner cannot have: a checkout of
+  # the private sibling repository mcu-home/build-server, which those
+  # tests drive the client against as a real peer. There is no deploy key
+  # for it (CLI_DEPLOY_KEY, used by the `matter` job, covers mcu-home/cli
+  # only), so that file skips itself with one loud reason — `-rs` below is
+  # what puts that reason in the log rather than in a dot.
+  pytest:
+    name: pytest (tests_py)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # The three editable installs AGENTS.md prescribes, and no
+      # aggregate distribution over them (ADR 0020 decision 2 and the
+      # head comment of the root pyproject.toml).
+      - name: Install the three distributions
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -e ./packaging/model \
+            -e './packaging/workbench[remote]' \
+            -e ./packaging/compiler \
+            'pytest>=8.0'
+
+      - name: pytest
+        run: pytest -q -rs
 
   twister:
     name: Twister (native_sim, in the builder image)

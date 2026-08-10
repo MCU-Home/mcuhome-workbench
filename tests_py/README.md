@@ -47,7 +47,26 @@ second — they are the fast half of the strategy in
 | `test_imgtool.py` | detached signing: the command is Zephyr's own, and two signings of one image differ only in the signature |
 | `test_export.py` | the registry and the `main.yaml` JSON Schema, golden and against the parser |
 | `test_scaffold.py` | `mcuhome new`: what it writes, what it refuses, and that init-pairing then validate works on it |
-| `test_packaging.py` | the ADR 0020 layout: one distribution per subpackage, one version for all three, and the two files outside Python that name an import path |
+| `test_packaging.py` | the ADR 0020 layout: one distribution per subpackage, one version for all three, the two files outside Python that name an import path, and the `remote` extra's declaration |
+| `test_sessionclient.py` | the `remote` build method: the session-protocol client, driven against the **real** build server (see below) |
+
+## The one suite with extra requirements
+
+`test_sessionclient.py` tests the client of ADR 0019's session protocol
+against the real `mcuhome-build-server` over a real socket — one client
+and one server tested against each other rather than each against a mock
+of the other. That needs two things the installs above do not bring:
+
+```sh
+pip install -e './packaging/workbench[remote]'   # aiohttp + zstandard
+pip install -e ../build-server                   # the peer, cloned beside this repo
+```
+
+Without them the file skips itself with **one** reason naming exactly
+what is missing (`pytest -rs` prints it). CI installs the extra but not
+the build server: that repository is private and the workflow has no
+deploy key for it, so those tests are green locally and skipped there —
+a stated gap, not a silent one.
 
 The command-surface tests (exit codes, summary output, `--json`
 documents) live with the command: `tests/test_cli.py` in the

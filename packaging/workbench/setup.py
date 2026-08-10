@@ -44,5 +44,22 @@ setup(
         # a near-ubiquitous transitive dependency, but the workbench uses
         # it directly, so it is declared directly.
         "packaging>=23",
-    ]
+    ],
+    extras_require={
+        # The `remote` build method and nothing else (E18, ADR 0019).
+        # `mcuhome.workbench.sessionclient` speaks the session protocol
+        # over one WebSocket and carries the build context as tar.zst
+        # (E41/E45), so it needs an async HTTP stack and a zstd codec —
+        # and a workbench that only validates a configuration, or builds
+        # through the local container, needs neither. Both are imported
+        # lazily behind a refusal that names this extra, so the cost of
+        # not having them is a sentence rather than an ImportError.
+        #
+        # The bounds are the ones the build server declares for the same
+        # two libraries, deliberately: the two halves of one protocol
+        # should not disagree about which aiohttp they were written
+        # against, and `<4` is there because aiohttp 4 changes its
+        # WebSocket surface.
+        "remote": ["aiohttp>=3.10,<4", "zstandard>=0.22"],
+    },
 )

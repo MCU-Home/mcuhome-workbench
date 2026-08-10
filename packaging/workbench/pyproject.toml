@@ -17,7 +17,14 @@ name = "mcuhome-workbench"
 # `setup.py` next to this file derives it from the same attribute the
 # version comes from. ADR 0020 decision 8: one version, one tag, one
 # release, and therefore no compatibility matrix to consult.
-dynamic = ["version", "dependencies"]
+#
+# `optional-dependencies` joins it because `dynamic` is per field and not
+# per entry: the `remote` extra is declared in the same `setup.py` call,
+# and setuptools silently *discards* an `extras_require` whose field is
+# not listed here — measured, not assumed. A dropped extra would make
+# `pip install 'mcuhome-workbench[remote]'` succeed and install nothing,
+# which is the one failure shape worse than a refusal.
+dynamic = ["version", "dependencies", "optional-dependencies"]
 description = "MCUHome's build workbench: configuration pipeline, build context, the three build methods, signing."
 readme = { text = """
 Everything between a YAML device configuration and something a compiler
