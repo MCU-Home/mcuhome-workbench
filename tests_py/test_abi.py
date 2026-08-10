@@ -1546,6 +1546,12 @@ def test_the_command_and_the_environment_a_build_would_run(build: BuildSetup) ->
     assert copied.read_text(encoding="utf-8") == (
         build.workspace_dir / ".west" / "config"
     ).read_text(encoding="utf-8")
+    # Zephyr's cache-dir probe only accepts a directory that already
+    # exists (a bare os.access), and its fallback writes into the frozen
+    # workspace — so the stated cache home must exist before CMake asks.
+    cache_home = Path(plan.env["XDG_CACHE_HOME"])
+    assert cache_home == build.work / abi.WORK_XDG_CACHE
+    assert cache_home.is_dir()
 
 
 def test_a_workspace_without_a_west_config_is_a_typed_refusal(build: BuildSetup) -> None:

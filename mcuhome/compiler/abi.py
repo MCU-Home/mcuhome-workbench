@@ -385,6 +385,9 @@ WORK_HOME = "home"
 #: The writable copy of the workspace's ``.west/config`` (see
 #: :meth:`_Invocation._environment`).
 WORK_WEST_CONFIG = "west-config"
+#: ``XDG_CACHE_HOME`` for the build's children (see
+#: :meth:`_Invocation._environment`).
+WORK_XDG_CACHE = "cache"
 
 #: ``<sysbuild artifact> -> <name in out>`` for the unsigned application
 #: image, whose role is ``firmware``. §7.2: "MCUHome's own container
@@ -1758,6 +1761,17 @@ class _Build:
         """
         home = self.work_dir / WORK_HOME
         home.mkdir(parents=True, exist_ok=True)
+        # Zephyr's user cache (the toolchain capability database) goes
+        # where XDG_CACHE_HOME points, then $HOME/.cache — but each
+        # candidate only counts if it already EXISTS and is writable
+        # (scripts/build/dir_is_writeable.py is a bare os.access), and a
+        # fresh HOME has no .cache yet. The fallback is ZEPHYR_BASE/.cache
+        # — inside the frozen workspace, where the first configure then
+        # dies on the same wall as every other workspace write. So the
+        # cache home is stated explicitly and created before anything
+        # asks.
+        cache_home = self.work_dir / WORK_XDG_CACHE
+        cache_home.mkdir(parents=True, exist_ok=True)
         # West caches what it derives: the first `west build` writes
         # `zephyr.base` back into the workspace's own `.west/config`. The
         # baked workspace belongs to whoever built the image, and §2.2
@@ -1787,6 +1801,7 @@ class _Build:
             home=home,
         )
         env["WEST_CONFIG_LOCAL"] = str(west_config)
+        env["XDG_CACHE_HOME"] = str(cache_home)
         cache = self.document.get("ccache")
         shared = cache.get("path") if isinstance(cache, dict) else None
         if isinstance(cache, dict) and cache.get("writable") is True:
