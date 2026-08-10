@@ -38,5 +38,11 @@ setup(
         # hand-written checks — error messages are user interface here,
         # and a schema library's generic wording does not meet that bar.
         "ruamel.yaml>=0.18",
+        # PEP 440 constraint resolution for the SDK and container pins
+        # (E52): mcuhome.workbench.resolve_pins parses constraints and
+        # available versions with packaging.SpecifierSet/Version. It is
+        # a near-ubiquitous transitive dependency, but the workbench uses
+        # it directly, so it is declared directly.
+        "packaging>=23",
     ]
 )

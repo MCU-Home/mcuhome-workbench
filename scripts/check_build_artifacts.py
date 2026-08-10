@@ -1,42 +1,79 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Assert that a finished build produced what its manifest says it did.
+"""Assert that a finished build left the flashable files behind, well-formed.
 
 The gate behind the Matter build job in ``.github/workflows/ci.yml``: a
 build that exits 0 but leaves no flashable image behind is a worse result
 than a build that fails, because nothing downstream notices. This script
-turns "the compiler was happy" into "the things a device needs exist, are
-non-empty, and hash to what the manifest recorded".
+turns "the compiler was happy" into "the things a device needs exist and
+are non-empty, and the build's own description of itself is well-formed".
 
 Usage::
 
     check_build_artifacts.py <build-dir>
 
-where ``<build-dir>`` is what ``mcuhome build --build-dir`` was given —
-the directory holding ``build-manifest.json``. Every path inside the
-manifest is relative to it.
+where ``<build-dir>`` is what ``mcuhome build --build-dir`` was given.
 
-What is required, and why each one:
+**Two build shapes, chosen by which description file is present** — the
+same fork ``mcuhome sign`` makes (``mcuhome/workbench/imgtool.py``):
 
-* ``build-manifest.json`` itself — the description of the artifact set
-  (builder-pipeline.md §7); without it nothing else can be checked, and
-  ``mcuhome sign`` and every flashing path have nothing to read.
-* the MCUboot image — the trust anchor, and what a factory flash starts.
-* the signed application image, in both formats — an unsigned
-  application is an image MCUboot refuses to chain-load.
-* the merged hex — sysbuild's every-image-in-one-file form, which is
-  what a first-time flash writes.
+* the **default** ``mcuhome build`` drives the ``local`` backend through
+  the build container and delivers ``build-report.json`` (the §7.2.1
+  report) beside the artifacts, which the host then signs. Its artifact
+  set is flat: ``firmware.{hex,bin}`` (unsigned), ``bootloader.hex`` when
+  the build produced one, ``firmware.signed.{hex,bin}`` (host-signed) and
+  one ``<device>-<version>.ota`` wrapped from the signed image.
+* ``--native`` compiles on the host with ``west`` and writes the fuller
+  ``build-manifest.json`` over a sysbuild layout, signing inline.
 
-Every file the manifest lists (including the ``.ota``, when the build
-wrote one) is additionally verified by size and SHA-256, which is what
-catches a truncated or half-written artifact rather than an absent one.
+``build-report.json`` present selects the first; ``build-manifest.json``
+present selects the second. They are mutually exclusive — one build
+method writes one of them — so presence is a clean selector.
+
+**Why the report shape is checked by presence, not by hash.** Unlike the
+manifest, the §7.2.1 report carries *no* per-artifact hash list (that was
+cut vs the old ``build-manifest.json``), so there is no recorded value to
+re-hash against. There is also no need for one here: the build container
+already re-hashed every artifact on egress against the report it emits
+(build-container-contract §5.3), so a second hash oracle in CI would only
+re-check what the container already guaranteed. CI's job for this shape is
+therefore narrower and exactly right — "the flashable files exist and are
+non-empty, and the report is a well-formed §7.2.1 document" — which is
+what catches a build that silently produced nothing, or a report a signer
+would refuse. The manifest shape, which *does* record a size and SHA-256
+per file, is still verified against them.
+
+What the **report shape** requires (each present and non-empty):
+
+* ``build-report.json`` — and it must parse, carry ``report`` == 1, a
+  ``signing`` block whose ``signature_type`` is ``ecdsa-p256`` and whose
+  ``arguments`` is an object holding all four imgtool keys (``version``,
+  ``header-size``, ``align``, ``slot-size``). Without it a detached signer
+  has nothing to read, and §7.2 requires exactly one report.
+* ``firmware.hex`` and ``firmware.bin`` — the unsigned firmware the
+  container declared with role ``firmware`` (§7.2).
+* ``firmware.signed.hex`` and ``firmware.signed.bin`` — what the host
+  signer produced; an unsigned application is one MCUboot refuses to
+  chain-load.
+* exactly one ``*.ota`` — the Matter update image wrapped from the signed
+  binary.
+* ``bootloader.hex`` is checked non-empty *when present*, but a missing
+  bootloader is not a failure by itself: §7.2 requires at least one
+  firmware artifact and exactly one report, and makes the bootloader
+  optional (a board without an MCUboot member, a build that does not
+  deliver one).
+
+What the **manifest shape** requires: the bootloader image, the signed
+application in both formats, the merged hex and ``build-manifest.json``
+itself, and every file the manifest lists verified by size and SHA-256 —
+which is what catches a truncated or half-written artifact there.
 
 The image and file names below are written out rather than imported from
-:mod:`mcuhome.compiler.generate`: this is an independent oracle for a regression
-gate, and one that imported its expectations from the code under test
-would follow that code silently wherever it went. Standard library only,
-for the same reason.
+the code under test: this is an independent oracle for a regression gate,
+and one that imported its expectations from the code that produced the
+artifacts would follow that code silently wherever it went. Standard
+library only, for the same reason.
 
 Exit status: 0 when the artifact set is complete, 1 with findings (one
 per line), 2 on usage errors.
@@ -50,7 +87,45 @@ import sys
 from pathlib import Path
 from typing import Any
 
-#: Written by ``mcuhome.compiler.report.write_manifest`` into the build directory.
+# --- the default (container) shape --------------------------------------
+
+#: Delivered by the ``local`` backend beside the unsigned firmware, and the
+#: selector for this shape. The §7.2.1 report a host signer consumes.
+BUILD_REPORT_FILE = "build-report.json"
+
+#: The one report format version this gate understands (§7.2.1).
+REPORT_VERSION = 1
+
+#: The one signature algorithm MCUHome images carry
+#: (``mcuhome.model.registry.SIGNATURE_TYPE``).
+SIGNATURE_TYPE = "ecdsa-p256"
+
+#: imgtool's own option names, the keys a §7.2.1 ``signing.arguments``
+#: object must carry so a detached signer can turn it back into a command
+#: (``mcuhome.model.manifest.SigningParameters.to_dict``).
+SIGNING_ARGUMENT_KEYS = ("version", "header-size", "align", "slot-size")
+
+#: The flashable files the container path must leave behind: the unsigned
+#: firmware in both encodings, and the host-signed forms of each.
+REPORT_REQUIRED_FILES = (
+    "firmware.hex",
+    "firmware.bin",
+    "firmware.signed.hex",
+    "firmware.signed.bin",
+)
+
+#: The bootloader image, when the build delivered one. Optional: §7.2
+#: requires firmware + report, not a bootloader.
+BOOTLOADER_FILE = "bootloader.hex"
+
+#: The Matter update image, wrapped from the signed binary and named
+#: ``<device>-<version>.ota`` — matched by suffix, of which there is one.
+OTA_GLOB = "*.ota"
+
+# --- the --native (west/sysbuild) shape ---------------------------------
+
+#: Written by ``mcuhome.compiler.report.write_manifest`` into a --native
+#: build directory, and the selector for that shape.
 MANIFEST_FILE = "build-manifest.json"
 
 #: Sysbuild's name for the bootloader image, fixed by Zephyr.
@@ -80,6 +155,93 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(_HASH_BLOCK), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _nonempty(path: Path, *, what: str) -> list[str]:
+    """A file that must exist and hold bytes, or the finding that says so."""
+    if not path.is_file():
+        return [f"{what} is missing"]
+    if path.stat().st_size == 0:
+        return [f"{what} is empty"]
+    return []
+
+
+# --- the default (container) shape --------------------------------------
+
+
+def _check_report_document(report_path: Path) -> list[str]:
+    """The §7.2.1 ``build-report.json`` itself: parses, version, signing block."""
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return [f"{BUILD_REPORT_FILE} is not readable JSON: {error}"]
+    if not isinstance(report, dict):
+        return [f"{BUILD_REPORT_FILE} does not describe a build"]
+
+    findings: list[str] = []
+    version = report.get("report")
+    if version != REPORT_VERSION:
+        findings.append(
+            f"{BUILD_REPORT_FILE} is report format version {version!r}, not {REPORT_VERSION}"
+        )
+
+    signing = report.get("signing")
+    if not isinstance(signing, dict):
+        findings.append(f"{BUILD_REPORT_FILE} carries no signing block")
+        return findings
+
+    signature_type = signing.get("signature_type")
+    if signature_type != SIGNATURE_TYPE:
+        findings.append(
+            f"{BUILD_REPORT_FILE} signs with signature_type {signature_type!r}, "
+            f"not {SIGNATURE_TYPE!r}"
+        )
+
+    arguments = signing.get("arguments")
+    if not isinstance(arguments, dict):
+        findings.append(f"{BUILD_REPORT_FILE} signing.arguments is not an object")
+    else:
+        missing = [key for key in SIGNING_ARGUMENT_KEYS if key not in arguments]
+        if missing:
+            findings.append(
+                f"{BUILD_REPORT_FILE} signing.arguments is missing {', '.join(missing)}"
+            )
+    return findings
+
+
+def check_report(out_dir: Path) -> list[str]:
+    """Every finding about a container-path build directory."""
+    findings = _check_report_document(out_dir / BUILD_REPORT_FILE)
+
+    for name in REPORT_REQUIRED_FILES:
+        findings += _nonempty(out_dir / name, what=name)
+
+    bootloader = out_dir / BOOTLOADER_FILE
+    if bootloader.is_file() and bootloader.stat().st_size == 0:
+        findings.append(f"{BOOTLOADER_FILE} is present but empty")
+
+    otas = sorted(out_dir.glob(OTA_GLOB))
+    if not otas:
+        findings.append("no .ota image: the build wrapped none from the signed firmware")
+    elif len(otas) > 1:
+        names = ", ".join(path.name for path in otas)
+        findings.append(f"expected exactly one .ota image, found {len(otas)}: {names}")
+    else:
+        findings += _nonempty(otas[0], what=otas[0].name)
+    return findings
+
+
+def describe_report(out_dir: Path) -> str:
+    """One line naming what was checked in a container-path build directory."""
+    otas = sorted(out_dir.glob(OTA_GLOB))
+    ota = otas[0].name if otas else "no .ota"
+    present = [
+        name for name in (BOOTLOADER_FILE, *REPORT_REQUIRED_FILES) if (out_dir / name).is_file()
+    ]
+    return f"{ota}: {', '.join(present)}"
+
+
+# --- the --native (west/sysbuild) shape ---------------------------------
 
 
 def check_file(entry: dict[str, Any], *, out_dir: Path, what: str) -> list[str]:
@@ -138,11 +300,9 @@ def check_images(manifest: dict[str, Any], *, out_dir: Path) -> list[str]:
     return findings
 
 
-def check(out_dir: Path) -> list[str]:
-    """Every finding about *out_dir*, in the order a reader wants them."""
+def check_manifest(out_dir: Path) -> list[str]:
+    """Every finding about a --native build directory, in reading order."""
     manifest_path = out_dir / MANIFEST_FILE
-    if not manifest_path.is_file():
-        return [f"{manifest_path} is missing: this is not a finished build directory"]
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -171,12 +331,34 @@ def check(out_dir: Path) -> list[str]:
     return findings
 
 
-def describe(out_dir: Path) -> str:
-    """One line naming what was checked, for the log."""
+def describe_manifest(out_dir: Path) -> str:
+    """One line naming what was checked in a --native build directory."""
     manifest = json.loads((out_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
     device = manifest.get("device", {})
     images = ", ".join(str(image.get("name")) for image in manifest.get("images", []))
     return f"{device.get('name')} for {device.get('board')}: {images}"
+
+
+# --- dispatch -----------------------------------------------------------
+
+
+def check(out_dir: Path) -> list[str]:
+    """Every finding about *out_dir*, whichever build shape produced it."""
+    if (out_dir / BUILD_REPORT_FILE).is_file():
+        return check_report(out_dir)
+    if (out_dir / MANIFEST_FILE).is_file():
+        return check_manifest(out_dir)
+    return [
+        f"neither {BUILD_REPORT_FILE} nor {MANIFEST_FILE} is in {out_dir}: "
+        "this is not a finished build directory"
+    ]
+
+
+def describe(out_dir: Path) -> str:
+    """One line naming what was checked, for the log."""
+    if (out_dir / BUILD_REPORT_FILE).is_file():
+        return describe_report(out_dir)
+    return describe_manifest(out_dir)
 
 
 def main(argv: list[str]) -> int:
@@ -197,8 +379,7 @@ def main(argv: list[str]) -> int:
     print(
         "\nA build that exits 0 without a complete artifact set is a failure "
         "nothing downstream would notice: mcuhome sign, the OTA wrapper and "
-        "every flashing path read the manifest and expect the files it names "
-        "to be there."
+        "every flashing path expect the files a finished build names to be there."
     )
     return 1
 

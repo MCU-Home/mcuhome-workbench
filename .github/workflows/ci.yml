@@ -395,15 +395,16 @@ jobs:
 
       # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
       # step. That is comfortable for what the job wants at once — the
-      # build container (5.3 GB at r3, which bakes a west workspace), the
-      # CHIP clone with its four submodules, a restored compiler cache (up
-      # to the 5 GB /etc/ccache.conf allows) and the build tree, call it
-      # 13 GB. Until the run-time side uses the baked workspace this job
-      # carries two copies of it, the image's and the one it clones, and
-      # even that fits. The step stays because the preinstalled
-      # Android/.NET/Haskell toolchains are worth tens of gigabytes,
-      # nothing here uses them, and the headroom is what lets the image
-      # grow without this job becoming the thing that discovers it.
+      # build container (the r7 image bakes a west workspace, Matter
+      # included), a restored compiler cache (up to the 5 GB
+      # /etc/ccache.conf allows) and the build tree the container writes
+      # back to the host. The host no longer clones connectedhomeip and
+      # its four submodules, so the multi-gigabyte checkout that used to
+      # sit beside the image is gone. The step stays because the
+      # preinstalled Android/.NET/Haskell toolchains are worth tens of
+      # gigabytes, nothing here uses them, and the headroom is what lets
+      # the image grow without this job becoming the thing that discovers
+      # it.
       - name: Make room on the runner
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
@@ -447,74 +448,24 @@ jobs:
               --file mcuhome/containers/builder/Dockerfile mcuhome
           fi
 
-      # WITH the `matter` group — the whole point of this job. west.yml
-      # declares no group-filter, so a plain `west update` fetches
-      # connectedhomeip and its four submodules; the twister job's
-      # `west config manifest.group-filter -- -matter` is what excludes
-      # them there, and its absence here is deliberate.
+      # No west workspace is initialised and no patch is applied on the
+      # host any more, and neither is a gap. The r7 image bakes a west
+      # workspace with the `matter` group included and both files in
+      # patches/ already applied (ADR 0020 decision E5), and the new
+      # default backend builds inside the container against that baked
+      # workspace. The host therefore never clones connectedhomeip and
+      # its four submodules — the multi-gigabyte checkout this job used
+      # to carry, and the reason for the make-room step, is gone with the
+      # two steps that were here.
       #
-      # Not cached, unlike the twister job's workspace. Two reasons: the
-      # CHIP clone with submodules is the multi-gigabyte thing that job's
-      # cache exists to keep out of CI, and an entry that size in the
-      # repository's shared cache budget would evict the cheap one that
-      # every pull request depends on. It also keeps the next step
-      # honest — a pristine tree every run means `git apply` never meets
-      # a tree it has already patched, so a drifted patch fails here
-      # instead of being silently skipped.
-      - name: Initialize the west workspace, Matter included
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:$PWD" --workdir "$PWD" \
-            '${{ steps.image.outputs.reference }}' \
-            sh -euc '
-              west init -l mcuhome
-              west update --narrow -o=--depth=1
-            '
-          # A shallow clone cannot see the tag it is pinned to, so
-          # `git describe` falls back to the commit and Zephyr stamps
-          # BUILD_VERSION with a hash rather than `v4.4.0`. The image this
-          # job produces is therefore a few bytes larger than the same
-          # example built from a full checkout (measured 2026-08-09:
-          # 748964 against 748960). It is not a defect and this job does
-          # not compare sizes across machines — but it is the reason the
-          # two differ.
-          #
-          # The image bakes its own workspace as of r3 (ADR 0020 decision
-          # E5) and fetches the tag ref back, so the git state is a
-          # property of the image digest there. This job still does not
-          # use it: mcuhome/compiler/container.py mounts the host workspace and
-          # builds out of that. This step, the patch step below and this
-          # note all go away in the same change that switches the
-          # run-time side over.
-
-      # `git apply` and nothing else: no --3way, no --reject, no retry.
-      # A patch that no longer applies to the revision west.yml pins is
-      # the drift this job exists to catch, and any workaround here would
-      # hide it. git apply is all-or-nothing per patch, so a failure
-      # leaves the project tree as it found it.
-      #
-      # Applying them by hand is still the documented state of affairs
-      # (patches/README.md): the build-container contract specifies
-      # automatic application, nothing implements it yet. When something
-      # does, this step goes away and the build step covers it.
-      - name: Apply the workspace patches
-        run: |
-          apply_patch() {
-            project="$1"
-            patch="$2"
-            echo "--- $patch -> $project"
-            if ! git -C "$project" apply --verbose "$PWD/mcuhome/patches/$patch"; then
-              echo "::error file=mcuhome/patches/$patch::Does not apply to $project"
-              echo "The patch and the revision west.yml pins have drifted apart."
-              echo "Regenerate it against the pinned tag (patches/README.md), and"
-              echo "mind the pigweed_environment.gni hunk: CHIP gitignores that"
-              echo "file, so a plain 'git diff > patch' drops it without a word."
-              exit 1
-            fi
-          }
-          apply_patch zephyr zephyr-v4.4.0-nrf53-spinel-stack.patch
-          apply_patch modules/lib/connectedhomeip \
-            connectedhomeip-v1.5.1.0-vanilla-zephyr.patch
+      # The drift-detection story the removed `git apply` step told is
+      # not lost, only moved earlier. A patch that no longer applies to
+      # the revision west.yml pins fails the IMAGE build, and the
+      # "Pull the builder image, or build it" step above builds r7 from
+      # this repository whenever that tag is not yet published — which is
+      # exactly the case a patch or a pin change creates (west.yml and
+      # patches/ are image inputs since r3). So a drifted patch still
+      # fails this job, at image build, before a single artifact exists.
 
       # Carrying the compiler cache is what makes this job affordable to
       # run twice in a row (13:38 cold against 2:02 warm on four cores,
@@ -536,24 +487,48 @@ jobs:
           restore-keys: |
             ccache-matter-1-${{ runner.os }}-
 
+      # The default `mcuhome build` resolves the device's SDK pin against
+      # the source directories `--sdk-source` names (build-container
+      # contract v1's first tier) and mounts the selected package into
+      # the container as the SDK tree, so this job has to produce one.
+      # It is the same archive the sdk-package job publishes, built by the
+      # same script into a directory next to the index.json that maps the
+      # pin to it — seconds of work (a `git archive` and one zstd frame),
+      # not the multi-gigabyte west clone the removed steps did. The
+      # script reads the committed revision (HEAD), never the working
+      # tree, and `--repo` defaults to the checkout the script lives in
+      # (here mcuhome/). zstandard is unpinned on purpose: this archive is
+      # a throwaway build input consumed in the same run, so its bytes
+      # need not reproduce a release's the way the sdk-package job's must.
+      - name: Build the SDK source archive
+        run: |
+          python -m pip install --disable-pip-version-check zstandard
+          python mcuhome/scripts/build_sdk_archive.py --output-dir dist/sdk
+
       # The example the bench node was commissioned from — the YAML form
       # of samples/matter-node — built the way AGENTS.md documents it:
       # from the workspace top directory, in the builder image (the
-      # default path, not --native, which is the whole point), with the
-      # RTT snippet the debug-output directive requires. The signing key
-      # is generated on first use and dies with the runner; nothing
-      # commissions this image, and no key of any consequence exists on a
-      # CI runner. Job count is left to the builder's own CPU/RAM
-      # detection (mcuhome.compiler.workspace.auto_jobs).
+      # default path, not --native, which is the whole point), against
+      # the SDK archive built above, with the RTT snippet the
+      # debug-output directive requires. The signing key is generated on
+      # first use and dies with the runner; nothing commissions this
+      # image, and no key of any consequence exists on a CI runner. Job
+      # count is left to the builder's own CPU/RAM detection
+      # (mcuhome.compiler.workspace.auto_jobs).
       - name: Build the reference Matter device
         run: |
           mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node -S debug-rtt
+            --build-dir build/bmp180-node --sdk-source dist/sdk -S debug-rtt
 
-      # A green build that produced nothing is worse than a red one.
-      # Checks the bootloader, the signed application in both formats,
-      # the merged hex and build-manifest.json, and verifies every file
-      # the manifest lists by size and SHA-256.
+      # A green build that produced nothing is worse than a red one. This
+      # is the default (container) path, so the build directory holds a
+      # build-report.json rather than a build-manifest.json: the checker
+      # picks the shape by which file is present and here verifies that
+      # the report is a well-formed §7.2.1 document, and that the unsigned
+      # firmware, the host-signed firmware in both formats and the one
+      # .ota image are present and non-empty. The container already
+      # re-hashed every artifact on egress (contract §5.3), so this is a
+      # presence-and-shape gate, not a second hash oracle.
       - name: Check the artifact set
         run: python3 mcuhome/scripts/check_build_artifacts.py build/bmp180-node
 
