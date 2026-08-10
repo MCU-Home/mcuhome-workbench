@@ -69,20 +69,20 @@ enforce:
 * **Per-file integrity of a download is checked here** (E45). The
   ``get-artifact`` announcement carries the *archive's* hash, computed at
   egress; the per-file hashes are the ones the client already holds from
-  the ``invocation.finished`` verdict, and checking them is what keeps
+  the ``invocation.verdict`` frame, and checking them is what keeps
   the announced hash a transport check rather than a second integrity
   claim.
 
-**One gap, deliberately not papered over.** E44 makes the ingress caps
-configurable and says they are announced through ``capabilities``; the
-build server's ``capabilities`` payload carries the protocol block, the
-container inventory, the patch policy and the session quota, and **no
-ingress caps at all**. This client therefore reads them when they are
-there (:meth:`Capabilities.ingress`) and falls back to E44's decided
-defaults when they are not — never to a number of its own invention. The
-key names it reads are forward-compatible guesses and are documented as
-such on :class:`IngressCaps`; the shape belongs to the server and is a
-product-owner question, not this module's to settle.
+**The ingress caps are announced, and this client sizes itself by them**
+(E44, E57). ``capabilities`` carries an ``ingress`` block with the five
+caps of ADR 0019 decision 8 — read from the server's own configuration,
+so an operator who lowered one has lowered what a client is told — plus
+``frame_bytes``, the largest WebSocket message the endpoint accepts. The
+last one is announced because it is the only bound whose overrun is a
+dropped connection rather than a typed refusal: it cannot be discovered
+by hitting it and surviving. :meth:`Capabilities.ingress` reads all six
+and falls back to E44's decided defaults for anything a peer leaves out
+— never to a number of this client's own invention.
 """
 
 from __future__ import annotations
@@ -158,11 +158,13 @@ _logger = logging.getLogger(__name__)
 SESSION_PROTOCOL_VERSION = 2
 
 #: How many bytes of an archive go into one outbound BINARY frame, absent
-#: an announced limit. A quarter of a megabyte, which is the same number
-#: the build server streams *downloads* at and well under the 8 MiB
-#: ``max_msg_size`` its ``/ws`` endpoint accepts — neither of which is
-#: announced, so both are treated as this client's own conservative
-#: choice rather than as knowledge of the peer.
+#: a smaller announced limit. A quarter of a megabyte, which is the same
+#: number the build server streams *downloads* at and well under the
+#: 8 MiB ``max_msg_size`` its ``/ws`` endpoint accepts and announces
+#: (E57). It stays this client's own conservative choice rather than
+#: knowledge of the peer: a peer that announces a larger frame has given
+#: a licence and not an instruction, and one that announces none — an
+#: older or third-party server — is a peer nothing is known about.
 DEFAULT_CHUNK_BYTES = 256 * 1024
 
 #: The largest inbound WebSocket message this client will assemble, and
@@ -365,16 +367,19 @@ class IngressCaps:
 
     **These numbers belong to the server** (E44: "the config is the
     policy"), and this client uses an announced value wherever it finds
-    one. Where it finds none it uses E44's decided defaults —
-    :data:`E44_CAPS` — because a client that invented a cap of its own
+    one. The build server announces all six in ``capabilities`` (E57),
+    out of its own configuration. Where a peer announces none — an older
+    or a third-party server — E44's decided defaults stand
+    (:data:`E44_CAPS`), because a client that invented a cap of its own
     would refuse contexts a server would have taken.
 
     :attr:`frame_bytes` is not one of E44's five. It is the largest
     single WebSocket message the peer accepts, which bounds the *chunk*
-    an archive is streamed in rather than the archive; the server fixes
-    it at 8 MiB in its endpoint and announces it nowhere, so the client's
-    conservative :data:`DEFAULT_CHUNK_BYTES` stands until it is told
-    otherwise.
+    an archive is streamed in rather than the archive — and it is the one
+    limit whose overrun is a dropped connection instead of a typed
+    refusal, which is why E57 made it part of the announcement beside the
+    caps. A peer that states none leaves this client's conservative
+    :data:`DEFAULT_CHUNK_BYTES` in place.
     """
 
     compressed_bytes: int
@@ -385,10 +390,11 @@ class IngressCaps:
     frame_bytes: int = DEFAULT_CHUNK_BYTES
 
     #: The names read out of an announcement, in the order they are
-    #: tried. The server does not announce ingress caps today (see the
-    #: module docstring), so this is a forward-compatible read and not a
-    #: wire shape this client may assume: an announcement that uses other
-    #: names simply leaves the defaults in place, and nothing breaks.
+    #: tried. **This is the wire shape** since E57: the product owner
+    #: fixed the ``capabilities`` payload's ``ingress`` block on the
+    #: names this client had guessed, so one server changed and nothing
+    #: here did. A peer that announces other names, or none, simply
+    #: leaves the defaults in place.
     _FIELDS = (
         "compressed_bytes",
         "decompressed_bytes",
@@ -1352,12 +1358,14 @@ class SessionClient:
             # and no event duplicated" true for the caller rather than
             # only for the wire.
             return
-        if name == "invocation.finished" and not numbered and isinstance(invocation_id, str):
-            # E46's *verdict*, told from the program's own announcement of
-            # the same name by the one structural rule the server states:
-            # every program event carries a monotonic `seq` and this
-            # server never invents one, so a frame of this name without a
-            # `seq` is the verdict.
+        if name == "invocation.verdict" and isinstance(invocation_id, str):
+            # E46's *verdict*, and since E58 a name of its own. It used to
+            # share `invocation.finished` with the program's contract §8
+            # announcement and was told from it by the absence of `seq` —
+            # so a program that omitted its counter had its own event read
+            # as the server's judgement. The program's numbered
+            # `invocation.finished` still arrives, and is delivered to the
+            # caller's sink like any other event.
             self._note_verdict(payload)
             future = self._finished.setdefault(
                 invocation_id, asyncio.get_running_loop().create_future()
@@ -1525,8 +1533,9 @@ class SessionClient:
 
         It carries no session id because there is no session yet, and it
         is what tells this client which build containers the server has,
-        which patch layers it allows and — where a server announces them
-        — the ingress caps that size every upload afterwards.
+        which patch layers it allows and the ingress caps that size every
+        upload afterwards (E57 — a peer that announces none leaves E44's
+        defaults in place).
         """
         payload = await self._call("capabilities")
         self.capabilities_payload = Capabilities(payload)
@@ -1850,19 +1859,23 @@ class SessionClient:
     async def wait_finished(
         self, invocation_id: str, *, timeout: float | None = None
     ) -> dict[str, Any]:
-        """Wait for the server's own ``invocation.finished`` verdict (E46).
+        """Wait for the server's ``invocation.verdict`` (E46, E58).
 
         Not a verb — a build is minutes to hours, and a command frame that
         waited for it would make every client's socket a build timer. The
         verb acknowledges, the completion arrives on the channel that
         survives a reconnect, and this is where a caller waits for it.
 
-        The verdict is told from the *program's* event of the same name
-        structurally: every program event carries a monotonic ``seq`` and
-        the server never invents one, so the frame without a ``seq`` is
-        the verdict. Only the verdict carries the status, the artifact
-        list, the context ID the server computed and, on a failure, the
-        error envelope.
+        **The verdict is the server's frame and has its own name.** The
+        program's contract §8 ``invocation.finished`` — numbered like
+        every program event, emitted immediately before the result
+        document is written — arrives first and is delivered as an
+        ordinary event; it is not what this method returns. Only the
+        verdict carries the status, the artifact list, the context ID the
+        server computed and, on a failure, the error envelope. E46 first
+        gave both frames one name and left ``seq`` to separate them, which
+        made a program's §8 violation readable as the server's judgement;
+        E58 replaced that with the name.
         """
         future = self._finished.setdefault(
             invocation_id, asyncio.get_running_loop().create_future()

@@ -11,13 +11,14 @@ mock of the other. Only docker is stubbed at the same seam the build
 server's own suite stubs it at, because a build server is an orchestrator
 and there is no build to stand in for.
 
-A hand-rolled server appears exactly once, for the one shape the real one
-cannot be bent into: a ``capabilities`` payload that *announces* ingress
-caps. E44 makes the caps configurable and says they are announced; the
-server's payload carries the protocol block, the container inventory, the
-patch policy and the session quota and no caps at all — so a client that
-sizes its frames from an announcement has nothing to read yet, and the
-only way to test that it *would* read one is to speak one at it.
+**There is no hand-rolled server left.** One existed for a single shape
+the real one could not be bent into — a ``capabilities`` payload that
+*announces* ingress caps — and E57 made the real server announce them out
+of its own configuration, so the caps are now tested where every other
+verb is: against the peer that has to get them right. The one number that
+is not configurable, the endpoint's maximum WebSocket frame, is lowered
+on the *client* after the announcement, which is the case it exists for:
+a peer that accepts less than this one does.
 
 Nothing in this file is a pytest-asyncio test. The repository's own dev
 dependency is pytest and nothing else, so each test is an ordinary
@@ -79,12 +80,12 @@ if MISSING:
 
 # Imported through `importlib` rather than with `import` statements
 # because they may only be resolved after the gate above.
-aiohttp = importlib.import_module("aiohttp")
 test_utils = importlib.import_module("aiohttp.test_utils")
 zstandard = importlib.import_module("zstandard")
 bs_app = importlib.import_module("mcuhome_buildserver.app")
 bs_config = importlib.import_module("mcuhome_buildserver.config")
 bs_container = importlib.import_module("mcuhome_buildserver.container")
+bs_protocol = importlib.import_module("mcuhome_buildserver.protocol")
 bs_sessions = importlib.import_module("mcuhome_buildserver.sessions")
 
 TOKEN = "test-token-000000000000000000000000"
@@ -638,9 +639,16 @@ def test_capabilities_is_the_handshake_and_carries_no_session(tmp_path: Path) ->
         assert [entry["digest"] for entry in answer.containers] == [IMAGE_DIGEST]
         # Deny by default: the server was configured with no layers.
         assert answer.allows_patch_layer("zephyr") is False
-        # E44's caps are announced nowhere yet, so the client falls back
-        # to E44's decided defaults rather than to a number of its own.
-        assert answer.ingress() == sc.E44_CAPS
+        # E57: the caps are announced, and this server's are its own
+        # configuration. Nothing here is a default of the client's.
+        assert answer.ingress() == sc.IngressCaps(
+            compressed_bytes=harness.config.max_compressed_bytes,
+            decompressed_bytes=harness.config.max_decompressed_bytes,
+            entries=harness.config.max_entries,
+            file_bytes=harness.config.max_file_bytes,
+            path_depth=harness.config.max_path_depth,
+            frame_bytes=bs_protocol.MAX_FRAME_BYTES,
+        )
 
     run(scenario())
 
@@ -698,7 +706,15 @@ def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path
         assert not [entry for entry in verdict["artifacts"] if "sign" in entry["path"]]
         assert not any("sign" in name for name in delivery.files)
         assert lines and any("build finished" in line for line in lines)
-        assert [name for name, _ in events].count("invocation.finished") == 2
+        # Two frames end an invocation and E58 gives them two names: the
+        # program's contract §8 announcement, numbered like every program
+        # event, and the server's verdict. Both reach the sink; only the
+        # second is what `wait_finished` returned.
+        seen = [name for name, _ in events]
+        assert seen.count("invocation.finished") == 1
+        assert seen.count("invocation.verdict") == 1
+        assert seen.index("invocation.finished") < seen.index("invocation.verdict")
+        assert dict(events)["invocation.verdict"] == verdict
 
     run(scenario())
 
@@ -1280,10 +1296,47 @@ def test_the_packer_refuses_a_path_that_leaves_the_context(tmp_path: Path) -> No
 def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) -> None:
     """And the server's own answer, surfaced as the typed refusal it is.
 
-    The client's caps are the announced ones (here: none, so E44's
-    defaults), and this server's are smaller — which is exactly the case
-    a client cannot know about, and exactly why the refusal has to arrive
-    typed rather than as a dropped connection.
+    **The announcement is a courtesy and never the enforcement.** Since
+    E57 a client that applies what it was told refuses this context at
+    home, which is the point of announcing — so this test puts the
+    client's caps back where an announcement-blind client would have
+    them (E44's defaults, what an older client or one talking to a
+    silent third-party server uses) and sends anyway. What is asserted is
+    the far side: the server enforces its own configuration while the
+    bytes arrive and answers a typed refusal, rather than dropping the
+    connection or accepting what it advertised against.
+    """
+
+    async def scenario() -> None:
+        sdk_sha256 = write_sdk_package(tmp_path / "packages")
+        context = tmp_path / "context"
+        context.mkdir()
+        make_context(context, sdk_sha256=sdk_sha256)
+        async with (
+            real_server(tmp_path, max_file_bytes=8) as harness,
+            client_for(harness, tmp_path) as client,
+        ):
+            await client.capabilities()
+            assert client.caps.file_bytes == 8, "the small cap was announced"
+            client.caps = replace(client.caps, file_bytes=sc.E44_CAPS.file_bytes)
+            await client.open_session()
+            with pytest.raises(sc.ServerRefusal) as refusal:
+                await client.send_context(context)
+            await client.close_session()
+        assert refusal.value.code == "policy.ingress-limit-exceeded"
+        assert refusal.value.retryable is False
+
+    run(scenario())
+
+
+def test_an_announced_cap_is_refused_at_home_before_a_byte_leaves(tmp_path: Path) -> None:
+    """The other half of E57, and the reason the caps are announced at all.
+
+    The same server and the same context as the test above, with the
+    client applying what it was told: the refusal is local, typed as
+    :class:`~mcuhome.workbench.sessionclient.ContextTooLarge`, and
+    nothing was uploaded — no session-quota charge, no minutes of
+    transfer, and the number in the message is the *server's*.
     """
 
     async def scenario() -> None:
@@ -1297,123 +1350,88 @@ def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) 
         ):
             await client.capabilities()
             await client.open_session()
-            with pytest.raises(sc.ServerRefusal) as refusal:
+            with pytest.raises(sc.ContextTooLarge, match="at most 8"):
                 await client.send_context(context)
             await client.close_session()
-        assert refusal.value.code == "policy.ingress-limit-exceeded"
-        assert refusal.value.retryable is False
+            assert not [kind for kind, _ in client.sent if kind == "binary"]
 
     run(scenario())
 
 
-def test_an_announced_frame_cap_sizes_the_upload(tmp_path: Path) -> None:
-    """The one hand-rolled server, and the reason it exists.
+def test_the_announced_caps_are_the_ones_the_client_applies(tmp_path: Path) -> None:
+    """E57 end to end: the server's configuration sizes the client's checks.
 
-    E44 says the caps are announced through ``capabilities``; the real
-    server announces none today (see the module docstring). So this one
-    does, and the assertion is that the client *reads* it: with a 512-byte
-    frame cap announced, no BINARY frame this client sends exceeds 512
-    bytes, and the archive still arrives whole.
+    Every cap is given a distinctive value, and none of them is one of
+    E44's defaults — an assertion against the defaults would pass on a
+    client that read nothing at all. What is asserted is the *effective*
+    caps: what ``capabilities`` left on the client, which is what
+    :func:`~mcuhome.workbench.sessionclient.pack_context` then refuses
+    by.
+    """
+
+    async def scenario() -> None:
+        async with (
+            real_server(
+                tmp_path,
+                max_compressed_bytes=4001,
+                max_decompressed_bytes=4002,
+                max_entries=4003,
+                max_file_bytes=4004,
+                max_path_depth=7,
+            ) as harness,
+            client_for(harness, tmp_path) as client,
+        ):
+            await client.capabilities()
+            assert client.caps == sc.IngressCaps(
+                compressed_bytes=4001,
+                decompressed_bytes=4002,
+                entries=4003,
+                file_bytes=4004,
+                path_depth=7,
+                # Not configurable: the endpoint's own `max_msg_size`,
+                # applied to the socket before any verb exists to refuse
+                # anything, and announced for exactly that reason.
+                frame_bytes=bs_protocol.MAX_FRAME_BYTES,
+            )
+            assert client.caps != sc.E44_CAPS
+
+    run(scenario())
+
+
+def test_a_frame_cap_sizes_the_upload(tmp_path: Path) -> None:
+    """The announced frame bound is what chunks an archive.
+
+    Lowered on the client after the announcement rather than in the
+    server's configuration, because it is not configurable there — it is
+    the endpoint's ``max_msg_size``. A peer with a smaller one is the
+    case this covers, and the previous version of this test built a
+    hand-rolled server to speak it; the real one announces its own now
+    (E57), so what is left to prove is that the number does the
+    chunking. The archive still arrives whole, which is the half a
+    smaller frame could break.
     """
     context = tmp_path / "context"
     context.mkdir()
-    make_context(context, sdk_sha256="a" * 64)
-    record: dict[str, Any] = {"chunks": [], "announced": None, "received": 0}
 
     async def scenario() -> None:
-        server = test_utils.TestServer(_announcing_app(record))
-        await server.start_server()
-        try:
-            async with sc.SessionClient(
-                str(server.make_url("/ws")), spool_dir=tmp_path / "spool"
-            ) as client:
-                caps = await client.capabilities()
-                assert caps.ingress().frame_bytes == 512
-                await client.open_session()
-                await client.send_context(context)
-        finally:
-            await server.close()
+        sdk_sha256 = write_sdk_package(tmp_path / "packages")
+        make_context(context, sdk_sha256=sdk_sha256)
+        async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
+            await client.capabilities()
+            assert client.caps.frame_bytes == bs_protocol.MAX_FRAME_BYTES
+            client.caps = replace(client.caps, frame_bytes=512)
+            await client.open_session()
+            packed = await client.send_context(context)
+            await client.close_session()
+        chunks = [len(data) for kind, data in client.sent if kind == "binary"]
+        assert chunks, "nothing was uploaded"
+        assert max(chunks) <= 512
+        assert len(chunks) > 1, "the archive was chunked, not sent whole"
+        # And the server put the whole of it back together: it answered
+        # the pins out of the context.yaml inside the archive.
+        assert packed["container"]["contract"] == 1
 
     run(scenario())
-    assert record["chunks"], "nothing was uploaded"
-    assert max(record["chunks"]) <= 512
-    assert len(record["chunks"]) > 1, "the archive was chunked, not sent whole"
-    assert record["received"] == record["announced"]["size"]
-
-
-def _announcing_app(record: dict[str, Any]):
-    """A server that announces ingress caps and acknowledges one upload."""
-    from aiohttp import web
-
-    async def handler(request):
-        ws = web.WebSocketResponse(max_msg_size=0)
-        await ws.prepare(request)
-        async for message in ws:
-            if message.type is aiohttp.WSMsgType.BINARY:
-                record["chunks"].append(len(message.data))
-                record["received"] += len(message.data)
-                if record["received"] >= record["announced"]["size"]:
-                    await ws.send_str(
-                        json.dumps(
-                            {
-                                "id": record["upload_id"],
-                                "type": "result",
-                                "payload": {
-                                    "session_id": "s-fake",
-                                    "context": {"state": "unlocked", "format": 1},
-                                    "pins": {},
-                                    "container": {"contract": 1},
-                                },
-                            }
-                        )
-                    )
-                continue
-            frame = json.loads(message.data)
-            verb, frame_id = frame["type"], frame.get("id")
-            if verb == "capabilities":
-                payload = {
-                    "protocol": {
-                        "version": 2,
-                        "context_format": {"min": 1, "max": 1},
-                        "profiles": ["oneshot"],
-                    },
-                    "containers": [],
-                    "patch_policy": {},
-                    "quota": {},
-                    # The announcement the real server does not make yet.
-                    "ingress": {
-                        "compressed_bytes": 1 << 20,
-                        "decompressed_bytes": 1 << 22,
-                        "entries": 64,
-                        "file_bytes": 1 << 20,
-                        "path_depth": 8,
-                        "frame_bytes": 512,
-                    },
-                }
-            elif verb == "open-session":
-                payload = {
-                    "session": {
-                        "id": "s-fake",
-                        "profile": "oneshot",
-                        "state": "open",
-                        "context_state": "none",
-                        "created_at": 0.0,
-                    },
-                    "lease": {"ttl_seconds": 60, "idle_timeout_seconds": 60, "expires_at": 0.0},
-                    "negotiated": {"protocol_version": 2},
-                }
-            elif verb == "send-context":
-                record["announced"] = frame["payload"]["archive"]
-                record["upload_id"] = frame_id
-                continue  # the acknowledgement follows the bytes
-            else:  # pragma: no cover - the scenario sends nothing else
-                payload = {}
-            await ws.send_str(json.dumps({"id": frame_id, "type": "result", "payload": payload}))
-        return ws
-
-    app = web.Application()
-    app.router.add_get("/ws", handler)
-    return app
 
 
 # --------------------------------------------------------------------------
