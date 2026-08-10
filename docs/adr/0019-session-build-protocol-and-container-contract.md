@@ -818,3 +818,49 @@ its patches are applied by the developer's hands — a locally modified
 Zephyr to chase a bug or work on MCUHome's core is the reason the mode
 exists. The workbench's `local-dev` method builds what is there and
 attributes it accordingly.
+## Amendment: what the session client may rely on (2026-08-10 evening, product owner)
+
+Writing the first session client against the protocol surfaced four
+places where the implementation had decided a shape by existing, or
+where a duty had an implementation but no owner. The product owner
+settled all four; the reasoning travels with each.
+
+**The `capabilities` answer announces the ingress caps** (`E57`). The
+caps of the context transport — decompressed and compressed archive
+size, entry count, per-file size, chunk count — exist so a client can
+refuse an oversized upload before the first byte leaves, and a cap the
+client cannot see can only be discovered by hitting it. The answer
+gains an `ingress` object carrying them, plus the one transport bound
+that lives below the verbs: the maximum WebSocket frame the server
+accepts (today 8 MiB), whose overrun is a dropped connection rather
+than a typed refusal and therefore must be knowable in advance. The
+key names are the ones the first client already reads — its documented
+forward-guess becomes the shape, one server change and none on the
+client.
+
+**The server's completion verdict is `invocation.verdict`** (`E58`).
+E46 gave the verdict the same name as the contract's §8 program event
+`invocation.finished`, distinguishable only by carrying no `seq` — so
+a program that violated §8 by omitting `seq` would have its own
+announcement read as the server's verdict. The contract is frozen and
+keeps its event name; the session layer is not public yet, so the
+verdict is renamed while renaming costs nothing. The discrimination is
+now structural, not the absence of a field.
+
+**Replay deduplication is the client's duty** (`E59`). After
+`attach-session` the server replays literally from `from_seq` — it
+keeps no per-client delivery ledger, exactly as `lock-context` keeps
+no per-client comparison. A client that asks low legitimately sees
+events again (that is what makes the replay a debugging tool), and the
+client that wants exactly-once folds duplicates by the highest `seq`
+it has seen per invocation. Recorded here as the E37 pattern applied
+to events: minimal server, a stated client duty, conformance owned by
+the client's suite.
+
+**The `send-context` answer is part of the protocol** (`E60`). The
+answer carries `pins` (what the pins file resolved to) and `container`
+(the image the session will build in, contract version included), and
+until now their field names were whatever the server's serializers
+spelled — a client reading them was coupled to an accident. The shapes
+are fixed as they are spelled today; what a client may read is named,
+and a third-party server knows what it owes.
