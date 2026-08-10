@@ -160,7 +160,15 @@ def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tu
         except (OSError, ValueError):
             continue
         try:
-            resolved = resolve_from_index(index, lb.SDK_PACKAGE_NAME, constraint)
+            # SDK_ANY means "the newest package this source holds, whatever
+            # it is" — and during development that is a dev release. The
+            # E52 pre-release rule (a dev version satisfies only a
+            # pre-release constraint) is right for a real pin like ~=2.3
+            # but wrong for "any", which is literally any: so an empty
+            # constraint admits pre-releases, and a stated one keeps the
+            # rule.
+            allow = True if constraint == SDK_ANY else None
+            resolved = resolve_from_index(index, lb.SDK_PACKAGE_NAME, constraint, prereleases=allow)
         except BuildError:
             continue
         return constraint, resolved.version, resolved.sha256

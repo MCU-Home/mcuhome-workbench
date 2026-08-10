@@ -270,6 +270,43 @@ def test_resolve_sdk_pin_reads_the_source_index(tmp_path):
     assert constraint == localbuild.SDK_ANY
 
 
+def test_resolve_sdk_pin_resolves_a_dev_only_source_under_any(tmp_path):
+    """SDK_ANY means the newest, and during development that is a dev release.
+
+    The regression this pins: the E52 pre-release rule (a dev version
+    satisfies only a pre-release constraint) is right for a real pin like
+    ``~=2.3`` and wrong for "any" — SDK_ANY is literally any, including a
+    ``0.1.0.dev0``. An earlier version resolved SDK_ANY as a stable
+    specifier and refused a dev-only source, which is exactly what every
+    build did before the first stable release: the source directory holds
+    one archive and it carries the ``.dev0`` version.
+    """
+    import json
+
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "index.json").write_text(
+        json.dumps(
+            {
+                "packages": {
+                    "mcuhome-sdk": {
+                        "0.1.0.dev0": {
+                            "file": "mcuhome-sdk-0.1.0.dev0.tar.zst",
+                            "sha256": "ab" * 32,
+                            "size": 100,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    constraint, version, sha256 = localbuild.resolve_sdk_pin((source,))
+    assert version == "0.1.0.dev0"
+    assert sha256 == "ab" * 32
+    assert constraint == localbuild.SDK_ANY
+
+
 def test_resolve_sdk_pin_without_a_source_refuses(tmp_path):
     with pytest.raises(BuildError) as caught:
         localbuild.resolve_sdk_pin(())
