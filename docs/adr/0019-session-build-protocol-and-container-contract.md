@@ -939,3 +939,50 @@ whose `container.digest` it does not match" — is now "rejects a session
 whose required Zephyr line its one build environment does not carry",
 which is the same rule about the same thing: a backend with exactly one
 build environment cannot choose, so it can only accept or refuse.
+
+## Amendment: the SDK is resolved by version and guarded by hash, with no announcement (2026-08-11, product owner)
+
+E61 left one input of a build context without a resolver on the `remote`
+path: `mcuhome.package.sha256`. The obvious symmetry would have been the
+one E61 had just removed — ask the server what it holds, then pin it —
+and the product owner ruled it out for the same reason and one more of
+its own.
+
+**There is no capabilities announcement for the SDK.** The client states
+the SDK **version** and its **sha256** in `context.yaml`, exactly as
+before; the server resolves the version against its own sources — a
+locally cached package today, `packages.mcuhome.org` or a configured
+external registry later — and *verifies the bytes it found against the
+pinned hash*. A package it cannot find and cannot fetch is a typed
+refusal (`sdk.unavailable`, not retryable); a package it found whose
+bytes hash to something else is the **same** refusal, naming both
+values.
+
+The reason this is not a weaker arrangement than an announcement, in the
+product owner's words: with external or private registries the same
+version number can mean different bytes, and a server that quietly used
+its own copy would build against a different SDK than the identity
+claims. That must be an error immediately, never a silent wrong build.
+The hash is what makes it one — and because it is a *check* rather than
+a negotiation, asking in advance buys nothing: a client that announced
+and agreed would still have to verify, and a client that verifies does
+not have to announce.
+
+Consequences, and they are deliberately small:
+
+- **No format bump and no change to the identity.** `context.yaml` keeps
+  version and sha256 where it had them, and the ID rule keeps hashing
+  `sdk.sha256`, `target.board` and the file list. The version is the
+  resolution key, the hash is the byte-identity guard, and the guard was
+  already in the hash. Nothing published or unpublished migrates.
+- **The client's pin source is its own.** Today that is the local SDK
+  source directories the `local` method already reads
+  (`--sdk-source`/`MCUHOME_SDK_SOURCE`, the first tier of §8's search
+  order); later it is the registry index. Both container-shaped build
+  methods therefore resolve the same pin with the same resolver before
+  they create a context, which is what makes the client's pin and the
+  server's check statements about one rule rather than two.
+- **`package.url` stays a hint nobody follows.** A context resolved from
+  a local directory records the `file://` location it was resolved from,
+  because the field is read by a human reproducing a build years later
+  and never by a backend (§8).

@@ -313,6 +313,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `org.mcuhome.zephyr` label at all, since "absence is never read as
   compatible" (§2.1.1) — naming what the image says and what the device
   needs.
+- **`mcuhome build --method remote` is complete** (E65, product owner,
+  2026-08-11). The method could only be driven by an embedder that
+  already held a build context: a context is content-addressed over the
+  SDK package's hash, and nothing resolved that pin on this path. It now
+  creates its own, from a device model and `--sdk-source`, through the
+  *same* resolver and the same context writer the `local` method uses
+  (`mcuhome.workbench.resolve_pins.resolve_sdk`,
+  `mcuhome.workbench.contextdir.create_build_context`) — so both
+  container-shaped methods ask for one package by one rule, and
+  `--sdk-source`/`MCUHOME_SDK_SOURCE` serve both.
+  There is deliberately **no** capabilities round trip for the SDK, as
+  there is none for the container since E61: the context states the
+  version *and* the sha256, the build server resolves the version
+  against its own sources and verifies the bytes it found against the
+  hash. Same version, other bytes — which is what a private or mirrored
+  registry can mean — is `sdk.unavailable` there, never a quiet build
+  against a different SDK. Because the guard is the hash the identity
+  was already computed over, this is no format bump and no change to the
+  context ID. A `remote` build with no SDK source refuses typed, naming
+  the same knob the `local` method names, and an end-to-end test drives
+  the whole path against the real build server: pin resolved, context
+  created, session driven, unsigned artifacts and the §7.2.1 report
+  delivered into the one host-side signing step (E56).
 - A crash now leaves a breadcrumb the next boot reports
   (`CONFIG_MCUHOME_CRASH_BREADCRUMB`, `lib/health/breadcrumb.c`; ADR 0015
   health amendment). A fatal error reboots, which is the right behaviour

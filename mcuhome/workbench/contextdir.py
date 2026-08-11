@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,12 +52,14 @@ from mcuhome.model.context import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
+from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
 __all__ = [
     "ContextFormatVersionError",
     "ContextVerification",
     "FileMismatch",
+    "create_build_context",
     "create_context",
     "lock_context",
     "read_context_manifest",
@@ -297,6 +300,61 @@ def create_context(
     )
     write_context_request(request, out_dir=out_dir)
     return request
+
+
+def create_build_context(
+    model: DeviceModel,
+    *,
+    out_dir: Path,
+    sdk_sources: Sequence[Path],
+    signing_pub: str,
+    created: datetime | None = None,
+    constraint: str = SDK_ANY,
+) -> ContextRequest:
+    """Resolve the SDK pin and write a fresh base context at *out_dir*.
+
+    The seam **both** container-shaped build methods create a context
+    through (E65). ``local`` and ``remote`` differ in everything after
+    this point — one starts a container and locks the context itself, the
+    other sends the directory to a build server that locks it — and in
+    what a context *is* they do not differ at all: the resolved pin, the
+    canonical model, the public signing key, the patches. Two callers
+    assembling that by hand is two places for the pin and the layout to
+    drift apart, under an identity that claims they cannot have.
+
+    *out_dir* is **removed if it exists**, because :func:`create_context`
+    requires an empty directory and a build method's context directory is
+    its own scratch area, rebuilt every run. Callers pass a path they own
+    (``<work root>/context``), never a directory a user named.
+
+    *created* defaults to now. It is the one field two creations of the
+    same inputs may differ in (ADR 0018) and it is outside the identity,
+    so a caller that wants byte-identical output states it.
+
+    The two never-hashed fields of the pin — the intent and the location
+    hint — are rendered by :class:`~mcuhome.workbench.resolve_pins.SdkResolution`
+    rather than here, and neither is left empty: a context document is
+    read by implementations that are not this one, and an empty
+    ``mcuhome.constraint`` or ``package.url`` says "unstated" to a writer
+    and "malformed" to a reader.
+    """
+    found = resolve_sdk(sdk_sources, constraint=constraint)
+    out_dir = Path(out_dir)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    return create_context(
+        model,
+        out_dir=out_dir,
+        sdk=SdkPin(
+            constraint=found.intent,
+            version=found.package.version,
+            url=found.url,
+            sha256=found.package.sha256,
+        ),
+        signing_pub=signing_pub,
+        created=created or datetime.now(UTC),
+    )
 
 
 def lock_context(out_dir: Path, *, container: ContainerResolution) -> ContextManifest:

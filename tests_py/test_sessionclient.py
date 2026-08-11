@@ -45,13 +45,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import EXAMPLES_DIR, resolve_file
 
 from mcuhome.compiler.localbackend import LocalOutcome
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextRequest, SdkPin
+from mcuhome.workbench import buildmethods, imgtool, resolve_pins, signing
 from mcuhome.workbench import sessionclient as sc
-from mcuhome.workbench import signing
-from mcuhome.workbench.contextdir import write_context_request
+from mcuhome.workbench.contextdir import read_context_request, write_context_request
+from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
 #: What this file needs beyond the repository's own dev dependencies, and
 #: the one command that installs each. The gate below is a **single**
@@ -470,12 +472,43 @@ def archive_members(spool: Path) -> list[str]:
         return [member.name for member in tar.getmembers()]
 
 
-def write_sdk_package(directory: Path) -> str:
-    """Put one SDK package where the server's source list will find it."""
+def write_sdk_package(directory: Path, *, declared_sha256: str | None = None) -> str:
+    """Put one SDK package where the server's source list will find it.
+
+    And its static ``index.json`` beside it, because since E65 one
+    directory serves both parties of the pin: the **client** resolves
+    ``(version, sha256)`` out of the index before a context can exist,
+    and the **server** finds the archive by the version in its name and
+    checks the bytes against the hash. That is the local-source shape E48
+    configures, with the two readers it actually has.
+
+    *declared_sha256* overrides what the index declares, which is the one
+    way to arrange the case E65 exists for: a context pinning bytes the
+    server's source does not hold. The **real** hash is returned either
+    way — a caller writing a context by hand pins that one.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     archive = make_archive({"mcuhome/__init__.py": b"# the SDK\n"})
-    (directory / f"mcuhome-sdk-{SDK_VERSION}.tar.zst").write_bytes(archive)
-    return hashlib.sha256(archive).hexdigest()
+    name = f"mcuhome-sdk-{SDK_VERSION}.tar.zst"
+    (directory / name).write_bytes(archive)
+    real = hashlib.sha256(archive).hexdigest()
+    (directory / "index.json").write_text(
+        json.dumps(
+            {
+                "packages": {
+                    "mcuhome-sdk": {
+                        SDK_VERSION: {
+                            "file": name,
+                            "sha256": declared_sha256 or real,
+                            "size": len(archive),
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return real
 
 
 #: One known private key, so the invariant test can look for exact bytes.
@@ -2379,3 +2412,188 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
         "firmware.bin",
         "firmware.hex",
     ]
+
+
+# --------------------------------------------------------------------------
+# The `remote` build method, from a device model (E65)
+# --------------------------------------------------------------------------
+#
+# Everything above drives the session client directly, from a context
+# somebody already wrote. These drive `run_build(method="remote")` — the
+# supported entry point — from a resolved device model and nothing else,
+# which is the gap E65 closed: the SDK pin is resolved on this side, from
+# this side's source directories, and the context is created here.
+#
+# The peer stays the real build server. That matters more here than
+# anywhere else in this file, because the property under test is a
+# *cross-party* one: the version this client writes into `context.yaml`
+# is what the server resolves the package by, and the sha256 it writes is
+# what the server checks the bytes it found against.
+
+
+def _model():
+    """The reference device, stages 1-3 run — the ``remote`` method's input."""
+    return resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
+
+
+def _public_pem() -> str:
+    """The public half of the one known key, which is all a build may see."""
+    return signing.public_key_pem(signing.generate_key_pem(KEY_SCALAR))
+
+
+def _remote_request(tmp_path: Path, sources: Path, harness: Harness, **overrides: Any):
+    return buildmethods.BuildRequest(
+        model=_model(),
+        out_dir=tmp_path / "build",
+        signing_pub=_public_pem(),
+        sdk_sources=(sources,),
+        server=harness.url,
+        token=TOKEN,
+        **overrides,
+    )
+
+
+def test_the_remote_method_builds_from_a_model_against_the_real_server(tmp_path: Path) -> None:
+    """Model in, unsigned image out — no context written by the caller.
+
+    The whole of E65 in one path: the SDK pin is resolved from a local
+    source directory, a base context is created from the model and the
+    **public** signing key, a real session sends it, the server freezes
+    it and answers a context ID this client agreed with, and the
+    artifacts come back. The device model never leaves the client as
+    anything but context content, and no step of it asked the server what
+    it had.
+
+    The last assertion is the E56 seam: what a build delivers is an
+    unsigned image plus a build report the one host-side signer reads —
+    the same report name, in the same relationship to the same directory,
+    as the ``local`` method's delivery.
+    """
+    sources = tmp_path / "packages"
+    write_sdk_package(sources)
+    lines: list[str] = []
+
+    async def scenario() -> buildmethods.BuildOutcome:
+        async with real_server(tmp_path) as harness:
+            return await buildmethods.run_build(
+                _remote_request(tmp_path, sources, harness, on_line=lines.append),
+                method=buildmethods.REMOTE,
+            )
+
+    outcome = run(scenario())
+    assert outcome.method == buildmethods.REMOTE
+    assert outcome.successful is True and outcome.status == "success"
+    assert outcome.context_id.startswith("sha256:")
+    assert {entry.path for entry in outcome.artifacts} == {name for name, _ in ARTIFACTS}
+    assert lines and any("build finished" in line for line in lines)
+
+    # The delivery, where the shared signing step looks for it.
+    work_root = tmp_path / "build" / ".mcuhome-remote"
+    assert outcome.out_dir == work_root / "out"
+    assert sorted(path.name for path in outcome.out_dir.iterdir()) == [
+        "build-report.json",
+        "firmware.bin",
+        "firmware.hex",
+    ]
+    assert outcome.report == BUILD_REPORT_FILE
+    report = imgtool.read_build_report(outcome.out_dir / outcome.report)
+    assert report["signing"]["signature_type"] == "ecdsa-p256"
+    # Unsigned, as every method delivers (E55, E56): nothing signed came
+    # back, and the signature is the host step after this.
+    assert not [path for path in outcome.out_dir.iterdir() if "sign" in path.name]
+
+    # And what the method created on the way: a base context, carrying the
+    # public key and no manifest — freezing it is the server's act (E7).
+    context = work_root / "context"
+    assert (context / "keys" / "signing.pub").read_text(encoding="utf-8") == _public_pem()
+    assert (context / "model" / "device-model.json").is_file()
+    assert not (context / "manifest.yaml").exists()
+
+
+def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
+    tmp_path: Path,
+) -> None:
+    """The pin in ``context.yaml`` is exactly what the resolver answered.
+
+    Asserted against the resolver rather than against the fixture's own
+    hash, because the claim is that one rule produced both: the same
+    function the ``local`` method resolves its pin with wrote this one,
+    from the same ``--sdk-source`` directories, so a build server and a
+    build container are asked for the same package by the same name and
+    the same bytes.
+
+    The two never-hashed fields are checked as well, and against the
+    resolution rather than against a literal: ``constraint`` is the intent
+    (here "nothing was stated", recorded as the resolution) and ``url``
+    is the location the bytes were found at. Neither may be empty — a
+    context document is parsed by implementations that are not this one —
+    and neither is anybody's invention.
+    """
+    sources = tmp_path / "packages"
+    real_sha256 = write_sdk_package(sources)
+
+    async def scenario() -> None:
+        async with real_server(tmp_path) as harness:
+            await buildmethods.run_build(
+                _remote_request(tmp_path, sources, harness), method=buildmethods.REMOTE
+            )
+
+    run(scenario())
+    found = resolve_pins.resolve_sdk((sources,))
+    written = read_context_request(
+        tmp_path / "build" / ".mcuhome-remote" / "context" / "context.yaml"
+    )
+    assert (written.sdk.version, written.sdk.sha256) == (
+        found.package.version,
+        found.package.sha256,
+    )
+    assert written.sdk.sha256 == real_sha256
+    assert (written.sdk.constraint, written.sdk.url) == (found.intent, found.url)
+    # Both informational fields are honestly empty for a local source:
+    # no constraint was stated, and a file:// hint would leak the local
+    # filesystem layout into an uploaded document.
+    assert (written.sdk.constraint, written.sdk.url) == ("", "")
+    # And the three-value helper the `local` method reads answers the same
+    # package, with the constraint as *stated*.
+    assert resolve_pins.resolve_sdk_pin((sources,)) == (
+        resolve_pins.SDK_ANY,
+        found.package.version,
+        real_sha256,
+    )
+    # The other half of the context's own statements, from the model.
+    assert written.zephyr == ZEPHYR_LINE
+    assert written.board == _model().device.board
+
+
+def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path) -> None:
+    """E65's guarantee, end to end: the hash decides, not the version.
+
+    The index this client resolves from declares a hash the archive next
+    to it does not have — which is what a private or mirrored registry
+    serving other bytes under the same version number looks like from
+    here. The server finds a file named for that version, hashes it,
+    disagrees, and refuses: ``sdk.unavailable``, not retryable, naming
+    the version and the pin. That refusal is the whole reason no
+    capabilities announcement is needed for the SDK — a build against the
+    wrong SDK cannot happen quietly, so the client does not have to ask
+    in advance what the server holds.
+
+    The server's own coverage of that check is the server's; what is
+    asserted here is that it *arrives*, typed, through the build method a
+    user calls.
+    """
+    sources = tmp_path / "packages"
+    write_sdk_package(sources, declared_sha256="ab" * 32)
+
+    async def scenario() -> None:
+        async with real_server(tmp_path) as harness:
+            with pytest.raises(sc.ServerRefusal) as refusal:
+                await buildmethods.run_build(
+                    _remote_request(tmp_path, sources, harness), method=buildmethods.REMOTE
+                )
+        assert refusal.value.code == "sdk.unavailable"
+        assert refusal.value.retryable is False
+        rendered = str(refusal.value)
+        assert SDK_VERSION in rendered or "ab" * 32 in rendered
+
+    run(scenario())

@@ -18,8 +18,14 @@ The properties, in the order they matter:
 * a method name nobody implements is a refusal that lists the ones that
   exist, rather than a ``KeyError`` or a silent default;
 * ``remote`` refuses in words for the two things it cannot invent — the
-  build server's address (E53) and a build context — and for the missing
-  transport extra, before any of them costs a connection.
+  build server's address (E53) and the SDK source its context is pinned
+  from (E65) — and for the missing transport extra, before any of them
+  costs a connection.
+
+What ``remote`` *does* once it has both — resolve the pin, write the base
+context, drive a real session — is asserted in ``test_sessionclient.py``,
+against the real build server. Here the composition is stubbed at
+``run_remote_build`` and only the layer above it is the subject.
 """
 
 from __future__ import annotations
@@ -261,17 +267,17 @@ def test_remote_without_a_server_refuses_naming_both_decided_rungs(model, tmp_pa
     assert "MCUHOME_BUILD_TOKEN" in rendered
 
 
-def test_remote_without_a_context_says_which_step_is_missing(model, tmp_path) -> None:
-    """The honest gap: nothing resolves the SDK pin for a remote build.
+def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> None:
+    """E65's other half: the pin is the client's, so its source must be too.
 
-    E61 moved this gap rather than closing it. The container is no longer
-    the client's to choose, so a context needs no ``capabilities`` round
-    trip any more — but ``mcuhome.package.sha256`` is a hashed identity
-    input and still has to be resolved against a package index this
-    client can read, and nothing wires that up for ``remote``. Until it
-    does, a caller holding a locked context passes it and a caller
-    holding only a model is told so, rather than getting a context
-    pinned to something this machine happened to have.
+    ``remote`` creates its own context now, and a context is
+    content-addressed over the SDK package's hash — so the one thing this
+    method still cannot invent is *which package*. The refusal names the
+    same two knobs the ``local`` method reads, because they are the same
+    two knobs: the pin is resolved here either way, and only who fetches
+    the bytes afterwards differs. It deliberately does not fall back to
+    "whatever the server has", which would be an identity describing a
+    build nobody asked for.
     """
     with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
         _run(
@@ -281,8 +287,12 @@ def test_remote_without_a_context_says_which_step_is_missing(model, tmp_path) ->
             buildmethods.REMOTE,
         )
     rendered = str(refusal.value)
-    assert "build context" in rendered
-    assert "SDK package hash" in rendered
+    assert "--sdk-source" in rendered
+    assert "MCUHOME_SDK_SOURCE" in rendered
+    # And it says what the pin is *for*, so the reader learns why a build
+    # server cannot supply it: the version resolves the package, the hash
+    # is what the bytes are checked against.
+    assert "sha256" in rendered
 
 
 def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path, monkeypatch):

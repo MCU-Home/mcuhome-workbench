@@ -37,8 +37,6 @@ before a container starts, not tracebacks ten minutes into a build.
 
 from __future__ import annotations
 
-import json
-import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -46,12 +44,18 @@ from pathlib import Path
 
 from mcuhome.compiler import container
 from mcuhome.compiler import localbackend as lb
-from mcuhome.model.context import ContainerResolution, SdkPin
+from mcuhome.model.context import ContainerResolution
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
 from mcuhome.model.toolchain import satisfies_line
-from mcuhome.workbench.contextdir import create_context, lock_context
-from mcuhome.workbench.resolve_pins import resolve_from_index
+from mcuhome.workbench.contextdir import create_build_context, lock_context
+
+# The SDK pin is resolved in the workbench (E65), because ``remote``
+# resolves the very same pin and may not import this package (ADR 0020
+# decision 3). Re-exported under the names this module has always
+# offered: `localbuild.resolve_sdk_pin` is where a local build's pin
+# comes from, wherever the rule is written down.
+from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 
 __all__ = [
     "SDK_ANY",
@@ -60,14 +64,6 @@ __all__ = [
     "resolve_sdk_pin",
     "run_local_build",
 ]
-
-#: The SDK constraint a local developer build resolves with: "the newest
-#: the configured sources offer". A device configuration can pin the SDK
-#: as a PEP 440 constraint (ADR 0018), but a plain ``mcuhome build`` on a
-#: developer's own machine has no such intent — it takes whatever SDK
-#: package the ``--sdk-source`` directories hold, exactly as the empty
-#: :class:`~packaging.specifiers.SpecifierSet` matches every version.
-SDK_ANY = ""
 
 
 @dataclass(frozen=True)
@@ -87,68 +83,6 @@ class LocalBuildResult:
     out_dir: Path
     context_dir: Path
     image: str
-
-
-def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tuple[str, str, str]:
-    """Resolve the SDK pin ``(constraint, version, sha256)`` from *sources*.
-
-    The pin has to exist *before* the context can be created — the context
-    is content-addressed over the resolved ``sha256`` — so this resolves it
-    from the static ``index.json`` a source directory carries
-    (``scripts/build_sdk_archive.py``), never from a network. Sources are
-    searched in order and the first that holds a matching package wins,
-    which is the same "first source wins" rule
-    :func:`~mcuhome.compiler.localbackend.acquire_sdk` then fetches the
-    bytes by.
-
-    Raises a typed :class:`~mcuhome.model.errors.BuildError` — the
-    ``sdk.unavailable`` spirit — when no source is configured or none holds
-    the package, so the command line can render it as a clean refusal.
-    """
-    if not sources:
-        raise BuildError(
-            "The local build method needs an SDK source, and none is configured.",
-            hint=(
-                "the build container fetches the MCUHome SDK as a hash-pinned "
-                "package from operator-configured directories only (ADR 0018) — "
-                "point at one:\n"
-                "    mcuhome build <device> --sdk-source <dir>\n"
-                "or set MCUHOME_SDK_SOURCE. --method local-dev needs no SDK source."
-            ),
-        )
-    searched: list[str] = []
-    for source in sources:
-        source = Path(source)
-        searched.append(str(source))
-        index_path = source / lb.INDEX_FILE
-        if not index_path.is_file():
-            continue
-        try:
-            index = json.loads(index_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        try:
-            # SDK_ANY means "the newest package this source holds, whatever
-            # it is" — and during development that is a dev release. The
-            # E52 pre-release rule (a dev version satisfies only a
-            # pre-release constraint) is right for a real pin like ~=2.3
-            # but wrong for "any", which is literally any: so an empty
-            # constraint admits pre-releases, and a stated one keeps the
-            # rule.
-            allow = True if constraint == SDK_ANY else None
-            resolved = resolve_from_index(index, lb.SDK_PACKAGE_NAME, constraint, prereleases=allow)
-        except BuildError:
-            continue
-        return constraint, resolved.version, resolved.sha256
-    listed = ", ".join(searched) or "none"
-    raise BuildError(
-        f"No configured SDK source holds the {lb.SDK_PACKAGE_NAME} package.",
-        hint=(
-            f"the local build reads the SDK from source directories only, never "
-            f"from a URL — put a {lb.SDK_PACKAGE_NAME} package and its index.json "
-            f"(scripts/build_sdk_archive.py) in one of: {listed}"
-        ),
-    )
 
 
 def _image_not_found(reference: str) -> BuildError:
@@ -276,17 +210,15 @@ def run_local_build(
     if not satisfies_line(offered, line=required):
         raise _line_unsatisfied(reference, offered, required)
 
-    constraint, version, sha256 = resolve_sdk_pin(sources)
-
     work_root = Path(work_root)
     context_dir = work_root / "context"
-    if context_dir.exists():
-        shutil.rmtree(context_dir)
-    work_root.mkdir(parents=True, exist_ok=True)
-    create_context(
+    # The pin resolution and the context layout are the workbench's, and
+    # deliberately the same call the `remote` method makes (E65): what a
+    # context is does not depend on which build method sends it anywhere.
+    create_build_context(
         model,
         out_dir=context_dir,
-        sdk=SdkPin(constraint=constraint, version=version, url="", sha256=sha256),
+        sdk_sources=sources,
         signing_pub=signing_pub,
         created=created or datetime.now(UTC),
     )

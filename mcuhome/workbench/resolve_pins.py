@@ -25,7 +25,23 @@ configuration, never a URL this module follows (ADR 0019 §8).
 resolves any constraint against any set of version strings, so the same
 rule serves the container coupling labels or a community registry later.
 :func:`resolve_from_index` is the thin convenience that reads the
-``index.json`` shape and hands back the selected package's entry.
+``index.json`` shape and hands back the selected package's entry, and
+:func:`resolve_sdk_pin` is the one above it that walks a list of source
+directories and answers with the pin a context is created from.
+
+**Why the SDK resolver lives here and not beside a build method** (E65).
+Both container-shaped methods need the same pin before a context can
+exist, because ``mcuhome.package.sha256`` is a hashed identity input:
+``local`` resolves it for the container it starts itself, and ``remote``
+resolves it for a context it sends to a build server, which then
+*re-resolves the version against its own sources and verifies the bytes
+against this pin*. The version is the server's resolution key and the
+hash is the byte-identity guard — same version number, other bytes, is a
+typed refusal there rather than a silently different SDK. One resolver
+for both is what makes the client's pin and the server's check statements
+about the same rule; and it has to be in the workbench, because a
+workbench must not import the compiler (ADR 0020 decision 3) and
+``remote`` is a workbench-only method.
 
 Pre-release rule (E52, stated so a reader need not reverse-engineer
 ``packaging``): a dev or pre-release version (``2.5.0.dev0``, ``2.5.0a1``)
@@ -42,8 +58,10 @@ passing it through — which is exactly the rule above.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
@@ -51,10 +69,34 @@ from packaging.version import InvalidVersion, Version
 from mcuhome.model.errors import BuildError
 
 __all__ = [
+    "INDEX_FILE",
+    "SDK_ANY",
+    "SDK_PACKAGE_NAME",
     "ResolvedPackage",
+    "SdkResolution",
     "resolve_from_index",
+    "resolve_sdk",
+    "resolve_sdk_pin",
     "resolve_version",
 ]
+
+#: The distribution name the SDK package is indexed under, from the one
+#: script that writes the index (``scripts/build_sdk_archive.py``). Not a
+#: value anybody invents: an index keyed by any other name is one no pin
+#: can be resolved from.
+SDK_PACKAGE_NAME = "mcuhome-sdk"
+
+#: The static index a source directory carries, next to the archives it
+#: indexes (``scripts/build_sdk_archive.py``).
+INDEX_FILE = "index.json"
+
+#: The SDK constraint a build resolves with when the caller states none:
+#: "the newest the configured sources offer". A device configuration can
+#: pin the SDK as a PEP 440 constraint (ADR 0018), but a plain ``mcuhome
+#: build`` has no such intent — it takes whatever SDK package the
+#: ``--sdk-source`` directories hold, exactly as the empty
+#: :class:`~packaging.specifiers.SpecifierSet` matches every version.
+SDK_ANY = ""
 
 
 def resolve_version(
@@ -185,3 +227,143 @@ def resolve_from_index(
             f"The package index entry for {name} {version} is missing something: {error}.",
             hint="each entry carries file, sha256 and size — the index is malformed",
         ) from error
+
+
+@dataclass(frozen=True)
+class SdkResolution:
+    """One SDK package a constraint resolved to, and where it was found.
+
+    :attr:`stated` is what the caller asked for, verbatim — ``SDK_ANY``
+    when it asked for nothing. :attr:`package` is what that selected, and
+    :attr:`source` is the directory whose index selected it, which is the
+    directory whose bytes :func:`~mcuhome.compiler.localbackend.acquire_sdk`
+    then reads.
+
+    It exists because a :class:`~mcuhome.model.context.SdkPin` needs more
+    than the three values a pin *is*: ``context.yaml`` also records the
+    original intent and a location hint, and both are derived from here
+    rather than invented by whoever writes the document.
+    """
+
+    stated: str
+    package: ResolvedPackage
+    source: Path
+
+    @property
+    def intent(self) -> str:
+        """The constraint to record — verbatim, empty included.
+
+        The empty specifier is PEP 440's own way of saying "any
+        version", and the document records the caller's statement, not a
+        paraphrase: ``mcuhome.constraint`` is informational by contract
+        ("original intent — never hashed"), and the build server accepts
+        it empty for exactly that reason. Rendering an unstated
+        constraint as ``==<version>`` was considered and rejected — it
+        destroys the one thing the field exists to preserve, the
+        difference between "any version was fine" and "exactly this one
+        was demanded".
+        """
+        return self.stated
+
+    @property
+    def url(self) -> str:
+        """The location hint to record — empty for a local source.
+
+        ``mcuhome.package.url`` is a hint only ("never hashed", and ADR
+        0019 §8 forbids any backend to follow it). A package resolved
+        from a local directory has no URL worth recording: a ``file://``
+        URI of the source would carry the creator's local filesystem
+        layout — home directory, username — into a document that is
+        uploaded to a build server and archivable there. The field stays
+        empty until a resolution actually comes from a registry with a
+        public location.
+        """
+        return ""
+
+
+def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkResolution:
+    """Resolve *constraint* to one SDK package out of *sources*.
+
+    The pin has to exist *before* a context can be created — a context is
+    content-addressed over the resolved ``sha256`` — so this resolves it
+    from the static :data:`INDEX_FILE` a source directory carries
+    (``scripts/build_sdk_archive.py``), never from a network. Sources are
+    searched in order and the first that holds a matching package wins,
+    which is the same "first source wins" rule
+    :func:`~mcuhome.compiler.localbackend.acquire_sdk` then fetches the
+    bytes by.
+
+    **Both halves of the answer are load-bearing, and differently so**
+    (E65). The *version* is a resolution key: whoever fetches the package
+    looks it up by that number, here or on a build server whose sources
+    are its operator's, not this machine's. The *sha256* is the
+    byte-identity guard: it is what the context ID hashes, and what the
+    fetching party checks the bytes it found against. That is the whole
+    protection against a version number meaning different bytes in two
+    places — a build server that quietly used its own copy under the
+    pinned version would build against a different SDK than the identity
+    claims, so a mismatch there is a typed refusal rather than a fallback.
+
+    Raises a typed :class:`~mcuhome.model.errors.BuildError` — the
+    ``sdk.unavailable`` spirit — when no source is configured or none holds
+    the package, so a command line can render it as a clean refusal.
+    """
+    if not sources:
+        raise BuildError(
+            "A build in a build container needs an SDK source, and none is configured.",
+            hint=(
+                "MCUHome's own SDK travels into the build as a hash-pinned package "
+                "(ADR 0018), and the pin is resolved on this machine for every method "
+                "that uses a build container — the local one and a build server alike. "
+                "Point at a directory holding one:\n"
+                "    mcuhome build <device> --sdk-source <dir>\n"
+                "or set MCUHOME_SDK_SOURCE. --method local-dev needs no SDK source."
+            ),
+        )
+    searched: list[str] = []
+    for source in sources:
+        source = Path(source)
+        searched.append(str(source))
+        index_path = source / INDEX_FILE
+        if not index_path.is_file():
+            continue
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        try:
+            # SDK_ANY means "the newest package this source holds, whatever
+            # it is" — and during development that is a dev release. The
+            # E52 pre-release rule (a dev version satisfies only a
+            # pre-release constraint) is right for a real pin like ~=2.3
+            # but wrong for "any", which is literally any: so an empty
+            # constraint admits pre-releases, and a stated one keeps the
+            # rule.
+            allow = True if constraint == SDK_ANY else None
+            resolved = resolve_from_index(index, SDK_PACKAGE_NAME, constraint, prereleases=allow)
+        except BuildError:
+            continue
+        return SdkResolution(stated=constraint, package=resolved, source=source)
+    listed = ", ".join(searched) or "none"
+    raise BuildError(
+        f"No configured SDK source holds the {SDK_PACKAGE_NAME} package.",
+        hint=(
+            f"the pin is resolved from source directories only, never from a URL — "
+            f"put a {SDK_PACKAGE_NAME} package and its {INDEX_FILE} "
+            f"(scripts/build_sdk_archive.py) in one of: {listed}"
+        ),
+    )
+
+
+def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tuple[str, str, str]:
+    """The three values an SDK pin *is*: ``(constraint, version, sha256)``.
+
+    :func:`resolve_sdk` with everything a document needs left out, for the
+    callers that only want the pin — and, deliberately, returning the
+    constraint the caller **stated** rather than
+    :attr:`SdkResolution.intent`, so that "what was asked for" is
+    recoverable here and the rendering decision belongs to whoever writes
+    the document.
+    """
+    found = resolve_sdk(sources, constraint=constraint)
+    return found.stated, found.package.version, found.package.sha256

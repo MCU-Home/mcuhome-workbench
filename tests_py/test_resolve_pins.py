@@ -11,12 +11,17 @@ the resolver owes a caller.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from mcuhome.model.errors import BuildError
 from mcuhome.workbench.resolve_pins import (
+    SDK_ANY,
     ResolvedPackage,
     resolve_from_index,
+    resolve_sdk,
+    resolve_sdk_pin,
     resolve_version,
 )
 
@@ -132,3 +137,67 @@ def test_an_index_without_the_package_is_refused() -> None:
     with pytest.raises(BuildError) as caught:
         resolve_from_index({"packages": {}}, "mcuhome-sdk", ">=0")
     assert "mcuhome-sdk" in caught.value.message
+
+
+# --------------------------------------------------------------------------
+# What a context document records about the pin (E65)
+# --------------------------------------------------------------------------
+#
+# `resolve_sdk` answers more than the three values a pin is, because
+# `context.yaml` records two more — the intent and a location hint — and
+# both have to be derived from the resolution rather than invented by
+# whoever writes the document. Neither may be empty: a context is parsed
+# by implementations that are not this one (the build server refuses an
+# empty `mcuhome.constraint` or `package.url`), and an empty field cannot
+# be told from a dropped one by a reader.
+
+
+def _sdk_source(directory, *, versions: dict[str, str]) -> None:
+    """A source directory holding one index and one file per version."""
+    directory.mkdir(parents=True, exist_ok=True)
+    entries = {}
+    for version, digest in versions.items():
+        name = f"mcuhome-sdk-{version}.tar.zst"
+        (directory / name).write_bytes(b"not a real archive")
+        entries[version] = {"file": name, "sha256": digest, "size": 18}
+    (directory / "index.json").write_text(
+        json.dumps({"packages": {"mcuhome-sdk": entries}}), encoding="utf-8"
+    )
+
+
+def test_an_unstated_constraint_is_recorded_verbatim_and_empty(tmp_path) -> None:
+    """The document records the statement, not a paraphrase.
+
+    The empty specifier is PEP 440's own "any version"; the field is
+    informational by contract and the build server accepts it empty.
+    Rendering it as ``==<version>`` would erase the difference between
+    "any version was fine" and "exactly this one was demanded" — the one
+    thing the field preserves.
+    """
+    _sdk_source(tmp_path / "src", versions={"2.4.0": "a" * 64})
+    found = resolve_sdk((tmp_path / "src",))
+    assert found.stated == SDK_ANY
+    assert found.intent == SDK_ANY
+    assert resolve_sdk_pin((tmp_path / "src",))[0] == SDK_ANY
+
+
+def test_a_stated_constraint_is_recorded_verbatim(tmp_path) -> None:
+    """Intent and resolution stay two things wherever there are two (ADR 0018)."""
+    _sdk_source(tmp_path / "src", versions={"2.3.6": "a" * 64, "2.4.0": "b" * 64})
+    found = resolve_sdk((tmp_path / "src",), constraint="~=2.3")
+    assert found.intent == "~=2.3"
+    assert found.package.version == "2.4.0"
+
+
+def test_a_local_source_records_no_url(tmp_path) -> None:
+    """No invented location hint — and no local filesystem layout leaked.
+
+    A ``file://`` URI of the source directory would carry the creator's
+    home directory and username into a document uploaded to a build
+    server. The hint stays empty until a resolution really comes from a
+    registry with a public location.
+    """
+    source = tmp_path / "src"
+    _sdk_source(source, versions={"2.4.0": "a" * 64})
+    found = resolve_sdk((source,))
+    assert found.url == ""

@@ -50,6 +50,23 @@ throughout and the other two block for minutes in a subprocess, so the
 one interface over them is ``async`` and the synchronous methods are
 offloaded to a thread. A command line wraps the whole thing in one
 :func:`asyncio.run` at its entry point and its user sees nothing.
+
+**All three methods are complete** (E65). ``remote`` was the last one
+that could not start from a device model: a build context is
+content-addressed over the SDK package's hash, and nothing resolved that
+pin on this path. It does now, through the *same* resolver and the same
+context writer the ``local`` method uses
+(:func:`~mcuhome.workbench.resolve_pins.resolve_sdk`,
+:func:`~mcuhome.workbench.contextdir.create_build_context`), from the
+same ``--sdk-source`` directories. There is deliberately **no**
+capabilities round trip for it, exactly as there is none for the
+container since E61: the client states a version *and* a sha256, the
+server resolves the version against its own sources — which may be a
+cache, a package service or a private registry — and verifies the bytes
+it found against the hash. Same number, other bytes is a typed refusal
+on that side, never a quiet build against another SDK; and because the
+hash is what the identity is computed over, none of this changes the
+context format or the ID rule.
 """
 
 from __future__ import annotations
@@ -64,6 +81,7 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
+from mcuhome.workbench.contextdir import create_build_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
 __all__ = [
@@ -120,10 +138,14 @@ class MethodUnavailable(BuildError):
 class RemoteNotConfigured(BuildError):
     """``remote`` was selected and something it cannot invent is missing.
 
-    Two shapes: no build server address, and no build context to send. In
-    both cases the refusal names what to supply rather than guessing —
-    there is no default build server, and a context is content-addressed
-    so a wrong one is a silently different identity.
+    Two shapes, and they are the two decisions this method cannot make
+    for a caller: **where** to build — there is no default build server
+    and no discovery — and **which SDK package** the context pins, which
+    is resolved from the caller's own sources and is part of the
+    identity the work is attributed to. Both refusals name the knob that
+    supplies the value rather than guessing at one, because a guess here
+    is either a context sent to a stranger or an identity that describes
+    a build nobody asked for.
     """
 
 
@@ -189,9 +211,17 @@ class BuildRequest:
     #: pair a build ever sees (ADR 0015 decision 8).
     signing_pub: str = ""
 
-    # -- local ---------------------------------------------------------
+    # -- local / remote ------------------------------------------------
     #: Directories holding the hash-pinned MCUHome SDK package (ADR 0018).
+    #: Read by **both** container-shaped methods, for the same reason and
+    #: at the same moment: the resolved package hash is an input of the
+    #: context ID, so the pin has to exist before a context does (E65).
+    #: What differs afterwards is who fetches the bytes — this machine for
+    #: ``local``, the build server out of its operator's own sources for
+    #: ``remote``, which then verifies them against this pin.
     sdk_sources: Sequence[Path] = ()
+
+    # -- local ---------------------------------------------------------
     #: Build-container reference to compile in; ``None`` takes the default.
     image: str | None = None
 
@@ -223,8 +253,13 @@ class BuildRequest:
     #: ``MCUHOME_BUILD_TOKEN``). ``None`` is legitimate — a server may
     #: require none.
     token: str | None = None
-    #: A **locked** build context directory to send. See
-    #: :func:`_run_remote` for why ``remote`` cannot yet create its own.
+    #: A build context directory to send instead of creating one. For an
+    #: embedder that already holds one — a dashboard that assembled a
+    #: context elsewhere, a test driving a hand-written one. Left ``None``,
+    #: which is the ordinary case, the method creates its own from
+    #: :attr:`model` and :attr:`sdk_sources`. It is the *base* context that
+    #: travels: freezing it is the server's act, and the client checks the
+    #: identity it answers with (E37).
     context_dir: Path | None = None
 
 
@@ -409,27 +444,55 @@ async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
     )
 
 
+def _remote_context(request: BuildRequest, work_root: Path) -> Path:
+    """The base context a remote build sends, at ``<work root>/context``.
+
+    Placed exactly where the ``local`` method places its own and written
+    by the same function, so the two methods differ in where the context
+    goes and in nothing about what it is.
+    """
+    context_dir = Path(work_root) / "context"
+    create_build_context(
+        request.model,
+        out_dir=context_dir,
+        sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        signing_pub=request.signing_pub,
+    )
+    return context_dir
+
+
 async def _run_remote(request: BuildRequest) -> BuildOutcome:
     """The build-server method: :func:`…sessionclient.run_remote_build`.
 
-    Imported here rather than at module level so that importing this
-    package costs neither the session client's own weight nor the
+    The session client is imported here rather than at module level so
+    that importing this package costs neither its weight nor the
     ``remote`` extra: ``aiohttp`` and ``zstandard`` are refused in words
     the first time a frame would be sent, not at import.
 
     Two things are refused before that, because neither can be invented.
     **The server address** is E53's ladder and its rungs belong to the
     caller — a build server has no default, and a wrong one is a build
-    context sent to a stranger. **The build context** is the gap this
-    method still has, and E61 moved where the gap is rather than closing
-    it: the container is no longer the client's to choose, so nothing
-    about a context needs a ``capabilities`` round trip any more, but
-    ``mcuhome.package.sha256`` is still a hashed identity input and still
-    has to be resolved against an SDK package index this client can read.
-    Nothing wires that up for the remote method yet, so an embedder that
-    has a locked context passes it and a caller that has only a model is
-    told so rather than silently getting a context pinned to something
-    else.
+    context sent to a stranger. **An SDK source** is E65's: the context
+    this method creates carries the SDK package's version *and* its
+    sha256, and both come from the client's own source directories
+    (later, from a registry index). The version is the key the server
+    resolves the package by; the hash is what it verifies the bytes it
+    found against, which is what makes "same version, other bytes" a
+    typed refusal there instead of a silent build against another SDK.
+    A client that states no source can resolve neither, and a context
+    pinned to whatever the server happened to have would be an identity
+    that describes nothing.
+
+    With both in hand this is the ``local`` method's own composition with
+    a socket in place of a container: resolve the pin, write the base
+    context through the seam both methods share
+    (:func:`~mcuhome.workbench.contextdir.create_build_context`), and
+    hand the directory to the session client. It is the **base** context
+    that goes — unlocked, without a ``manifest.yaml`` — because freezing
+    it is the server's act (ADR 0019, E7) and the client's duty is to
+    compare the identity it answers with (E37). An embedder that already
+    holds a context passes it as :attr:`BuildRequest.context_dir` and
+    none of this runs.
     """
     if not request.server:
         raise RemoteNotConfigured(
@@ -443,25 +506,37 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
                 "rather than a lookup."
             ),
         )
-    if request.context_dir is None:
-        raise RemoteNotConfigured(
-            "The remote build method cannot create its own build context yet.",
-            hint=(
-                "a context carries the SDK package hash it was resolved to, and "
-                "resolving one needs an SDK package index this client can read — "
-                "that step is not wired up for the remote method. A caller that "
-                "already holds a locked context directory can pass it; from the "
-                f"command line, use --method {LOCAL} or --method {LOCAL_DEV} for now."
-            ),
-        )
+    work_root = _work_root(request, ".mcuhome-remote")
+    context_dir = Path(request.context_dir) if request.context_dir is not None else None
+    if context_dir is None:
+        if not request.sdk_sources:
+            raise RemoteNotConfigured(
+                "The remote build method needs an SDK source to pin the build context "
+                "with, and none is configured.",
+                hint=(
+                    "the context states which MCUHome SDK package to build against — "
+                    "the version the build server resolves it by, and the sha256 it "
+                    "checks the bytes it found against (ADR 0018) — and that pin is "
+                    "resolved here, from your own source directories. Point at one:\n"
+                    "    mcuhome build <device> --method remote --server <url> "
+                    "--sdk-source <dir>\n"
+                    "or set MCUHOME_SDK_SOURCE. An embedder that already holds a build "
+                    "context directory can pass it instead."
+                ),
+            )
+        # Off the event loop: this hashes nothing large, but it reads an
+        # index, writes the model and the key, and copies the patch set —
+        # filesystem work with no await in it, in a method whose whole
+        # point is that a caller's loop keeps running while it waits.
+        context_dir = await asyncio.to_thread(_remote_context, request, work_root)
 
     from mcuhome.workbench import sessionclient
 
     result = await sessionclient.run_remote_build(
-        Path(request.context_dir),
+        context_dir,
         url=request.server,
         token=request.token,
-        work_root=_work_root(request, ".mcuhome-remote"),
+        work_root=work_root,
         mode=request.mode,
         on_line=request.on_line,
     )

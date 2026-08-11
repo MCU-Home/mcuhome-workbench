@@ -77,7 +77,13 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.toolchain import satisfies_line
 from mcuhome.workbench.contextdir import read_context_manifest
-from mcuhome.workbench.resolve_pins import resolve_from_index
+
+# The package name, the index file name and the resolution rule are the
+# client's as much as this backend's — the same directory is read by
+# whoever resolves a pin and by whoever fetches the bytes — so all three
+# live in the workbench and are re-exported here under the names this
+# module already offered (`localbackend.SDK_PACKAGE_NAME`).
+from mcuhome.workbench.resolve_pins import INDEX_FILE, SDK_PACKAGE_NAME, resolve_from_index
 
 __all__ = [
     "ACTION_BUILD",
@@ -144,16 +150,6 @@ ACTION_BUILD = abi.IMPLEMENTED_ACTIONS[2]
 REQUEST_VERSION = abi.REQUEST_VERSIONS[0]
 RESULT_VERSION = abi.RESULT_VERSION
 CONTRACT_VERSION = abi.CONTRACT_VERSION
-
-#: The distribution name the SDK package is indexed under, from the one
-#: script that writes the index (``scripts/build_sdk_archive.py``). Not a
-#: value this backend invents: an index keyed by any other name is one it
-#: cannot resolve a pin from.
-SDK_PACKAGE_NAME = "mcuhome-sdk"
-
-#: The static index a source directory carries, next to the archives it
-#: indexes (``scripts/build_sdk_archive.py``).
-INDEX_FILE = "index.json"
 
 #: What the session's container runs as its main process. §2.2 makes
 #: starting the container the backend's business — ``docker run``
