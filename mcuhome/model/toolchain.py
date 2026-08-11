@@ -37,6 +37,7 @@ __all__ = [
     "ResolvedToolchain",
     "available_blobs",
     "line_of",
+    "normalize_release",
     "resolve_toolchain",
     "satisfies_line",
 ]
@@ -138,6 +139,30 @@ def line_of(version: str) -> str | None:
     if found is None or found.group("suffix"):
         return None
     return ".".join(found.group("numbers").split(".")[:2])
+
+
+def normalize_release(version: str) -> str:
+    """Strip west's leading ``v``, and no more of it than that.
+
+    West states every pinned revision with a ``v`` no Zephyr release
+    grammar carries: ``west list`` and a program's own ``describe``
+    answer ``v4.4.0`` for what everywhere else — :func:`line_of`,
+    :func:`satisfies_line`, the ``org.mcuhome.zephyr`` coupling label —
+    is spelled ``4.4.0`` (``containers/builder/README.md``'s r7 repair
+    fixed the label to match for the same reason this exists: "a
+    container that does not carry a named label does not qualify", and a
+    label still spelled ``v4.4.0`` satisfied no release's constraint at
+    all).
+
+    Exactly one leading ``v`` is dropped and nothing else about the value
+    is touched: a second ``v`` is not west's doing and stays, and a value
+    that never had one comes back unchanged. This is the one place that
+    normalization happens, so that a build server reading a program's
+    ``describe`` answer and this module's own release grammar agree on
+    what a release looks like without a second implementation of the
+    strip.
+    """
+    return version[1:] if version.startswith("v") else version
 
 
 def available_blobs(board: str) -> dict[str, str]:

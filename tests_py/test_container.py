@@ -85,7 +85,7 @@ def test_the_image_tag_is_the_zephyr_pin_plus_a_revision() -> None:
     manifest = (REPO_ROOT / "west.yml").read_text(encoding="utf-8")
     pinned = re.search(r"name: zephyr\s+remote: \S+\s+revision: v(\S+)", manifest)
     assert pinned is not None, "west.yml no longer states the Zephyr revision as expected"
-    assert pinned.group(1) == container.ZEPHYR_LINE
+    assert pinned.group(1) == container.ZEPHYR_RELEASE
     assert f"zephyr-{pinned.group(1)}-r{container.IMAGE_REVISION}" == container.IMAGE_TAG
 
 

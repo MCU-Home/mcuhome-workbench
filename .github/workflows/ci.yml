@@ -137,9 +137,9 @@ jobs:
           path: mcuhome
 
       # One source of truth for the image name, and it is the builder's:
-      # mcuhome/compiler/container.py carries the Zephyr line and the image
-      # revision, and the builder resolves the very same string when a
-      # developer runs `mcuhome build`. Importing it needs no third-party
+      # mcuhome/compiler/container.py carries the Zephyr release and the
+      # image revision, and the builder resolves the very same string when
+      # a developer runs `mcuhome build`. Importing it needs no third-party
       # package — that module is standard library only, on purpose.
       - name: Resolve the builder image reference
         id: image
@@ -147,9 +147,9 @@ jobs:
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import sys
           sys.path.insert(0, "mcuhome")
-          from mcuhome.compiler.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_LINE
+          from mcuhome.compiler.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_RELEASE
           print(f"reference={IMAGE}")
-          print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_LINE}")
+          print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_RELEASE}")
           PY
 
       - name: Log in to ghcr.io

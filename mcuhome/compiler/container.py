@@ -51,7 +51,7 @@ __all__ = [
     "IMAGE_TAG",
     "IMAGE_VAR",
     "NETWORK_VAR",
-    "ZEPHYR_LINE",
+    "ZEPHYR_RELEASE",
     "ccache_directory",
     "container_environment",
     "docker_program",
@@ -69,7 +69,7 @@ __all__ = [
 #: Zephyr release the image is built for. **Lockstep rule (ADR 0007/0008):
 #: this is the ``revision:`` of the ``zephyr`` project in ``west.yml``
 #: without the leading ``v``.** Bumping one without the other is a bug.
-ZEPHYR_LINE = "4.4.0"
+ZEPHYR_RELEASE = "4.4.0"
 
 #: Rebuilds of the image for the same Zephyr release: a new tool version,
 #: a new Python dependency, a fix in the Dockerfile. Starts at 1 and is
@@ -143,7 +143,7 @@ IMAGE_REPOSITORY = "ghcr.io/mcu-home/builder"
 #: environment that changes under a stable name is not one. CI also
 #: publishes the moving ``zephyr-<line>`` alias for people who want the
 #: newest revision of a Zephyr line, but the builder never asks for it.
-IMAGE_TAG = f"zephyr-{ZEPHYR_LINE}-r{IMAGE_REVISION}"
+IMAGE_TAG = f"zephyr-{ZEPHYR_RELEASE}-r{IMAGE_REVISION}"
 
 #: The image this version of the builder compiles in.
 IMAGE = f"{IMAGE_REPOSITORY}:{IMAGE_TAG}"

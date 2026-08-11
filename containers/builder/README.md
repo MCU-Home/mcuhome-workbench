@@ -291,6 +291,6 @@ docker run --rm --user "$(id -u):$(id -g)" \
 ## Bumping Zephyr
 
 The Zephyr pin, the CHIP pin and this image move together (ADR 0008). In
-one commit: `west.yml`, `ZEPHYR_LINE` in `mcuhome/compiler/container.py`,
+one commit: `west.yml`, `ZEPHYR_RELEASE` in `mcuhome/compiler/container.py`,
 `IMAGE_REVISION` back to 1, and the SDK version and checksums in the
 `Dockerfile`.

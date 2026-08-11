@@ -110,7 +110,7 @@ def image_zephyr_version(profile: lb.ImageProfile) -> str:
     absence is never read as compatible".
 
     There is deliberately **no** fallback to this module's own pin
-    (:data:`~mcuhome.compiler.container.ZEPHYR_LINE`). One existed and
+    (:data:`~mcuhome.compiler.container.ZEPHYR_RELEASE`). One existed and
     was wrong twice over:
     :meth:`~mcuhome.compiler.localbackend.LocalBackend._resolve_image`
     performs this same match a few steps later with no fallback, so an

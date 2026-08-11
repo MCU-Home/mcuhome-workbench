@@ -48,7 +48,7 @@ from mcuhome.model.context import (
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
-from mcuhome.model.toolchain import line_of, satisfies_line
+from mcuhome.model.toolchain import line_of, normalize_release, satisfies_line
 from mcuhome.workbench.contextdir import (
     create_context,
     lock_context,
@@ -909,6 +909,29 @@ def test_a_reported_line_is_always_one_the_release_satisfies(version: str) -> No
     line = line_of(version)
     assert line is not None
     assert satisfies_line(version, line=line)
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        # West's own spelling: the one case this exists for.
+        ("v4.4.0", "4.4.0"),
+        # No leading v — nothing to strip, unchanged.
+        ("4.4.0", "4.4.0"),
+        # Exactly one v, however many there are: not west's doing beyond
+        # the first, and this is not a loop.
+        ("vv4.4.0", "v4.4.0"),
+        # The whole string can be the v.
+        ("v", ""),
+        # Absence stays absence.
+        ("", ""),
+    ],
+)
+def test_normalize_release_strips_one_leading_v(version: str, expected: str) -> None:
+    """West states every pinned revision with a ``v`` no release grammar
+    carries; this is the one place that strip happens, for every reader
+    of a ``describe`` answer or a west revision alike."""
+    assert normalize_release(version) == expected
 
 
 def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Path) -> None:
