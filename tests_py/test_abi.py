@@ -1672,15 +1672,18 @@ def test_a_mode_this_program_does_not_implement_is_refused_rather_than_downgrade
     """§5.2's warning, applied where ``required`` did not name the pointer.
 
     "A program that knows ``/params/mode`` but not the value
-    ``reproducible`` MUST refuse … rather than accept the job and quietly
-    deliver something else." §7.2 enumerates two values and says nothing
-    about a third arriving unannounced; executing it as ``clean`` would be
-    the same lie one channel down. See :mod:`mcuhome.compiler.abi`'s docstring.
+    ``reproducible`` MUST refuse with ``unsupported.required`` … rather
+    than accept the job and quietly deliver something else." The value is
+    what the program cannot honour, so the reason is the same whether or
+    not the backend named the pointer in ``required`` — executing it as
+    ``clean`` would be the same lie one channel down. See
+    :mod:`mcuhome.compiler.abi`'s docstring.
     """
     assert build.run(params={"mode": "reproducible"}) == abi.EXIT_FAILURE
     document = build.document()
     assert document["status"] == "unsupported"
-    assert document["reason"] == "unsupported.request"
+    assert document["reason"] == "unsupported.required"
+    assert document["error"]["details"]["required"] == ["/params/mode"]
     assert build.plans == []
 
 
@@ -2542,5 +2545,28 @@ def test_a_crash_inside_an_action_still_writes_a_result_document(backend: Backen
     assert document["status"] == "failure"
     assert document["action"] == "build"
     assert document["session"] == "s-42"
-    assert document["reason"] == "error.build.failed"
+    # error.internal, not error.build.failed: the program crashed, which
+    # is a fact about the program, not about the build work (§5.4.1
+    # erratum). The same reason answers a crash in describe or verify.
+    assert document["reason"] == "error.internal"
     assert "disk went away mid-action" in document["error"]["message"]
+
+
+def test_a_crash_in_a_non_build_action_is_also_error_internal(backend: Backend) -> None:
+    """The erratum's point: a describe/verify crash is not build-work.
+
+    Before error.internal existed, any-action crash was
+    error.build.failed — telling a backend that a verify that hit an
+    unexpected error was a compile failure. The reason is now honest
+    about which action crashed by not pretending it was a build.
+    """
+    backend.request.write_text(json.dumps(backend.preamble(session="s-9")), encoding="utf-8")
+
+    def explode(action: str, document: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("verify blew up")
+
+    code = abi.run_invocation([PROGRAM_PATH, "verify", str(backend.request)], explode)
+    assert code == abi.EXIT_FAILURE
+    document = backend.document()
+    assert document["action"] == "verify"
+    assert document["reason"] == "error.internal"

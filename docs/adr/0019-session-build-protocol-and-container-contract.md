@@ -994,3 +994,38 @@ Consequences, and they are deliberately small:
   an empty `mcuhome.constraint` is PEP 440's own any-version specifier,
   and forcing either non-empty made the reference client invent
   values.
+
+## Amendment: session lifecycle matches the shipped scope (2026-08-11, product owner)
+
+A conformance pass found Decision 2 and Decision 3 above promising
+session-lifecycle behaviour the server deliberately does not implement,
+and this amendment brings the record to the code rather than the code to
+the record.
+
+**Leases and budgets are per server, not per profile.** Decision 2 read
+the three session profiles (`oneshot`, `dev`, `test`) as each carrying
+its own TTL, idle timeout and budget, and named a typed profile
+violation. The 2026-08-08 amendment already moved limits to the server
+(one configured TTL, one idle timeout, one session cap), and that is
+what `SessionManager.open` does: every session gets the same lease
+regardless of profile, and no verb is profile-restricted — the profile
+is an admission label the `open-session` answer echoes, nothing more.
+Per-profile budgets and a typed profile-violation are **not** part of
+v0.1; they are a named later block, to be designed if a deployment ever
+needs a session class with its own limits. The reasoning stands: a
+profile that promised a budget the server does not keep would be the
+"accept the job and quietly do something else" failure at the session
+layer.
+
+**Session end is learned, not announced.** Decision 3's lease-warning
+and eviction events are **not** emitted. A session ends in one of three
+ways — the client closes it, the connection is lost, or the lease
+expires — and a client learns of an expiry the next time it uses the
+session, as the typed `session.expired` refusal. A proactive
+session-scoped eviction event (so a connected-but-idle client hears of
+its eviction without asking) is a real improvement and an explicit
+later block; it is not v0.1, because the `max_open` cap already bounds
+what an abandoned session costs and `session.expired` already names the
+condition legibly when it matters. The four frame kinds (`result`,
+`error`, `event`, `log`) stay invocation-scoped; no session-scoped
+event frame exists yet.

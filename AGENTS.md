@@ -183,7 +183,9 @@ mcuhome schema registry
 mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
 
 # Detached signing (ADR 0015 decision 8): compile without the private key,
-# sign where the key is. build-manifest.json carries the imgtool parameters.
+# sign where the key is. build-report.json carries the imgtool parameters
+# (the default `local` method's §7.2.1 delivery; `--method local-dev`
+# writes build-manifest.json instead, and the signer reads either).
 mcuhome public-key -o signing.pub
 mcuhome build <device> --no-sign --public-key signing.pub
 mcuhome sign build/<device>

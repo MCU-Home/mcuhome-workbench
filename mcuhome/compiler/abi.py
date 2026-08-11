@@ -146,13 +146,15 @@ below is a decision this module took, not a rule it found. Each names the
 line it stands on.
 
 *A ``params.mode`` value this program does not implement is
-``unsupported.request``.* §5.2 rule 2 fires only through ``required``,
-and §7.2 enumerates two values without saying what a third one means when
-it arrives unannounced. Silently executing ``reproducible`` as ``clean``
-is exactly the failure §5.2 describes one paragraph later — "accept the
-job and quietly deliver something else" — so the value is refused the way
-rule 3 refuses a field "the program needs for this action and does not
-find": it is in the document and there is no usable value at it.
+``unsupported.required``.* §5.2 ("`required` and value granularity")
+already says so — "A program that knows ``/params/mode`` but not the
+value ``reproducible`` MUST refuse with ``unsupported.required``" — so
+the bare case answers the same reason a value NAMED in ``required``
+earns through :data:`_HONOURED_REQUIRED`. It is not
+``unsupported.request``: the field is present and well-formed, and
+refusing it as "missing" would misname a present-but-unimplemented
+value. Silently executing ``reproducible`` as ``clean`` stays forbidden
+— the §5.2 failure "accept the job and quietly deliver something else".
 
 *The generated application tree and the CMake tree live in ``work``.*
 §5.2 calls ``work`` "the session's persistent working area" and §7.2
@@ -437,6 +439,7 @@ _REASON_LAYER = "error.layer.unknown"
 _REASON_PATCH = "error.patch.incomplete"
 _REASON_WORK = "error.work.foreign"
 _REASON_BUILD = "error.build.failed"
+_REASON_INTERNAL = "error.internal"
 
 # --------------------------------------------------------------------------
 # The request document (§5.2)
@@ -634,9 +637,15 @@ def honoured_required(
 #: ``required``, and :data:`HONOURED_REQUIRED` answers that.
 #:
 #: ``/params/mode`` is here rather than only in the honoured table
-#: because §7.2 enumerates two values and is silent about a third
-#: arriving without ``required`` — see the module docstring. Absent is
-#: usable (it means ``clean``); ``reproducible`` is not.
+#: ``/params/mode`` is not here: a missing mode is usable (it means
+#: ``clean``), so the only way it could fail this presence check is a
+#: value like ``reproducible`` — and §5.2 ("`required` and value
+#: granularity") already fixes what that is: "A program that knows
+#: ``/params/mode`` but not the value ``reproducible`` MUST refuse with
+#: ``unsupported.required`` rather than accept the job." That is a
+#: present field with an unimplemented value, not a missing one, so
+#: :func:`_unsupported_mode` handles it apart from rule 3's missing
+#: fields.
 _NEEDED_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
     "verify": {"/context": _is_absolute_path, "/session": _is_present},
     "build": {
@@ -647,7 +656,6 @@ _NEEDED_FIELDS: dict[str, dict[str, Callable[[Any], bool]]] = {
         "/tmp": _is_absolute_path,
         "/trees/sdk/path": _is_absolute_path,
         "/limits/jobs": _is_jobs,
-        "/params/mode": _is_mode,
     },
 }
 
@@ -784,6 +792,27 @@ def _not_found(action: str, document: dict[str, Any]) -> list[str]:
         for pointer, usable in needed.items()
         if not usable(_resolve_pointer(document, pointer))
     ]
+
+
+def _unsupported_mode(action: str, document: dict[str, Any]) -> Any:
+    """A present ``/params/mode`` this program does not implement, or None.
+
+    §7.2 enumerates ``clean`` and ``incremental``. A third value is one
+    the program cannot honour, which §5.2 already scopes to
+    ``unsupported.required`` ("A program that knows ``/params/mode`` but
+    not the value ``reproducible`` MUST refuse with
+    ``unsupported.required``") — distinct from a *missing* mandatory
+    field (``unsupported.request``), because the field is present and
+    well-formed; it is its value the program does not implement. An
+    absent mode is ``clean`` (§5.2) and usable, so it is never one of
+    these.
+    """
+    if action != "build":
+        return None
+    value = _resolve_pointer(document, "/params/mode")
+    if value is _MISSING or value in MODES:
+        return None
+    return value
 
 
 def _relative_paths(document: dict[str, Any]) -> list[str]:
@@ -2304,6 +2333,14 @@ def _invoke(
             f"supplies no usable value there",
         )
 
+    bad_mode = _unsupported_mode(action, document)
+    if bad_mode is not None:
+        return refuse(
+            _REASON_REQUIRED,
+            f"this program implements the build modes {list(MODES)}, not {bad_mode!r}",
+            details={"required": ["/params/mode"]},
+        )
+
     if action == "verify":
         return _verify(echo, document)
     if action == "build":
@@ -2379,13 +2416,13 @@ def run_invocation(
     forever" — so an unexpected exception after the preamble was read is
     answered on the channel that was already open: ``status:
     "failure"``, the exception in ``error.message``, exit 1. The
-    ``reason`` is ``error.build.failed`` for want of a better one:
-    contract v1's registry has no value for "the program itself failed",
-    which is recorded as an erratum candidate (E36) rather than solved
-    here by inventing an unregistered value. Only when even that
-    document cannot be written does the invocation end with exit 66 —
-    the same answer the ordinary write path gives, because a result
-    nobody can address is that case whatever was computed.
+    ``reason`` is ``error.internal`` — the registry value §5.4.1's
+    erratum added for exactly this ("the program itself failed, in any
+    action"), so a backend is never told a ``describe`` or ``verify``
+    crash was a build-work failure. Only when even that document cannot
+    be written does the invocation end with exit 66 — the same answer
+    the ordinary write path gives, because a result nobody can address
+    is that case whatever was computed.
     """
     if len(argv) != 3:
         return EXIT_UNUSABLE
@@ -2408,7 +2445,7 @@ def run_invocation(
         result = _result_document(
             echo,
             _STATUS_FAILURE,
-            reason=_REASON_BUILD,
+            reason=_REASON_INTERNAL,
             error={
                 "retryable": False,
                 "message": f"the program failed inside the action: {died}",

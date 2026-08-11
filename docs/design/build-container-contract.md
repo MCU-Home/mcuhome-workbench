@@ -552,8 +552,8 @@ hashed inputs — `sdk.sha256` and `target.board` — are read from
 `manifest.yaml`, which is not itself in the integrity list, so a
 self-consistently forged manifest recomputes to its own declared ID.
 The reference implementation has exactly this shape
-(`mcuhome/workbench/contextdir.py:606-641`, pins taken from the declared
-manifest at `:636-637`, only `files` measured). Closing it is a backend
+(`mcuhome/workbench/contextdir.py:666-701`, pins taken from the declared
+manifest at `:695-697`, only `files` measured). Closing it is a backend
 duty and it is stated as one in §9.1.
 
 #### 3.3.1 The lexical form of a hash value — normative
@@ -1104,6 +1104,7 @@ diagnostic output.
   | `error.work.foreign` | found a `work` directory marked for a different session (§6.3) |
   | `error.build.failed` | did the work and the work did not produce what it was asked for — reaching or running code generation (§6.1), the compiler, the linker, artifact collection |
   | `error.deadline.exceeded` | stopped itself at `limits.deadline_seconds` (§5.2) |
+  | `error.internal` | the program itself failed — an unexpected error inside any action, not a fact about the request or the context (erratum, 2026-08-11) |
 
   `error.build.failed` is the ordinary one and covers every failure of
   the build itself, including a failed `generate` child (§6.1): a
@@ -1112,7 +1113,12 @@ diagnostic output.
   `error.message`. `error.deadline.exceeded` exists because
   `deadline_seconds` is advisory: enforcement is the backend's (§9.1),
   and a program that honours it anyway would otherwise have no typed way
-  to say why it stopped.
+  to say why it stopped. `error.internal` (erratum, 2026-08-11) is the
+  one reason that is a fact about the *program* rather than the work or
+  the request: an unexpected exception inside any action — `describe`
+  and `verify` included — so a backend is never told a crash outside a
+  build was a build-work failure. `error.build.failed` stays scoped to
+  the build; the two are not interchangeable.
 - `error` — the detail carrier: `{retryable, message, details}`.
   Mandatory whenever `status` is `failure` or `unsupported`, together
   with `reason`, and `null` otherwise. It carries no classification of
