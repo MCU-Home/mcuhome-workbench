@@ -89,8 +89,8 @@ directory. That is the reason contract v1 defines no mount points at
 all (§4).
 
 A `subprocess`-profile backend serves **exactly one build environment —
-the one it runs in**. It MUST reject, typed, any session whose
-`container.digest` does not identify that build environment.
+the one it runs in**. It MUST reject, typed, any session whose context
+requires a Zephyr line that build environment does not carry.
 
 Everything else in this document applies to both profiles unless a
 paragraph says otherwise.
@@ -350,11 +350,12 @@ context/
 ### 3.2 The two context documents
 
 `context.yaml` is written when the base context is created. It carries
-the format version, the resolved pins and the original intent, and
-nothing that depends on the final file set:
+the format version, the resolved pins, the build environment the context
+requires, and the original intent — and nothing that depends on the
+final file set:
 
 ```yaml
-context: 1                          # context format version
+context: 2                          # context format version
 created: 2026-08-09T10:00:00Z       # informational — never hashed
 mcuhome:
   constraint: ^2.3.6                # original intent — never hashed
@@ -362,13 +363,30 @@ mcuhome:
   package:                          # resolved SDK package
     url: https://…/mcuhome-sdk-2.4.0.tar.zst   # hint only — never hashed
     sha256: <hash>
-container:
-  image: ghcr.io/mcu-home/build-container   # informational — never hashed
-  tag: zephyr-4.4.0-r1                      # informational — never hashed
-  digest: sha256:<hash>             # THE container identity; the only hashed field
+zephyr: '4.4'                       # REQUIRED Zephyr line — never hashed
 target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
+
+**A context requires a build environment; it does not choose one.**
+`zephyr` names a Zephyr release *line* — dotted decimal numbers, no
+leading `v`, no pre-release suffix — and a build container serves it
+when its `org.mcuhome.zephyr` label (§2.1.1) is a release *within* that
+line: `4.4` is served by `4.4`, `4.4.0` and `4.4.12`, and by nothing
+else. A release carrying an upstream suffix (`4.5.0-rc1`) serves no
+line, for the reason §2.1.1 gives about ranges. A container that carries
+no `org.mcuhome.zephyr` label at all serves no line either — absence is
+never read as compatible.
+
+Selecting a container of that line is the **backend's** job, and the
+selection MUST be recorded in `manifest.yaml` (below). A backend that
+serves no container of the required line MUST refuse, typed, before the
+context is locked. The `zephyr` value is written quoted, because YAML
+reads an unquoted `4.4` as a number.
+
+The value is **informational for the hash** and load-bearing for
+everything else: §3.3 excludes it, and §3.3's own note says why that is
+redundancy rather than a hole.
 
 A context may be extended after creation (ADR 0019 §2,
 `extend-context`), and an extension MUST NOT touch `context.yaml` — it
@@ -376,13 +394,18 @@ carries the pins the session was admitted on, and changing them is a
 new session, not an extension.
 
 `manifest.yaml` is written **by the backend when the context is
-locked** (`lock-context`, ADR 0019 §2). It repeats the same pins and
+locked** (`lock-context`, ADR 0019 §2). It repeats the same pins and the
+same requirement, adds the backend's answer to that requirement, and
 adds the two things that only exist once the file set is final:
 
 ```yaml
-context: 1
+context: 2
 mcuhome: { … }                      # as in context.yaml
-container: { … }                    # as in context.yaml
+zephyr: '4.4'                       # as in context.yaml — the requirement
+container:                          # THE BACKEND'S RESOLUTION — never hashed
+  image: ghcr.io/mcu-home/build-container
+  tag: zephyr-4.4.0-r1
+  digest: sha256:<hash>             # null for an image that was never pushed
 target: { … }                       # as in context.yaml
 files:                              # integrity list: every content file,
   - { path: keys/signing.pub, sha256: <hash> }             # patches included
@@ -391,9 +414,20 @@ files:                              # integrity list: every content file,
 id: sha256:<hash>                   # canonical hash (identity), rule in §3.3
 ```
 
+The `container` block is **written by the party that locks the context
+and by nobody else**. It is the record of which build environment
+answered this context's requirement, and it is what reproduces the build
+years later: the requirement says what was needed, this says what
+actually ran. It is outside the identity (§3.3), so two backends
+answering one requirement with two different containers of the same line
+still compute one context ID for one set of bytes. `digest` is the repo
+digest, or `null` for an image that was built locally and never pushed —
+such an image names no fetchable bytes, and `null` says exactly that
+rather than inventing a value.
+
 Every `<hash>` in the two documents above has exactly one legal
-spelling, fixed normatively in §3.3.1: `container.digest` and `id`
-are `sha256:` followed by 64 lowercase hex digits,
+spelling, fixed normatively in §3.3.1: `container.digest` (where it is
+not `null`) and `id` are `sha256:` followed by 64 lowercase hex digits,
 `mcuhome.package.sha256` and every `files[].sha256` are 64 lowercase
 hex digits with no prefix. Any other rendering is invalid input and is
 refused, never normalized — the ID is a hash over a text encoding, so
@@ -431,13 +465,13 @@ would hash differently, and the same configuration built once under the
 constraint `^2.3.6` and once under `2.4.0` would produce two identities
 for one resolved pin. Nothing is lost by the exclusion, because
 everything build-relevant `context.yaml` carries is already hashed in
-its own right — `container.digest`, `sdk.sha256` and `target.board` are
-three of the four inputs of §3.3, and the fourth is the `files` list
-itself.
+its own right — `sdk.sha256` and `target.board` are two of the three
+inputs of §3.3, the third is the `files` list itself, and `zephyr` is
+covered by the argument §3.3 makes about it.
 
 ### 3.3 Context identity — normative hashing rule
 
-This rule is **locked for context format version 1 and can never
+This rule is **locked for context format version 2 and can never
 change**. New build-relevant fields enter the hash only together with
 a `context` format-version bump. `lock-context` changed *when* and
 *from what* the ID is derived; it did not change the rule.
@@ -448,27 +482,51 @@ Canonicalization Scheme) encoding of exactly this JSON structure:
 
 ```json
 {
-  "container": {"digest": "sha256:<hash>"},
   "files": [{"path": "<path>", "sha256": "<hash>"}, …],
   "sdk": {"sha256": "<hash>"},
   "target": {"board": "<board>"}
 }
 ```
 
-- `container.digest` — the manifest's `container.digest`.
 - `sdk.sha256` — the manifest's `mcuhome.package.sha256`.
 - `target.board` — the manifest's `target.board`.
 - `files` — one entry per context file, `path` and `sha256` as in the
-  manifest's `files` list, sorted by `path` (ascending byte order).
+  manifest's `files` list, sorted by `path` in ascending byte order **of
+  its UTF-8 encoding**, which is the same as ascending code-point order
+  and is *not* the UTF-16 code-unit order RFC 8785 uses for object keys —
+  the two differ as soon as a path outside the BMP meets one inside it.
   Duplicate paths are invalid. Patches and `keys/signing.pub` are
   ordinary entries; every listed file contributes its own content hash,
   the sort only makes the encoding deterministic.
 
 Explicitly excluded from the hash: `created`, `mcuhome.constraint`,
 `mcuhome.package.url` (any source yielding the pinned hash is
-equivalent), and `container.image`/`container.tag` — the digest alone
-identifies the container, so a context resolved via a floating tag and
-one resolved via the equivalent versioned tag hash identically.
+equivalent), the whole `container` block, and `zephyr`.
+
+The **`container` block** is excluded because it is not the context's
+statement. It is the backend's record of which build environment
+answered the context's requirement (§3.2), and a context that identified
+itself by it would get a different identity on every server that serves
+the same Zephyr line with a different image — which would make "built
+from *this* context" a claim about a machine rather than about a set of
+bytes.
+
+**`zephyr`** is excluded because hashing it would be redundancy rather
+than identity. The line is provably inside two values the hash already
+covers: it is a property of the SDK release that `sdk.sha256` pins, and
+it is a field of the canonical device model, whose bytes are an ordinary
+entry of `files`. Two contexts differing only in their required line
+already have two IDs. A third copy of the fact would enlarge the hashed
+document without narrowing what it identifies — and every field in that
+document is one more thing two implementations have to agree about.
+
+That argument holds only while the two copies agree, and `context.yaml`
+is outside the integrity list by construction, so nothing about the
+*bytes* enforces it. §9.1 therefore makes the comparison a backend duty:
+a context whose `zephyr` differs from its model's `toolchain.zephyr_line`
+is refused. Without it the exclusion is circular — two contexts with
+identical files and different required lines would share one ID and
+build in containers of two different lines.
 
 The hash input is **never** the YAML file bytes and **never** the
 transport archive bytes: neither serialization is deterministic.
@@ -480,14 +538,14 @@ contract MUST compute the ID independently from the bytes they actually
 hold and MUST NOT trust a declared `id` value.
 
 Recomputing over the `files` list is **not** a complete check of the
-context, and no implementation may present it as one: three of the four
-hashed inputs — `container.digest`, `sdk.sha256` and `target.board` —
-are read from `manifest.yaml`, which is not itself in the integrity
-list, so a self-consistently forged manifest recomputes to its own
-declared ID. The reference implementation has exactly this shape
-(`mcuhome/workbench/contextdir.py:389-425`, pins taken from the declared manifest at
-`:419-421`, only `files` measured). Closing it is a backend duty and it
-is stated as one in §9.1.
+context, and no implementation may present it as one: two of the three
+hashed inputs — `sdk.sha256` and `target.board` — are read from
+`manifest.yaml`, which is not itself in the integrity list, so a
+self-consistently forged manifest recomputes to its own declared ID.
+The reference implementation has exactly this shape
+(`mcuhome/workbench/contextdir.py:606-641`, pins taken from the declared
+manifest at `:636-637`, only `files` measured). Closing it is a backend
+duty and it is stated as one in §9.1.
 
 #### 3.3.1 The lexical form of a hash value — normative
 
@@ -498,7 +556,7 @@ normalization step anywhere on either side of the contract:
 
 | Value | Form |
 |---|---|
-| `container.digest` (in `context.yaml`, in `manifest.yaml`, and in the hashed structure) | the literal prefix `sha256:` followed by exactly 64 lowercase hex digits — `[0-9a-f]{64}` |
+| `container.digest` (in `manifest.yaml`; the one hash value that is outside the hashed structure, and `null` where the image was never pushed) | the literal prefix `sha256:` followed by exactly 64 lowercase hex digits — `[0-9a-f]{64}` |
 | the context `id` (in `manifest.yaml`, and `result.context` in §5.4) | the same: `sha256:` + exactly 64 lowercase hex digits |
 | `files[].sha256` (in `manifest.yaml` and in the hashed structure) | exactly 64 lowercase hex digits, **no prefix** |
 | `mcuhome.package.sha256`, which the hashed structure carries as `sdk.sha256` | exactly 64 lowercase hex digits, **no prefix** |
@@ -524,15 +582,16 @@ already enforces, with two separate regular expressions and no
 normalization path between them:
 `_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")` and
 `_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")`
-(`mcuhome/model/context.py:126-127`), applied by `_require_sha256`
-(`:278-287`) and `_require_digest` (`:290-295`) to every input of
-`context_id` before it hashes anything (`:368-371`). The first states
-the reason in its own refusal — "one spelling per hash, so two
-manifests can never name the same bytes differently" (`:283-286`) — and
+(`mcuhome/model/context.py:172-173`), applied by `_require_sha256`
+(`:473-483`) to every input of `context_id` before it hashes anything
+(`:573-600`) and by `_require_digest` (`:485-491`) to the two values
+that carry the prefix. The first states the reason in its own refusal —
+"one spelling per hash, so two manifests can never name the same bytes
+differently" (`:477-482`) — and
 the function's docstring states the other half: inputs are "checked
-strictly rather than normalized: an ID computed over a mistyped digest
+strictly rather than normalized: an ID computed over a mistyped hash
 would be silently wrong forever, and normalizing (say, uppercase hex)
-would give the same bytes two names" (`:362-365`).
+would give the same bytes two names" (`:587-589`).
 
 The rendering of a hash **outside** the hashed structure follows one
 rule, so that no reader has to look a field up: the algorithm is named
@@ -737,7 +796,7 @@ inside the context**.
 
 **Field-name grammar (frozen):** `[a-z][a-z0-9_-]*`, plus the `x-`
 prefix for third parties. Hyphens are required because layer names
-admit them (`mcuhome/workbench/contextdir.py:58`) and a layer named `some-layer`
+admit them (`mcuhome/workbench/contextdir.py:69`) and a layer named `some-layer`
 must be addressable from `required`.
 
 **Mandatory in v1:** `request` and `result` for **every** action.
@@ -1723,7 +1782,8 @@ extensions: under contract v1 as first drafted, `manifest.yaml` was
 frozen for the session while the session protocol allowed extension, so
 every added file was reported as "present but not in the integrity
 list" and the check returned `ok == False` by construction
-(`mcuhome/workbench/contextdir.py:349-351`, `:374-376`). `lock-context` closes that
+(`mcuhome/workbench/contextdir.py:623-631` builds the mismatches,
+`:592-593` is the rule). `lock-context` closes that
 by giving the integrity list a defined moment at which it is written:
 after the last extension, before the first working action.
 
@@ -1864,16 +1924,37 @@ profiles.
   version, sha256) from operator-configured sources only; the
   manifest's `package.url` is a hint, never an instruction (ADR 0019
   §8).
-- **Cross-checked pins.** The backend MUST check `container.digest`,
+- **A build environment of the required line.** The backend MUST run
+  the invocation in a build container that serves the context's `zephyr`
+  line (§3.2), and MUST record which one in `manifest.yaml`'s `container`
+  block at `lock-context`. A backend that serves no such container MUST
+  refuse, typed, and MUST NOT substitute a container of another line.
+- **Cross-checked pins.** The backend MUST check `zephyr`,
   `mcuhome.package.sha256` and `target.board` from the manifest against
-  what it **actually pulled and unpacked**, and against the header the
-  session was admitted on. This is the duty that closes the gap named
-  in §3.3: recomputing the context ID over the `files` list does not
-  cover the other three hashed inputs, so without this check a
-  self-consistently forged manifest verifies clean. Every comparison is
-  a comparison of the exact spelling §3.3.1 fixes; a manifest whose
-  hashes are rendered any other way is rejected before it is compared to
-  anything.
+  what it **actually resolved, pulled and unpacked**, and against the
+  header the session was admitted on. This is the duty that closes the
+  gap named in §3.3: recomputing the context ID over the `files` list
+  does not cover the other hashed inputs, so without this check a
+  self-consistently forged manifest verifies clean — and `zephyr` is
+  covered by nothing else at all, being hashed nowhere. Every comparison
+  of a hash is a comparison of the exact spelling §3.3.1 fixes; a
+  manifest whose hashes are rendered any other way is rejected before it
+  is compared to anything. `container.digest` is deliberately **not** on
+  this list: it is the backend's own record rather than a value the
+  client sent, so comparing it against the pins would be comparing the
+  backend to itself.
+- **`zephyr` against the model that carries it** (erratum, 2026-08-11).
+  The backend MUST check the context's `zephyr` against
+  `toolchain.zephyr_line` in `model/device-model.json`, and MUST refuse
+  when they disagree. §3.3 leaves `zephyr` out of the hash as
+  "redundancy, not identity" *because* the line is provably inside the
+  hashed model — and nothing made it provable: `context.yaml` is outside
+  the integrity list by construction, so two contexts with identical
+  files and two different required lines have one context ID, build in
+  containers of two different lines, and both verify clean. This is the
+  one field of the device model a backend reads, it is read out of a
+  file the backend already hashes, and it is used for nothing but this
+  equality — the model stays the program's to interpret (§6.1).
 - **Safe context materialization.** Whatever transport delivered the
   context, the backend MUST materialize it using safe extraction:
   regular files and directories only; absolute paths, `..` after
@@ -2029,3 +2110,23 @@ intent; it is not the answer to a sentence that failed to say what was
 intended, and spending version 2 on one would leave every future reader
 with two documents to reconcile for no gain. That licence ends with the
 first implementation that depends on this text.
+
+**Context format 1 does not exist** (E61, product owner, 2026-08-11).
+It was the format this document was first written against: the context
+pinned a build container by digest, and the digest was one of four
+hashed inputs of §3.3. That asked the wrong party for the wrong value —
+a client knows which Zephyr its device needs and cannot know which
+images a given build server holds, so the pin was either a guess or a
+round trip that had to happen before a context could exist at all.
+Format 2 replaces it: the context states a Zephyr *line*, the backend
+resolves that to a container and records the resolution in
+`manifest.yaml`, outside the identity.
+
+The replacement is **not** a migration and this document describes no
+version 1. Nothing was published against it, no context written to it
+exists outside a superseded test, and a reader that accepted both
+formats would carry two hashing rules forever to serve no documents. A
+`context` version an implementation does not know remains what §3.2 has
+always said it is — `unsupported.context`, not a guess — and a *future*
+format 3 would be an addition beside 2 rather than a replacement of it,
+because by then the window this paragraph depends on will have closed.

@@ -41,8 +41,9 @@ from conftest import VALID_CONFIG, resolve_file
 from mcuhome.compiler import abi
 from mcuhome.model import __version__
 from mcuhome.model.context import (
+    CONTEXT_VERSION,
     MANIFEST_FILE,
-    ContainerPin,
+    ContainerResolution,
     ContextFile,
     ContextManifest,
     SdkPin,
@@ -131,7 +132,12 @@ def backend(tmp_path: Path) -> Backend:
 #: list and never looks a pin up — cross-checking them against what was
 #: actually pulled is the backend's duty (§9.1) — so nothing here has to
 #: name a container or an SDK package that exists.
-CONTAINER = ContainerPin(
+#:
+#: The Zephyr line and the container are the two halves E61 separates:
+#: ``ZEPHYR`` is what the context requires and ``CONTAINER`` is what some
+#: backend resolved it to. ``verify`` reads neither.
+ZEPHYR = "4.4"
+CONTAINER = ContainerResolution(
     image="ghcr.io/mcu-home/build-container",
     tag="zephyr-4.4.0-r4",
     digest="sha256:" + "ab" * 32,
@@ -176,11 +182,11 @@ def locked_context(root: Path, files: dict[str, str] | None = None) -> ContextMa
         entries.append(ContextFile(path=name, sha256=digest))
     manifest = ContextManifest(
         sdk=SDK,
+        zephyr=ZEPHYR,
         container=CONTAINER,
         board="nrf7002dk/nrf5340/cpuapp",
         files=tuple(entries),
         id=context_id(
-            container_digest=CONTAINER.digest,
             sdk_sha256=SDK.sha256,
             board="nrf7002dk/nrf5340/cpuapp",
             files=entries,
@@ -852,6 +858,7 @@ def test_a_manifest_that_lies_about_its_own_id_does_not_verify(
     write_context_manifest(
         ContextManifest(
             sdk=SDK,
+            zephyr=ZEPHYR,
             container=CONTAINER,
             board=manifest.board,
             files=manifest.files,
@@ -907,18 +914,19 @@ def test_a_context_format_version_this_program_does_not_implement(
     ``failure`` … because the program is refusing a document written to a
     specification it does not have, which a backend can act on by choosing
     another image — nothing about this context is broken." Nothing is
-    hashed on the way out either: the rule for hashing a version 2 context
+    hashed on the way out either: the rule for hashing a version 3 context
     is written in a document this program does not have.
     """
     path = context / MANIFEST_FILE
     path.write_text(
-        path.read_text(encoding="utf-8").replace("context: 1", "context: 2"), encoding="utf-8"
+        path.read_text(encoding="utf-8").replace(f"context: {CONTEXT_VERSION}", "context: 3"),
+        encoding="utf-8",
     )
     assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
     document = backend.document()
     assert document["status"] == "unsupported"
     assert document["reason"] == "unsupported.context"
-    assert document["error"]["details"]["context"] == 2
+    assert document["error"]["details"]["context"] == 3
     assert "context" not in document
 
 
@@ -937,7 +945,9 @@ def test_a_format_version_that_is_not_json_is_still_reported(
     """
     path = context / MANIFEST_FILE
     path.write_text(
-        path.read_text(encoding="utf-8").replace("context: 1", "context: 2026-08-09"),
+        path.read_text(encoding="utf-8").replace(
+            f"context: {CONTEXT_VERSION}", "context: 2026-08-09"
+        ),
         encoding="utf-8",
     )
     assert backend.run("verify", verify_request(backend, context)) == abi.EXIT_FAILURE
@@ -978,12 +988,13 @@ def test_a_manifest_that_states_no_format_version_is_not_unsupported(
     [
         ("not YAML at all", "files: [unclosed\n"),
         ("not a mapping", "- one\n- two\n"),
-        ("a manifest missing a section", "context: 1\nid: sha256:x\n"),
+        ("a manifest missing a section", f"context: {CONTEXT_VERSION}\nid: sha256:x\n"),
         (
             "a hash spelled a second way",
-            "context: 1\ncreated: 2026-08-09T10:00:00Z\n"
+            f"context: {CONTEXT_VERSION}\ncreated: 2026-08-09T10:00:00Z\n"
             "mcuhome:\n  constraint: '^0.1.0'\n  version: 0.1.0\n"
             "  package: {url: 'https://example.invalid/x', sha256: " + "CD" * 32 + "}\n"
+            "zephyr: '4.4'\n"
             "container: {image: i, tag: t, digest: 'sha256:" + "ab" * 32 + "'}\n"
             "target: {board: nrf7002dk/nrf5340/cpuapp}\nfiles: []\nid: 'sha256:"
             + "ab" * 32

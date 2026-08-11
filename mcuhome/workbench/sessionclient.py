@@ -1593,7 +1593,7 @@ class SessionClient:
         a fresh start is a new session, which is cheap.
 
         The context's ``context.yaml`` is read here as well, because its
-        pins are three of the four inputs of the context ID and the E37
+        pins are two of the three inputs of the context ID and the E37
         comparison needs them locally.
         """
         session_id = self._require_session()
@@ -1754,7 +1754,7 @@ class SessionClient:
         The local value is computed over the integrity list of the bytes
         this client actually sent — the base context plus every accepted
         extension, minus every removal — and over the pins out of
-        ``context.yaml``, which is exactly the four-part document the
+        ``context.yaml``, which is exactly the three-part document the
         frozen rule hashes.
 
         A disagreement **closes the session** and raises
@@ -1787,14 +1787,13 @@ class SessionClient:
         if self._pins is None:
             raise RemoteError(
                 "This client has sent no context, so there is no identity to compute.",
-                hint="send-context carries context.yaml, and its pins are three of the "
-                "four inputs of the context ID",
+                hint="send-context carries context.yaml, and its pins are two of the "
+                "three inputs of the context ID",
             )
         files = tuple(
             ContextFile(path=path, sha256=digest) for path, digest in sorted(self._files.items())
         )
         return context_id(
-            container_digest=self._pins.container.digest,
             sdk_sha256=self._pins.sdk.sha256,
             board=self._pins.board,
             files=files,

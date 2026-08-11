@@ -28,7 +28,7 @@ import pytest
 import zstandard
 
 from mcuhome.compiler import localbackend as lb
-from mcuhome.model.context import ContainerPin, ContextRequest, SdkPin
+from mcuhome.model.context import ContainerResolution, ContextRequest, SdkPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.workbench.contextdir import (
@@ -42,6 +42,7 @@ SDK_VERSION = "0.1.0"
 IMAGE = "ghcr.io/mcu-home/builder"
 TAG = "zephyr-4.4.0-r7"
 BOARD = "nrf7002dk/nrf5340/cpuapp"
+ZEPHYR = "4.4"
 CONTAINER_ID = "c" * 64
 
 PROGRAM_BLOCK = {
@@ -110,7 +111,12 @@ def make_sdk_source(directory: Path, *, index_sha: str | None = None) -> str:
 
 
 def make_context(
-    root: Path, *, sdk_sha: str, digest: str = DIGEST, patches: dict[str, str] | None = None
+    root: Path,
+    *,
+    sdk_sha: str,
+    digest: str | None = DIGEST,
+    zephyr: str = ZEPHYR,
+    patches: dict[str, str] | None = None,
 ) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "model").mkdir()
@@ -123,12 +129,15 @@ def make_context(
         (layer_dir / name).write_text("--- a\n+++ b\n", "utf-8")
     request = ContextRequest(
         sdk=SdkPin(constraint=f"=={SDK_VERSION}", version=SDK_VERSION, url="", sha256=sdk_sha),
-        container=ContainerPin(image=IMAGE, tag=TAG, digest=digest),
+        zephyr=zephyr,
         board=BOARD,
         created="2026-01-01T00:00:00Z",
     )
     write_context_request(request, out_dir=root)
-    lock_context(root)
+    # The backend half's own answer, as the local build method supplies
+    # it: a context states a line and the party that locks records what
+    # it resolved that to (E61).
+    lock_context(root, container=ContainerResolution(image=IMAGE, tag=TAG, digest=digest))
     return root
 
 
@@ -765,8 +774,15 @@ def test_the_container_is_torn_down_even_when_the_build_fails(tmp_path) -> None:
     assert rm and CONTAINER_ID in rm[0]
 
 
-def test_the_pin_is_cross_checked_against_the_resolved_digest(tmp_path) -> None:
-    """§9.1: the image on this host must carry the digest the context names."""
+def test_the_recorded_digest_is_cross_checked_against_the_resolved_one(tmp_path) -> None:
+    """§9.1, as format 2 leaves it: the image found is the one recorded.
+
+    A weaker statement than the digest-pinned format's, and deliberately
+    so — the digest is this side's own record rather than a client's
+    demand — but it still catches the case that matters: a manifest
+    naming one image while this backend is about to invoke another, which
+    would attribute a build to an environment it did not run in.
+    """
     backend, context, seam = scenario(
         tmp_path,
         build=conforming,
@@ -775,8 +791,54 @@ def test_the_pin_is_cross_checked_against_the_resolved_digest(tmp_path) -> None:
     )
     with pytest.raises(BuildError) as caught:
         backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
-    assert "pins" in caught.value.message
+    assert "records" in caught.value.message
     assert not any("--detach" in c for c in seam.calls)  # no container started
+
+
+def test_an_image_of_another_zephyr_line_is_refused(tmp_path) -> None:
+    """E61's requirement, checked on the backend's side of the boundary.
+
+    The context asks for a line; the image on this host answers with its
+    own ``org.mcuhome.zephyr`` label. A build in a container of another
+    line is the failure mode the whole requirement exists to prevent, and
+    it is refused before a container starts rather than as a compiler
+    error ten minutes in.
+    """
+    backend, context, seam = scenario(
+        tmp_path,
+        build=conforming,
+        describe_static=describe_result_document(),
+        facts=image_facts(
+            labels={
+                "org.mcuhome.contract": "1",
+                "org.mcuhome.zephyr": "4.5.0",
+                "org.mcuhome.toolchain": "zephyr-0.16.8",
+            }
+        ),
+    )
+    with pytest.raises(BuildError) as caught:
+        backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert "4.5.0" in caught.value.message
+    assert f"{ZEPHYR} line" in caught.value.message
+    assert not any("--detach" in c for c in seam.calls)
+
+
+def test_a_patch_release_of_the_required_line_serves_it(tmp_path) -> None:
+    """ADR 0013: "a line, never a frozen point release"."""
+    backend, context, _ = scenario(
+        tmp_path,
+        build=conforming,
+        describe_static=describe_result_document(),
+        facts=image_facts(
+            labels={
+                "org.mcuhome.contract": "1",
+                "org.mcuhome.zephyr": "4.4.12",
+                "org.mcuhome.toolchain": "zephyr-0.16.8",
+            }
+        ),
+    )
+    outcome = backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert outcome.successful
 
 
 def test_a_missing_image_refuses_before_a_container_starts(tmp_path) -> None:

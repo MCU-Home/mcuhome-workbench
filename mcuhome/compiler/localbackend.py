@@ -75,6 +75,7 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextManifest
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
+from mcuhome.model.toolchain import satisfies_line
 from mcuhome.workbench.contextdir import read_context_manifest
 from mcuhome.workbench.resolve_pins import resolve_from_index
 
@@ -1292,34 +1293,71 @@ class LocalBackend:
             self.docker.remove(container)
 
     def _resolve_image(self, manifest: ContextManifest) -> ImageProfile:
-        """The image the context pins, resolved and cross-checked (§9.1).
+        """The image the manifest records, resolved and cross-checked (§9.1).
 
-        The digest is resolved **by this backend's own** ``docker image
+        The reference is resolved **by this backend's own** ``docker image
         inspect`` (E51: the workbench runs its own inspect; there is no
-        capabilities verb, which is the remote method's). The pin is then
-        cross-checked: the image on this host really carries the digest the
-        context names. ``--image`` overrides the reference for a locally
-        built image, and the cross-check tolerates the ``None`` digest such
-        an image has — it names no pinnable bytes, which is a fact rather
-        than a mismatch.
+        capabilities verb, which is the remote method's). Two things are
+        then cross-checked against the image actually found, and they are
+        the two halves E61 separates:
+
+        * the **requirement** — ``manifest.zephyr``, what the context
+          asked for — against the image's ``org.mcuhome.zephyr`` label.
+          This is the check that matters: a context is built by a
+          container of the line its model was resolved against, or it is
+          not built.
+        * the **resolution** — ``manifest.container.digest``, what a
+          backend recorded when it locked this context — against the
+          digest the image reports now. A ``None`` on either side is
+          tolerated: an image built locally and never pushed names no
+          pinnable bytes, which is a fact about it rather than a
+          mismatch.
+
+        The second check is a weaker statement than contract v1's, and
+        deliberately so: under v2 the digest is this side's own record
+        rather than the client's demand, so what it catches is a manifest
+        that names one image while this backend is about to invoke
+        another — a build attributed to the wrong environment.
         """
-        digest = manifest.container.digest
-        reference = self.config.image or f"{manifest.container.image}@{digest}"
+        recorded = manifest.container
+        reference = self.config.image or recorded.reference()
         facts = self.docker.inspect(reference)
         if facts is None:
             raise BuildError(
                 f"No build container on this host answers to {reference}.",
                 hint=(
-                    "the local build method resolves the pinned digest against this host's "
-                    "images and pulls nothing — pull or build the image the context pins, "
-                    "or point --image at it"
+                    "the local build method resolves the recorded image against this "
+                    "host's images and pulls nothing — pull or build the image the "
+                    "manifest names, or point --image at it"
                 ),
             )
-        if facts.digest is not None and facts.digest != digest:
+        offered = facts.labels.get(ZEPHYR_LABEL) or ""
+        if not satisfies_line(offered, line=manifest.zephyr):
+            # An absent label and a wrong one are one refusal with two
+            # sentences: both mean "this image does not serve that line"
+            # (§2.1.1: absence is never read as compatible), and naming
+            # the label rather than an empty value is what tells the
+            # operator of an unlabelled image what to fix.
+            says = f"carries Zephyr {offered}" if offered else f"carries no {ZEPHYR_LABEL} label"
             raise BuildError(
-                f"The image {reference} reports digest {facts.digest}, and the context "
-                f"pins {digest}.",
-                hint="the pin names bytes; this image is not those bytes",
+                f"The build container {reference} {says}, and this context needs the "
+                f"{manifest.zephyr} line.",
+                hint=(
+                    "a context states the Zephyr line its model was resolved against and "
+                    "the backend picks a container of that line (E61) — this image is not "
+                    "one. Point --image at a container of that line, or rebuild the "
+                    "context for a line this host serves."
+                ),
+            )
+        known = facts.digest is not None and recorded.digest is not None
+        if known and facts.digest != recorded.digest:
+            raise BuildError(
+                f"The image {reference} reports digest {facts.digest}, and this context's "
+                f"manifest records {recorded.digest}.",
+                hint=(
+                    "the manifest records which container a backend resolved this context "
+                    "to; this host answers that name with different bytes"
+                ),
             )
         static = self.docker.read_static_describe(reference)
         if static is not None:
@@ -1790,11 +1828,12 @@ def _first_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _repo_digest(facts: dict[str, Any]) -> str | None:
-    """The repo digest out of ``RepoDigests`` — the value a pin names.
+    """The repo digest out of ``RepoDigests`` — the value a manifest records.
 
-    ``Id`` is the local image ID and never compares equal to a
-    ``container.digest`` pin, so it is not read here. ``None`` for an image
-    that was built locally and never pushed.
+    ``Id`` is the local image ID and never compares equal to a manifest's
+    ``container.digest``, so it is not read here. ``None`` for an image
+    that was built locally and never pushed, which is recorded as ``None``
+    rather than repaired.
     """
     digests = facts.get("RepoDigests")
     if isinstance(digests, list):

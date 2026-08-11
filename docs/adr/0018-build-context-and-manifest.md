@@ -388,3 +388,52 @@ in `build-container-contract.md` §3.2 are illustrative and pre-date E52;
 read them as `~=2.3.6`. No normative rule changes: the constraint is
 recorded in `context.yaml` as intent and is never hashed (§6), so the
 grammar it is written in cannot affect a context ID.
+
+## Amendment: no field of the container enters the identity (2026-08-11, product owner)
+
+Decision 6 made `container.digest` one of the four hashed inputs, and the
+amendments above kept restating that as the settled part. The product
+owner took the premise away: *the client does not pin a container at all*
+— it states the Zephyr line its device needs, and the backend picks a
+container of that line and records which. E61, and its reasoning, are in
+ADR 0019's amendment of the same date; the normative text is
+`docs/design/build-container-contract.md` §3.2, §3.3 and §11.
+
+Read every "four hashed inputs" above as **three**: `sdk.sha256`,
+`target.board` and the `files` list. The hashed structure is
+`{files[], sdk.sha256, target.board}` in RFC 8785 canonical JSON, locked
+to `context` format version 2. The `container` block survives in
+`manifest.yaml` as the backend's written record of what it resolved —
+`image`, `tag`, `digest`, the last of them `null` for an image that was
+never pushed — and is hashed nowhere. `zephyr` joins both documents as
+the requirement, informational for the hash and load-bearing for the
+selection.
+
+Two things this changes about the passages above rather than
+contradicting them:
+
+- The **`context.yaml` exclusion argument** still holds and one clause of
+  it moves. "Everything build-relevant `context.yaml` carries is already
+  hashed in its own right" is true of `sdk.sha256` and `target.board`
+  directly; it is true of `zephyr` because the line is a property of the
+  SDK release the first pins *and* a field of the canonical model whose
+  bytes are in `files`. Hashing it a third time would be redundancy —
+  *provided the two copies agree*, which nothing about the bytes
+  enforces, since `context.yaml` is outside the integrity list. The
+  backend duty below carries that proviso as an explicit comparison.
+- The **backend duty** of the verification-defect amendment is unchanged
+  in force and shifts by one name. What the backend must cross-check is
+  `zephyr`, `mcuhome.package.sha256` and `target.board`; `container.digest`
+  leaves the list because it is no longer a client-declared value. It
+  is replaced by a stronger guarantee than a comparison: the backend
+  *selects* the container, so a container of the wrong line cannot be
+  reached rather than being detected after the fact. One comparison
+  joins the list instead (contract §9.1 erratum, 2026-08-11): `zephyr`
+  against the model's own `toolchain.zephyr_line`, which is what makes
+  the redundancy argument above true rather than merely intended.
+
+Decision 7 is untouched and is the reason this works at all: SDK ↔
+container compatibility was already a constraint over the coupling
+labels rather than an enumeration of tags, so a `zephyr` line matched
+against `org.mcuhome.zephyr` is that same mechanism used by the party
+that was always in a position to use it.

@@ -27,6 +27,7 @@ refusal ADR 0013 asks for, not a silent downgrade.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from mcuhome.model.errors import ErrorCollector, Location
@@ -35,7 +36,9 @@ __all__ = [
     "SUPPORTED_ZEPHYR_LINES",
     "ResolvedToolchain",
     "available_blobs",
+    "line_of",
     "resolve_toolchain",
+    "satisfies_line",
 ]
 
 #: Zephyr release lines this MCUHome release can build (ADR 0008/0013:
@@ -57,6 +60,84 @@ class ResolvedToolchain:
     blob_usage: str
     #: Resolved per-blob decisions. Empty until blobs are integrated.
     blobs: dict[str, str] = field(default_factory=dict)
+
+
+#: A Zephyr release as an image may spell it: dotted decimal components,
+#: optionally followed by an upstream suffix after a hyphen. It is the
+#: value range build-container-contract.md §2.1.1 fixes for the
+#: ``org.mcuhome.zephyr`` coupling label, minus the label's wider
+#: character class — what does not parse as a version cannot be *in* a
+#: line, which is the only question :func:`satisfies_line` asks.
+_RELEASE = re.compile(r"(?P<numbers>[0-9]+(\.[0-9]+)*)(?P<suffix>-[A-Za-z0-9._+-]+)?\Z")
+
+
+def satisfies_line(version: str, *, line: str) -> bool:
+    """Does a build container carrying Zephyr *version* serve *line*?
+
+    The one implementation of the match E61 makes a backend perform, in
+    ``mcuhome-model`` because **both** backends perform it — the local
+    build method against the image on this host, the build server against
+    the images in its inventory — and two spellings of "this container
+    serves 4.4" is how one of them starts accepting a container the other
+    refuses.
+
+    A line is a prefix of a release, component by component: ``4.4``
+    is satisfied by ``4.4``, ``4.4.0`` and ``4.4.12``, and by nothing
+    else — not by ``4.5.0``, and not by ``4.40.0``, whose leading
+    component is a different number that merely starts with the same
+    digits. That is the ADR 0013 rule the line exists for: "a line, never
+    a frozen point release — patch releases with security backports are
+    always taken".
+
+    A release carrying an upstream suffix (``4.5.0-rc1``) satisfies **no**
+    line, including its own. Contract §2.1.1 says the same of its
+    constraint syntax — such a value "is not ordered at all: it satisfies
+    only ``=``, and it never satisfies a range" — and a line is a range.
+    A pre-release is a container an operator chose to build; asking for a
+    line is asking for the released ones.
+
+    A *version* that is not a Zephyr release at all — a label somebody
+    filled in by hand, an empty string, a value with the leading ``v``
+    west uses — satisfies nothing. Absence is never read as compatible
+    (§2.1.1), and neither is nonsense.
+    """
+    found = _RELEASE.fullmatch(version.strip()) if isinstance(version, str) else None
+    asked = _RELEASE.fullmatch(line.strip()) if isinstance(line, str) else None
+    if found is None or asked is None or found.group("suffix") or asked.group("suffix"):
+        return False
+    wanted = [int(part) for part in asked.group("numbers").split(".")]
+    have = [int(part) for part in found.group("numbers").split(".")]
+    if len(wanted) > len(have):
+        return False
+    return all(a == b for a, b in zip(wanted, have, strict=False))
+
+
+def line_of(version: str) -> str | None:
+    """Which line a build container carrying Zephyr *version* serves.
+
+    The inverse of :func:`satisfies_line`, for the one job that needs it:
+    **telling a client what this host can answer.** A backend that cannot
+    serve a context reports what it *could* serve, and both ADR 0019's
+    ``version.builder-unsatisfiable`` amendment and the build server's
+    own error table call those values "the lines available". They are
+    read off ``org.mcuhome.zephyr`` labels, and a label states a
+    *release* (§2.1.1) — so reporting the labels verbatim reports
+    releases under the name of lines, and a client that echoed one back
+    as its ``zephyr`` would pin a frozen point release (which ADR 0013
+    forbids) or, for a pre-release, send a value no image can ever
+    satisfy.
+
+    So: ``4.4.12`` and ``4.4`` are both the ``4.4`` line, and
+    ``4.5.0-rc1``, ``v4.5``, ``latest`` and ``""`` are ``None`` —
+    exactly the values :func:`satisfies_line` matches against nothing.
+    The invariant the two share, and the reason they live side by side:
+    whenever this returns a line, ``satisfies_line(version, line=...)``
+    over that line is true.
+    """
+    found = _RELEASE.fullmatch(version.strip()) if isinstance(version, str) else None
+    if found is None or found.group("suffix"):
+        return None
+    return ".".join(found.group("numbers").split(".")[:2])
 
 
 def available_blobs(board: str) -> dict[str, str]:

@@ -295,9 +295,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `verify_context` recomputes every file hash and the context ID from the
   bytes actually present, so declared values stay advisory. The ID is the
   SHA-256 over the RFC 8785 canonical JSON of exactly the build-relevant
-  fields (container digest, SDK package hash, target board, sorted file
-  integrity list); the rule is locked with context format version 1 and
-  anchored by a golden vector in `tests_py/test_context.py`.
+  fields (SDK package hash, target board, sorted file integrity list);
+  the rule is locked with context format version 2 and anchored by a
+  golden vector in `tests_py/test_context.py`.
+- Context format 2 (E61, product owner, 2026-08-11): a context states
+  the **Zephyr line** it needs (`zephyr:`, from the model's
+  `toolchain.zephyr_line`, ADR 0013) instead of pinning a build
+  container by digest, and the backend resolves that requirement to a
+  container and records image, tag and digest in `manifest.yaml`,
+  outside the identity. The client cannot know which images a given
+  build server holds, so the digest was the wrong party's value; the
+  line is one the device configuration already decided. Format 1
+  disappears without migration — nothing was published against it —
+  which is what makes this a version bump with no compatibility surface.
+  `mcuhome build --method local` refuses, before it writes anything,
+  when the image on this host carries another line — or no
+  `org.mcuhome.zephyr` label at all, since "absence is never read as
+  compatible" (§2.1.1) — naming what the image says and what the device
+  needs.
 - A crash now leaves a breadcrumb the next boot reports
   (`CONFIG_MCUHOME_CRASH_BREADCRUMB`, `lib/health/breadcrumb.c`; ADR 0015
   health amendment). A fatal error reboots, which is the right behaviour

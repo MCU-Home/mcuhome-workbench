@@ -13,7 +13,8 @@ revisions in ``west.yml`` are *tags*, and a tag is movable at the remote,
 so a rebuild of the same Dockerfile can silently produce a different
 workspace. Recording the resolved 40-character commit per layer turns
 that from something to trust into something to check. The same argument
-ADR 0018 makes with ``container.digest`` and ``sdk.sha256``.
+ADR 0018 makes with ``sdk.sha256``, and the reason a build container is
+recorded by digest rather than by tag once a backend has chosen one.
 
 **Why the layer names are the contract's.** ``zephyr``, ``sdk``, ``chip``
 and ``mcuboot`` are the layer registry of

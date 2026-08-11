@@ -35,17 +35,20 @@ from mcuhome.model.context import (
     MANIFEST_FILE,
     MODEL_FILE,
     SIGNING_KEY_FILE,
-    ContainerPin,
+    ContainerResolution,
     ContextFile,
     ContextManifest,
     ContextRequest,
     SdkPin,
     canonical_json,
     context_id,
+    validate_manifest,
+    validate_zephyr_line,
     vector_id,
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
+from mcuhome.model.toolchain import line_of, satisfies_line
 from mcuhome.workbench.contextdir import (
     create_context,
     lock_context,
@@ -71,7 +74,13 @@ FILES = (
 #: builder and in every builder that will ever exist. NEVER update this
 #: constant — a change here is a change to a frozen contract, and the
 #: bug is in the code that made it necessary.
-GOLDEN_ID = "sha256:dde9df3b7ab59f8ad8197b6916f437ed3502ce88275b48f5e122b89e48b99c3f"
+#:
+#: It moved exactly once, with the bump to context format 2 (E61), which
+#: is the only thing that may move it: the hashed document lost its
+#: ``container`` member, so the same inputs hash to a different number
+#: under a different format version. A frozen rule is frozen per format
+#: version, and version 1 no longer exists to disagree with this.
+GOLDEN_ID = "sha256:11affc97a03519f03745793f96c02d40d8b0216b0c57772d94cec5f322f8abcf"
 
 #: Resolved pins for the create tests. The constraint is PEP 440 (ADR
 #: 0018's amendment, E52). The URL uses a reserved domain (RFC 2606): it
@@ -82,7 +91,12 @@ SDK = SdkPin(
     url="https://example.invalid/mcuhome-sdk-0.1.0.tar.zst",
     sha256=SDK_SHA,
 )
-CONTAINER = ContainerPin(image="ghcr.io/mcu-home/builder", tag="zephyr-4.4.0-r1", digest=DIGEST)
+#: What a backend resolved the context's Zephyr requirement to. Written
+#: at the lock, recorded in ``manifest.yaml``, and part of no identity —
+#: which is why every test below that changes it expects the ID to stay.
+CONTAINER = ContainerResolution(
+    image="ghcr.io/mcu-home/builder", tag="zephyr-4.4.0-r1", digest=DIGEST
+)
 
 #: The request timestamp, an explicit argument so two creations of the
 #: same inputs are byte-identical (ADR 0018: created is the one field
@@ -104,7 +118,6 @@ def model() -> DeviceModel:
 def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextRequest:
     arguments = {
         "sdk": SDK,
-        "container": CONTAINER,
         "signing_pub": SIGNING_PUB,
         "created": CREATED,
     }
@@ -119,8 +132,9 @@ def _lock(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
     ID exist only once the context is locked, so every test that needs a
     ``manifest.yaml`` goes through here rather than through create alone.
     """
+    container = overrides.pop("container", CONTAINER)
     _create(model, out_dir, **overrides)
-    return lock_context(out_dir)
+    return lock_context(out_dir, container=container)
 
 
 def _patches_source(tmp_path: Path) -> Path:
@@ -168,7 +182,7 @@ def test_canonical_json_escapes_strings_the_ecmascript_way() -> None:
 
 def test_the_golden_vector_never_changes() -> None:
     """The regression anchor of the whole format. See GOLDEN_ID."""
-    computed = context_id(container_digest=DIGEST, sdk_sha256=SDK_SHA, board=BOARD, files=FILES)
+    computed = context_id(sdk_sha256=SDK_SHA, board=BOARD, files=FILES)
     assert computed == GOLDEN_ID
 
 
@@ -184,7 +198,7 @@ def test_the_conformance_vectors_hold(vector) -> None:
     obligation is checkable rather than asserted, and this test is the
     Python side running it.
 
-    A failure here is never fixed in the data: version 1's vectors are
+    A failure here is never fixed in the data: version 2's vectors are
     frozen exactly as :data:`GOLDEN_ID` is.
     """
     assert vector_id(vector) == vector["id"]
@@ -201,11 +215,47 @@ def test_the_golden_vector_is_one_of_the_conformance_vectors() -> None:
     assert GOLDEN_ID in {vector["id"] for vector in CONTEXT_ID_VECTORS}
 
 
+def test_an_implementation_sorting_by_utf16_code_units_fails_the_suite() -> None:
+    """The suite's job, checked against the mistake it exists to catch.
+
+    The hashed document *is* RFC 8785, and RFC 8785 orders object keys by
+    UTF-16 code units. An implementation that reached for its JCS
+    library's comparator for the ``files`` array would sort a different
+    way — the two orders agree across the whole BMP and disagree the
+    moment an astral path meets a BMP one — and would then compute a
+    different context ID forever, for a context nobody could tell apart
+    from a correct one.
+
+    So: replay every vector with a UTF-16 sort in place of the code-point
+    sort, and *some* vector must come out wrong. Five of the six do not
+    (they are ASCII, or single-file, or below U+D800); the sixth is
+    there so this assertion has something to stand on. Deleting it makes
+    this test fail, which is the whole point of writing it as a check on
+    the table rather than as a sixth assertion inside it.
+    """
+
+    def utf16_id(vector: dict) -> str:
+        inputs = vector["inputs"]
+        document = {
+            "files": [
+                {"path": path, "sha256": sha256}
+                for path, sha256 in sorted(
+                    inputs["files"], key=lambda entry: entry[0].encode("utf-16-be")
+                )
+            ],
+            "sdk": {"sha256": inputs["sdk_sha256"]},
+            "target": {"board": inputs["board"]},
+        }
+        return "sha256:" + hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
+
+    wrong = [vector["name"] for vector in CONTEXT_ID_VECTORS if utf16_id(vector) != vector["id"]]
+    assert wrong, "no vector distinguishes code-point order from UTF-16 code-unit order"
+
+
 def test_the_golden_vectors_canonical_form_never_changes() -> None:
     """The exact bytes under the hash, spelled out — nesting, order, all."""
     expected = (
-        '{"container":{"digest":"' + DIGEST + '"},'
-        '"files":['
+        '{"files":['
         '{"path":"model/device-model.json","sha256":"' + "11" * 32 + '"},'
         '{"path":"patches/zephyr/0001-fix.patch","sha256":"' + "22" * 32 + '"}],'
         '"sdk":{"sha256":"' + SDK_SHA + '"},'
@@ -216,15 +266,12 @@ def test_the_golden_vectors_canonical_form_never_changes() -> None:
 
 def test_the_order_files_are_given_in_does_not_matter() -> None:
     """The sort is part of the rule: the list is a set with an encoding."""
-    computed = context_id(
-        container_digest=DIGEST, sdk_sha256=SDK_SHA, board=BOARD, files=reversed(FILES)
-    )
+    computed = context_id(sdk_sha256=SDK_SHA, board=BOARD, files=reversed(FILES))
     assert computed == GOLDEN_ID
 
 
 def test_every_hashed_field_changes_the_id() -> None:
     variants = [
-        {"container_digest": "sha256:" + "ba" * 32},
         {"sdk_sha256": "dc" * 32},
         {"board": "nrf52840dk/nrf52840"},
         # A file's content, a file's path, one file more, one file less.
@@ -236,7 +283,6 @@ def test_every_hashed_field_changes_the_id() -> None:
     ids = {
         context_id(
             **{
-                "container_digest": DIGEST,
                 "sdk_sha256": SDK_SHA,
                 "board": BOARD,
                 "files": FILES,
@@ -252,7 +298,6 @@ def test_every_hashed_field_changes_the_id() -> None:
 def test_a_duplicate_path_is_refused() -> None:
     with pytest.raises(BuildError) as caught:
         context_id(
-            container_digest=DIGEST,
             sdk_sha256=SDK_SHA,
             board=BOARD,
             files=(FILES[0], replace(FILES[0], sha256="33" * 32)),
@@ -269,15 +314,45 @@ def test_a_duplicate_path_is_refused() -> None:
         "sha512:" + "ab" * 32,  # not the version-1 algorithm
     ],
 )
-def test_a_malformed_container_digest_is_refused(digest: str) -> None:
+def test_a_malformed_container_digest_is_refused(model, tmp_path: Path, digest: str) -> None:
+    """The digest is out of the hash and still has exactly one spelling.
+
+    Under format 2 it is the backend's record rather than a hashed input,
+    so ``context_id`` never sees it and the check moved to the manifest
+    validator. It is still a check: ``manifest.yaml`` is read by build
+    containers this project does not write, and §3.3.1 has them refuse a
+    digest rendered any other way rather than repair it.
+    """
+    manifest = _lock(model, tmp_path / "context")
     with pytest.raises(BuildError):
-        context_id(container_digest=digest, sdk_sha256=SDK_SHA, board=BOARD, files=FILES)
+        validate_manifest(replace(manifest, container=replace(CONTAINER, digest=digest)))
+
+
+def test_a_resolution_without_a_digest_is_accepted(model, tmp_path: Path) -> None:
+    """An image built here and never pushed names no bytes, and says so.
+
+    ``None`` rather than a fabricated digest: the digest is no longer a
+    hashed input, so there is nothing left that needs a value to exist,
+    and inventing one would claim bytes nobody can fetch.
+    """
+    manifest = _lock(model, tmp_path / "context", container=replace(CONTAINER, digest=None))
+    validate_manifest(manifest)
+    assert manifest.container.digest is None
+    assert manifest.id == manifest.compute_id()
+    read_back = read_context_manifest(tmp_path / "context" / MANIFEST_FILE)
+    assert read_back.container.digest is None
+
+
+@pytest.mark.parametrize("line", ["", "  ", "v4.4", "4.4.0-rc1", "latest", "4.x"])
+def test_a_malformed_zephyr_line_is_refused(line: str) -> None:
+    """A line is dotted decimals: no leading v, no suffix, no word."""
+    with pytest.raises(BuildError):
+        validate_zephyr_line(line)
 
 
 def test_a_malformed_file_hash_is_refused() -> None:
     with pytest.raises(BuildError):
         context_id(
-            container_digest=DIGEST,
             sdk_sha256=SDK_SHA,
             board=BOARD,
             files=(replace(FILES[0], sha256="not-a-hash"),),
@@ -286,7 +361,7 @@ def test_a_malformed_file_hash_is_refused() -> None:
 
 def test_a_missing_board_is_refused() -> None:
     with pytest.raises(BuildError):
-        context_id(container_digest=DIGEST, sdk_sha256=SDK_SHA, board="  ", files=FILES)
+        context_id(sdk_sha256=SDK_SHA, board="  ", files=FILES)
 
 
 @pytest.mark.parametrize(
@@ -296,7 +371,6 @@ def test_a_missing_board_is_refused() -> None:
 def test_an_unusable_path_is_refused(path: str) -> None:
     with pytest.raises(BuildError):
         context_id(
-            container_digest=DIGEST,
             sdk_sha256=SDK_SHA,
             board=BOARD,
             files=(ContextFile(path=path, sha256="11" * 32),),
@@ -309,7 +383,7 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
 
     ``context.yaml`` is the one that went unenforced for a while: §3.2
     excludes it "as a statement about the hash rather than about layout"
-    — its never-hashed fields (constraint, url, tag, created) would leak
+    — its never-hashed fields (constraint, url, zephyr, created) would leak
     into an identity §6 computes from resolved values alone — but the
     shared vocabulary accepted it anyway, leaving the exclusion to every
     caller separately. The build server recomputes IDs from received
@@ -318,7 +392,6 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
     """
     with pytest.raises(BuildError) as caught:
         context_id(
-            container_digest=DIGEST,
             sdk_sha256=SDK_SHA,
             board=BOARD,
             files=(ContextFile(path=path, sha256="11" * 32),),
@@ -332,17 +405,24 @@ def test_the_integrity_list_may_not_name_what_is_not_content(path: str) -> None:
 
 
 def test_the_informational_fields_do_not_influence_the_id(model, tmp_path: Path) -> None:
-    """created, constraint, version, url, image, tag — advisory, all of them."""
+    """created, constraint, version, url, zephyr, the whole resolution."""
     manifest = _lock(model, tmp_path / "context")
     variants = [
         replace(manifest, sdk=replace(SDK, constraint="~9.9.9")),
         # The version and the URL are names for bytes the sha256 pins.
         replace(manifest, sdk=replace(SDK, version="9.9.9")),
         replace(manifest, sdk=replace(SDK, url="file:///srv/mirror/sdk.tar.zst")),
-        # A context resolved via `latest` and one resolved via the
-        # equivalent versioned tag hash identically.
+        # The whole container block is the backend's answer, not the
+        # client's statement: two servers answering one requirement with
+        # two different images still identify one context (E61).
         replace(manifest, container=replace(CONTAINER, image="mirror.example/builder")),
         replace(manifest, container=replace(CONTAINER, tag="latest")),
+        replace(manifest, container=replace(CONTAINER, digest="sha256:" + "ba" * 32)),
+        replace(manifest, container=replace(CONTAINER, digest=None)),
+        # And the requirement itself, which is redundancy rather than
+        # identity: it is inside the SDK pin and inside the model file,
+        # both of which the ID already hashes.
+        replace(manifest, zephyr="9.9"),
     ]
     assert {variant.compute_id() for variant in variants} == {manifest.id}
 
@@ -375,6 +455,7 @@ def test_yaml_formatting_is_irrelevant_to_the_id(model, tmp_path: Path) -> None:
         + "".join(f"- {{sha256: {entry.sha256}, path: {entry.path}}}\n" for entry in manifest.files)
         + f"container: {{digest: {CONTAINER.digest}, tag: {CONTAINER.tag}, "
         f"image: {CONTAINER.image}}}\n"
+        f"zephyr: '{manifest.zephyr}'\n"
         "mcuhome:\n"
         f"  package: {{sha256: {SDK.sha256}, url: {SDK.url}}}\n"
         f"  version: {SDK.version}\n"
@@ -464,11 +545,10 @@ def test_the_request_carries_pins_and_created_but_no_files_or_id(model, tmp_path
     assert document["mcuhome"]["constraint"] == SDK.constraint
     assert document["mcuhome"]["version"] == SDK.version
     assert document["mcuhome"]["package"] == {"url": SDK.url, "sha256": SDK.sha256}
-    assert document["container"] == {
-        "image": CONTAINER.image,
-        "tag": CONTAINER.tag,
-        "digest": CONTAINER.digest,
-    }
+    # The requirement, read off the model rather than taken as an
+    # argument — and no container: choosing one is the backend's (E61).
+    assert document["zephyr"] == model.toolchain.zephyr_line
+    assert "container" not in document
     assert document["target"] == {"board": model.device.board}
     # The freeze's outputs cannot exist yet: no integrity list, no identity.
     assert "files" not in document
@@ -692,3 +772,160 @@ def test_a_manifest_with_a_spoofable_hash_spelling_is_a_refusal(model, tmp_path:
     with pytest.raises(BuildError) as caught:
         verify_context(out_dir)
     assert "SDK package hash" in caught.value.message
+
+
+# --------------------------------------------------------------------------
+# Context format 2: the requirement, and the backend's answer to it (E61)
+# --------------------------------------------------------------------------
+
+
+def test_the_format_version_is_two() -> None:
+    """Version 1 is gone rather than supported alongside this one.
+
+    Pinned as a number because everything else in this file is written
+    against it: the golden ID, the vectors, and the refusal a document of
+    another version gets. Nothing is published, so the bump cost nothing
+    — and this assertion is what makes the next bump a deliberate act.
+    """
+    assert CONTEXT_VERSION == 2
+
+
+def test_the_manifest_carries_the_requirement_beside_the_resolution(model, tmp_path: Path) -> None:
+    """What was asked for and what answered, side by side (ADR 0018 decision 3).
+
+    The requirement travels from ``context.yaml`` unchanged — the lock
+    restates it and never re-derives it — and the resolution comes from
+    the party that locked, which is the only party that knows what it
+    has.
+    """
+    out_dir = tmp_path / "context"
+    manifest = _lock(model, out_dir)
+    assert manifest.zephyr == model.toolchain.zephyr_line
+    assert manifest.container == CONTAINER
+    document = YAML(typ="safe").load((out_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert document["zephyr"] == model.toolchain.zephyr_line
+    assert document["container"] == {
+        "image": CONTAINER.image,
+        "tag": CONTAINER.tag,
+        "digest": CONTAINER.digest,
+    }
+
+
+def test_two_backends_answering_one_requirement_agree_on_the_identity(
+    model, tmp_path: Path
+) -> None:
+    """The whole point of taking the container out of the hash (E61).
+
+    One context, two build servers, two different images of the same
+    Zephyr line — one identity. Under the digest-pinned format these were
+    two contexts, which made "built from *this*" a statement about a
+    machine rather than about the bytes.
+    """
+    here = _lock(model, tmp_path / "here")
+    there = _lock(
+        model,
+        tmp_path / "there",
+        container=ContainerResolution(
+            image="registry.example/other-builder", tag="zephyr-4.4.2-r1", digest=None
+        ),
+    )
+    assert here.id == there.id
+    assert here.container != there.container
+
+
+@pytest.mark.parametrize(
+    ("version", "line", "expected"),
+    [
+        # A line is a prefix, component by component.
+        ("4.4", "4.4", True),
+        ("4.4.0", "4.4", True),
+        ("4.4.12", "4.4", True),
+        ("4.4.0", "4", True),
+        ("4.4.0", "4.4.0", True),
+        # …and only component by component: 4.40 merely starts with the
+        # same digits, and a longer line is not satisfied by a shorter
+        # release.
+        ("4.40.0", "4.4", False),
+        ("4.5.0", "4.4", False),
+        ("4.4", "4.4.0", False),
+        # A pre-release satisfies no line, including its own (§2.1.1:
+        # "not ordered at all" — and a line is a range).
+        ("4.5.0-rc1", "4.5", False),
+        ("4.5.0-rc1", "4.5.0", False),
+        # Absence, and nonsense, are never read as compatible.
+        ("", "4.4", False),
+        ("v4.4.0", "4.4", False),
+        ("latest", "4.4", False),
+        ("4.4.0", "", False),
+    ],
+)
+def test_which_container_serves_a_line(version: str, line: str, expected: bool) -> None:
+    """The match both backends make, in ``mcuhome-model`` so they make one.
+
+    The local build method asks it of the image on a developer's host and
+    the build server asks it of every image in its inventory; two
+    spellings of "this container serves 4.4" is how the two start
+    disagreeing about one container.
+    """
+    assert satisfies_line(version, line=line) is expected
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("4.4", "4.4"),
+        ("4.4.0", "4.4"),
+        ("4.4.12", "4.4"),
+        ("4.5.0", "4.5"),
+        # A one-component release is its own line; there is no second
+        # component to reduce to.
+        ("4", "4"),
+        # A pre-release serves no line, so it *is* no line — which is the
+        # whole reason a backend must not report one as "available".
+        ("4.5.0-rc1", None),
+        # …and neither is anything that is not a release at all.
+        ("", None),
+        ("v4.4.0", None),
+        ("latest", None),
+    ],
+)
+def test_the_line_a_release_belongs_to(version: str, expected: str | None) -> None:
+    """``satisfies_line``'s inverse, for telling a client what is served.
+
+    A backend that cannot answer a context reports what it *could*
+    answer, and both ADR 0019 and the build server's error registry call
+    those values "the lines available" — while the values they are read
+    off, ``org.mcuhome.zephyr`` labels, are releases. The reduction lives
+    beside the match so that "serves 4.4" and "offers 4.4" cannot drift
+    apart.
+    """
+    assert line_of(version) == expected
+
+
+@pytest.mark.parametrize("version", ["4.4", "4.4.0", "4.4.12", "4", "4.5.0"])
+def test_a_reported_line_is_always_one_the_release_satisfies(version: str) -> None:
+    """The invariant that makes the reduction usable rather than merely
+    tidy: a client that echoes back a reported line gets an image."""
+    line = line_of(version)
+    assert line is not None
+    assert satisfies_line(version, line=line)
+
+
+def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Path) -> None:
+    """A ``sha256:`` digest is 71 characters and the emitter would fold it.
+
+    Legal YAML — and this module's own round-trip test never noticed,
+    because ruamel folds it straight back. It is still the wrong thing to
+    write: ``manifest.yaml`` is read by build containers this project
+    does not write, in languages it does not choose, and §3.3.1 has them
+    **refuse** a hash rendered any other way rather than repair it. A
+    one-line value cannot be read as two.
+    """
+    out_dir = tmp_path / "context"
+    manifest = _lock(model, out_dir)
+    text = (out_dir / MANIFEST_FILE).read_text(encoding="utf-8")
+    assert f"digest: {CONTAINER.digest}" in text
+    assert f"id: {manifest.id}" in text
+    assert f"sha256: {SDK.sha256}" in text
+    for entry in manifest.files:
+        assert f"sha256: {entry.sha256}" in text

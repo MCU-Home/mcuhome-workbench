@@ -39,13 +39,14 @@ from mcuhome.model.context import (
     MODEL_FILE,
     PATCHES_DIR,
     SIGNING_KEY_FILE,
-    ContainerPin,
+    ContainerResolution,
     ContextFile,
     ContextManifest,
     ContextRequest,
     SdkPin,
     context_id,
     validate_manifest,
+    validate_zephyr_line,
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
@@ -211,7 +212,6 @@ def create_context(
     *,
     out_dir: Path,
     sdk: SdkPin,
-    container: ContainerPin,
     signing_pub: str,
     created: datetime,
     patches_dir: Path | None = None,
@@ -230,12 +230,22 @@ def create_context(
     - the patches under *patches_dir*, laid out as ``<layer>/NNNN-name.patch``;
     - ``context.yaml`` — the pins and the intent, written last.
 
-    It writes **no** ``manifest.yaml``: the ``files`` integrity list and
-    the context ``id`` do not exist until the file set is final, and the
-    party that locks the context computes them (``lock_context``). *sdk*
-    and *container* arrive already resolved to exact pins — resolving a
-    constraint to them (``mcuhome.workbench.resolve_pins``) is a separate
-    step, deliberately not this one.
+    It writes **no** ``manifest.yaml``: the ``files`` integrity list, the
+    backend's container resolution and the context ``id`` do not exist
+    until the file set is final and a backend has been chosen, and the
+    party that locks the context supplies and computes them
+    (``lock_context``). *sdk* arrives already resolved to an exact pin —
+    resolving a constraint to it (``mcuhome.workbench.resolve_pins``) is a
+    separate step, deliberately not this one.
+
+    The **Zephyr requirement is read off the model** (``toolchain.
+    zephyr_line``, ADR 0013) rather than taken as an argument, for the
+    same reason the board is: the model already decided it, and a
+    parameter that could disagree with the model in the same directory
+    would be a way to write a context whose two halves ask for different
+    Zephyr releases. What the context states is a requirement and not a
+    choice — which container answers it is the backend's decision and
+    lands in ``manifest.yaml`` at the lock (E61).
 
     *out_dir* has to be new or empty: a context is created from scratch so
     that its later integrity list covers everything in it, which it cannot
@@ -281,7 +291,7 @@ def create_context(
 
     request = ContextRequest(
         sdk=sdk,
-        container=container,
+        zephyr=model.toolchain.zephyr_line,
         board=model.device.board,
         created=_format_created(created),
     )
@@ -289,16 +299,27 @@ def create_context(
     return request
 
 
-def lock_context(out_dir: Path) -> ContextManifest:
+def lock_context(out_dir: Path, *, container: ContainerResolution) -> ContextManifest:
     """Freeze a created context: hash its files and write ``manifest.yaml``.
 
     The write-side counterpart of :func:`create_context`. Creating writes
-    the request (``context.yaml``); locking turns that request plus the
-    now-final file set into the integrity *record* — the ``files`` list
+    the request (``context.yaml``); locking turns that request, the
+    now-final file set and the backend's chosen container into the
+    integrity *record* — the ``files`` list, the ``container`` resolution
     and the context ``id`` (ADR 0018 amendment,
-    build-container-contract.md §3.2). It reads the pins back out of
-    ``context.yaml`` rather than taking them again, so the manifest can
+    build-container-contract.md §3.2). It reads the request back out of
+    ``context.yaml`` rather than taking it again, so the manifest can
     only ever restate what the request already committed the session to.
+
+    *container* is the one thing that does **not** come from the request,
+    and cannot: it is the answer to the request's ``zephyr``
+    requirement, and only a backend knows which containers it serves
+    (E61). Its caller is therefore always a backend — the local build
+    method passes the image it resolved on this host, the build server
+    passes the one it selected out of its inventory — and this function
+    only records the answer, never chooses it. It is outside the ID, so
+    two backends answering one requirement with two different images
+    still produce one context identity.
 
     A remote build server does this from the bytes it received off a
     socket; a local build method does it over the directory the workbench
@@ -313,11 +334,11 @@ def lock_context(out_dir: Path) -> ContextManifest:
     files = _context_files(out_dir)
     manifest = ContextManifest(
         sdk=request.sdk,
-        container=request.container,
+        zephyr=request.zephyr,
+        container=container,
         board=request.board,
         files=files,
         id=context_id(
-            container_digest=request.container.digest,
             sdk_sha256=request.sdk.sha256,
             board=request.board,
             files=files,
@@ -340,10 +361,10 @@ def write_context_request(request: ContextRequest, *, out_dir: Path) -> Path:
     same bytes for the same request every time. The YAML bytes are
     presentation and never identity — the request carries no ID, and a
     reader re-parses the values rather than hashing the file. Line
-    wrapping is switched off so a pin stays on one line: a 71-character
-    ``digest: sha256:…`` value exceeds ruamel's default width and would
-    otherwise fold across two lines, which a stricter reader of §3.3.1's
-    lexical form should not have to reassemble.
+    wrapping is switched off so a pin stays on one line: a 64-character
+    ``sha256:`` value plus its key exceeds ruamel's default width and
+    would otherwise fold across two lines, which a stricter reader of
+    §3.3.1's lexical form should not have to reassemble.
     """
     path = out_dir / CONTEXT_FILE
     yaml = YAML()
@@ -406,7 +427,7 @@ def read_context_request(path: Path) -> ContextRequest:
             found=found,
         )
     try:
-        return ContextRequest.from_dict(data)
+        request = ContextRequest.from_dict(data)
     except (AttributeError, KeyError, TypeError, ValueError) as error:
         raise BuildError(
             f"The context request {path} is missing something this builder needs: {error}.",
@@ -416,6 +437,13 @@ def read_context_request(path: Path) -> ContextRequest:
                 "context."
             ),
         ) from error
+    # The one field of the request that a reader can get *wrong* rather
+    # than miss: it is a string in a document full of them, and YAML
+    # reads an unquoted 4.4 as a float. Checked here so the request
+    # reader is as strict as read_context_manifest, which gets the same
+    # check through validate_manifest.
+    validate_zephyr_line(request.zephyr)
+    return request
 
 
 # --------------------------------------------------------------------------
@@ -429,10 +457,24 @@ def write_context_manifest(manifest: ContextManifest, *, out_dir: Path) -> Path:
     The YAML bytes are presentation, never identity: the ID was computed
     over the canonical JSON form before this function ran, and a reader
     re-parses the values rather than hashing the file.
+
+    Line wrapping is switched off for the same reason as in
+    :func:`write_context_request`, and this is where it actually bit: a
+    ``sha256:`` digest is 71 characters, ``container.digest`` lands past
+    ruamel's default width, and the emitter folded it onto a second
+    line. That is legal YAML which every conforming parser folds back —
+    the round trip through this module never noticed — and it is still
+    the wrong thing to write. ``manifest.yaml`` is read by build
+    containers this project does not write, in languages it does not
+    choose (contract §1.1's third-party program), and §3.3.1 has them
+    **refuse** a hash rendered any other way rather than repair it. A
+    one-line value cannot be read as two. The build server's own emitter
+    has said so since it was written; the reference emitter did not.
     """
     path = out_dir / MANIFEST_FILE
     yaml = YAML()
     yaml.default_flow_style = False
+    yaml.width = 4096
     try:
         with path.open("w", encoding="utf-8") as handle:
             yaml.dump(manifest.to_dict(), handle)
@@ -591,7 +633,6 @@ def verify_context(root: Path) -> ContextVerification:
         root=root,
         manifest=manifest,
         actual_id=context_id(
-            container_digest=manifest.container.digest,
             sdk_sha256=manifest.sdk.sha256,
             board=manifest.board,
             files=present,

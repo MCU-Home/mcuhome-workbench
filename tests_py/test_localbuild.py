@@ -184,6 +184,94 @@ def test_a_missing_image_refuses_before_a_container_starts(tmp_path, model, publ
     assert "answers to" in caught.value.message
 
 
+def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
+    tmp_path, model, public_pem
+):
+    """E61's requirement, checked by the half that states it.
+
+    ``run_local_build`` plays both roles: it writes the requirement into
+    ``context.yaml`` and it answers that requirement out of this host's
+    images. So the mismatch is caught here, before the context directory
+    or the SDK lookup exist — a refusal that costs nothing and names both
+    the line the device needs and the line the image carries.
+    """
+    make_sdk_source(tmp_path / "src")
+    seen: list[list[str]] = []
+
+    def runner(argv, on_line=None):
+        seen.append(argv)
+        if argv[1:3] == ["image", "inspect"]:
+            from mcuhome.compiler.localbackend import Completed
+
+            return Completed(
+                0,
+                image_facts(
+                    labels={
+                        "org.mcuhome.contract": "1",
+                        "org.mcuhome.zephyr": "4.5.0",
+                        "org.mcuhome.toolchain": "zephyr-0.16.8",
+                    }
+                ),
+            )
+        raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
+
+    with pytest.raises(BuildError) as caught:
+        localbuild.run_local_build(
+            model,
+            signing_pub=public_pem,
+            sdk_sources=(tmp_path / "src",),
+            work_root=tmp_path / "wr",
+            env={},
+            image=IMAGE,
+            docker=Docker(runner=runner),
+        )
+    assert "4.5.0" in caught.value.message
+    assert model.toolchain.zephyr_line in caught.value.message
+    assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
+
+
+def test_an_image_with_no_zephyr_label_refuses_before_anything_is_written(
+    tmp_path, model, public_pem
+):
+    """ "Absence is never read as compatible" (§2.1.1) — here too.
+
+    An image carrying no ``org.mcuhome.zephyr`` label states nothing
+    about what it builds against, and there used to be a fallback here
+    that read the workbench's own pin into that silence. It was wrong
+    twice over. ``LocalBackend._resolve_image`` performs this identical
+    match a few steps later with no fallback, so the image was admitted
+    here and refused there — after the context directory, the SDK lookup
+    and the manifest lock had been paid for, which is precisely what the
+    comment above this check promises will not happen. And when the
+    required line was one the invented value did not satisfy, the refusal
+    said "carries Zephyr 4.4.0" about an image that had said nothing.
+
+    So: refused here, and named for what is actually wrong with it.
+    """
+    make_sdk_source(tmp_path / "src")
+
+    def runner(argv, on_line=None):
+        if argv[1:3] == ["image", "inspect"]:
+            from mcuhome.compiler.localbackend import Completed
+
+            return Completed(0, image_facts(labels={"org.mcuhome.contract": "1"}))
+        raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
+
+    with pytest.raises(BuildError) as caught:
+        localbuild.run_local_build(
+            model,
+            signing_pub=public_pem,
+            sdk_sources=(tmp_path / "src",),
+            work_root=tmp_path / "wr",
+            env={},
+            image=IMAGE,
+            docker=Docker(runner=runner),
+        )
+    assert "carries no org.mcuhome.zephyr label" in caught.value.message
+    assert model.toolchain.zephyr_line in caught.value.message
+    assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
+
+
 def test_no_sdk_source_configured_is_a_typed_refusal(tmp_path, model, public_pem):
     calls: list[list[str]] = []
 
@@ -237,9 +325,12 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
 def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem):
     """A ``--image localhost/…`` names no pinnable bytes; the build proceeds.
 
-    ``docker image inspect`` reports no ``RepoDigests``, so the context
-    pins a placeholder digest and the backend's §9.1 cross-check tolerates
-    the ``null`` observed one. The build is judged successful all the same.
+    ``docker image inspect`` reports no ``RepoDigests``, and under context
+    format 2 the manifest records exactly that — ``digest: null`` — rather
+    than the placeholder the digest-pinned format needed because a hashed
+    field could not be absent. Nothing depends on the value: it is this
+    backend's record of what it chose, and the record is honest about an
+    image whose bytes nobody can fetch.
     """
     make_sdk_source(tmp_path / "src")
     seam = _seam(facts=image_facts(digest=None))
@@ -254,7 +345,9 @@ def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem
     )
     assert result.outcome.successful, result.outcome.problems
     manifest = read_context_manifest(result.context_dir / "manifest.yaml")
-    assert manifest.container.digest.startswith("sha256:")
+    assert manifest.container.digest is None
+    assert manifest.container.image == "localhost/builder"
+    assert manifest.container.tag == "wip"
 
 
 # --------------------------------------------------------------------------

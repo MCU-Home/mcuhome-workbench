@@ -48,7 +48,7 @@ import pytest
 
 from mcuhome.compiler.localbackend import LocalOutcome
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.context import ContainerPin, ContextRequest, SdkPin
+from mcuhome.model.context import ContextRequest, SdkPin
 from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench import signing
 from mcuhome.workbench.contextdir import write_context_request
@@ -90,9 +90,11 @@ bs_sessions = importlib.import_module("mcuhome_buildserver.sessions")
 
 TOKEN = "test-token-000000000000000000000000"
 
-#: The image the contexts below pin, and the §2.1 labels a conforming one
-#: carries. Same values as the build server's own suite, because they are
-#: what its stubbed docker answers with.
+#: The image the server below selects, and the §2.1 labels a conforming
+#: one carries. Same values as the build server's own suite, because they
+#: are what its stubbed docker answers with. The contexts pin no image:
+#: they require a Zephyr line (:data:`ZEPHYR_LINE`) and the server answers
+#: it out of this inventory (E61).
 IMAGE = "ghcr.io/mcu-home/build-container"
 IMAGE_DIGEST = "sha256:" + "b" * 64
 IMAGE_REFERENCE = f"{IMAGE}@{IMAGE_DIGEST}"
@@ -101,6 +103,10 @@ IMAGE_LABELS = {
     "org.mcuhome.zephyr": "4.4.0",
     "org.mcuhome.toolchain": "zephyr-sdk-1.0.1",
 }
+
+#: The Zephyr line every context here requires — satisfied by the image
+#: above, whose label says 4.4.0.
+ZEPHYR_LINE = "4.4"
 
 #: A conforming ``describe`` ``program`` block — every field §7.1.1 makes
 #: mandatory. ``sdk`` reports ``path: null``: "not in my image, mount it
@@ -512,7 +518,7 @@ def make_context(root: Path, *, sdk_sha256: str, patches: dict[str, bytes] | Non
                 url="https://example.invalid/mcuhome-sdk.tar.zst",
                 sha256=sdk_sha256,
             ),
-            container=ContainerPin(image=IMAGE, tag="zephyr-4.4.0-r7", digest=IMAGE_DIGEST),
+            zephyr=ZEPHYR_LINE,
             board="nrf7002dk/nrf5340/cpuapp",
             created="2026-08-10T09:00:00Z",
         ),
@@ -1419,13 +1425,13 @@ def test_a_frame_cap_sizes_the_upload(tmp_path: Path) -> None:
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             assert client.caps.frame_bytes == bs_protocol.MAX_FRAME_BYTES
-            client.caps = replace(client.caps, frame_bytes=512)
+            client.caps = replace(client.caps, frame_bytes=256)
             await client.open_session()
             packed = await client.send_context(context)
             await client.close_session()
         chunks = [len(data) for kind, data in client.sent if kind == "binary"]
         assert chunks, "nothing was uploaded"
-        assert max(chunks) <= 512
+        assert max(chunks) <= 256
         assert len(chunks) > 1, "the archive was chunked, not sent whole"
         # And the server put the whole of it back together: it answered
         # the pins out of the context.yaml inside the archive.

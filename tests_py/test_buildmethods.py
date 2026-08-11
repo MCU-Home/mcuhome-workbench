@@ -262,13 +262,16 @@ def test_remote_without_a_server_refuses_naming_both_decided_rungs(model, tmp_pa
 
 
 def test_remote_without_a_context_says_which_step_is_missing(model, tmp_path) -> None:
-    """The honest gap: nothing resolves the container digest for a remote build.
+    """The honest gap: nothing resolves the SDK pin for a remote build.
 
-    The context pins the build container by digest, and for ``remote``
-    that digest is meant to come from the server's own ``capabilities``
-    answer (E53). Until that exists, a caller holding a locked context
-    passes it and a caller holding only a model is told so — rather than
-    getting a context pinned to something this machine happened to have.
+    E61 moved this gap rather than closing it. The container is no longer
+    the client's to choose, so a context needs no ``capabilities`` round
+    trip any more — but ``mcuhome.package.sha256`` is a hashed identity
+    input and still has to be resolved against a package index this
+    client can read, and nothing wires that up for ``remote``. Until it
+    does, a caller holding a locked context passes it and a caller
+    holding only a model is told so, rather than getting a context
+    pinned to something this machine happened to have.
     """
     with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
         _run(
@@ -279,7 +282,7 @@ def test_remote_without_a_context_says_which_step_is_missing(model, tmp_path) ->
         )
     rendered = str(refusal.value)
     assert "build context" in rendered
-    assert "capabilities" in rendered
+    assert "SDK package hash" in rendered
 
 
 def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path, monkeypatch):

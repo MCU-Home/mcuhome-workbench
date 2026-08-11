@@ -62,14 +62,22 @@ decision 4) — which is what keeps it able to drive build containers it
 did not build.
 
 **Image identity is the digest, not the tag.** The lockstep versioning
-above stays a release-process rule and stops being an identity rule: the
-only field of a build container that enters a context ID is
-`container.digest`, while `container.image` and `container.tag` are
-informational and never hashed (ADR 0018 decision 6). SDK ↔ container
-compatibility is expressed as a constraint over the coupling labels
-`org.mcuhome.zephyr` and `org.mcuhome.toolchain`, never as an
-enumeration of blessed tags, so a CVE respin at the same coupling is
-picked up without republishing anything (ADR 0018 decision 7).
+above stays a release-process rule and stops being an identity rule: a
+backend names a chosen image by its digest and never by its tag
+*wherever the image has a repo digest*, while `container.image` and
+`container.tag` are the human-readable trail beside it. An image built
+on the host and never pushed has no repo digest; it is served, named by
+the tag its host lists it under, and recorded `digest: null` (contract
+§3.2) — the honest answer for bytes nobody can fetch, and a window the
+format declares rather than hides. **No** field of a build container enters a context ID — not
+even the digest, since E61 (ADR 0018's amendment of 2026-08-11): a
+context requires a Zephyr *line* and the backend records which container
+answered it, outside the identity. SDK ↔ container compatibility is
+expressed as a constraint over the coupling labels `org.mcuhome.zephyr`
+and `org.mcuhome.toolchain`, never as an enumeration of blessed tags, so
+a CVE respin at the same coupling is picked up without republishing
+anything (ADR 0018 decision 7) — and the line match E61 introduced is
+that same mechanism, applied by the backend.
 
 Terminology: the image this ADR calls the "builder image" is the **build
 container** / build-container image throughout the newer documents.

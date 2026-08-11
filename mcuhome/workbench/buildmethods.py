@@ -421,11 +421,15 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
     **The server address** is E53's ladder and its rungs belong to the
     caller — a build server has no default, and a wrong one is a build
     context sent to a stranger. **The build context** is the gap this
-    method still has: its ``container.digest`` pin is meant to come from
-    the server's own ``capabilities`` answer (E53), and nothing resolves
-    it yet, so an embedder that has a locked context passes it and a
-    caller that has only a model is told so rather than silently getting
-    a context pinned to something else.
+    method still has, and E61 moved where the gap is rather than closing
+    it: the container is no longer the client's to choose, so nothing
+    about a context needs a ``capabilities`` round trip any more, but
+    ``mcuhome.package.sha256`` is still a hashed identity input and still
+    has to be resolved against an SDK package index this client can read.
+    Nothing wires that up for the remote method yet, so an embedder that
+    has a locked context passes it and a caller that has only a model is
+    told so rather than silently getting a context pinned to something
+    else.
     """
     if not request.server:
         raise RemoteNotConfigured(
@@ -443,11 +447,11 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         raise RemoteNotConfigured(
             "The remote build method cannot create its own build context yet.",
             hint=(
-                "the context pins the build container by digest, and for a remote "
-                "build that digest comes from the server's own capabilities answer "
-                "— that discovery step is not implemented. A caller that already "
-                "holds a locked context directory can pass it; from the command "
-                f"line, use --method {LOCAL} or --method {LOCAL_DEV} for now."
+                "a context carries the SDK package hash it was resolved to, and "
+                "resolving one needs an SDK package index this client can read — "
+                "that step is not wired up for the remote method. A caller that "
+                "already holds a locked context directory can pass it; from the "
+                f"command line, use --method {LOCAL} or --method {LOCAL_DEV} for now."
             ),
         )
 

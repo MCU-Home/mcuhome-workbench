@@ -864,3 +864,78 @@ until now their field names were whatever the server's serializers
 spelled — a client reading them was coupled to an accident. The shapes
 are fixed as they are spelled today; what a client may read is named,
 and a third-party server knows what it owes.
+
+## Amendment: the context requires a Zephyr line, the server chooses the container (2026-08-11, product owner)
+
+Scheibe 4 was written on the assumption that `context.yaml` pins a build
+container by digest, and the product owner corrected it in one sentence:
+*"den digest pinnt doch erst der server selbst?! die cli selbst pinnt nur
+eine bestimmte zephyr version … der build server nutzt den passenden
+container, und schreibt den exakten digest in das manifest. oder
+antwortet mit einem fehler wenn er den versions pin nicht erfüllen
+kann."* The assumption asked the wrong party: a client knows which Zephyr
+its device needs and cannot know which images a given server holds, so a
+client-chosen digest is either a guess or a round trip that has to happen
+before a context can exist at all — a round trip this protocol would then
+have to keep offering forever.
+
+The context format is version 2 (E61). The requirement is the canonical
+model's `toolchain.zephyr_line` (ADR 0013), carried informationally in
+both context documents as `zephyr:` so a server can select without
+parsing the model; the context ID hashes `sdk.sha256`, `target.board` and
+the file list, and nothing else. The full rule and its reasoning are in
+`docs/design/build-container-contract.md` §3.2, §3.3 and §11. Format 1
+disappears without migration — nothing was published against it.
+
+What this changes in the protocol, and only this:
+
+**`send-context` answers the container the *server* chose.** The
+E60 field names hold and their meaning moves: `pins` is still what the
+client sent and therefore loses its `container` block and gains `zephyr`,
+while the answer's own `container` object is now this server's
+resolution. It carries `image`, `tag` and `digest` — the three names
+`manifest.yaml` records, so what a client reads here and what it reads
+off the manifest are the same fields — beside the `contract`, `program`,
+`version` and `actions` that E60 already fixed. `digest` may be `null`,
+for an image the server built locally and never pushed: such an image
+names no fetchable bytes, and saying so is the honest reading of a field
+whose names are now promises.
+
+**An unsatisfiable line is `version.builder-unsatisfiable`**, at
+`send-context`, before the context is frozen. It is a new registry entry
+rather than a widening of `version.builder-unavailable`, because the two
+answer different questions and a client can act on exactly one of them:
+`builder-unavailable` is about *one* image and is actionable only by the
+server's operator, while this one is about the server's whole inventory
+and carries `required` (the line) and `available` (the lines actually
+served) — enough for a client to choose another server or another
+`zephyr_version` without anybody touching that host. Neither is
+retryable; nothing is pulled.
+
+**`lock-context` is unchanged in shape** and gains a duty. Its request is
+still `session_id` and its response still the context ID and nothing else
+(E37), and the client still owns the comparison. What the freeze now also
+writes is the chosen container into `manifest.yaml` — outside the ID by
+construction, which is what lets two servers serving one Zephyr line
+freeze the same bytes to the same identity while each manifest records,
+exactly, what built there.
+
+**The pre-invocation re-check compares `zephyr` where it used to compare
+`container.digest`.** The digest left the comparison because it stopped
+being a value a client sent: it is the server's own record now, and
+comparing it against the pins would be the server checking itself. The
+line took its place and earns it — it is what the choice was made
+against, and it is hashed nowhere, so no other check on that path would
+notice it being rewritten.
+
+Two sentences in the body above are superseded by that and are left
+standing as the record they are. Decision 8's "recomputing the ID is not
+the whole check" names "three of the four hashed inputs —
+`container.digest`, `sdk.sha256` and `target.board`"; read it as **two
+of the three**, `sdk.sha256` and `target.board`, with `zephyr` a fourth
+declared value that no hash covers and that the same duty therefore also
+has to compare. And §4's `subprocess`-profile rule — "rejects a session
+whose `container.digest` it does not match" — is now "rejects a session
+whose required Zephyr line its one build environment does not carry",
+which is the same rule about the same thing: a backend with exactly one
+build environment cannot choose, so it can only accept or refuse.
