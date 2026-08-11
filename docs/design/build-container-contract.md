@@ -368,6 +368,15 @@ target:
   board: nrf7002dk/nrf5340/cpuapp
 ```
 
+Both never-hashed fields of the pin are required **keys** whose value
+MAY be the empty string. An empty `constraint` is PEP 440's own
+any-version specifier — no intent was stated. An empty `package.url`
+means the package was resolved from a location with no public name; a
+context resolved from a local directory records no `file://` URI,
+because that would carry the creator's filesystem layout into a
+document another party stores. A reader MUST treat a *missing* key or
+a non-string as malformed, and an empty statement as a statement.
+
 **A context requires a build environment; it does not choose one.**
 `zephyr` names a Zephyr release *line* — dotted decimal numbers, no
 leading `v`, no pre-release suffix — and a build container serves it

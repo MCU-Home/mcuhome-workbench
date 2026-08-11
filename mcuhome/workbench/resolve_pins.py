@@ -326,11 +326,24 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
         searched.append(str(source))
         index_path = source / INDEX_FILE
         if not index_path.is_file():
+            # A directory without an index simply is not an SDK source —
+            # a legitimate not-here, the search continues.
             continue
         try:
             index = json.loads(index_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as broken:
+            # An index that exists and cannot be read is different: the
+            # caller named this source on purpose, and skipping it would
+            # silently demote a higher-precedence source — a build
+            # against the wrong SDK instead of an error message.
+            raise BuildError(
+                f"The SDK source {source} has an unreadable {INDEX_FILE}: {broken}.",
+                hint=(
+                    "the index is what scripts/build_sdk_archive.py writes next to "
+                    "the archive — regenerate it, or drop the source from "
+                    "--sdk-source/MCUHOME_SDK_SOURCE"
+                ),
+            ) from broken
         try:
             # SDK_ANY means "the newest package this source holds, whatever
             # it is" — and during development that is a dev release. The

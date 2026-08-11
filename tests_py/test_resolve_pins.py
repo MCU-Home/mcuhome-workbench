@@ -201,3 +201,20 @@ def test_a_local_source_records_no_url(tmp_path) -> None:
     _sdk_source(source, versions={"2.4.0": "a" * 64})
     found = resolve_sdk((source,))
     assert found.url == ""
+
+
+def test_an_unreadable_index_is_an_error_not_a_silent_skip(tmp_path) -> None:
+    """A named source with a broken index must not be silently demoted.
+
+    Skipping it would let a lower-precedence source win — a build against
+    the wrong SDK instead of an error message. A directory without an
+    index stays a legitimate not-here.
+    """
+    broken = tmp_path / "first"
+    broken.mkdir()
+    (broken / "index.json").write_text("{not json", encoding="utf-8")
+    _sdk_source(tmp_path / "second", versions={"2.4.0": "a" * 64})
+    with pytest.raises(BuildError) as caught:
+        resolve_sdk((broken, tmp_path / "second"))
+    assert "unreadable" in caught.value.message
+    assert str(broken) in caught.value.message

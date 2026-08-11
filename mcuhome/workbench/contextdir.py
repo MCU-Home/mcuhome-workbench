@@ -333,10 +333,12 @@ def create_build_context(
 
     The two never-hashed fields of the pin — the intent and the location
     hint — are rendered by :class:`~mcuhome.workbench.resolve_pins.SdkResolution`
-    rather than here, and neither is left empty: a context document is
-    read by implementations that are not this one, and an empty
-    ``mcuhome.constraint`` or ``package.url`` says "unstated" to a writer
-    and "malformed" to a reader.
+    rather than here, and both are legitimately empty for a locally
+    resolved package: an empty ``mcuhome.constraint`` is PEP 440's own
+    any-version specifier, and a ``file://`` hint would carry this
+    machine's filesystem layout into a document uploaded to a build
+    server. The server accepts both empty; absence, not emptiness, is
+    what a reader refuses as malformed.
     """
     found = resolve_sdk(sdk_sources, constraint=constraint)
     out_dir = Path(out_dir)

@@ -982,7 +982,15 @@ Consequences, and they are deliberately small:
   methods therefore resolve the same pin with the same resolver before
   they create a context, which is what makes the client's pin and the
   server's check statements about one rule rather than two.
-- **`package.url` stays a hint nobody follows.** A context resolved from
-  a local directory records the `file://` location it was resolved from,
-  because the field is read by a human reproducing a build years later
-  and never by a backend (§8).
+- **`package.url` stays a hint nobody follows — and stays empty for a
+  local source.** A `file://` URI of the source directory would carry
+  the creator's local filesystem layout — home directory, username —
+  into a document that is uploaded to a build server and archivable
+  there, so a context resolved from a local directory records no
+  location at all. The field is filled only when a resolution really
+  comes from a registry with a public location, where it serves the
+  human reproducing a build years later and never a backend (§8). The
+  server accepts both never-hashed fields empty for the same reason:
+  an empty `mcuhome.constraint` is PEP 440's own any-version specifier,
+  and forcing either non-empty made the reference client invent
+  values.

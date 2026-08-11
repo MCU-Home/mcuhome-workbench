@@ -2522,12 +2522,11 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
     build container are asked for the same package by the same name and
     the same bytes.
 
-    The two never-hashed fields are checked as well, and against the
-    resolution rather than against a literal: ``constraint`` is the intent
-    (here "nothing was stated", recorded as the resolution) and ``url``
-    is the location the bytes were found at. Neither may be empty — a
-    context document is parsed by implementations that are not this one —
-    and neither is anybody's invention.
+    The two never-hashed fields are checked as well, against the
+    resolution: ``constraint`` is the verbatim intent (here empty —
+    nothing was stated) and ``url`` is empty for a local source, because
+    a ``file://`` hint would leak this machine's filesystem layout into
+    the uploaded document. Neither value is anybody's invention.
     """
     sources = tmp_path / "packages"
     real_sha256 = write_sdk_package(sources)
