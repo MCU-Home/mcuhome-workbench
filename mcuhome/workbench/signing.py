@@ -54,7 +54,7 @@ from pathlib import Path
 
 from mcuhome.model import p256
 from mcuhome.model.errors import BuildError
-from mcuhome.model.userpaths import expand, home
+from mcuhome.model.userpaths import config_dir, expand
 
 __all__ = [
     "KEY_FILE",
@@ -115,9 +115,7 @@ def default_key_path(env: dict[str, str]) -> Path:
     of a private key, and a server process must resolve it from what it
     was given rather than from the environment it happens to run in.
     """
-    config_home = env.get("XDG_CONFIG_HOME")
-    base = expand(config_home, env) if config_home else home(env) / ".config"
-    return base / "mcuhome" / KEY_FILE
+    return config_dir(env) / KEY_FILE
 
 
 def resolve_key_path(override: Path | str | None = None, *, env: dict[str, str]) -> Path:

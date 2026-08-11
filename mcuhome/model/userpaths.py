@@ -40,13 +40,24 @@ from pathlib import Path
 from mcuhome.model.errors import ConfigError
 
 __all__ = [
+    "APP_DIR",
+    "CONFIG_HOME_VAR",
     "HOME_VAR",
+    "config_dir",
     "expand",
     "home",
 ]
 
 #: The environment variable that says where the user's home directory is.
 HOME_VAR = "HOME"
+
+#: The XDG variable that moves the configuration home off ``~/.config``.
+CONFIG_HOME_VAR = "XDG_CONFIG_HOME"
+
+#: MCUHome's own directory under the configuration home. One name, because
+#: everything a user configures for MCUHome by hand lives together: the
+#: signing key (ADR 0015 decision 8) and the build servers (E63).
+APP_DIR = "mcuhome"
 
 
 def home(env: dict[str, str]) -> Path:
@@ -86,3 +97,21 @@ def expand(path: Path | str, env: dict[str, str]) -> Path:
         # ``~someone`` — an account name, not this environment's user.
         return result.expanduser()
     return home(env).joinpath(*result.parts[1:])
+
+
+def config_dir(env: dict[str, str]) -> Path:
+    """``$XDG_CONFIG_HOME/mcuhome``, or the ``~/.config/mcuhome`` form.
+
+    The per-user configuration directory of MCUHome, resolved from *env*
+    for the reason the module docstring gives. It is one function because
+    two packages in two repositories now answer to the same directory —
+    the signing key lives in it (ADR 0015 decision 8) and so does the
+    build-server file the command line reads (E63) — and a rule spelled
+    twice is a rule that drifts.
+
+    A configuration directory rather than a cache or a state directory:
+    nothing in it is derivable, reproducible or disposable.
+    """
+    config_home = env.get(CONFIG_HOME_VAR)
+    base = expand(config_home, env) if config_home else home(env) / ".config"
+    return base / APP_DIR

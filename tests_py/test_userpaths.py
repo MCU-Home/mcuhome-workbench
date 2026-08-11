@@ -65,6 +65,25 @@ def test_a_bare_tilde_is_the_home_directory_itself(tmp_path) -> None:
     assert userpaths.expand("~", {"HOME": str(tmp_path)}) == tmp_path
 
 
+def test_the_configuration_directory_follows_xdg_then_home(monkeypatch, tmp_path) -> None:
+    """One rule for one directory, asked from two repositories.
+
+    The signing key (ADR 0015 decision 8) and the build-server file the
+    command line reads (E63) live in the same place, so the place is one
+    function rather than the same three lines twice.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "the-process"))
+    monkeypatch.setenv("HOME", str(tmp_path / "the-process"))
+    assert userpaths.config_dir({"XDG_CONFIG_HOME": str(tmp_path / "cfg")}) == (
+        tmp_path / "cfg" / "mcuhome"
+    )
+    assert userpaths.config_dir({"HOME": str(tmp_path / "someone")}) == (
+        tmp_path / "someone" / ".config" / "mcuhome"
+    )
+    with pytest.raises(ConfigError):
+        userpaths.config_dir({})
+
+
 def test_a_named_account_is_not_an_environment_question(tmp_path) -> None:
     """``~root`` names an account, and only the account database answers it.
 

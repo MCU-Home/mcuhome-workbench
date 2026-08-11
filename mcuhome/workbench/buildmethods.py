@@ -246,12 +246,16 @@ class BuildRequest:
     stream: TextIO | None = None
 
     # -- remote --------------------------------------------------------
-    #: The build server's WebSocket address (E53: ``--server``, then
-    #: ``MCUHOME_BUILD_SERVER``).
+    #: The build server's WebSocket address, already resolved: the
+    #: ladder (E53/E63 — ``--server``, ``MCUHOME_BUILD_SERVER``, then
+    #: ``build-servers.toml``, where a *label* also stands for an
+    #: address) belongs to the caller, and an address is what arrives
+    #: here.
     server: str | None = None
-    #: The bearer token for it (E53: ``--token``, then
-    #: ``MCUHOME_BUILD_TOKEN``). ``None`` is legitimate — a server may
-    #: require none.
+    #: The bearer token for it, from the same ladder (``--token``,
+    #: ``MCUHOME_BUILD_TOKEN``, then the label's ``tokens/<label>``
+    #: file). ``None`` sends no ``Authorization`` header at all, which
+    #: this package permits because a third-party server may want none.
     token: str | None = None
     #: A build context directory to send instead of creating one. For an
     #: embedder that already holds one — a dashboard that assembled a
@@ -498,9 +502,14 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         raise RemoteNotConfigured(
             "The remote build method needs the address of a build server, and none is set.",
             hint=(
-                "name it on the command line, or in the environment:\n"
+                "name it on the command line, in the environment, or once in a "
+                "file — the three rungs of E53/E63:\n"
                 "    mcuhome build <device> --method remote --server <url> [--token <token>]\n"
                 "    MCUHOME_BUILD_SERVER=<url> MCUHOME_BUILD_TOKEN=<token>\n"
+                "    $XDG_CONFIG_HOME/mcuhome/build-servers.toml, which the mcuhome\n"
+                "    command line reads: a [server.<label>] table with a url, a\n"
+                '    top-level default = "<label>", and the token in tokens/<label>.\n'
+                "    --server takes that label as well as an address.\n"
                 "A build server is not discovered and has no default: the build "
                 "context carries the device model, so the address is a decision "
                 "rather than a lookup."

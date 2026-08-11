@@ -336,6 +336,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the whole path against the real build server: pin resolved, context
   created, session driven, unsigned artifacts and the §7.2.1 report
   delivered into the one host-side signing step (E56).
+- **Build servers are configured once, not retyped** (E63, product owner,
+  2026-08-11): E53's ladder gets its third rung. `--server`/`--token`
+  still beat `MCUHOME_BUILD_SERVER`/`MCUHOME_BUILD_TOKEN`, which now beat
+  `$XDG_CONFIG_HOME/mcuhome/build-servers.toml` — one `[server.<label>]`
+  table per server with a `url`, and a top-level `default = "<label>"`
+  for the run that names none. `--server` takes a **label as well as an
+  address**, told apart by the one thing that cannot be mistaken (a URL
+  has a scheme, a table key never does), and a label brings its token
+  with it from `tokens/<label>`. Tokens live in their own files on
+  purpose: a configuration file is something a user pastes into a bug
+  report or copies to a second machine, and a bearer token in it would
+  travel with every one of those. Owner-only permissions are expected
+  and a group- or world-readable token file is reported loudly with the
+  exact `chmod` — the signing key's stance, one voice louder — while an
+  unknown key in the file is a warning rather than a refusal, because
+  the file has two authors and a dashboard writing tomorrow's option
+  must not take today's build down. Everything else is typed and names
+  the file: malformed TOML, a `default` naming no table, an unknown
+  label (listing the configured ones), an address without a scheme, a
+  label without a token file. Read with `tomllib`, never written; and
+  read **only** by the method that uses a build server, so a typo in it
+  cannot stop a `local` build that never opens a socket.
+  `RemoteNotConfigured` now names all three rungs, and
+  `mcuhome.model.userpaths.config_dir` is the one rule for
+  `$XDG_CONFIG_HOME/mcuhome/`, which the signing key and this file now
+  share instead of spelling twice.
 - A crash now leaves a breadcrumb the next boot reports
   (`CONFIG_MCUHOME_CRASH_BREADCRUMB`, `lib/health/breadcrumb.c`; ADR 0015
   health amendment). A fatal error reboots, which is the right behaviour

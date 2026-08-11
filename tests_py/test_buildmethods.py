@@ -247,14 +247,16 @@ def test_the_remote_method_answers_in_the_same_shape(model, tmp_path, monkeypatc
 # --------------------------------------------------------------------------
 
 
-def test_remote_without_a_server_refuses_naming_both_decided_rungs(model, tmp_path) -> None:
-    """E53's ladder, as a refusal: the flag and the variable, by name.
+def test_remote_without_a_server_refuses_naming_all_three_rungs(model, tmp_path) -> None:
+    """E53's ladder, as a refusal: the flag, the variable and the file.
 
     There is no default build server and no discovery — the context
     carries the device model, so where it is sent is a decision. The
-    refusal therefore names the two rungs the decision log settled and
-    stops; the third (a file under ``$XDG_CONFIG_HOME/mcuhome/``) has no
-    decided format and is not invented here.
+    refusal therefore names every rung that can answer it. The third one
+    (``build-servers.toml`` under ``$XDG_CONFIG_HOME/mcuhome/``, E63) is
+    read by the command line rather than by this package, and is named
+    here anyway: this is the text a user reads when nothing is
+    configured, and a rung it does not mention is a rung nobody finds.
     """
     with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
         _run(
@@ -265,6 +267,8 @@ def test_remote_without_a_server_refuses_naming_both_decided_rungs(model, tmp_pa
     assert "--server" in rendered
     assert "MCUHOME_BUILD_SERVER" in rendered
     assert "MCUHOME_BUILD_TOKEN" in rendered
+    assert "build-servers.toml" in rendered
+    assert "tokens/<label>" in rendered
 
 
 def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> None:
