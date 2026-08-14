@@ -8,7 +8,7 @@ deliberate departure from the obvious answer. CHIP's
 workspace — but the workspace is where the *build* happens, and ADR 0015
 decision 8 puts signing somewhere else entirely: the private key lives
 where the user's controlling instance runs, and a detached build's signed
-image therefore only comes into existence during ``mcuhome sign``, on a
+image therefore only comes into existence during ``mcuhome device sign-firmware``, on a
 machine that per ADR 0003 has no compiler, no west workspace and no Matter
 SDK. An .ota wraps the *signed* image, so a builder that could only
 produce it during the build could not produce it for the delivery path the
@@ -173,7 +173,7 @@ def write_ota_image(
             hint=(
                 "the Matter OTA file wraps the signed application image; a build "
                 "that produced none has nothing to wrap. Sign it first:\n"
-                "    mcuhome sign <build directory>"
+                "    mcuhome device sign-firmware <build directory>"
             ),
         ) from error
 

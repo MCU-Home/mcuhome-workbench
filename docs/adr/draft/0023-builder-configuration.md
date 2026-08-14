@@ -118,7 +118,17 @@ spellings in its hint texts — the retirement touches those too).
   it — merge-by-name makes origin a per-builder fact.
 - §5's retirements are done in the workbench's own texts (the
   `buildmethods` refusals now speak this ADR's vocabulary); the CLI's
-  spellings retire with the vocabulary step (cli ADR 0003).
+  spellings retired with the vocabulary step (cli ADR 0003, C2,
+  2026-08-14) — `--build-mode`/`--builder`/`--build-server`/
+  `--build-token` are live, `build-servers.toml`, `tokens/<label>` and
+  `MCUHOME_BUILD_*` are gone.
+- The manual rung's flag pairing is the CLI's validate phase (cli ADR
+  0003's C2 pins): mode flags without `--build-mode`, mixed rungs, or
+  `remote` without a server are exit-2 refusals before anything runs.
+- A `local-dev` builder's `workspace` (or the manual `--workspace`)
+  becomes the *only* discovery start for the west workspace — the
+  install-location/working-directory discovery serves only the
+  unconfigured case.
 
 ## Open points
 

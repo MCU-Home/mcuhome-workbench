@@ -294,3 +294,135 @@ def test_the_posix_layer_directories_follow_the_conventions(tmp_path: Path) -> N
     assert system_config_dir({}) == Path("/etc/mcuhome")
     assert user_config_dir({"XDG_CONFIG_HOME": str(tmp_path)}) == tmp_path / "mcuhome"
     assert user_config_dir({}) is None
+
+
+# --- writing configuration (config set/unset, ADR 0022 §3) ------------
+
+
+def test_set_writes_a_value_the_next_resolve_reads_back(project: Project) -> None:
+    file = configuration.scope_config_file("project", project=project, env={})
+    written = configuration.set_config_value(file, "jobs", "4", env={})
+    assert written == 4
+    resolved = resolve_settings(project=project, env={})
+    assert resolved.value("jobs") == 4
+    assert resolved.origin("jobs") == "project"
+
+
+def test_set_preserves_comments_and_neighboring_keys(project: Project) -> None:
+    write_project(project, "# my project\nsdk_sources:\n  - /pkgs  # pinned packages\n")
+    configuration.set_config_value(project.config_file, "jobs", "2", env={})
+    text = project.config_file.read_text(encoding="utf-8")
+    assert "# my project" in text
+    assert "# pinned packages" in text
+    assert "jobs: 2" in text
+
+
+def test_set_creates_the_file_and_its_directory(tmp_path: Path) -> None:
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "fresh-xdg")}
+    file = configuration.scope_config_file("user", project=None, env=env)
+    configuration.set_config_value(file, "default_builder", "attic", env=env)
+    assert file.is_file()
+    assert "default_builder: attic" in file.read_text(encoding="utf-8")
+
+
+def test_set_splits_a_paths_value_like_the_environment_does(project: Project) -> None:
+    configuration.set_config_value(project.config_file, "sdk_sources", "/a:relative/b", env={})
+    resolved = resolve_settings(project=project, env={})
+    values = resolved.value("sdk_sources")
+    assert values[0] == Path("/a")
+    # The user's spelling is written; the file's own rule resolves it on read.
+    assert values[1] == (project.root / "relative/b").resolve()
+    assert "- relative/b" in project.config_file.read_text(encoding="utf-8")
+
+
+def test_set_validates_the_value_before_touching_the_file(project: Project) -> None:
+    write_project(project, "jobs: 2\n")
+    before = project.config_file.read_text(encoding="utf-8")
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "jobs", "vier", env={})
+    assert "whole number" in caught.value.message
+    assert project.config_file.read_text(encoding="utf-8") == before
+
+
+def test_set_refuses_an_undeclared_name_with_the_settable_list(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "jobz", "4", env={})
+    assert caught.value.message == "There is no option called 'jobz'."
+    assert "jobs" in (caught.value.hint or "")
+
+
+def test_set_refuses_the_channels_a_file_may_not_carry(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "signing_key", "/k", env={})
+    assert "'signing_key' cannot be set from a configuration file" in caught.value.message
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "project_dir", "/p", env={})
+    assert "'project_dir' cannot be set from a configuration file" in caught.value.message
+
+
+def test_set_refuses_builders_toward_the_file_itself(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "builders", "attic", env={})
+    assert "structured configuration" in caught.value.message
+    assert "builders:" in (caught.value.hint or "")
+
+
+def test_set_refuses_an_empty_value_toward_unset(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "jobs", "", env={})
+    assert "mcuhome config unset jobs" in (caught.value.hint or "")
+
+
+def test_set_refuses_a_file_that_is_not_a_mapping(project: Project) -> None:
+    write_project(project, "- a list\n")
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "jobs", "4", env={})
+    assert "must be a mapping" in caught.value.message
+
+
+def test_unset_removes_the_key_and_says_whether_it_did(project: Project) -> None:
+    write_project(project, "# keep me\njobs: 4\ndefault_builder: attic\n")
+    assert configuration.unset_config_value(project.config_file, "jobs") is True
+    text = project.config_file.read_text(encoding="utf-8")
+    assert "jobs" not in text
+    assert "# keep me" in text
+    assert "default_builder: attic" in text
+    assert configuration.unset_config_value(project.config_file, "jobs") is False
+    missing = project.root / "nowhere.yaml"
+    assert configuration.unset_config_value(missing, "jobs") is False
+
+
+def test_unset_refuses_a_typo_rather_than_confirming_nothing(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.unset_config_value(project.config_file, "jobz")
+    assert caught.value.message == "There is no option called 'jobz'."
+
+
+def test_scope_files_answer_per_scope(tmp_path: Path, project: Project) -> None:
+    env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    assert (
+        configuration.scope_config_file("project", project=project, env=env) == project.config_file
+    )
+    assert (
+        configuration.scope_config_file("user", project=None, env=env)
+        == tmp_path / "xdg" / "mcuhome" / CONFIG_FILE
+    )
+    assert (
+        configuration.scope_config_file("system", project=None, env={})
+        == Path("/etc/mcuhome") / CONFIG_FILE
+    )
+
+
+def test_the_project_scope_needs_a_project(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.scope_config_file("project", project=None, env={})
+    assert "no project here" in caught.value.message
+    assert "mcuhome init" in (caught.value.hint or "")
+
+
+def test_an_unnameable_scope_directory_is_a_refusal_when_editing(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.scope_config_file("user", project=project, env={})
+    assert "names no user configuration directory" in caught.value.message
+    with pytest.raises(ValueError):
+        configuration.scope_config_file("galaxy", project=project, env={})

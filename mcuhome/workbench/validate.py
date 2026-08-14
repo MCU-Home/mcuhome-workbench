@@ -333,7 +333,7 @@ def _check_pairing(config: RawConfig, errors: ErrorCollector) -> None:
             location=matter.loc_of(given[0]),
             hint=(
                 "discriminator, passcode and salt belong together — write the missing "
-                f"ones, or replace all three:\n    mcuhome init-pairing {device} --force"
+                f"ones, or replace all three:\n    mcuhome device init-pairing {device} --force"
             ),
         )
         return
@@ -355,7 +355,7 @@ def _report_no_credentials(
         location=location_of.loc if location_of is not None else config.loc,
         hint=(
             "every Matter device needs a pairing code of its own — let the builder "
-            f"draw one and write it into this file:\n    mcuhome init-pairing {device}\n"
+            f"draw one and write it into this file:\n    mcuhome device init-pairing {device}\n"
             "  (on a bench device you can instead add use_test_pairing: true under "
             "matter:, which uses the passcode published with the Matter SDK — never "
             "on a device that leaves your desk)"
@@ -389,7 +389,7 @@ def _check_passcode(
             hint=(
                 f"a passcode is a number from {pairing.PASSCODE_MIN} to "
                 f"{pairing.PASSCODE_MAX} — or let the builder pick one:\n"
-                f"    mcuhome init-pairing {device} --force"
+                f"    mcuhome device init-pairing {device} --force"
             ),
         )
         return
@@ -401,7 +401,7 @@ def _check_passcode(
                 "the specification rules out the twelve most guessable codes — eight "
                 "repeated digits, 12345678 and 87654321 — because they are the first "
                 f"thing anyone tries; pick another, or run:\n"
-                f"    mcuhome init-pairing {device} --force"
+                f"    mcuhome device init-pairing {device} --force"
             ),
         )
 
@@ -424,7 +424,7 @@ def _check_salt(value: str | None, matter: RawMatter, device: str, errors: Error
             f"the salt is {pairing.SALT_MIN_BYTES} to {pairing.SALT_MAX_BYTES} random "
             "bytes written in base64, and it is what stops one precomputed table from "
             f"unlocking every device — the builder makes one for you:\n"
-            f"    mcuhome init-pairing {device} --force"
+            f"    mcuhome device init-pairing {device} --force"
         ),
     )
 

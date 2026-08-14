@@ -123,6 +123,23 @@ Pinned during implementation: the registry is
 per option — files (all three file layers as one), environment,
 arguments — plus the bootstrap mark, and a file that sets an option
 outside its channels is refused with the channel rule in the message.
+
+Pinned with the CLI's C2 step (2026-08-14) — **editing configuration**
+is workbench-owned like reading it: `scope_config_file` names the file
+a scope (`system`/`user`/`project`, `CONFIG_SCOPES`) is edited in —
+and unlike reading, where an unnameable directory is an absent layer,
+*editing* one is a refusal, because a value written into a layer that
+cannot exist configures nothing. `set_config_value` obeys the same
+channel refusals as `_read_layer`, validates the value **before**
+touching the file (it never leaves a file behind that the next resolve
+refuses), and writes through the loader's round-trip editor, so
+comments and `!file` references survive; what is written is the user's
+own spelling — a relative path stays relative, a list value splits
+`os.pathsep`-style like its environment variable. `builders` is
+refused as a one-value set (structured configuration is edited in the
+file itself). `unset_config_value` requires a declared name — a typo
+answering "nothing to remove" would confirm a removal that never
+happened.
 The platform options of this draft's scope are `sdk_sources` (all
 channels; the canonical spelling is **plural**, `MCUHOME_SDK_SOURCES`,
 `PATH`-style separated — the old singular `MCUHOME_SDK_SOURCE` retires

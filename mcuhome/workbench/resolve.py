@@ -158,7 +158,7 @@ def _resolve_pairing(config: RawConfig, matter_enabled: bool) -> PairingModel | 
 
     Nothing is invented here — that is the whole design (yaml-schema.md
     §4.1). The credentials are random, but they are randomized *once*, by
-    ``mcuhome init-pairing``, into the configuration file; from there on
+    ``mcuhome device init-pairing``, into the configuration file; from there on
     they are ordinary input and the builder stays byte-deterministic. The
     iteration count is the one derived value, and it is a constant of the
     builder rather than of the device.
@@ -189,8 +189,8 @@ def _resolve_pairing(config: RawConfig, matter_enabled: bool) -> PairingModel | 
             "This configuration reached the code generator without commissioning credentials.",
             location=matter.loc if matter is not None else config.loc,
             hint=(
-                "run mcuhome validate on it first; the credentials come from\n"
-                f"    mcuhome init-pairing {config.device.name or '<device>'}"
+                "run mcuhome device validate on it first; the credentials come from\n"
+                f"    mcuhome device init-pairing {config.device.name or '<device>'}"
             ),
         )
     return PairingModel(

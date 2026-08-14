@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome init-pairing``: draw commissioning credentials, once.
+"""``mcuhome device init-pairing``: draw commissioning credentials, once.
 
 This is the one place in the builder where randomness enters, and it
 enters *into the user's configuration file* rather than into a build.
@@ -49,7 +49,7 @@ __all__ = ["CREDENTIAL_COMMENT", "InitResult", "init_pairing", "secret_names"]
 #: replaces them so that repeated runs do not stack up comment blocks.
 #: Matched by exact text — a comment the user wrote is never touched.
 CREDENTIAL_COMMENT = (
-    "# Commissioning credentials, written by `mcuhome init-pairing`.",
+    "# Commissioning credentials, written by `mcuhome device init-pairing`.",
     "# They are this device's identity: replacing them means every controller",
     "# has to commission it again.",
 )
@@ -262,7 +262,7 @@ def init_pairing(
             entry,
             f"{names} would be replaced, and every controller that already knows this "
             "device would have to commission it again — so say it in so many words:\n"
-            "    mcuhome init-pairing … --force",
+            "    mcuhome device init-pairing … --force",
             line=min(anchor.occupied.values()),
         )
 

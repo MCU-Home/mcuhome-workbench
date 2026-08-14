@@ -99,7 +99,7 @@ PRIVATE_KEY_FILE = "mcuboot.pem"
 #: pair that ever leaves the machine it was generated on. A build server
 #: needs it (MCUboot verifies against a public key compiled into the
 #: bootloader) and must never see the other half (ADR 0015 decision 8),
-#: which is what ``mcuhome build --no-sign --public-key`` is for.
+#: which is what ``mcuhome device build --no-sign --public-key`` is for.
 PUBLIC_KEY_FILE = "signing.pub"
 
 #: Overrides where the key lives. ``--signing-key`` beats it, it beats the

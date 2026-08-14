@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome init-pairing``: :mod:`mcuhome.workbench.provision`.
+"""``mcuhome device init-pairing``: :mod:`mcuhome.workbench.provision`.
 
 The workbench half of the commissioning credentials. The math, the CHIP
 vectors and the atomic Kconfig group are :mod:`mcuhome.model.pairing` and

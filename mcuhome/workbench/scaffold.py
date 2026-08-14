@@ -28,6 +28,7 @@ say, in the file and in the command's output, that it is the next step.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,11 +99,14 @@ def _transport_lines(board: registry.BoardDef) -> list[str]:
     return []  # pragma: no cover - every supported board has a transport
 
 
-def render_starter(name: str, *, board: str) -> str:
+def render_starter(name: str, *, board: str, friendly_name: str | None = None) -> str:
     """The text of a new device's ``main.yaml``.
 
     Pure, so the test suite reads it without touching a filesystem and the
     dashboard's new-device wizard can show it before anything is written.
+    *friendly_name* is the human-readable name destined for the device's
+    Matter identity (cli ADR 0003: ``device new --name``); left unset, a
+    title-cased spelling of *name* stands in.
     """
     definition = registry.BOARDS[board]
     example_driver = next(iter(registry.DRIVERS.values()))
@@ -118,6 +122,7 @@ def render_starter(name: str, *, board: str) -> str:
         if channel.quantity == example_cluster.quantity
     )
 
+    shown_name = friendly_name or name.replace("-", " ").title()
     lines = [
         f"# {name} — an MCUHome device.",
         "#",
@@ -125,13 +130,13 @@ def render_starter(name: str, *, board: str) -> str:
         "# the one command that writes the commissioning credentials below.",
         "#",
         "# Next step:",
-        f"#   mcuhome init-pairing {name}    # draw this device's commissioning codes",
-        f"#   mcuhome validate {name}        # see what it resolves to",
-        f"#   mcuhome build {name}           # compile it",
+        f"#   mcuhome device init-pairing {name}    # draw this device's commissioning codes",
+        f"#   mcuhome device validate {name}        # see what it resolves to",
+        f"#   mcuhome device build {name}           # compile it",
         "",
         "device:",
         f"  name: {name}",
-        f"  friendly_name: {name.replace('-', ' ').title()}",
+        f"  friendly_name: {json.dumps(shown_name)}",
         f"  board: {board}",
         f'  version: "{ota.DEFAULT_VERSION}"    # raise it for every image you want '
         "a device to update to",
@@ -184,6 +189,7 @@ def new_device(
     env: Mapping[str, str],
     cwd: Path,
     project_dir: Path | None = None,
+    friendly_name: str | None = None,
 ) -> NewDevice:
     """Create ``devices/<name>/main.yaml``, or refuse and change nothing.
 
@@ -221,13 +227,15 @@ def new_device(
             hint=(
                 "pick another name, or edit the configuration that is already "
                 f"there. mcuhome never overwrites a device configuration.\n"
-                f"    mcuhome validate {name}"
+                f"    mcuhome device validate {name}"
             ),
         )
 
     try:
         entry.parent.mkdir(parents=True, exist_ok=True)
-        entry.write_text(render_starter(name, board=board), encoding="utf-8")
+        entry.write_text(
+            render_starter(name, board=board, friendly_name=friendly_name), encoding="utf-8"
+        )
     except OSError as error:
         raise ConfigError(
             f"MCUHome cannot create {entry}: {error.strerror}.",

@@ -52,11 +52,12 @@ from mcuhome.model.userpaths import config_dir, expand
 
 from mcuhome.workbench import builders as builders_module
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
-from mcuhome.workbench.loader import FileRef, load_yaml_file
+from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file
 
 __all__ = [
     "CONFIG_FILE",
+    "CONFIG_SCOPES",
     "OPTIONS",
     "Option",
     "Setting",
@@ -64,13 +65,21 @@ __all__ = [
     "option",
     "resolve_builder",
     "resolve_settings",
+    "scope_config_file",
+    "set_config_value",
     "system_config_dir",
+    "unset_config_value",
     "user_config_dir",
 ]
 
 #: File name of the system and user layers. Deliberately not
 #: ``mcuhome.yaml`` — the module docstring says why.
 CONFIG_FILE = "configuration.yaml"
+
+#: The three file scopes ``mcuhome config set``/``unset`` write, in the
+#: layer order of the model. The other two layers have no file to edit:
+#: the environment is the shell's, the arguments are the invocation's.
+CONFIG_SCOPES = ("system", "user", "project")
 
 #: Origin labels, in ascending precedence. ``default`` is what a value
 #: has when no layer set it.
@@ -349,6 +358,29 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
     raise ValueError(f"option {opt.name!r} declares unknown kind {opt.kind!r}")
 
 
+def _refuse_not_file_settable(opt: Option, location: Location | None) -> ConfigError:
+    """The channel refusal of ADR 0022 §3, for reading and writing alike."""
+    if opt.bootstrap:
+        return ConfigError(
+            f"{opt.name!r} cannot be set from a configuration file.",
+            location=location,
+            hint=(
+                f"{opt.name!r} decides where the project layer *is*, so it runs "
+                f"before any configuration file is read (ADR 0022 §2). Set it per "
+                f"invocation: {opt.flag} on the command line, or {opt.env_var} in "
+                "the environment."
+            ),
+        )
+    return ConfigError(
+        f"{opt.name!r} cannot be set from a configuration file.",
+        location=location,
+        hint=(
+            f"{opt.name!r} is a per-invocation value: set it with {opt.flag} "
+            f"on the command line or as {opt.env_var} in the environment."
+        ),
+    )
+
+
 def _read_layer(
     file: Path,
     *,
@@ -379,26 +411,8 @@ def _read_layer(
                 hint="options settable from a configuration file: " + ", ".join(settable),
             )
         opt = by_name[key]
-        if opt.bootstrap:
-            raise ConfigError(
-                f"{opt.name!r} cannot be set from a configuration file.",
-                location=location,
-                hint=(
-                    f"{opt.name!r} decides where the project layer *is*, so it runs "
-                    f"before any configuration file is read (ADR 0022 §2). Set it per "
-                    f"invocation: {opt.flag} on the command line, or {opt.env_var} in "
-                    "the environment."
-                ),
-            )
-        if not opt.files:
-            raise ConfigError(
-                f"{opt.name!r} cannot be set from a configuration file.",
-                location=location,
-                hint=(
-                    f"{opt.name!r} is a per-invocation value: set it with {opt.flag} "
-                    f"on the command line or as {opt.env_var} in the environment."
-                ),
-            )
+        if opt.bootstrap or not opt.files:
+            raise _refuse_not_file_settable(opt, location)
         value = _parse_file_value(opt, raw, file=file, env=env, location=location, origin=origin)
         settings[opt.name] = Setting(option=opt, value=value, origin=origin, source=str(file))
     return settings
@@ -582,3 +596,179 @@ def _builder_token(
             )
         return token
     return None
+
+
+# --------------------------------------------------------------------------
+# Writing configuration (`mcuhome config set`/`unset`, ADR 0022 §3)
+# --------------------------------------------------------------------------
+
+
+def scope_config_file(
+    scope: str,
+    *,
+    project: Project | None,
+    env: Mapping[str, str],
+) -> Path:
+    """The file a configuration scope is edited in.
+
+    The write-side counterpart of the three file layers: ``project`` is
+    the project's ``mcuhome.yaml``, ``user`` and ``system`` are their
+    directories' ``configuration.yaml``. Reading treats an unnameable
+    directory as an absent layer; *editing* one is a refusal instead —
+    a value written into a layer that cannot exist would silently
+    configure nothing.
+    """
+    if scope == "project":
+        if project is None:
+            raise ConfigError(
+                "There is no project here to configure.",
+                hint=(
+                    "the project scope writes mcuhome.yaml in the project directory "
+                    "(the upward marker search found none). Run `mcuhome init` first, "
+                    "or write the user/system configuration instead."
+                ),
+            )
+        return project.config_file
+    if scope not in CONFIG_SCOPES:
+        raise ValueError(f"{scope!r} is not a configuration scope")
+    directory = user_config_dir(env) if scope == "user" else system_config_dir(env)
+    if directory is None:
+        raise ConfigError(
+            f"This environment names no {scope} configuration directory.",
+            hint=(
+                "the user directory follows XDG_CONFIG_HOME/HOME (POSIX) or %APPDATA% "
+                "(Windows); the system directory is /etc/mcuhome or %ProgramData%\\mcuhome"
+            ),
+        )
+    return directory / CONFIG_FILE
+
+
+def _declared_or_refuse(name: str, registry: tuple[Option, ...]) -> Option:
+    by_name = {opt.name: opt for opt in registry}
+    if name not in by_name:
+        settable = sorted(n for n, o in by_name.items() if o.files and not o.bootstrap)
+        raise ConfigError(
+            f"There is no option called {name!r}.",
+            hint="options settable from a configuration file: " + ", ".join(settable),
+        )
+    return by_name[name]
+
+
+def _value_to_write(opt: Option, text: str, location: Location) -> Any:
+    """What ``config set`` puts into the file, validated but unresolved.
+
+    The user's own spelling is written, never a resolution of it: a
+    relative path stays relative (the file's rule resolves it on every
+    read), a ``paths`` value splits ``os.pathsep``-style — the same
+    convention its environment variable uses — into a YAML list.
+    """
+    if not text:
+        raise ConfigError(
+            f"An empty value does not set {opt.name!r}.",
+            location=location,
+            hint=f"to remove the option from the file: mcuhome config unset {opt.name}",
+        )
+    if opt.kind == "builders":
+        raise ConfigError(
+            "'builders' is structured configuration and not settable as one value.",
+            location=location,
+            hint=(
+                "edit the `builders:` list in the file directly — one entry per "
+                "builder with name:, type: and the type's options (ADR 0023)"
+            ),
+        )
+    if opt.kind == "integer":
+        try:
+            return int(text)
+        except ValueError:
+            raise ConfigError(
+                f"{opt.name} must be a whole number, not {text!r}.",
+                location=location,
+                hint=opt.help or None,
+            ) from None
+    if opt.kind == "paths":
+        return [item for item in text.split(os.pathsep) if item]
+    return text
+
+
+def _load_for_editing(file: Path, yaml: Any) -> Any:
+    if not file.is_file():
+        return None
+    data = yaml.load(file.read_text(encoding="utf-8"))
+    if data is not None and not isinstance(data, dict):
+        raise ConfigError(
+            f"{file.name} must be a mapping of `option: value` pairs.",
+            location=Location(file=file, line=1, column=1),
+            hint="one option per line, for example:\n    jobs: 4",
+        )
+    return data
+
+
+def _dump_config(file: Path, data: Any, yaml: Any) -> None:
+    try:
+        file.parent.mkdir(parents=True, exist_ok=True)
+        with file.open("w", encoding="utf-8") as handle:
+            yaml.dump(data, handle)
+    except OSError as error:
+        raise ConfigError(
+            f"MCUHome cannot write {file}: {error.strerror}.",
+            hint=(
+                "the system scope usually needs administrator rights"
+                if str(file).startswith("/etc/") or "ProgramData" in str(file)
+                else "pick a scope you can write to"
+            ),
+        ) from error
+
+
+def set_config_value(
+    file: Path,
+    name: str,
+    text: str,
+    *,
+    env: Mapping[str, str],
+    registry: tuple[Option, ...] = OPTIONS,
+) -> Any:
+    """Set *name* to *text* in *file*, and answer with the written value.
+
+    The write obeys the option's channels exactly as reading does — a
+    per-invocation or bootstrap option is refused with the same words —
+    and goes through the round-trip editor, so comments and ``!file``
+    references elsewhere in the file survive the edit byte for byte.
+    """
+    opt = _declared_or_refuse(name, registry)
+    location = Location(file=file, key=name)
+    if opt.bootstrap or not opt.files:
+        raise _refuse_not_file_settable(opt, location)
+    value = _value_to_write(opt, text, location)
+    # Prove the written form reads back as a value of the option's kind
+    # before anything touches the file — the one guarantee `config set`
+    # owes: it never leaves a file behind that the next resolve refuses.
+    _parse_file_value(opt, value, file=file, env=env, location=location, origin="edit")
+    yaml = editing_yaml()
+    data = _load_for_editing(file, yaml)
+    if data is None:
+        data = {}
+    data[name] = value
+    _dump_config(file, data, yaml)
+    return value
+
+
+def unset_config_value(
+    file: Path,
+    name: str,
+    *,
+    registry: tuple[Option, ...] = OPTIONS,
+) -> bool:
+    """Remove *name* from *file*; False when there was nothing to remove.
+
+    The name must be a declared option — ``unset`` with a typo saying
+    "nothing to remove" would confirm a removal that never happened.
+    """
+    _declared_or_refuse(name, registry)
+    yaml = editing_yaml()
+    data = _load_for_editing(file, yaml)
+    if data is None or name not in data:
+        return False
+    del data[name]
+    _dump_config(file, data, yaml)
+    return True

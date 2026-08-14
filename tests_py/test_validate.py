@@ -373,7 +373,7 @@ def test_a_matter_device_without_credentials_is_refused(write_config) -> None:
     error = find_error(errors, "no commissioning credentials")
     assert error.message == "This device has no commissioning credentials."
     assert error.location.line == line_of(text, "  matter:")
-    assert "mcuhome init-pairing bench-node" in (error.hint or "")
+    assert "mcuhome device init-pairing bench-node" in (error.hint or "")
     assert "use_test_pairing: true" in (error.hint or "")
 
 
@@ -383,7 +383,7 @@ def test_half_written_credentials_name_what_is_missing(write_config) -> None:
     error = find_error(errors, "incomplete")
     assert error.message == "The commissioning credentials are incomplete: salt: missing."
     assert error.location.line == line_of(text, "discriminator:")
-    assert "mcuhome init-pairing bench-node --force" in (error.hint or "")
+    assert "mcuhome device init-pairing bench-node --force" in (error.hint or "")
 
 
 def test_a_passcode_out_of_range_is_refused(write_config) -> None:

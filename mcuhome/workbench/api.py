@@ -40,7 +40,7 @@ What is here, in the order a caller needs it:
     A canonical model back from JSON — the other end of the wire. A build
     server receives one of these and starts at stage 4; it never sees
     the project directory and never sees a secrets file (dashboard ADR
-    0007 decision 4). ``mcuhome build --model <file>`` is the same thing
+    0007 decision 4). ``mcuhome device build --model <file>`` is the same thing
     as a command.
 ``validate_device``
     The same three stages, returning **every** problem as typed errors
@@ -113,12 +113,16 @@ from mcuhome.workbench.buildmethods import (
 from mcuhome.workbench.configschema import config_json_schema
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
+    CONFIG_SCOPES,
     OPTIONS,
     Option,
     Setting,
     Settings,
     resolve_builder,
     resolve_settings,
+    scope_config_file,
+    set_config_value,
+    unset_config_value,
 )
 from mcuhome.workbench.loader import load_config
 from mcuhome.workbench.project import (
@@ -142,6 +146,7 @@ from mcuhome.workbench.validate import validate
 __all__ = [
     "BUILDER_TYPES",
     "CONFIG_FILE",
+    "CONFIG_SCOPES",
     "DEFAULT_METHOD",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
@@ -191,6 +196,9 @@ __all__ = [
     "resolve_project",
     "resolve_settings",
     "run_build",
+    "scope_config_file",
+    "set_config_value",
+    "unset_config_value",
     "validate_device",
 ]
 

@@ -17,8 +17,8 @@ every build (container, ``local-dev``, ``--no-sign``) produces an
 **unsigned** image and states those same arguments in its report
 (``build-manifest.json`` for a west build, the §7.2.1 ``build-report.json``
 for a container build). This module is the one place they are turned back
-into a command — run right after the build by ``mcuhome build``, or later
-by ``mcuhome sign`` on another machine — so the private key lives in no
+into a command — run right after the build by ``mcuhome device build``, or later
+by ``mcuhome device sign-firmware`` on another machine — so the private key lives in no
 build at all (ADR 0015 decision 8). The argument order below is Zephyr's,
 verbatim, so a signature made here is comparable line by line with the
 inline one Zephyr would have produced.
@@ -245,7 +245,7 @@ def _contained_name(value: str, *, role: str, manifest_path: Path) -> str:
     out of the directory. A build writes its artifacts *beside* its
     manifest, so a name that is absolute or reaches upward was not written
     by one — it is the shape a hand-crafted ``build-manifest.json`` handed
-    to ``mcuhome sign`` would take to read and sign a file anywhere on the
+    to ``mcuhome device sign-firmware`` would take to read and sign a file anywhere on the
     machine, or to write one outside the build directory. Refused by name,
     before it is ever joined, rather than trusted because it came from a
     file named like a manifest.

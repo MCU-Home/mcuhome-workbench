@@ -160,7 +160,7 @@ def test_a_missing_image_says_to_sign_first(tmp_path: Path) -> None:
             product_id=1,
             version="0.1.0",
         )
-    assert "mcuhome sign" in str(error.value.hint)
+    assert "mcuhome device sign-firmware" in str(error.value.hint)
 
 
 def test_writing_the_same_image_twice_gives_the_same_bytes(tmp_path: Path) -> None:

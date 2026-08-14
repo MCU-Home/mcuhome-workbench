@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome new``: the first file of a device, and what it is worth.
+"""``mcuhome device new``: the first file of a device, and what it is worth.
 
 A scaffold that produces something the next command rejects is not a
 scaffold, so the important test here is the round trip: create a device,
@@ -103,7 +103,7 @@ def test_an_explicit_project_dir_that_is_not_there_is_a_refusal(tmp_path) -> Non
 def test_the_starter_names_the_next_step_rather_than_taking_it() -> None:
     """Credentials are drawn once, by their own command, on purpose."""
     text = scaffold.render_starter("bench-node", board=BOARD)
-    assert "mcuhome init-pairing bench-node" in text
+    assert "mcuhome device init-pairing bench-node" in text
     assert "discriminator:" not in text
     assert "passcode:" not in text
 
@@ -153,3 +153,23 @@ def test_new_then_init_pairing_then_validate(tmp_path) -> None:
     assert model.device.board == BOARD
     assert model.network.pairing is not None
     assert model.network.pairing.test_credentials is False
+
+
+def test_the_starter_takes_a_friendly_name_and_quotes_it() -> None:
+    """`device new --name` (cli ADR 0003): the human name for the Matter identity."""
+    text = scaffold.render_starter("bench-node", board=BOARD, friendly_name='Bench: "A"')
+    assert 'friendly_name: "Bench: \\"A\\""' in text
+    plain = scaffold.render_starter("bench-node", board=BOARD)
+    assert 'friendly_name: "Bench Node"' in plain
+
+
+def test_new_device_writes_the_friendly_name_through(tmp_path) -> None:
+    project = init_project(tmp_path / "p").project
+    created = scaffold.new_device(
+        "bench-node",
+        board=BOARD,
+        env={},
+        cwd=project.root,
+        friendly_name="Workbench Node",
+    )
+    assert 'friendly_name: "Workbench Node"' in created.entry.read_text(encoding="utf-8")
