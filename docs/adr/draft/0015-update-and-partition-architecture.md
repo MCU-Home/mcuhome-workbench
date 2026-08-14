@@ -410,7 +410,8 @@ Two invariants keep that door open:
 firmware vendor: the builder generates an ECDSA P-256 key pair on first
 need into `$XDG_CONFIG_HOME/mcuhome/signing.key` (owner-only
 permissions), outside every repository and every build directory;
-`--signing-key` and `MCUHOME_SIGNING_KEY` point elsewhere. The key
+`MCUHOME_SIGNING_KEY` (and the CLI's `--signing-key`, cli ADR 0003)
+points elsewhere. The key
 lives **where the user's controlling instance runs, never on a build
 server**: the dashboard generates it on first need and keeps it in its
 own state (in a Home Assistant add-on, `/config/mcuhome/signing.key` —
@@ -423,14 +424,15 @@ output can replace the other's.
 
 This works because MCUboot signing is a **detached post-build step** —
 `imgtool` over the finished binary — so a machine that compiles never
-needs the private key. The detached path is implemented end to end:
-`mcuhome build --no-sign --public-key <file>` compiles the bootloader
-with only the public half compiled into it and leaves the application
-unsigned; the build manifest carries the `imgtool` parameters (taken
-from the registry's layout, so they can be stated without a build
-having run); `mcuhome sign <build-dir>` applies the signature
-afterwards with the same arguments Zephyr's own `cmake/mcuboot.cmake`
-would have used; `mcuhome public-key` writes the half that may travel.
+needs the private key. The detached path is implemented end to end (the command-line
+spellings are the CLI's own, cli ADR 0003): a build without the
+private key compiles the bootloader with only the public half compiled
+into it and leaves the application unsigned; the build manifest
+carries the `imgtool` parameters (taken from the registry's layout, so
+they can be stated without a build having run); the detached signing
+step applies the signature afterwards with the same arguments Zephyr's
+own `cmake/mcuboot.cmake` would have used; the public half that may
+travel is exported on its own.
 Verified on the real toolchain: the bootloader built from the public
 key alone is **byte-identical** to the one built from the private key,
 and an inline-signed and a detached-signed application agree in

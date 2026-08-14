@@ -24,10 +24,10 @@ Product-owner requirement: keep host prerequisites minimal.
 
 **On the developer machine: git and docker. That is the whole list** for
 a compiling build — no Zephyr SDK, no cross-compilers, no vendor flash
-tools on the host. The `mcuhome` command itself is an ordinary
-pip-installed Python program and adds nothing toolchain-shaped;
-`mcuhome validate` and `mcuhome build --generate-only` need Python and
-nothing else.
+tools on the host. The `mcuhome` command itself adds nothing
+toolchain-shaped — a standing constraint of the shell, recorded on its
+side (cli ADR 0002); `mcuhome validate` and `mcuhome build
+--generate-only` need Python and nothing else.
 
 **In the build container: everything that compiles.** The Zephyr SDK and
 toolchain, west and Zephyr's Python requirements, the Matter SDK's build

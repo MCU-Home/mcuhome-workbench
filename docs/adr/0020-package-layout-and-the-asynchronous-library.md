@@ -64,11 +64,13 @@ is that independent parties compute the same value.
 
 ### 2. The CLI package becomes `mcuhome`; "lib" is retired
 
-The command shell's distribution is renamed to `mcuhome`; the console
-script is unchanged. The reason is the whole reason: `pip install
-mcuhome` should yield the command a user expects, and no other package
-has a better claim to the plain name. The services keep
-`mcuhome-dashboard` and `mcuhome-build-server`.
+This repository's distributions renounce the plain name: no package
+here may claim `mcuhome`, because `pip install mcuhome` should yield
+the command a user expects, and no other package has a better claim
+to the plain name. The command line's half — its distribution bearing
+that name, the console script unchanged — is recorded in cli
+ADR 0002. The services keep `mcuhome-dashboard` and
+`mcuhome-build-server`.
 
 "lib" is retired as a term. It named where the package came from rather
 than what it is, and it could only ever mean "the rest" — a name three

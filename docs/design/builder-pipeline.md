@@ -365,47 +365,28 @@ is its own later design; the artifacts above are designed so both work.
 
 ## 8. CLI surface (v0.1)
 
-```
-mcuhome new          <device>      # scaffold a device folder from a board
-mcuhome validate     <device>      # stages 1–3, prints resolved summary
-mcuhome build        <device>      # stages 1–5
-mcuhome sign         <build-dir>   # apply the signature detached (§7)
-mcuhome init-pairing <device>      # draw commissioning credentials, once
-mcuhome public-key                 # the public half of the signing key
-mcuhome schema       [config|registry]   # the contract, as JSON
-mcuhome clean        <device|--all>
-```
+The command vocabulary, its flags and the `--json`/exit-code contract
+are the CLI's own decisions, recorded in the cli repository since
+2026-08-14 (cli ADR 0003; the method/server/SDK-source ladders in cli
+ADR 0004). The enumeration this section used to carry had drifted —
+it listed `--keep-going`, which was never built — and is not repeated
+here.
 
-`<device>` is a folder name resolved against the config tree root
-(`devices/<name>/main.yaml`); an explicit path works too. Tree root:
-`--config-root`, else auto-discovered (cwd upwards). Everything else
-(`flash`, `logs`, `migrate`, `update`) arrives with its own design.
-Flags: `--method local-dev` (§5), `--keep-going` for CI, `-v`.
-
-`init-pairing` is the exception to "the builder never writes into the
-configuration tree" (§2), and it exists because of §1.4: a device needs
-credentials nobody else has, and a build has to be reproducible, so the
-randomness happens once — in this command, into the device's own YAML or
-the tree's `secrets.yaml` — and every build after that is deterministic
-input in, deterministic bytes out (yaml-schema.md §4.1).
-`validate`/`build` print the resulting pairing codes and store them
-nowhere.
-
-`new` is the other end of the same rule: it writes a device's first
-`main.yaml` and deliberately does *not* draw its credentials, so that
-re-running it after a mistake cannot silently invalidate every controller
-that already knows the device. It prints `init-pairing` as the next step
-instead.
-
-`validate` and `build` take `--json`, which replaces the human rendering
-with one machine-readable document on stdout — the canonical model or the
-build manifest, and on failure the errors of `ConfigError.to_dict()`
-(message, tree-relative file, line, column, dotted key, hint, kind). Exit
-codes do not change; the build log moves to stderr. `mcuhome schema`
-emits the two documents a consumer needs statically: a JSON Schema for
-`main.yaml` and the registry as data. All of it is also reachable in
-process through `mcuhome.api`, which is the supported programmatic
-surface (dashboard ADR 0011 decision 1).
+What stays pipeline-relevant: `<device>` is a folder name resolved
+against the config tree root (`devices/<name>/main.yaml`; an explicit
+path works too; tree root `--config-root`, else auto-discovered cwd
+upwards). `init-pairing` is the exception to "the builder never
+writes into the configuration tree" (§2), and it exists because of
+§1.4: a device needs credentials nobody else has, and a build has to
+be reproducible, so the randomness happens once — into the device's
+own YAML or the tree's `secrets.yaml` — and every build after that is
+deterministic input in, deterministic bytes out (yaml-schema.md §4.1).
+`new` is the other end of the same rule: it deliberately draws no
+credentials, so re-running it after a mistake cannot silently
+invalidate every controller that already knows the device. Everything
+else (`flash`, `logs`, `migrate`, `update`) arrives with its own
+design. In process, the supported programmatic surface is
+`mcuhome.workbench.api`.
 
 ## 9. Testing strategy
 

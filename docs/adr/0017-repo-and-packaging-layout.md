@@ -33,7 +33,7 @@ dashboard, and the CLI usable without any dashboard version.
 | Repo | Contents | Depends on |
 |---|---|---|
 | `mcuhome` | SDK (C components, samples), YAML spec + codegen, the published Python distributions (below), west manifest (Zephyr pin), build-container definition + CI, golden tests. One shared version for everything it publishes. | — |
-| `cli` | Thin command shell (distribution `mcuhome`) | `mcuhome-compiler` (pip) |
+| `cli` | The command shell — its own decisions live in cli ADR 0002 | `mcuhome-compiler` (pip) |
 | `dashboard` | Web UI + user key handling (detached signing) (distribution `mcuhome-dashboard`) | `mcuhome-workbench` (pip) |
 | `build-server` | Service orchestrating build containers (distribution `mcuhome-build-server`) | `mcuhome-model` (pip) + the build-container contract |
 
@@ -65,11 +65,11 @@ dependency, `mcuhome-compiler`, pulls `mcuhome-workbench` and
 `mcuhome-model` with it — the local-dev case is the one consumer
 entitled to all three. The dashboard imports `mcuhome-workbench` in
 process and never spawns it (dashboard ADR 0011). The build server
-consumes `mcuhome-model` and nothing else (§3). The CLI's
-distribution is named `mcuhome`, so that `pip install mcuhome` yields
-the command a user expects; the console script keeps the same name
-(ADR 0020 decision 2). The services keep `mcuhome-dashboard` and
-`mcuhome-build-server`.
+consumes `mcuhome-model` and nothing else (§3). The CLI's own
+attributes — thin-shell nature, its distribution bearing the plain
+name, versioning — are recorded in cli ADR 0002; ADR 0020 §2 keeps
+the renouncing half of the name. The services keep
+`mcuhome-dashboard` and `mcuhome-build-server`.
 
 ### 2. Repo ≠ package
 
@@ -111,7 +111,8 @@ all three read it from one place — `mcuhome/model/__init__.py` — so
 the property holds by construction rather than by discipline.
 
 The CLI and the dashboard, by contrast, are thin consumers: they
-declare a version range (dashboard ADR 0011) and follow the releases.
+declare a version range and follow the releases (the dashboard's rule
+in dashboard ADR 0011, the CLI's in cli ADR 0002).
 The build server consumes **`mcuhome-model`, and nothing else**
 (ADR 0020 decision 4) — no build logic, only the shared vocabulary,
 which is what keeps it able to orchestrate third-party build
@@ -132,10 +133,10 @@ the server orchestrates against.
 - The build server moved out of the dashboard repository into its own
   repo; that half of the decision is recorded where its code lived at
   the time, in dashboard ADR 0012.
-- `cli` is its own repository: the command shell is a thin layer over
-  the published packages, with `mcuhome-compiler` as its one
-  dependency. The existing rule that using the CLI must never require
-  the dashboard is unchanged — it now falls out of the layout.
+- `cli` is its own repository. The shell's own decisions — thin-shell
+  nature, its single dependency, the rule that using the CLI must
+  never require the dashboard — are recorded in cli ADR 0002 and now
+  fall out of the layout.
 - The dashboard's dependency changes from a sibling-checkout install
   to the published `mcuhome-workbench` package; the direction and the
   version-range rule of dashboard ADR 0011 are unchanged. Interim,

@@ -178,13 +178,13 @@ documentation depends on it.
 ### 6. Commissioning codes are done; the test VIDs are a going-public gate
 
 The commissioning-code half of onboarding is done, not proposed
-(builder pairing block, commit `7c9266b`): `mcuhome init-pairing` draws
-per-device credentials from the system CSPRNG once, into the user's own
-configuration; `mcuhome/model/pairing.py` emits all seven
-`CONFIG_CHIP_DEVICE_*` symbols as one indivisible Kconfig group,
-because CHIP checks none of them against each other on Zephyr; and
-`validate`, `build` and `init-pairing` print the manual pairing code
-and the `MT:` QR payload, storing neither.
+(builder pairing block, commit `7c9266b`): the credentials are drawn
+from the system CSPRNG once, into the user's own configuration — the
+CLI's `init-pairing`, whose command shape and print-but-never-store
+output rule are recorded in cli ADR 0003; `mcuhome/model/pairing.py`
+emits all seven `CONFIG_CHIP_DEVICE_*` symbols as one indivisible
+Kconfig group, because CHIP checks none of them against each other on
+Zephyr.
 
 **VID/PID hygiene before anything ships beyond the bench.** The USB
 descriptor still carries Zephyr's test VID `0x2FE3` and the Matter
