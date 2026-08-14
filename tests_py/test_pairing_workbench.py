@@ -41,7 +41,7 @@ WITHOUT_CREDENTIALS = VALID_CONFIG.replace("    use_test_pairing: true\n", "")
 
 def _init(path: Path, **kwargs) -> provision.InitResult:
     return provision.init_pairing(
-        path, secrets_file=path.parent / "secrets.yaml", draw=lambda: FIXED, **kwargs
+        path, secrets_file=path.parent / "secrets" / "main.yaml", draw=lambda: FIXED, **kwargs
     )
 
 
@@ -104,7 +104,7 @@ def test_force_replaces_the_credentials_without_stacking_up_comments(write_confi
         discriminator=17, passcode=11223344, salt=FIXED.salt, iterations=FIXED.iterations
     )
     result = provision.init_pairing(
-        path, secrets_file=path.parent / "secrets.yaml", force=True, draw=lambda: other
+        path, secrets_file=path.parent / "secrets" / "main.yaml", force=True, draw=lambda: other
     )
     twice = path.read_text(encoding="utf-8")
 
@@ -118,7 +118,7 @@ def test_force_replaces_the_credentials_without_stacking_up_comments(write_confi
 def test_force_also_clears_a_test_pairing_opt_in(write_config) -> None:
     path = write_config(VALID_CONFIG)
     provision.init_pairing(
-        path, secrets_file=path.parent / "secrets.yaml", force=True, draw=lambda: FIXED
+        path, secrets_file=path.parent / "secrets" / "main.yaml", force=True, draw=lambda: FIXED
     )
     text = path.read_text(encoding="utf-8")
     assert "use_test_pairing" not in text
@@ -154,7 +154,7 @@ def test_secrets_mode_keeps_the_values_out_of_the_device_file(write_config) -> N
 def test_secrets_mode_keeps_what_the_secrets_file_already_had(write_config) -> None:
     path = write_config(WITHOUT_CREDENTIALS, secrets="wifi_password: hunter2\n")
     _init(path, use_secrets=True)
-    text = (path.parent / "secrets.yaml").read_text(encoding="utf-8")
+    text = (path.parent / "secrets" / "main.yaml").read_text(encoding="utf-8")
     assert "wifi_password: hunter2" in text
     assert "bench_node_discriminator: 2314" in text
 

@@ -22,22 +22,27 @@ builder never learns that a dashboard exists.
 
 What is here, in the order a caller needs it:
 
-``open_config_tree`` / ``find_device``
-    Where the configuration lives and which file is a given device's.
+``resolve_project`` / ``init_project`` / ``find_device``
+    Where the user's work lives (the ``.mcuhome-project-root`` marker
+    and its bootstrap ladder, ADR 0022), how a project comes into
+    being, and which file is a given device's.
+``resolve_settings``
+    The five-layer configuration model over the declared option
+    registry (``OPTIONS``), each value with the layer it came from.
 ``load_model``
     Stages 1-3 on one device, raising on the first thing that is wrong.
 ``read_model``
     A canonical model back from JSON — the other end of the wire. A build
-    server receives one of these and starts at stage 4; it never sees the
-    configuration tree and never sees a secrets file (dashboard ADR 0007
-    decision 4). ``mcuhome build --model <file>`` is the same thing as a
-    command.
+    server receives one of these and starts at stage 4; it never sees
+    the project directory and never sees a secrets file (dashboard ADR
+    0007 decision 4). ``mcuhome build --model <file>`` is the same thing
+    as a command.
 ``validate_device``
     The same three stages, returning **every** problem as typed errors
     instead of raising — one pass, all markers.
 ``error_dicts`` / ``ConfigError.to_dict``
     Those errors as plain dictionaries: message, file (relative to the
-    configuration tree), line, column, key, hint, kind.
+    project), line, column, key, hint, kind.
 ``registry_data`` / ``config_json_schema``
     What the builder knows about hardware and Matter, and the shape of
     ``main.yaml``, as data an editor or a picker can consume.
@@ -65,6 +70,7 @@ with ``asyncio.to_thread`` when it must.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -99,58 +105,80 @@ from mcuhome.workbench.buildmethods import (
     run_build,
 )
 from mcuhome.workbench.configschema import config_json_schema
+from mcuhome.workbench.configuration import (
+    CONFIG_FILE,
+    OPTIONS,
+    Option,
+    Setting,
+    Settings,
+    resolve_settings,
+)
 from mcuhome.workbench.loader import load_config
-from mcuhome.workbench.resolve import resolve
-from mcuhome.workbench.schema import parse_config
-from mcuhome.workbench.tree import (
+from mcuhome.workbench.project import (
     DEVICE_ENTRY,
     DEVICES_DIR,
-    SECRETS_FILE,
-    ConfigTree,
-    find_config_root,
-    is_config_root,
-    open_tree,
+    MARKER_FILE,
+    PROJECT_CONFIG_FILE,
+    PROJECT_DIR_VAR,
+    InitResult,
+    Project,
+    find_project_root,
+    init_project,
+    is_project_root,
     resolve_device,
+    resolve_project,
 )
+from mcuhome.workbench.resolve import resolve
+from mcuhome.workbench.schema import parse_config
 from mcuhome.workbench.validate import validate
 
 __all__ = [
+    "CONFIG_FILE",
     "DEFAULT_METHOD",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
     "LOCAL",
     "LOCAL_DEV",
     "MANIFEST_FILE",
+    "MARKER_FILE",
     "METHODS",
     "MODEL_VERSION",
+    "OPTIONS",
+    "PROJECT_CONFIG_FILE",
+    "PROJECT_DIR_VAR",
     "REMOTE",
-    "SECRETS_FILE",
     "VERSION",
     "BuildError",
     "BuildOutcome",
     "BuildRequest",
     "ConfigError",
     "ConfigErrorGroup",
-    "ConfigTree",
     "DeviceModel",
     "GenerationError",
+    "InitResult",
     "Location",
     "MCUHomeError",
     "MethodUnavailable",
+    "Option",
+    "Project",
     "RemoteNotConfigured",
+    "Setting",
+    "Settings",
     "UnknownMethod",
     "ValidationResult",
     "config_json_schema",
     "error_dicts",
-    "find_config_root",
     "find_device",
-    "is_config_root",
+    "find_project_root",
+    "init_project",
+    "is_project_root",
     "load_model",
-    "open_config_tree",
     "read_manifest",
     "read_model",
     "registry_data",
     "resolve_method",
+    "resolve_project",
+    "resolve_settings",
     "run_build",
     "validate_device",
 ]
@@ -161,28 +189,31 @@ __all__ = [
 VERSION = __version__
 
 
-def open_config_tree(root: Path | None = None, *, cwd: Path | None = None) -> ConfigTree:
-    """Resolve a configuration tree from an explicit root or by discovery.
-
-    Raises :class:`ConfigError` when *root* is not a configuration tree,
-    or when discovery from *cwd* upwards finds none.
-    """
-    return open_tree(root, cwd=cwd)
-
-
 def find_device(
-    spec: str, *, config_root: Path | None = None, cwd: Path | None = None
-) -> tuple[ConfigTree, Path]:
-    """Resolve a device name or path to its tree and its entry file.
+    spec: str,
+    *,
+    env: Mapping[str, str],
+    cwd: Path,
+    project_dir: Path | None = None,
+) -> tuple[Project, Path]:
+    """Resolve a device name or path to its project and its entry file.
 
     The same resolution the CLI's ``<device>`` argument gets: a folder
-    name under ``devices/``, or an explicit path to a device folder or a
-    YAML file.
+    name under the project's ``devices/``, or an explicit path to a
+    device folder or a YAML file. The project itself comes from the
+    bootstrap ladder of ADR 0022 §2 — *project_dir* first,
+    ``MCUHOME_PROJECT_DIR`` in *env* second, the upward marker search
+    from *cwd* last.
     """
-    return resolve_device(spec, config_root=config_root, cwd=cwd)
+    return resolve_device(spec, env=env, cwd=cwd, project_dir=project_dir)
 
 
-def load_model(entry: Path, *, tree: ConfigTree) -> DeviceModel:
+def load_model(
+    entry: Path,
+    *,
+    project: Project,
+    on_warning: Callable[[str], None] | None = None,
+) -> DeviceModel:
     """Run stages 1-3 on one device configuration: load, validate, resolve.
 
     The result is the canonical device model (builder-pipeline.md §1.2) —
@@ -190,8 +221,10 @@ def load_model(entry: Path, *, tree: ConfigTree) -> DeviceModel:
     wire format of a remote build. Raises :class:`ConfigError` for a
     single problem and :class:`ConfigErrorGroup` when validation found
     several; :func:`validate_device` is the same work without the raise.
+    *on_warning* receives the non-fatal findings of the run — today the
+    secrets-file permission warning of ADR 0022 §5.
     """
-    data = load_config(entry, secrets_file=tree.secrets_file)
+    data = load_config(entry, secrets_file=project.secrets_file, on_warning=on_warning)
     config = parse_config(data, file=entry)
     validate(config)
     return resolve(config)
@@ -210,7 +243,7 @@ class ValidationResult:
     """The outcome of checking one configuration, problems and all."""
 
     entry: Path
-    tree: ConfigTree
+    project: Project
     #: The resolved model, or None when the configuration was rejected.
     model: DeviceModel | None
     #: Every problem found, in file order. Empty exactly when *model* is
@@ -225,8 +258,8 @@ class ValidationResult:
         return self.model is not None
 
     def error_dicts(self) -> list[dict[str, Any]]:
-        """The problems as dictionaries, with paths relative to the tree."""
-        return [error.to_dict(root=self.tree.root) for error in self.errors]
+        """The problems as dictionaries, with paths relative to the project."""
+        return [error.to_dict(root=self.project.root) for error in self.errors]
 
     def raise_errors(self) -> None:
         """Raise what :func:`validate_device` caught, for a caller that wants it.
@@ -242,10 +275,10 @@ class ValidationResult:
         raise ConfigErrorGroup([error for error in self.errors if isinstance(error, ConfigError)])
 
     def to_dict(self) -> dict[str, Any]:
-        """The whole result as JSON-ready data — what ``--json`` prints."""
+        """The whole result as JSON-ready data — what ``-o json`` prints."""
         return {
             "ok": self.ok,
-            "file": _relative(self.entry, self.tree.root),
+            "file": _relative(self.entry, self.project.root),
             "errors": self.error_dicts(),
             "model": None if self.model is None else self.model.to_dict(),
         }
@@ -258,7 +291,12 @@ def _relative(path: Path, root: Path) -> str:
         return str(path)
 
 
-def validate_device(entry: Path, *, tree: ConfigTree) -> ValidationResult:
+def validate_device(
+    entry: Path,
+    *,
+    project: Project,
+    on_warning: Callable[[str], None] | None = None,
+) -> ValidationResult:
     """Stages 1-3, reporting every problem instead of raising.
 
     Validation deliberately does not stop at the first error, and this is
@@ -273,9 +311,11 @@ def validate_device(entry: Path, *, tree: ConfigTree) -> ValidationResult:
     the difference does not matter.
     """
     try:
-        model = load_model(entry, tree=tree)
+        model = load_model(entry, project=project, on_warning=on_warning)
     except ConfigErrorGroup as group:
-        return ValidationResult(entry=entry, tree=tree, model=None, errors=tuple(group.errors))
+        return ValidationResult(
+            entry=entry, project=project, model=None, errors=tuple(group.errors)
+        )
     except MCUHomeError as error:
-        return ValidationResult(entry=entry, tree=tree, model=None, errors=(error,))
-    return ValidationResult(entry=entry, tree=tree, model=model, errors=())
+        return ValidationResult(entry=entry, project=project, model=None, errors=(error,))
+    return ValidationResult(entry=entry, project=project, model=model, errors=())

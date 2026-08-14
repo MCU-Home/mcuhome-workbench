@@ -7,21 +7,27 @@ keeps line and column information on every mapping and sequence, and the
 whole validation layer is built around pointing at the offending line
 (yaml-schema.md §10, builder-pipeline.md §1.5).
 
-``!secret name`` reads ``name`` from the tree's ``secrets.yaml``
-(yaml-schema.md §9, deliberately ESPHome-identical UX). Resolution
-happens here, before validation, so no later stage ever sees a secret
-reference — and an unknown secret is reported with the line of the
-``!secret`` tag, not of the file it should have been in.
+``!secret name`` reads ``name`` from the project's ``secrets/main.yaml``
+(yaml-schema.md §9, deliberately ESPHome-shaped UX; ADR 0022 moved the
+former tree-root ``secrets.yaml`` into the ``secrets/`` directory).
+Resolution happens here, before validation, so no later stage ever sees
+a secret reference — and an unknown secret is reported with the line of
+the ``!secret`` tag, not of the file it should have been in. Reading the
+secrets file runs the permission check of ADR 0022 §5: a file other
+users can reach draws a warning through the caller's *on_warning*.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML, YAMLError
+
+from mcuhome.workbench.project import check_secret_file
 
 __all__ = ["SecretRef", "load_config", "load_yaml_file", "resolve_secrets"]
 
@@ -89,7 +95,11 @@ def load_yaml_file(path: Path) -> Any:
 
 
 def _load_secrets(
-    secrets_file: Path, ref: SecretRef, file: Path, key: str | None
+    secrets_file: Path,
+    ref: SecretRef,
+    file: Path,
+    key: str | None,
+    on_warning: Callable[[str], None] | None,
 ) -> dict[str, Any]:
     if not secrets_file.is_file():
         raise ConfigError(
@@ -98,6 +108,7 @@ def _load_secrets(
             location=ref.location(file, key),
             hint=(f"create {secrets_file} with a line like:\n    {ref.name}: your-value-here"),
         )
+    check_secret_file(secrets_file, key_material=False, on_warning=on_warning)
     data = load_yaml_file(secrets_file)
     if data is None:
         return {}
@@ -110,11 +121,18 @@ def _load_secrets(
     return dict(data)
 
 
-def resolve_secrets(data: Any, *, file: Path, secrets_file: Path) -> Any:
+def resolve_secrets(
+    data: Any,
+    *,
+    file: Path,
+    secrets_file: Path,
+    on_warning: Callable[[str], None] | None = None,
+) -> Any:
     """Replace every :class:`SecretRef` in *data* with its value.
 
     The secrets file is read at most once, and only when the config
-    actually uses a secret.
+    actually uses a secret — so the permission check of ADR 0022 §5
+    runs exactly when the file's content is actually about to be used.
     """
     secrets: dict[str, Any] | None = None
 
@@ -122,7 +140,7 @@ def resolve_secrets(data: Any, *, file: Path, secrets_file: Path) -> Any:
         nonlocal secrets
         if isinstance(value, SecretRef):
             if secrets is None:
-                secrets = _load_secrets(secrets_file, value, file, key_path)
+                secrets = _load_secrets(secrets_file, value, file, key_path, on_warning)
             if value.name not in secrets:
                 known = ", ".join(sorted(secrets)) if secrets else "none"
                 raise ConfigError(
@@ -149,7 +167,12 @@ def resolve_secrets(data: Any, *, file: Path, secrets_file: Path) -> Any:
     return walk(data, "")
 
 
-def load_config(entry: Path, *, secrets_file: Path) -> Any:
+def load_config(
+    entry: Path,
+    *,
+    secrets_file: Path,
+    on_warning: Callable[[str], None] | None = None,
+) -> Any:
     """Stage 1: parse *entry* and resolve its secrets."""
     data = load_yaml_file(entry)
     if data is None:
@@ -169,4 +192,4 @@ def load_config(entry: Path, *, secrets_file: Path) -> Any:
             location=Location(file=entry, line=1, column=1),
             hint="the top level holds the sections device:, network:, hardware:, node:",
         )
-    return resolve_secrets(data, file=entry, secrets_file=secrets_file)
+    return resolve_secrets(data, file=entry, secrets_file=secrets_file, on_warning=on_warning)

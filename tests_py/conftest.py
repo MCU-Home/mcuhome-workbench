@@ -29,7 +29,7 @@ from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench.api import load_model
-from mcuhome.workbench.tree import ConfigTree, find_config_root
+from mcuhome.workbench.project import Project, find_project_root
 
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
@@ -127,13 +127,14 @@ def package_modules() -> list[Path]:
 def _no_real_signing_key(monkeypatch, tmp_path):
     """No test may touch the developer's own firmware signing key.
 
-    ``mcuhome build`` generates one on first need under
-    ``$XDG_CONFIG_HOME/mcuhome/`` (ADR 0015 decision 8), which on the
-    machine running this suite is a real, long-lived private key. A test
-    that reaches it would either read a secret it has no business
-    reading or — worse — create one silently outside a temporary
-    directory. Point the variables at the test's own tmp_path instead;
-    tests that care about the resolution rules pass an explicit ``env``.
+    The key lives per project since ADR 0022 (``secrets/firmware/
+    mcuboot.yaml``, ADR 0015 decision 8), but ``MCUHOME_SIGNING_KEY``
+    still names a real, long-lived private key file wherever the
+    developer set it. A test that reaches one would either read a
+    secret it has no business reading or — worse — create one silently
+    outside a temporary directory. Point the variables at the test's
+    own tmp_path instead; tests that care about the resolution rules
+    pass an explicit ``env``.
 
     ``HOME`` is redirected as well, and not for symmetry: without
     ``XDG_CONFIG_HOME`` the key sits under ``~/.config``, so the two
@@ -229,23 +230,26 @@ def line_of(text: str, needle: str) -> int:
 
 @pytest.fixture
 def write_config(tmp_path: Path):
-    """Write a configuration into a throwaway tree and return its path."""
+    """Write a configuration into a throwaway project and return its path."""
 
     def write(text: str, *, name: str = "main.yaml", secrets: str | None = None) -> Path:
         path = tmp_path / name
         path.write_text(text, encoding="utf-8")
         if secrets is not None:
-            (tmp_path / "secrets.yaml").write_text(secrets, encoding="utf-8")
+            secrets_file = tmp_path / "secrets" / "main.yaml"
+            secrets_file.parent.mkdir(mode=0o700, exist_ok=True)
+            secrets_file.write_text(secrets, encoding="utf-8")
+            secrets_file.chmod(0o600)
         return path
 
     return write
 
 
 def resolve_file(path: Path) -> DeviceModel:
-    """Run stages 1-3 on a configuration file, tree discovery included."""
-    root = find_config_root(path.parent)
-    tree = ConfigTree(root=root or path.parent, discovered=root is not None)
-    return load_model(path, tree=tree)
+    """Run stages 1-3 on a configuration file, project discovery included."""
+    root = find_project_root(path.parent)
+    project = Project(root=root or path.parent, discovered=root is not None)
+    return load_model(path, project=project)
 
 
 def errors_of(exc: ConfigError | ConfigErrorGroup) -> list[ConfigError]:

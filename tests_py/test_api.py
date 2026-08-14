@@ -27,6 +27,7 @@ from mcuhome.model.errors import (
 )
 
 from mcuhome.workbench import api
+from mcuhome.workbench.project import MARKER_CONTENT
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -36,8 +37,8 @@ EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 ERROR_FIELDS = {"message", "file", "line", "column", "key", "hint", "kind"}
 
 
-def _tree(path: Path) -> api.ConfigTree:
-    return api.ConfigTree(root=path.parent, discovered=False)
+def _project(path: Path) -> api.Project:
+    return api.Project(root=path.parent, discovered=False)
 
 
 # --------------------------------------------------------------------------
@@ -96,16 +97,17 @@ def test_the_build_methods_are_part_of_the_surface() -> None:
 def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG, "utf-8")
-    model = api.load_model(entry, tree=_tree(entry))
+    model = api.load_model(entry, project=_project(entry))
     assert model.device.name == "bench-node"
     assert model.model_version == api.MODEL_VERSION
 
 
-def test_find_device_resolves_a_name_against_the_tree(tmp_path) -> None:
+def test_find_device_resolves_a_name_against_the_project(tmp_path) -> None:
+    (tmp_path / ".mcuhome-project-root").write_text(MARKER_CONTENT, "utf-8")
     (tmp_path / "devices" / "bench-node").mkdir(parents=True)
     (tmp_path / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
-    tree, entry = api.find_device("bench-node", cwd=tmp_path, config_root=tmp_path)
-    assert tree.root == tmp_path
+    project, entry = api.find_device("bench-node", cwd=tmp_path, env={})
+    assert project.root == tmp_path
     assert entry == tmp_path / "devices" / "bench-node" / "main.yaml"
 
 
@@ -117,7 +119,7 @@ def test_find_device_resolves_a_name_against_the_tree(tmp_path) -> None:
 def test_validate_device_reports_a_good_configuration(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG, "utf-8")
-    result = api.validate_device(entry, tree=_tree(entry))
+    result = api.validate_device(entry, project=_project(entry))
     assert result.ok
     assert result.errors == ()
     assert result.model is not None
@@ -130,7 +132,7 @@ def test_validate_device_returns_every_problem_at_once(tmp_path) -> None:
         VALID_CONFIG.replace("nrf7002dk/nrf5340/cpuapp", "nrf99dk").replace("baro.temp", "no.such"),
         "utf-8",
     )
-    result = api.validate_device(entry, tree=_tree(entry))
+    result = api.validate_device(entry, project=_project(entry))
     assert not result.ok
     assert result.model is None
     assert len(result.errors) >= 2
@@ -140,7 +142,7 @@ def test_validate_device_returns_every_problem_at_once(tmp_path) -> None:
 def test_validate_device_does_not_raise_for_a_broken_file(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text("device: [this is not a mapping]\n", "utf-8")
-    result = api.validate_device(entry, tree=_tree(entry))
+    result = api.validate_device(entry, project=_project(entry))
     assert not result.ok
     assert result.errors
 
@@ -148,7 +150,7 @@ def test_validate_device_does_not_raise_for_a_broken_file(tmp_path) -> None:
 def test_raise_errors_puts_the_exception_back(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG.replace("nrf7002dk/nrf5340/cpuapp", "nrf99dk"), "utf-8")
-    result = api.validate_device(entry, tree=_tree(entry))
+    result = api.validate_device(entry, project=_project(entry))
     with pytest.raises((ConfigError, ConfigErrorGroup)):
         result.raise_errors()
 
@@ -156,7 +158,7 @@ def test_raise_errors_puts_the_exception_back(tmp_path) -> None:
 def test_raise_errors_is_silent_when_nothing_is_wrong(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG, "utf-8")
-    api.validate_device(entry, tree=_tree(entry)).raise_errors()
+    api.validate_device(entry, project=_project(entry)).raise_errors()
 
 
 # --------------------------------------------------------------------------
@@ -236,7 +238,7 @@ def test_the_validation_result_serializes_whole(tmp_path) -> None:
     entry = tmp_path / "devices" / "bench-node" / "main.yaml"
     entry.parent.mkdir(parents=True)
     entry.write_text(VALID_CONFIG, "utf-8")
-    result = api.validate_device(entry, tree=api.ConfigTree(root=tmp_path, discovered=True))
+    result = api.validate_device(entry, project=api.Project(root=tmp_path, discovered=True))
     data = result.to_dict()
     assert data["ok"] is True
     assert data["file"] == "devices/bench-node/main.yaml"
@@ -255,8 +257,8 @@ def test_registry_data_and_schema_are_reachable_from_the_api() -> None:
 
 
 def test_the_example_still_resolves_through_the_api() -> None:
-    tree, entry = api.find_device(str(EXAMPLE), cwd=EXAMPLES_DIR)
-    assert api.load_model(entry, tree=tree).device.name == "bmp180-node"
+    project, entry = api.find_device(str(EXAMPLE), cwd=EXAMPLES_DIR, env={})
+    assert api.load_model(entry, project=project).device.name == "bmp180-node"
 
 
 # --------------------------------------------------------------------------
@@ -266,8 +268,8 @@ def test_the_example_still_resolves_through_the_api() -> None:
 
 def test_read_model_round_trips_a_resolved_model(tmp_path) -> None:
     """The model is the wire format, so it has to survive the trip."""
-    tree, entry = api.find_device("bench-node", cwd=FIXTURE_TREE, config_root=FIXTURE_TREE)
-    original = api.load_model(entry, tree=tree)
+    project, entry = api.find_device("bench-node", cwd=FIXTURE_TREE, env={})
+    original = api.load_model(entry, project=project)
     path = tmp_path / "device-model.json"
     path.write_text(original.to_json(), encoding="utf-8")
 

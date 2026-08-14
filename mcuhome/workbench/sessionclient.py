@@ -115,7 +115,6 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench.contextdir import read_context_request
-from mcuhome.workbench.signing import KEY_FILE as SIGNING_KEY_FILE
 
 __all__ = [
     "DEFAULT_CALL_TIMEOUT",
@@ -754,6 +753,11 @@ def pack_context(
 #: KEY``, ``BEGIN RSA PRIVATE KEY``, ``BEGIN OPENSSH PRIVATE KEY``.
 _PRIVATE_KEY_MARKER = b"PRIVATE KEY-----"
 
+#: File names this workbench has ever kept private key material under:
+#: a plain key file (the ``--signing-key``/dashboard form) and the
+#: project's ``secrets/firmware/mcuboot.yaml`` (ADR 0015 decision 8).
+_PRIVATE_KEY_NAMES = ("signing.key", "mcuboot.yaml")
+
 
 def _holds_private_key(source: Path) -> bool:
     """Whether *source* carries PEM private key material, streaming.
@@ -795,10 +799,14 @@ def _check_member(name: str, source: Path, caps: IngressCaps) -> None:
     # The API has no slot a private key could be passed in, but a file
     # left in the context directory needs no slot: it is packed as
     # ordinary content, and the server's own whitelist takes *any* file
-    # name under `keys/`. So the packer looks — by name, because
-    # `signing.key` is the name this workbench writes, and at the bytes,
-    # because a stray key under another name is the same accident.
-    if name.rsplit("/", 1)[-1] == SIGNING_KEY_FILE or _holds_private_key(source):
+    # name under `keys/`. So the packer looks — by name, because these
+    # are the names this workbench has ever kept private key material
+    # under (the plain file of a --signing-key override, and the
+    # project's secrets YAML of ADR 0015 §8) — and at the bytes, because
+    # a stray key under another name is the same accident. The content
+    # check catches the YAML form too: the PEM block inside it carries
+    # the same marker.
+    if name.rsplit("/", 1)[-1] in _PRIVATE_KEY_NAMES or _holds_private_key(source):
         raise PrivateKeyRefused(
             f'"{name}" holds private key material, and nothing was sent.',
             hint=(

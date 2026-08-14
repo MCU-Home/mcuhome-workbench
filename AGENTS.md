@@ -58,8 +58,11 @@ decision 1) — a one-directional dependency: the dashboard declares the
 workbench versions it supports and follows its releases, and the
 workbench never learns that a dashboard exists.
 
-What is there, roughly front to back: `open_config_tree`/`find_device`
-(where a device's configuration lives), `load_model`/`read_model`
+What is there, roughly front to back: `resolve_project`/`init_project`/
+`find_device` (where the user's work lives — the `.mcuhome-project-root`
+marker and its bootstrap ladder, ADR 0022 — and which file is a given
+device's), `resolve_settings` (the five-layer configuration model over
+the declared option registry), `load_model`/`read_model`
 (stages 1-3, or the canonical model back from JSON), `validate_device`
 (the same stages, returning **every** problem instead of raising on the
 first), `error_dicts` (those errors as plain dicts: message, file, line,

@@ -1011,7 +1011,7 @@ def test_no_frame_this_client_sends_carries_the_private_signing_key(tmp_path: Pa
         key_file.write_text(private_pem, encoding="utf-8")
         # ...and, in this scenario, also where nobody's should: next to
         # the public half, inside the context that is about to be sent.
-        stray = context / "keys" / signing.KEY_FILE
+        stray = context / "keys" / "signing.key"
         stray.write_text(private_pem, encoding="utf-8")
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
@@ -1083,10 +1083,10 @@ def test_the_packer_refuses_private_key_material_by_name_and_by_content(tmp_path
     context.mkdir()
     private_pem = make_context(context, sdk_sha256="a" * 64)
 
-    (context / "keys" / signing.KEY_FILE).write_text(private_pem, encoding="utf-8")
+    (context / "keys" / "signing.key").write_text(private_pem, encoding="utf-8")
     with pytest.raises(sc.PrivateKeyRefused, match="keys/signing.key"):
         sc.pack_context(context, spool=tmp_path / "named.tar.zst")
-    (context / "keys" / signing.KEY_FILE).unlink()
+    (context / "keys" / "signing.key").unlink()
 
     # The same key under a name nothing recognizes, found by its bytes.
     (context / "model" / "leftover.txt").write_text(
@@ -1101,6 +1101,12 @@ def test_the_packer_refuses_private_key_material_by_name_and_by_content(tmp_path
     # that carries it packs, which is what the invariant needs.
     packed = sc.pack_context(context, spool=tmp_path / "clean.tar.zst")
     assert "keys/signing.pub" in packed.members
+
+    # Also refuse mcuboot.yaml by name (the other known private key name).
+    (context / "keys" / "mcuboot.yaml").write_text(private_pem, encoding="utf-8")
+    with pytest.raises(sc.PrivateKeyRefused, match="keys/mcuboot.yaml"):
+        sc.pack_context(context, spool=tmp_path / "mcuboot.tar.zst")
+    (context / "keys" / "mcuboot.yaml").unlink()
 
 
 def test_the_public_api_has_no_slot_a_private_key_could_occupy(tmp_path: Path) -> None:

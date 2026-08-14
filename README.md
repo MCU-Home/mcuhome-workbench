@@ -109,10 +109,13 @@ is missing — see [AGENTS.md](AGENTS.md) for details.
 ## Using the workbench from Python
 
 ```python
+import os
+from pathlib import Path
+
 from mcuhome.workbench import api
 
-tree, entry = api.find_device("bedroom-climate", config_root=root)
-result = api.validate_device(entry, tree=tree)
+project, entry = api.find_device("bedroom-climate", env=dict(os.environ), cwd=Path.cwd())
+result = api.validate_device(entry, project=project)
 if result.ok:
     model = result.model  # the canonical device model
 else:
@@ -120,6 +123,13 @@ else:
     for problem in result.error_dicts():
         print(problem["message"])
 ```
+
+The environment and the working directory are *stated* — the workbench
+never reads them from the process (ADR 0020), so a server embedding it
+can answer for several sessions at once. `api.resolve_project` and
+`api.resolve_settings` are the same two steps on their own: where the
+project is (the `.mcuhome-project-root` marker, ADR 0022), and what its
+five-layer configuration resolves to.
 
 `validate_device` reports **every** problem rather than raising on the
 first, which is what lets an editor show a whole configuration's markers

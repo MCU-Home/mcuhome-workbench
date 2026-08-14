@@ -56,7 +56,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from mcuhome.model import manifest as manifest_module
@@ -66,6 +66,7 @@ from mcuhome.model.registry import SIGNATURE_TYPE
 from mcuhome.model.userpaths import expand
 
 from mcuhome.workbench import signing
+from mcuhome.workbench.project import Project
 
 __all__ = [
     "BUILD_REPORT_FILE",
@@ -214,6 +215,11 @@ class SignPlan:
     #: Directory the manifest lives in; every path below is under it.
     out_dir: Path
     manifest_path: Path
+    #: Where the signing key *lives* — the file a caller may name to a
+    #: user afterwards. For a key kept in the project's secrets YAML the
+    #: commands below carry a short-lived materialized path instead
+    #: (:meth:`~mcuhome.workbench.signing.SigningKey.key_file`), which is
+    #: gone by the time a caller holds this plan.
     key: Path
     parameters: SigningParameters
     #: One entry per artifact format, in a stable order: format, command,
@@ -488,20 +494,27 @@ def sign_report(
     env: dict[str, str],
     topdir: Path | None = None,
     key: Path | str | None = None,
+    project: Project | None = None,
     runner: Runner | None = None,
 ) -> SignPlan:
     """Sign the firmware a build container delivered, from its §7.2.1 report.
 
     The build-report counterpart of :func:`sign_build`. The key is
     resolved exactly as a build resolves it (``--signing-key``, then
-    :data:`~mcuhome.workbench.signing.KEY_VAR`, then the per-user default)
-    and, as there, **never generated** here: a delivered build has to be
-    signed with the key its device's bootloader already carries.
+    :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s
+    ``secrets/firmware/mcuboot.yaml``) and, as there, **never generated**
+    here: a delivered build has to be signed with the key its device's
+    bootloader already carries. A key that lives in the secrets YAML
+    exists as a file only while imgtool runs
+    (:meth:`~mcuhome.workbench.signing.SigningKey.key_file`).
     """
-    resolved = signing.signing_key(key, env=env, create=False)
-    plan = plan_report_signing(target, key=resolved.path, env=env, topdir=topdir)
-    run_signing(plan, runner=runner)
-    return plan
+    resolved = signing.signing_key(key, env=env, project=project, create=False)
+    with resolved.key_file() as key_path:
+        plan = plan_report_signing(target, key=key_path, env=env, topdir=topdir)
+        run_signing(plan, runner=runner)
+    # The returned plan names the key's durable home, not the
+    # materialized file the commands used — that one is already gone.
+    return replace(plan, key=resolved.path)
 
 
 def run_signing(plan: SignPlan, *, runner: Runner | None = None) -> list[Path]:
@@ -552,16 +565,17 @@ def sign_build(
     env: dict[str, str],
     topdir: Path | None = None,
     key: Path | str | None = None,
+    project: Project | None = None,
     runner: Runner | None = None,
 ) -> SignPlan:
     """Sign the application image a build directory holds, and say where.
 
     The key is resolved exactly as a build resolves it (``--signing-key``,
-    then :data:`~mcuhome.workbench.signing.KEY_VAR`, then the per-user default), but
-    it is **not** generated on first need here: a build directory that was
-    produced elsewhere has to be signed with the key its device's
-    bootloader carries, and inventing one at this point would produce
-    firmware that nothing accepts.
+    then :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s
+    ``secrets/firmware/mcuboot.yaml``), but it is **not** generated on
+    first need here: a build directory that was produced elsewhere has to
+    be signed with the key its device's bootloader carries, and inventing
+    one at this point would produce firmware that nothing accepts.
 
     *topdir* is a west workspace to take MCUboot's bundled ``imgtool``
     from when there is none on ``PATH``; None says there is no workspace
@@ -573,7 +587,8 @@ def sign_build(
     happens (ADR 0020 decision 3). A caller that has a workspace passes
     ``workspace.find_topdir(...)``.
     """
-    resolved = signing.signing_key(key, env=env, create=False)
-    plan = plan_signing(target, key=resolved.path, env=env, topdir=topdir)
-    run_signing(plan, runner=runner)
-    return plan
+    resolved = signing.signing_key(key, env=env, project=project, create=False)
+    with resolved.key_file() as key_path:
+        plan = plan_signing(target, key=key_path, env=env, topdir=topdir)
+        run_signing(plan, runner=runner)
+    return replace(plan, key=resolved.path)

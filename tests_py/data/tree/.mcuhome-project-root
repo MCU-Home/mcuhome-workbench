@@ -1,0 +1,2 @@
+# This file marks the root of an MCUHome project (ADR 0022).
+# Its presence is its meaning; configuration lives in mcuhome.yaml.

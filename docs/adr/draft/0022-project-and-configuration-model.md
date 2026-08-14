@@ -56,7 +56,17 @@ build/                    # build output (disposable, created by builds)
 `mcuhome.yaml`, `devices/`, `secrets/` (mode 700) and the
 `.gitignore` — after checking the target directory: a non-empty
 directory draws a warning and a refusal, `--force` proceeds anyway
-(and may overwrite files).
+(and may overwrite files). Pinned during implementation: the
+`.gitignore` covers `secrets/` **and** `build/` (disposable output is
+the first accidental commit of every new project); under `--force` an
+existing `mcuhome.yaml` is left alone — it is the user's configuration
+— while the marker is completed and missing ignore lines are appended
+rather than the file rewritten. Creating a *project* is init's job
+alone: `device new` refuses outside a project (the old zero-ceremony
+"a devices/ folder makes a tree" rule retired with the markers that
+carried it), and a bare YAML file validated outside any project gets
+its own directory as a stand-in root, with `secrets/main.yaml` next to
+it.
 
 ### 2. Five configuration layers, strict precedence
 
@@ -83,6 +93,18 @@ directory may look like a project directory — a config directory must
 never be mistaken for one by the upward search or by a user working
 inside it (PO 2026-08-14).
 
+The directories follow the **platformdirs conventions, not the
+platformdirs library**: that library answers out of the process
+environment, and the workbench serves several sessions from one
+process (ADR 0020's stated-environment invariant), so the paths are
+computed from the environment the caller states. A layer whose
+directory the stated environment cannot name — no `HOME`, no
+`XDG_CONFIG_HOME`, no `%APPDATA%` — is simply an absent layer, not an
+error: a service account reading only project configuration is a
+normal caller. Relative paths written in a configuration file resolve
+against that file's directory (the file cannot know where the reading
+process stands; its author can see its own neighborhood).
+
 ### 3. Schema-driven, with per-option channels
 
 Every option is declared exactly once — name, type, default, and
@@ -95,6 +117,21 @@ five. The declaration is the single source; "settable everywhere it
 makes sense" holds by construction, and `mcuhome config print` (the
 resolved tree, each value with its origin layer) falls out of the same
 registry.
+
+Pinned during implementation: the registry is
+`mcuhome.workbench.configuration.OPTIONS`; channels are three switches
+per option — files (all three file layers as one), environment,
+arguments — plus the bootstrap mark, and a file that sets an option
+outside its channels is refused with the channel rule in the message.
+The platform options of this draft's scope are `sdk_sources` (all
+channels; the canonical spelling is **plural**, `MCUHOME_SDK_SOURCES`,
+`PATH`-style separated — the old singular `MCUHOME_SDK_SOURCE` retires
+with the CLI's C2 migration), `signing_key` (argument+environment
+only, ADR 0015 §8's override) and `jobs` (all channels); ADR 0023 adds
+`builders` and `default_builder`. List-valued options list in files,
+split `PATH`-style in the environment. Tools may run additional
+registries of their own (the CLI's presentation options) through the
+same machinery; the platform registry stays the shared one.
 
 ### 4. Ownership: an explicitly-invoked workbench module
 
@@ -113,6 +150,16 @@ permissions: insecure permissions draw a warning, and for key material
 `mcuhome init` writes the `.gitignore` line so a project can be
 committed without ever committing its secrets.
 
+Pinned during implementation: the check is per file (a 600 file is
+protected whatever its directory says), runs in every reader — the
+`!secret` loader and the signing-key reader today — and warnings
+travel through a caller-supplied `on_warning` callback, because the
+workbench prints nothing. The signing key's YAML home has one
+practical consequence: `imgtool` signs with `--key <file>`, so the key
+is materialized as a short-lived owner-only file **inside**
+`secrets/firmware/` for exactly the duration of the imgtool run, and
+never anywhere else (ADR 0015 §8).
+
 ## Consequences
 
 - The CLI's `--config-root` and the cwd-upward *tree* discovery are
@@ -129,9 +176,12 @@ committed without ever committing its secrets.
 
 ## Open points
 
-- The workbench module's name (`mcuhome.workbench.project` is the
-  working title) and whether it later becomes its own distribution for
-  third-party tools.
+- ~~The workbench module's name~~ — pinned with the implementation:
+  two modules, `mcuhome.workbench.project` (marker, layout, init,
+  secrets hygiene) and `mcuhome.workbench.configuration` (registry and
+  layers), both surfaced through `mcuhome.workbench.api`. Whether they
+  later become their own distribution for third-party tools stays
+  open.
 - Merge/list semantics for structured values other than builders
   (builders are defined in ADR 0023); scalars are simply
   nearest-wins.

@@ -3,12 +3,13 @@
 """Driving a build: stages 1-3, the context, the build methods, signing.
 
 Everything between a YAML file and something a compiler can be handed:
-finding the configuration tree, parsing it, validating it, resolving it
-into a device model, creating the build context of ADR 0018, and the
-three build methods of ADR 0020 decision 6 — ``local-dev``, ``local``,
-``remote`` — behind one interface. Client-side signing lives here too
-(ADR 0015 §8), because the private key belongs to the person driving the
-build and to nobody the build talks to.
+finding the project directory, resolving its configuration, parsing a
+device file, validating it, resolving it into a device model, creating
+the build context of ADR 0018, and the three build methods of ADR 0020
+decision 6 — ``local-dev``, ``local``, ``remote`` — behind one
+interface. Client-side signing lives here too (ADR 0015 §8), because
+the private key belongs to the person driving the build and to nobody
+the build talks to.
 
 This is what runs wherever a build is *driven* rather than performed: the
 command line, the dashboard, a third-party embedder. It must never carry
@@ -18,7 +19,8 @@ already has them.
 
 =====================================  ============================================
 :mod:`mcuhome.workbench.api`           the supported surface — import this
-:mod:`mcuhome.workbench.tree`          find the configuration tree and device
+:mod:`mcuhome.workbench.project`       the project directory: marker, layout, init
+:mod:`mcuhome.workbench.configuration` the five-layer option model (ADR 0022)
 :mod:`mcuhome.workbench.loader`        stage 1: YAML parse, ``!secret``
 :mod:`mcuhome.workbench.schema`        stage 2a: shape, as typed raw config
 :mod:`mcuhome.workbench.validate`      stage 2b: cross-refs, gates, conformance
@@ -26,7 +28,7 @@ already has them.
 :mod:`mcuhome.workbench.contextdir`    creating and verifying a context directory
 :mod:`mcuhome.workbench.buildmethods`  the three build methods, behind one call
 :mod:`mcuhome.workbench.sessionclient` the ``remote`` method's protocol client
-:mod:`mcuhome.workbench.signing`       the per-user firmware signing key
+:mod:`mcuhome.workbench.signing`       the per-project firmware signing key
 :mod:`mcuhome.workbench.imgtool`       signing an image afterwards (ADR 0015 §8)
 :mod:`mcuhome.workbench.otafile`       wrapping a signed image in a Matter ``.ota``
 :mod:`mcuhome.workbench.provision`     drawing a device's commissioning credentials

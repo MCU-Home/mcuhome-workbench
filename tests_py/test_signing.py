@@ -1,324 +1,295 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The per-user firmware signing key (ADR 0015 decision 8).
+"""The firmware signing key: where it lives, what it is, how refusals read.
 
-Three things matter here and are checked as three separate concerns:
-where the key is looked for, what a generated one *is*, and how the
-refusals read. The last is not a formality — the failure this module
-exists to prevent is a user unknowingly shipping firmware signed with
-MCUboot's published demo key, and the way that is prevented is by making
-every other outcome say what happened.
+ADR 0015 decision 8 as implemented after the ADR 0022 project model:
+the key is **per project**, in ``secrets/firmware/mcuboot.yaml`` under
+``firmware_signing_key``, generated on first need; ``--signing-key``
+and ``MCUHOME_SIGNING_KEY`` point at a plain PEM file instead (the
+dashboard's path). There is deliberately no per-user default any more —
+and no fallback when neither a project nor an override is given,
+because guessing a directory for a private key is how two things end up
+signed with keys nobody meant.
 """
 
 from __future__ import annotations
 
-import base64
+import os
 import stat
+from pathlib import Path
 
 import pytest
-from mcuhome.model import p256
 from mcuhome.model.errors import BuildError, ConfigError
+from ruamel.yaml import YAML
 
-from mcuhome.workbench import signing
-
-#: One key the suite can compare bytes against, so nothing here draws a
-#: random one and nothing here goes near the developer's own.
-KNOWN_SCALAR = 0x0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20
-
-#: A foreign fixture, in the sense of tests_py/README.md: this is the
-#: literal output of ``imgtool keygen -t ecdsa-p256`` from the pinned
-#: MCUboot checkout, not of anything in this package. It is what makes
-#: "a user can bring their own key" a checked claim rather than a hope.
-#: A throwaway generated for this file — nothing was ever signed with it,
-#: and no device carries its public half.
-IMGTOOL_KEY = """\
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgHZMs6IloJOG8kDzY
-TIiTZTLCgHIYrNt2DhkbDAP1rOehRANCAAS8VpXhXVyQZjY9+pC/GqvUEL0tkUpG
-7LnqcREH3Kay8s4Kivr9I3z5dRaVkHj3qzSsOXnXcBiKAZpCofIHZYNG
------END PRIVATE KEY-----
-"""
+from mcuhome.workbench.project import Project, init_project
+from mcuhome.workbench.signing import (
+    FIRMWARE_KEY,
+    KEY_VAR,
+    generate_key_pem,
+    looks_like_p256_key,
+    public_key_pem,
+    signing_key,
+)
 
 
-# --------------------------------------------------------------------------
-# Where it is
-# --------------------------------------------------------------------------
+@pytest.fixture
+def project(tmp_path: Path) -> Project:
+    return init_project(tmp_path / "project").project
 
 
-def test_the_default_is_under_the_xdg_config_directory(tmp_path) -> None:
-    """A config directory, not a cache: it is not reproducible if lost."""
-    env = {"XDG_CONFIG_HOME": str(tmp_path / "cfg")}
-    assert signing.default_key_path(env) == tmp_path / "cfg" / "mcuhome" / "signing.key"
+def mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
 
 
-def test_without_the_variable_it_is_under_the_home_directory(tmp_path) -> None:
-    env = {"HOME": str(tmp_path)}
-    assert signing.default_key_path(env) == tmp_path / ".config" / "mcuhome" / "signing.key"
+def write_key_file(path: Path, text: str | None = None) -> str:
+    pem = text if text is not None else generate_key_pem()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(pem, encoding="utf-8")
+    path.chmod(0o600)
+    return pem
 
 
-def test_the_home_directory_comes_from_the_environment_it_was_given(monkeypatch, tmp_path) -> None:
-    """The process may run as someone else entirely — one server, many sessions.
-
-    Resolving a *private key* out of the process environment while
-    holding an ``env`` argument that says otherwise is the failure
-    ADR 0020 rules out: the server would hand a session its own key.
-    """
-    monkeypatch.setenv("HOME", str(tmp_path / "the-server"))
-    env = {"HOME": str(tmp_path / "the-caller")}
-    assert signing.default_key_path(env).is_relative_to(tmp_path / "the-caller")
+# --- resolution: override, variable, project --------------------------
 
 
-def test_an_environment_without_a_home_directory_is_refused(monkeypatch, tmp_path) -> None:
-    """A service started without a login session has no HOME at all.
+def test_no_project_and_no_override_is_a_refusal_in_words(tmp_path: Path) -> None:
+    with pytest.raises(BuildError) as caught:
+        signing_key(env={})
+    assert "no firmware signing key" in caught.value.message
+    hint = caught.value.hint or ""
+    assert "secrets/firmware/mcuboot.yaml" in hint
+    assert FIRMWARE_KEY in hint
+    assert "mcuhome init" in hint
+    assert "--signing-key" in hint
+    assert KEY_VAR in hint
 
-    Falling back to the account database would resolve *some* key, which
-    is the one outcome worth refusing outright.
-    """
-    monkeypatch.setenv("HOME", str(tmp_path))
+
+def test_the_flag_beats_the_variable_beats_the_project(tmp_path: Path, project: Project) -> None:
+    by_flag = tmp_path / "flag.key"
+    by_var = tmp_path / "var.key"
+    flag_pem = write_key_file(by_flag)
+    write_key_file(by_var)
+    key = signing_key(by_flag, env={KEY_VAR: str(by_var)}, project=project)
+    assert key.path == by_flag
+    assert key.pem == flag_pem
+    assert not key.in_secrets
+    assert not project.firmware_secrets_file.exists()
+
+
+def test_the_variable_beats_the_project(tmp_path: Path, project: Project) -> None:
+    by_var = tmp_path / "var.key"
+    var_pem = write_key_file(by_var)
+    key = signing_key(env={KEY_VAR: str(by_var)}, project=project)
+    assert key.path == by_var
+    assert key.pem == var_pem
+    assert not project.firmware_secrets_file.exists()
+
+
+def test_a_tilde_override_uses_the_stated_home(tmp_path: Path) -> None:
+    pem = write_key_file(tmp_path / "home" / "my.key")
+    key = signing_key("~/my.key", env={"HOME": str(tmp_path / "home")})
+    assert key.pem == pem
+
+
+# --- the project key: generated on first need -------------------------
+
+
+def test_the_first_build_generates_the_project_key_and_says_so(project: Project) -> None:
+    key = signing_key(env={}, project=project)
+    assert key.created
+    assert key.in_secrets
+    assert key.path == project.firmware_secrets_file
+    assert looks_like_p256_key(key.pem)
+    assert public_key_pem(key.pem).startswith("-----BEGIN PUBLIC KEY-----")
+
+
+def test_the_generated_file_is_readable_by_nobody_else(project: Project) -> None:
+    signing_key(env={}, project=project)
+    assert mode_of(project.firmware_secrets_file) == 0o600
+    assert mode_of(project.firmware_secrets_file.parent) == 0o700
+    assert mode_of(project.secrets_dir) == 0o700
+
+
+def test_the_generated_file_is_yaml_with_the_key_under_its_name(project: Project) -> None:
+    key = signing_key(env={}, project=project)
+    data = YAML(typ="safe").load(project.firmware_secrets_file.read_text(encoding="utf-8"))
+    assert data[FIRMWARE_KEY] == key.pem
+    head = project.firmware_secrets_file.read_text(encoding="utf-8").splitlines()[0]
+    assert head.startswith("#")  # the file explains itself
+
+
+def test_the_second_build_reuses_the_first_ones_key(project: Project) -> None:
+    first = signing_key(env={}, project=project)
+    second = signing_key(env={}, project=project)
+    assert not second.created
+    assert second.pem == first.pem
+
+
+def test_the_key_is_added_to_an_existing_secrets_file_without_disturbing_it(
+    project: Project,
+) -> None:
+    file = project.firmware_secrets_file
+    file.parent.mkdir(parents=True, mode=0o700)
+    file.write_text("# my notes\nother: value\n", encoding="utf-8")
+    file.chmod(0o600)
+    key = signing_key(env={}, project=project)
+    assert key.created
+    text = file.read_text(encoding="utf-8")
+    assert "# my notes" in text
+    data = YAML(typ="safe").load(text)
+    assert data["other"] == "value"
+    assert looks_like_p256_key(data[FIRMWARE_KEY])
+
+
+def test_create_false_never_generates(project: Project) -> None:
+    with pytest.raises(BuildError) as caught:
+        signing_key(env={}, project=project, create=False)
+    assert "no such file" in caught.value.message
+    assert not project.firmware_secrets_file.exists()
+
+    file = project.firmware_secrets_file
+    file.parent.mkdir(parents=True, mode=0o700)
+    file.write_text("other: value\n", encoding="utf-8")
+    file.chmod(0o600)
+    with pytest.raises(BuildError) as caught:
+        signing_key(env={}, project=project, create=False)
+    assert f"no {FIRMWARE_KEY} entry" in caught.value.message
+
+
+def test_key_material_that_is_not_a_key_is_never_overwritten(project: Project) -> None:
+    file = project.firmware_secrets_file
+    file.parent.mkdir(parents=True, mode=0o700)
+    file.write_text(f"{FIRMWARE_KEY}: not-a-key\n", encoding="utf-8")
+    file.chmod(0o600)
+    with pytest.raises(BuildError) as caught:
+        signing_key(env={}, project=project)
+    assert f"The {FIRMWARE_KEY} entry in {file}" in caught.value.message
+    assert "not an ECDSA P-256 private key" in caught.value.message
+    assert file.read_text(encoding="utf-8") == f"{FIRMWARE_KEY}: not-a-key\n"
+
+
+def test_a_secrets_file_that_is_not_a_mapping_is_refused(project: Project) -> None:
+    file = project.firmware_secrets_file
+    file.parent.mkdir(parents=True, mode=0o700)
+    file.write_text("- a list\n", encoding="utf-8")
+    file.chmod(0o600)
+    with pytest.raises(BuildError) as caught:
+        signing_key(env={}, project=project)
+    assert "not a mapping" in caught.value.message
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_an_exposed_project_key_file_is_refused_outright(project: Project) -> None:
+    signing_key(env={}, project=project)
+    project.firmware_secrets_file.chmod(0o644)
     with pytest.raises(ConfigError) as caught:
-        signing.default_key_path({})
-    assert "HOME" in str(caught.value)
+        signing_key(env={}, project=project)
+    assert "refuses to use the key material" in caught.value.message
+    assert "chmod 600" in (caught.value.hint or "")
 
 
-def test_the_environment_variable_moves_it(tmp_path) -> None:
-    """The knob a dashboard or a Home Assistant add-on sets once."""
-    env = {signing.KEY_VAR: str(tmp_path / "state" / "signing.key")}
-    assert signing.resolve_key_path(env=env) == tmp_path / "state" / "signing.key"
+# --- the override file ------------------------------------------------
 
 
-def test_the_flag_beats_the_variable(tmp_path) -> None:
-    env = {signing.KEY_VAR: str(tmp_path / "from-env")}
-    assert signing.resolve_key_path(tmp_path / "from-flag", env=env) == tmp_path / "from-flag"
+def test_a_missing_override_file_is_created_owner_only(tmp_path: Path) -> None:
+    path = tmp_path / "fresh.key"
+    key = signing_key(path, env={})
+    assert key.created
+    assert not key.in_secrets
+    assert mode_of(path) == 0o600
+    assert looks_like_p256_key(path.read_text(encoding="utf-8"))
 
 
-def test_a_tilde_is_a_home_directory(tmp_path) -> None:
-    env = {"HOME": str(tmp_path)}
-    assert signing.resolve_key_path("~/keys/mine.key", env=env) == tmp_path / "keys" / "mine.key"
-
-
-# --------------------------------------------------------------------------
-# What it is
-# --------------------------------------------------------------------------
-
-
-def _der_of(pem: str) -> bytes:
-    body = pem.split("-----BEGIN PRIVATE KEY-----", 1)[1].split("-----END", 1)[0]
-    return base64.b64decode("".join(body.split()))
-
-
-def test_a_generated_key_is_a_p256_private_key_in_pem_form() -> None:
-    pem = signing.generate_key_pem()
-    assert pem.startswith("-----BEGIN PRIVATE KEY-----\n")
-    assert pem.endswith("-----END PRIVATE KEY-----\n")
-    assert signing.looks_like_p256_key(pem)
-
-
-def test_a_generated_key_carries_the_public_half_of_its_own_scalar() -> None:
-    """The one property no shape check can see: the DER is self-consistent.
-
-    imgtool derives the public key MCUboot compiles in from this file, so
-    a private scalar and a public point that disagreed would produce a
-    bootloader that rejects every image the same key signed.
-    """
-    scalar = 0x0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20
-    der = _der_of(signing.generate_key_pem(scalar))
-
-    assert scalar.to_bytes(32, "big") in der
-    point = p256.generator_times(scalar)
-    assert point is not None
-    x, y = point
-    uncompressed = b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
-    assert uncompressed in der
-
-
-def test_the_generated_shape_is_the_one_imgtool_writes() -> None:
-    """So a user can swap an imgtool key in, or ours out, either way."""
-    ours = _der_of(signing.generate_key_pem())
-    theirs = _der_of(IMGTOOL_KEY)
-    assert len(ours) == len(theirs)
-    # Same header: version, AlgorithmIdentifier (id-ecPublicKey,
-    # prime256v1) and the start of the wrapped ECPrivateKey.
-    assert ours[:7] == theirs[:7]
-    assert signing.looks_like_p256_key(IMGTOOL_KEY)
-
-
-def test_two_generated_keys_are_different() -> None:
-    assert signing.generate_key_pem() != signing.generate_key_pem()
-
-
-def test_a_scalar_outside_the_group_is_a_programming_error() -> None:
-    with pytest.raises(ValueError, match="scalar in"):
-        signing.generate_key_pem(0)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "",
-        "not a key at all\n",
-        "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n",
-        # A P-384 key: right envelope, wrong curve — the mistake most
-        # likely to be made by someone who already has keys.
-        "-----BEGIN PRIVATE KEY-----\nMDECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQI=\n"
-        "-----END PRIVATE KEY-----\n",
-        "-----BEGIN PRIVATE KEY-----\nnot base64 !!!\n-----END PRIVATE KEY-----\n",
-    ],
-)
-def test_what_is_not_a_p256_key_is_not_taken_for_one(text: str) -> None:
-    assert not signing.looks_like_p256_key(text)
-
-
-# --------------------------------------------------------------------------
-# Getting one
-# --------------------------------------------------------------------------
-
-
-def test_the_first_build_generates_one_and_says_so(tmp_path) -> None:
-    env = {"XDG_CONFIG_HOME": str(tmp_path)}
-    key = signing.signing_key(env=env)
-
-    assert key.created is True
-    assert key.path == tmp_path / "mcuhome" / "signing.key"
-    assert signing.looks_like_p256_key(key.path.read_text(encoding="utf-8"))
-
-
-def test_a_generated_key_is_readable_by_nobody_else(tmp_path) -> None:
-    key = signing.signing_key(env={"XDG_CONFIG_HOME": str(tmp_path)})
-    mode = stat.S_IMODE(key.path.stat().st_mode)
-    assert mode == stat.S_IRUSR | stat.S_IWUSR, oct(mode)
-
-
-def test_the_second_build_reuses_the_first_ones_key(tmp_path) -> None:
-    """Generating twice would silently orphan every device already flashed."""
-    env = {"XDG_CONFIG_HOME": str(tmp_path)}
-    first = signing.signing_key(env=env)
-    before = first.path.read_bytes()
-
-    second = signing.signing_key(env=env)
-    assert second.created is False
-    assert second.path == first.path
-    assert second.path.read_bytes() == before
-
-
-def test_a_key_from_elsewhere_is_used_as_it_is(tmp_path) -> None:
+def test_a_key_from_elsewhere_is_used_as_it_is(tmp_path: Path) -> None:
     path = tmp_path / "imported.key"
-    path.write_text(IMGTOOL_KEY, encoding="utf-8")
-    key = signing.signing_key(path, env={})
-    assert key.created is False
-    assert path.read_text(encoding="utf-8") == IMGTOOL_KEY
+    pem = write_key_file(path)
+    key = signing_key(path, env={})
+    assert not key.created
+    assert key.pem == pem
 
 
-def test_an_explicit_path_that_does_not_exist_yet_is_created(tmp_path) -> None:
-    """The dashboard flow: a state directory that starts out empty.
-
-    ADR 0015 decision 8 puts the key where the controlling instance runs
-    and has it generated on first need there, so an explicit path is a
-    place to put one, not a promise that one is already there.
-    """
-    key = signing.signing_key(tmp_path / "config" / "mcuhome" / "signing.key", env={})
-    assert key.created is True
-    assert key.path.is_file()
-
-
-def test_generation_can_be_refused_outright(tmp_path) -> None:
-    """For a caller that wants to sign, not to enrol — a later detached step."""
+def test_a_file_that_is_not_a_key_is_never_overwritten(tmp_path: Path) -> None:
+    path = tmp_path / "notes.txt"
+    path.write_text("not a key\n", encoding="utf-8")
+    path.chmod(0o600)
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(tmp_path / "nowhere.key", env={}, create=False)
-    assert "no such file" in caught.value.render()
+        signing_key(path, env={})
+    assert "not an ECDSA P-256 private key" in caught.value.message
+    assert path.read_text(encoding="utf-8") == "not a key\n"
 
 
-def test_a_file_that_is_not_a_key_is_never_overwritten(tmp_path) -> None:
-    path = tmp_path / "signing.key"
-    path.write_text("this is my shopping list\n", encoding="utf-8")
-
+def test_binary_rubbish_is_refused_as_a_key_rather_than_as_an_encoding(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "rubbish.key"
+    path.write_bytes(bytes(range(256)))
+    path.chmod(0o600)
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(path, env={})
-    rendered = caught.value.render()
-    assert "not an ECDSA P-256 private key" in rendered
-    assert "imgtool keygen -t ecdsa-p256" in rendered
-    assert path.read_text(encoding="utf-8") == "this is my shopping list\n"
+        signing_key(path, env={})
+    assert "not an ECDSA P-256 private key" in caught.value.message
 
 
-def test_binary_rubbish_is_refused_as_a_key_rather_than_as_an_encoding(tmp_path) -> None:
-    path = tmp_path / "signing.key"
-    path.write_bytes(b"\xff\xfe\x00\x01")
-    with pytest.raises(BuildError, match="not an ECDSA P-256 private key"):
-        signing.signing_key(path, env={})
-
-
-def test_a_directory_where_the_key_should_be_is_a_plain_refusal(tmp_path) -> None:
-    (tmp_path / "signing.key").mkdir()
+def test_a_directory_as_key_path_is_reported_as_such(tmp_path: Path) -> None:
     with pytest.raises(BuildError) as caught:
-        signing.signing_key(tmp_path / "signing.key", env={})
-    assert "it is a directory" in caught.value.render()
+        signing_key(tmp_path, env={})
+    assert "it is a directory" in caught.value.message
 
 
-def test_a_place_the_key_cannot_be_written_says_where(tmp_path) -> None:
-    blocker = tmp_path / "blocker"
-    blocker.write_text("", encoding="utf-8")
-    with pytest.raises(BuildError) as caught:
-        signing.signing_key(blocker / "mcuhome" / "signing.key", env={})
-    rendered = caught.value.render()
-    assert "cannot create the firmware signing key" in rendered
-    assert signing.KEY_VAR in rendered
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_an_exposed_override_key_is_refused_outright(tmp_path: Path) -> None:
+    path = tmp_path / "loose.key"
+    write_key_file(path)
+    path.chmod(0o644)
+    with pytest.raises(ConfigError) as caught:
+        signing_key(path, env={})
+    assert "refuses to use the key material" in caught.value.message
 
 
-def test_no_refusal_ever_prints_the_key(tmp_path) -> None:
-    """The private half is never in a message, a log or a build directory."""
-    path = tmp_path / "signing.key"
-    path.write_text(IMGTOOL_KEY.replace("PRIVATE KEY", "RSA PRIVATE KEY"), encoding="utf-8")
-    with pytest.raises(BuildError) as caught:
-        signing.signing_key(path, env={})
-    rendered = caught.value.render()
-    assert "MIGHAgEAMBMGByqGSM49" not in rendered
+# --- materialization for imgtool --------------------------------------
 
 
-# --------------------------------------------------------------------------
-# The public half (ADR 0015 decision 8, detached signing)
-# --------------------------------------------------------------------------
+def test_a_project_key_exists_as_a_file_only_inside_the_block(project: Project) -> None:
+    key = signing_key(env={}, project=project)
+    with key.key_file() as path:
+        assert path.parent == project.firmware_secrets_file.parent
+        assert path != project.firmware_secrets_file
+        assert mode_of(path) == 0o600
+        assert path.read_text(encoding="utf-8") == key.pem
+        seen = path
+    assert not seen.exists()
 
 
-def test_the_public_half_is_derived_from_the_scalar() -> None:
-    """Recomputed, never read out of the file's optional copy.
-
-    A key file that disagrees with itself would otherwise produce a
-    bootloader that rejects every image the same file signs.
-    """
-    pem = signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
-    assert pem.startswith("-----BEGIN PUBLIC KEY-----\n")
-    assert pem.endswith("-----END PUBLIC KEY-----\n")
-    assert signing.looks_like_p256_public_key(pem)
+def test_the_materialized_file_is_gone_even_when_the_block_raises(
+    project: Project,
+) -> None:
+    key = signing_key(env={}, project=project)
+    with pytest.raises(RuntimeError), key.key_file() as path:
+        seen = path
+        raise RuntimeError("boom")
+    assert not seen.exists()
 
 
-def test_the_public_half_is_the_point_the_private_key_names() -> None:
-    point = p256.generator_times(KNOWN_SCALAR)
-    assert point is not None
-    x, y = point
-    expected = b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big")
-    pem = signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
-    body = pem.split("-----BEGIN PUBLIC KEY-----")[1].split("-----END PUBLIC KEY-----")[0]
-    assert expected in base64.b64decode("".join(body.split()))
+def test_a_plain_file_key_is_yielded_not_copied(tmp_path: Path) -> None:
+    path = tmp_path / "plain.key"
+    write_key_file(path)
+    key = signing_key(path, env={})
+    with key.key_file() as yielded:
+        assert yielded == path
+    assert path.exists()
 
 
-def test_the_public_half_is_stable() -> None:
-    first = signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
-    assert first == signing.public_key_pem(signing.generate_key_pem(KNOWN_SCALAR))
+# --- no refusal ever prints the key -----------------------------------
 
 
-def test_a_private_key_is_not_a_public_key() -> None:
-    """--public-key has to be able to catch the one dangerous mix-up."""
-    private = signing.generate_key_pem(KNOWN_SCALAR)
-    assert signing.looks_like_p256_key(private)
-    assert not signing.looks_like_p256_public_key(private)
-    public = signing.public_key_pem(private)
-    assert signing.looks_like_p256_public_key(public)
-    assert not signing.looks_like_p256_key(public)
-
-
-@pytest.mark.parametrize(
-    "text",
-    ["", "not a key", "-----BEGIN PRIVATE KEY-----\n@@@\n-----END PRIVATE KEY-----\n"],
-)
-def test_deriving_from_something_that_is_not_a_key_refuses(text: str) -> None:
-    with pytest.raises(ValueError):
-        signing.public_key_pem(text)
+def test_no_refusal_ever_prints_the_key(project: Project) -> None:
+    key = signing_key(env={}, project=project)
+    project.firmware_secrets_file.chmod(0o644)
+    with pytest.raises((BuildError, ConfigError)) as caught:
+        signing_key(env={}, project=project)
+    scalars = key.pem.replace("-----BEGIN PRIVATE KEY-----", "").replace(
+        "-----END PRIVATE KEY-----", ""
+    )
+    for line in filter(None, scalars.splitlines()):
+        assert line not in caught.value.message
+        assert line not in (caught.value.hint or "")

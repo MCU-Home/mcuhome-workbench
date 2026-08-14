@@ -15,8 +15,9 @@ That is the whole design (yaml-schema.md §4.1):
 so the credentials are drawn once, written down, and are ordinary
 configuration input from then on. Nothing is stored anywhere else: no
 state directory, no cache, no log file. The configuration the user backs
-up *is* the record, and ``--secrets`` moves the values into the tree's
-``secrets.yaml`` for configurations that live in version control.
+up *is* the record, and ``--secrets`` moves the values into the
+project's ``secrets/main.yaml`` for configurations that live in version
+control.
 
 **The file is edited, not rewritten.** A YAML round-trip that
 re-serializes the document reflows indentation and moves comments, which
@@ -28,6 +29,8 @@ afterwards.
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +68,7 @@ class InitResult:
 
 
 def secret_names(device: str) -> dict[str, str]:
-    """The ``secrets.yaml`` key each credential gets for *device*."""
+    """The secrets-file key each credential gets for *device*."""
     slug = "".join(character if character.isalnum() else "_" for character in device.lower())
     return {key: f"{slug}_{key}" for key in PAIRING_KEYS}
 
@@ -328,7 +331,7 @@ def _write_secrets(
     *,
     force: bool,
 ) -> None:
-    """Append the three values to the tree's secrets file, replacing old ones.
+    """Append the three values to the project's secrets file, replacing old ones.
 
     Line editing again, and for the same reason: a secrets file is a file
     a person keeps, not a database this command owns.
@@ -338,7 +341,8 @@ def _write_secrets(
         names["passcode"]: str(credentials.passcode),
         names["salt"]: f'"{credentials.salt}"',
     }
-    if secrets_file.is_file():
+    created = not secrets_file.is_file()
+    if not created:
         raw = secrets_file.read_text(encoding="utf-8")
         text = _Text.of(raw)
         existing = YAML(typ="safe").load(raw) or {}
@@ -354,10 +358,30 @@ def _write_secrets(
     else:
         text = _Text.of("")
         text.lines = [
-            "# Secrets for this configuration tree: `!secret <name>` in a device",
+            "# Secrets for this project: `!secret <name>` in a device",
             "# configuration reads from here. Keep this file out of version control.",
         ]
     if text.lines and text.lines[-1].strip():
         text.lines.append("")
     text.lines += [f"{name}: {value}" for name, value in values.items()]
-    secrets_file.write_text(text.render(), encoding="utf-8")
+    if created:
+        # A fresh secrets file starts owner-only, and so does any missing
+        # directory on the way to it (ADR 0022 §5) — exactly the missing
+        # ones: an existing directory's permissions are the user's, and
+        # `--secrets` may point anywhere. Rewriting an existing file goes
+        # through its inode and keeps whatever the user set.
+        missing: list[Path] = []
+        probe = secrets_file.parent
+        while not probe.exists():
+            missing.append(probe)
+            probe = probe.parent
+        secrets_file.parent.mkdir(parents=True, exist_ok=True)
+        for directory in missing:
+            os.chmod(directory, 0o700)
+        descriptor = os.open(
+            secrets_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text.render())
+    else:
+        secrets_file.write_text(text.render(), encoding="utf-8")

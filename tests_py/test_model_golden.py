@@ -95,7 +95,7 @@ def test_model_matches_the_hand_written_channel_table() -> None:
 def test_defaults_are_applied() -> None:
     model = resolve_file(FIXTURE_TREE / "devices" / "bench-node" / "main.yaml")
 
-    assert model.device.friendly_name == "Bench Node"  # from secrets.yaml
+    assert model.device.friendly_name == "Bench Node"  # from secrets/main.yaml
     assert model.device.power_source == "battery"
     # Battery power picks the conservative Thread role and a slow sample.
     assert model.network.thread is not None

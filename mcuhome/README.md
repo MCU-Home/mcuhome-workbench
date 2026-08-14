@@ -39,7 +39,8 @@ pytest                           # the suite in ../tests_py/
 | Module | Stage | Role |
 |---|---|---|
 | `workbench/api.py` | — | the supported programmatic surface over everything below |
-| `workbench/tree.py` | — | config-tree discovery and `<device>` resolution |
+| `workbench/project.py` | — | the project directory (ADR 0022): marker, layout, `init`, secrets hygiene, `<device>` resolution |
+| `workbench/configuration.py` | — | the five-layer option model (ADR 0022): registry, precedence, origins |
 | `workbench/loader.py` | 1 | YAML parsing (ruamel, with line/column) and `!secret` |
 | `workbench/schema.py` | 2a | typed model of the raw configuration; shape errors |
 | `workbench/validate.py` | 2b | cross-references, v0.1 scope gates, Matter conformance |
@@ -52,7 +53,7 @@ pytest                           # the suite in ../tests_py/
 | `workbench/buildmethods.py` | — | the three build methods behind `run_build` (E53/E64) |
 | `workbench/sessionclient.py` | — | the remote method's session-protocol client (ADR 0019) |
 | `workbench/imgtool.py` | — | detached signing over the §7.2.1 build report |
-| `workbench/signing.py` | — | the per-user signing key and its refusals (ADR 0015 §8) |
+| `workbench/signing.py` | — | the per-project signing key and its refusals (ADR 0015 §8) |
 | `workbench/userpaths.py` | — | the process-boundary seam for `$HOME`-shaped lookups |
 
 ## Two rules worth knowing before changing anything here

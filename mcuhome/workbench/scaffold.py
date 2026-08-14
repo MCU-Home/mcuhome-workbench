@@ -28,6 +28,7 @@ say, in the file and in the command's output, that it is the next step.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,13 +36,7 @@ from mcuhome.model import ota, registry
 from mcuhome.model.errors import ConfigError, Location
 
 from mcuhome.workbench import schema
-from mcuhome.workbench.tree import (
-    DEVICE_ENTRY,
-    DEVICES_DIR,
-    ConfigTree,
-    find_config_root,
-    is_config_root,
-)
+from mcuhome.workbench.project import Project, resolve_project
 
 __all__ = ["NewDevice", "new_device", "render_starter"]
 
@@ -50,13 +45,10 @@ __all__ = ["NewDevice", "new_device", "render_starter"]
 class NewDevice:
     """What ``mcuhome new`` created."""
 
-    tree: ConfigTree
+    project: Project
     entry: Path
     name: str
     board: str
-    #: True when this call created the ``devices/`` directory, i.e. when
-    #: it also brought the configuration tree into being.
-    created_tree: bool
 
 
 def _refuse_unknown_board(board: str) -> ConfigError:
@@ -189,24 +181,28 @@ def new_device(
     name: str,
     *,
     board: str,
+    env: Mapping[str, str],
     cwd: Path,
-    config_root: Path | None = None,
+    project_dir: Path | None = None,
 ) -> NewDevice:
     """Create ``devices/<name>/main.yaml``, or refuse and change nothing.
 
-    Refusals come first and cover the three ways this goes wrong: a name
-    that cannot become a folder and a hostname, a board nobody has brought
-    up, and a device that already exists — the last one loudly, because
-    overwriting somebody's configuration is not a scaffold's business.
+    Refusals come first and cover the four ways this goes wrong: a name
+    that cannot become a folder and a hostname, a board nobody has
+    brought up, no project to create the device in, and a device that
+    already exists — the last one loudly, because overwriting somebody's
+    configuration is not a scaffold's business.
 
-    Without a configuration tree around *cwd* this creates one, which is
-    the same zero-ceremony rule tree discovery already uses: a directory
-    with a ``devices/`` folder in it *is* a configuration tree
-    (:mod:`mcuhome.workbench.tree`), so making the folder is making the tree.
+    The project comes from :func:`mcuhome.workbench.project.resolve_project`'s
+    ladder, and outside any project that resolver's refusal already
+    points at ``mcuhome init``: creating a *project* is init's job (ADR
+    0022 §1), a device scaffold only ever fills one in. The ``devices/``
+    directory itself is created when missing — it is part of the layout
+    the marker promises, not a decision.
 
-    *cwd* is required rather than defaulted, for the reason
-    :func:`mcuhome.workbench.tree.open_tree` gives: this function creates
-    directories, and where it creates them must be an argument.
+    *cwd* and *env* are stated rather than read from the process, for
+    the reason :func:`mcuhome.workbench.project.resolve_project` gives —
+    doubly so here, because this function creates directories.
     """
     if not schema.DEVICE_NAME_RE.match(name) or name.endswith("-"):
         raise _refuse_bad_name(name)
@@ -215,23 +211,9 @@ def new_device(
     if board not in registry.BOARDS:
         raise _refuse_unknown_board(board)
 
-    here = cwd.resolve()
-    if config_root is not None:
-        root = config_root.resolve()
-        if not root.is_dir():
-            raise ConfigError(
-                f'The configuration root "{config_root}" does not exist.',
-                hint=(
-                    "create the directory first — mcuhome new fills a tree in, it "
-                    "does not decide where your configuration lives"
-                ),
-            )
-    else:
-        found = find_config_root(here)
-        root = found if found is not None else here
-    created_tree = not is_config_root(root)
+    project = resolve_project(project_dir, env=env, cwd=cwd)
 
-    entry = root / DEVICES_DIR / name / DEVICE_ENTRY
+    entry = project.device_entry(name)
     if entry.exists():
         raise ConfigError(
             f'There is already a device called "{name}" here.',
@@ -249,13 +231,7 @@ def new_device(
     except OSError as error:
         raise ConfigError(
             f"MCUHome cannot create {entry}: {error.strerror}.",
-            hint="pick a writable location with --config-root",
+            hint="pick a writable project location with --project-dir",
         ) from error
 
-    return NewDevice(
-        tree=ConfigTree(root=root, discovered=True),
-        entry=entry,
-        name=name,
-        board=board,
-        created_tree=created_tree,
-    )
+    return NewDevice(project=project, entry=entry, name=name, board=board)
