@@ -89,7 +89,7 @@ from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
 #: "the newest the configured sources offer". A device configuration can
 #: pin the SDK as a PEP 440 constraint (ADR 0018), but a plain ``mcuhome
 #: build`` has no such intent — it takes whatever SDK package the
-#: ``--sdk-source`` directories hold, exactly as the empty
+#: ``--sdk-sources`` directories hold, exactly as the empty
 #: :class:`~packaging.specifiers.SpecifierSet` matches every version.
 SDK_ANY = ""
 
@@ -310,9 +310,12 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
                 "MCUHome's own SDK travels into the build as a hash-pinned package "
                 "(ADR 0018), and the pin is resolved on this machine for every method "
                 "that uses a build container — the local one and a build server alike. "
-                "Point at a directory holding one:\n"
-                "    mcuhome build <device> --sdk-source <dir>\n"
-                "or set MCUHOME_SDK_SOURCE. --method local-dev needs no SDK source."
+                "Point at a directory holding one with --sdk-sources <dir>, set\n"
+                "MCUHOME_SDK_SOURCES, or put\n"
+                "    sdk_sources:\n"
+                "      - <dir>\n"
+                "into your configuration (any layer, ADR 0022). A local-dev build "
+                "needs no SDK source."
             ),
         )
     searched: list[str] = []
@@ -336,7 +339,7 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
                 hint=(
                     "the index is what scripts/build_sdk_archive.py writes next to "
                     "the archive — regenerate it, or drop the source from "
-                    "--sdk-source/MCUHOME_SDK_SOURCE"
+                    "--sdk-sources/MCUHOME_SDK_SOURCES"
                 ),
             ) from broken
         try:

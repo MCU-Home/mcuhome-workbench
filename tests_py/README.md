@@ -34,6 +34,7 @@ so a bare `pytest` from the repo root does the right thing.
 |---|---|
 | `test_project.py` | the project marker and its bootstrap ladder, layout, `mcuhome init`, secrets hygiene, device resolution (name, folder, bare file) |
 | `test_configuration.py` | the five-layer option model: precedence, origins, per-option channels, `config print` data |
+| `test_builders.py` | named builders (ADR 0023): parsing, merge-by-name, selection, credentials |
 | `test_loader.py` | YAML parsing and `!secret` resolution, including their error messages |
 | `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |

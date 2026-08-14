@@ -75,7 +75,13 @@ def test_an_undeclared_option_is_a_programming_error() -> None:
 
 
 def test_every_option_kind_is_one_the_parsers_know() -> None:
-    assert {declared.kind for declared in OPTIONS} <= {"string", "path", "paths", "integer"}
+    assert {declared.kind for declared in OPTIONS} <= {
+        "string",
+        "path",
+        "paths",
+        "integer",
+        "builders",
+    }
 
 
 # --- defaults and the five layers -------------------------------------

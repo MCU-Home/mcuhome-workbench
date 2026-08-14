@@ -248,16 +248,17 @@ def test_the_remote_method_answers_in_the_same_shape(model, tmp_path, monkeypatc
 # --------------------------------------------------------------------------
 
 
-def test_remote_without_a_server_refuses_naming_all_three_rungs(model, tmp_path) -> None:
-    """E53's ladder, as a refusal: the flag, the variable and the file.
+def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> None:
+    """ADR 0023's ladder, as a refusal: a configured builder, or fully manual.
 
     There is no default build server and no discovery — the context
     carries the device model, so where it is sent is a decision. The
-    refusal therefore names every rung that can answer it. The third one
-    (``build-servers.toml`` under ``$XDG_CONFIG_HOME/mcuhome/``, E63) is
-    read by the command line rather than by this package, and is named
-    here anyway: this is the text a user reads when nothing is
-    configured, and a rung it does not mention is a rung nobody finds.
+    refusal therefore names both ways of making it: a configured remote
+    builder (with its token's place in the secrets layout) and the
+    fully manual ``--build-mode`` rung. Builder selection is read by
+    the caller rather than by this package, and is named here anyway:
+    this is the text a user reads when nothing is configured, and a
+    rung it does not mention is a rung nobody finds.
     """
     with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
         _run(
@@ -265,11 +266,12 @@ def test_remote_without_a_server_refuses_naming_all_three_rungs(model, tmp_path)
             buildmethods.REMOTE,
         )
     rendered = str(refusal.value)
-    assert "--server" in rendered
-    assert "MCUHOME_BUILD_SERVER" in rendered
-    assert "MCUHOME_BUILD_TOKEN" in rendered
-    assert "build-servers.toml" in rendered
-    assert "tokens/<label>" in rendered
+    assert "type: remote" in rendered
+    assert "--builder attic" in rendered
+    assert "default_builder" in rendered
+    assert "secrets/build-server/attic.yaml" in rendered
+    assert "--build-mode remote --build-server" in rendered
+    assert "--build-token" in rendered
 
 
 def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> None:
@@ -292,8 +294,9 @@ def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> No
             buildmethods.REMOTE,
         )
     rendered = str(refusal.value)
-    assert "--sdk-source" in rendered
-    assert "MCUHOME_SDK_SOURCE" in rendered
+    assert "--sdk-sources" in rendered
+    assert "MCUHOME_SDK_SOURCES" in rendered
+    assert "sdk_sources:" in rendered  # the configuration channel (ADR 0022)
     # And it says what the pin is *for*, so the reader learns why a build
     # server cannot supply it: the version resolves the package, the hash
     # is what the bytes are checked against.

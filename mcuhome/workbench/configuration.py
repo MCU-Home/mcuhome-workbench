@@ -42,7 +42,7 @@ with every effective value and the layer it came from.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,8 +50,10 @@ from typing import Any
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import config_dir, expand
 
+from mcuhome.workbench import builders as builders_module
+from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
 from mcuhome.workbench.loader import load_yaml_file
-from mcuhome.workbench.project import Project
+from mcuhome.workbench.project import Project, check_secret_file
 
 __all__ = [
     "CONFIG_FILE",
@@ -60,6 +62,7 @@ __all__ = [
     "Setting",
     "Settings",
     "option",
+    "resolve_builder",
     "resolve_settings",
     "system_config_dir",
     "user_config_dir",
@@ -146,6 +149,26 @@ OPTIONS: tuple[Option, ...] = (
         default=1,
         help="parallel compile jobs a build may use",
     ),
+    # ADR 0023: builders are deployment configuration and live in files
+    # only — the fully manual rung (--build-mode plus its flags) is the
+    # per-invocation channel and bypasses the list entirely.
+    Option(
+        "builders",
+        kind="builders",
+        default=(),
+        environment=False,
+        arguments=False,
+        help="named builders: where a build may run (ADR 0023)",
+    ),
+    # Settable up to the environment; the *invocation* selects with
+    # --builder, which is selection rather than configuration — so the
+    # arguments channel is deliberately off here.
+    Option(
+        "default_builder",
+        kind="string",
+        arguments=False,
+        help="the builder a plain `mcuhome device build` uses (ADR 0023)",
+    ),
 )
 
 
@@ -194,6 +217,8 @@ class Settings:
         def jsonable(value: Any) -> Any:
             if isinstance(value, Path):
                 return str(value)
+            if isinstance(value, Builder):
+                return value.to_dict()
             if isinstance(value, tuple):
                 return [jsonable(item) for item in value]
             return value
@@ -250,7 +275,13 @@ def _key_location(data: Any, key: str, file: Path) -> Location:
 
 
 def _parse_file_value(
-    opt: Option, value: Any, *, file: Path, env: Mapping[str, str], location: Location
+    opt: Option,
+    value: Any,
+    *,
+    file: Path,
+    env: Mapping[str, str],
+    location: Location,
+    origin: str,
 ) -> Any:
     def refuse(expected: str) -> ConfigError:
         return ConfigError(
@@ -277,6 +308,13 @@ def _parse_file_value(
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise refuse("a list of paths")
         return tuple(_resolve_path(item, env=env, base=file.parent) for item in value)
+    if opt.kind == "builders":
+        return builders_module.parse_builders(
+            value,
+            file=file,
+            origin=origin,
+            expand_path=lambda raw: _resolve_path(raw, env=env, base=file.parent),
+        )
     raise ValueError(f"option {opt.name!r} declares unknown kind {opt.kind!r}")
 
 
@@ -361,7 +399,7 @@ def _read_layer(
                     f"on the command line or as {opt.env_var} in the environment."
                 ),
             )
-        value = _parse_file_value(opt, raw, file=file, env=env, location=location)
+        value = _parse_file_value(opt, raw, file=file, env=env, location=location, origin=origin)
         settings[opt.name] = Setting(option=opt, value=value, origin=origin, source=str(file))
     return settings
 
@@ -395,6 +433,22 @@ def resolve_settings(
         if not opt.bootstrap
     }
 
+    def apply(layer_settings: dict[str, Setting]) -> None:
+        # Scalars are whole-value nearest-wins; builder lists merge by
+        # name across the layers (ADR 0023 §3), so a machine can ship
+        # site builders, a user can add their own, and a project can
+        # pin its default without any layer repeating the others.
+        for name, setting in layer_settings.items():
+            below = resolved.get(name)
+            if setting.option.kind == "builders" and below is not None and below.value:
+                setting = Setting(
+                    option=setting.option,
+                    value=builders_module.merge_builders(below.value, setting.value),
+                    origin=setting.origin,
+                    source=setting.source,
+                )
+            resolved[name] = setting
+
     layers: list[tuple[str, Path | None]] = [
         ("system", system_config_dir(env)),
         ("user", user_config_dir(env)),
@@ -402,13 +456,9 @@ def resolve_settings(
     for origin, directory in layers:
         if directory is None:
             continue
-        resolved.update(
-            _read_layer(directory / CONFIG_FILE, origin=origin, registry=registry, env=env)
-        )
+        apply(_read_layer(directory / CONFIG_FILE, origin=origin, registry=registry, env=env))
     if project is not None:
-        resolved.update(
-            _read_layer(project.config_file, origin="project", registry=registry, env=env)
-        )
+        apply(_read_layer(project.config_file, origin="project", registry=registry, env=env))
 
     for opt in registry:
         if opt.bootstrap or not opt.environment:
@@ -432,3 +482,84 @@ def resolve_settings(
         resolved[name] = Setting(option=opt, value=value, origin="arguments", source=opt.flag)
 
     return Settings(resolved)
+
+
+# --------------------------------------------------------------------------
+# Builder selection (ADR 0023 §2/§4)
+# --------------------------------------------------------------------------
+
+
+def resolve_builder(
+    settings: Settings,
+    *,
+    name: str | None = None,
+    project: Project | None,
+    env: Mapping[str, str],
+    on_warning: Callable[[str], None] | None = None,
+) -> SelectedBuilder:
+    """Which builder this invocation uses, credentials included.
+
+    The two configured rungs of ADR 0023 §2 — an explicit ``--builder``
+    *name*, then the configured ``default_builder`` — over the resolved
+    ``builders`` list, falling back to a plain ``local`` build when
+    neither is set. The fully manual rung never calls this. A remote
+    builder's token comes from ``secrets/build-server/<name>.yaml``,
+    looked up nearest-first: the project, then the user configuration
+    directory, then the system one — the same ladder its definition
+    merged through, and the **nearest existing file answers whole**
+    (a project file without a ``token`` key means "no token", it does
+    not fall through to the user's). A missing file everywhere is a
+    tokenless builder, which is permitted — a third-party server may
+    want no Authorization at all.
+    """
+    return builders_module.select_builder(
+        settings.value("builders"),
+        name=name,
+        default=settings.value("default_builder"),
+        token_of=lambda builder: _builder_token(
+            builder.name, project=project, env=env, on_warning=on_warning
+        ),
+    )
+
+
+def _builder_token(
+    name: str,
+    *,
+    project: Project | None,
+    env: Mapping[str, str],
+    on_warning: Callable[[str], None] | None,
+) -> str | None:
+    relative = Path("build-server") / f"{name}.yaml"
+    candidates: list[Path] = []
+    if project is not None:
+        candidates.append(project.secrets_dir / relative)
+    for directory in (user_config_dir(env), system_config_dir(env)):
+        if directory is not None:
+            candidates.append(directory / "secrets" / relative)
+    for file in candidates:
+        if not file.is_file():
+            continue
+        check_secret_file(file, key_material=False, on_warning=on_warning)
+        data = load_yaml_file(file)
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ConfigError(
+                f"{file} must be a mapping of `name: value` pairs.",
+                location=Location(file=file, line=1, column=1),
+                hint=f"the token of the builder {name!r} goes on one line:\n    token: <token>",
+            )
+        token = data.get(CREDENTIALS_TOKEN_KEY)
+        if token is None:
+            # The file may legitimately carry only future material
+            # (TLS pinning, certificates — ADR 0023 §4); an unknown
+            # key is the future, not a typo worth refusing.
+            return None
+        if not isinstance(token, str):
+            raise ConfigError(
+                f"The {CREDENTIALS_TOKEN_KEY} in {file} must be a string.",
+                location=Location(file=file, key=CREDENTIALS_TOKEN_KEY),
+                hint='quote it if it looks like a number: token: "12345"',
+            )
+        return token
+    return None

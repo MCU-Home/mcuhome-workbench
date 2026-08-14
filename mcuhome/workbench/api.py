@@ -29,6 +29,11 @@ What is here, in the order a caller needs it:
 ``resolve_settings``
     The five-layer configuration model over the declared option
     registry (``OPTIONS``), each value with the layer it came from.
+``resolve_builder``
+    Which builder this invocation uses (ADR 0023): an explicit name,
+    the configured ``default_builder``, or the built-in ``local``
+    fallback — credentials from ``secrets/build-server/<name>.yaml``
+    included.
 ``load_model``
     Stages 1-3 on one device, raising on the first thing that is wrong.
 ``read_model``
@@ -90,6 +95,7 @@ from mcuhome.model.model import MODEL_VERSION, DeviceModel
 from mcuhome.model.modelfile import read_model
 
 from mcuhome.workbench import __version__
+from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
 from mcuhome.workbench.buildmethods import (
     DEFAULT_METHOD,
     LOCAL,
@@ -111,6 +117,7 @@ from mcuhome.workbench.configuration import (
     Option,
     Setting,
     Settings,
+    resolve_builder,
     resolve_settings,
 )
 from mcuhome.workbench.loader import load_config
@@ -133,6 +140,7 @@ from mcuhome.workbench.schema import parse_config
 from mcuhome.workbench.validate import validate
 
 __all__ = [
+    "BUILDER_TYPES",
     "CONFIG_FILE",
     "DEFAULT_METHOD",
     "DEVICES_DIR",
@@ -151,6 +159,7 @@ __all__ = [
     "BuildError",
     "BuildOutcome",
     "BuildRequest",
+    "Builder",
     "ConfigError",
     "ConfigErrorGroup",
     "DeviceModel",
@@ -162,6 +171,7 @@ __all__ = [
     "Option",
     "Project",
     "RemoteNotConfigured",
+    "SelectedBuilder",
     "Setting",
     "Settings",
     "UnknownMethod",
@@ -176,6 +186,7 @@ __all__ = [
     "read_manifest",
     "read_model",
     "registry_data",
+    "resolve_builder",
     "resolve_method",
     "resolve_project",
     "resolve_settings",

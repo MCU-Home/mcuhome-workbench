@@ -21,6 +21,7 @@ already has them.
 :mod:`mcuhome.workbench.api`           the supported surface — import this
 :mod:`mcuhome.workbench.project`       the project directory: marker, layout, init
 :mod:`mcuhome.workbench.configuration` the five-layer option model (ADR 0022)
+:mod:`mcuhome.workbench.builders`      named builders and their selection (ADR 0023)
 :mod:`mcuhome.workbench.loader`        stage 1: YAML parse, ``!secret``
 :mod:`mcuhome.workbench.schema`        stage 2a: shape, as typed raw config
 :mod:`mcuhome.workbench.validate`      stage 2b: cross-refs, gates, conformance

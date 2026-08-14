@@ -58,7 +58,7 @@ pin on this path. It does now, through the *same* resolver and the same
 context writer the ``local`` method uses
 (:func:`~mcuhome.workbench.resolve_pins.resolve_sdk`,
 :func:`~mcuhome.workbench.contextdir.create_build_context`), from the
-same ``--sdk-source`` directories. There is deliberately **no**
+same ``--sdk-sources`` directories. There is deliberately **no**
 capabilities round trip for it, exactly as there is none for the
 container since E61: the client states a version *and* a sha256, the
 server resolves the version against its own sources — which may be a
@@ -249,16 +249,17 @@ class BuildRequest:
     stream: TextIO | None = None
 
     # -- remote --------------------------------------------------------
-    #: The build server's WebSocket address, already resolved: the
-    #: ladder (E53/E63 — ``--server``, ``MCUHOME_BUILD_SERVER``, then
-    #: ``build-servers.toml``, where a *label* also stands for an
-    #: address) belongs to the caller, and an address is what arrives
-    #: here.
+    #: The build server's WebSocket address, already resolved: builder
+    #: selection (a configured builder or the fully manual
+    #: ``--build-mode`` rung, ADR 0023) belongs to the caller —
+    #: :func:`mcuhome.workbench.configuration.resolve_builder` is the
+    #: configured path — and an address is what arrives here.
     server: str | None = None
-    #: The bearer token for it, from the same ladder (``--token``,
-    #: ``MCUHOME_BUILD_TOKEN``, then the label's ``tokens/<label>``
-    #: file). ``None`` sends no ``Authorization`` header at all, which
-    #: this package permits because a third-party server may want none.
+    #: The bearer token for it, from the builder's
+    #: ``secrets/build-server/<name>.yaml`` (or the manual rung's
+    #: ``--build-token``). ``None`` sends no ``Authorization`` header at
+    #: all, which this package permits because a third-party server may
+    #: want none.
     token: str | None = None
     #: A build context directory to send instead of creating one. For an
     #: embedder that already holds one — a dashboard that assembled a
@@ -569,14 +570,15 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         raise RemoteNotConfigured(
             "The remote build method needs the address of a build server, and none is set.",
             hint=(
-                "name it on the command line, in the environment, or once in a "
-                "file — the three rungs of E53/E63:\n"
-                "    mcuhome build <device> --method remote --server <url> [--token <token>]\n"
-                "    MCUHOME_BUILD_SERVER=<url> MCUHOME_BUILD_TOKEN=<token>\n"
-                "    $XDG_CONFIG_HOME/mcuhome/build-servers.toml, which the mcuhome\n"
-                "    command line reads: a [server.<label>] table with a url, a\n"
-                '    top-level default = "<label>", and the token in tokens/<label>.\n'
-                "    --server takes that label as well as an address.\n"
+                "configure a builder once, or name the server outright (ADR 0023):\n"
+                "    builders:                    # mcuhome.yaml, or your user/system\n"
+                "      - name: attic              # configuration.yaml\n"
+                "        type: remote\n"
+                "        server: <host[:port]>\n"
+                "    with its token in secrets/build-server/attic.yaml, selected via\n"
+                "    --builder attic or once via default_builder;\n"
+                "or fully manually:\n"
+                "    --build-mode remote --build-server <url> [--build-token <token>]\n"
                 "A build server is not discovered and has no default: the build "
                 "context carries the device model, so the address is a decision "
                 "rather than a lookup."
@@ -593,11 +595,12 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
                     "the context states which MCUHome SDK package to build against — "
                     "the version the build server resolves it by, and the sha256 it "
                     "checks the bytes it found against (ADR 0018) — and that pin is "
-                    "resolved here, from your own source directories. Point at one:\n"
-                    "    mcuhome build <device> --method remote --server <url> "
-                    "--sdk-source <dir>\n"
-                    "or set MCUHOME_SDK_SOURCE. An embedder that already holds a build "
-                    "context directory can pass it instead."
+                    "resolved here, from your own source directories. Point at one "
+                    "with --sdk-sources <dir>, set MCUHOME_SDK_SOURCES, or put\n"
+                    "    sdk_sources:\n"
+                    "      - <dir>\n"
+                    "into your configuration (any layer, ADR 0022). An embedder that "
+                    "already holds a build context directory can pass it instead."
                 ),
             )
         # Off the event loop: this hashes nothing large, but it reads an

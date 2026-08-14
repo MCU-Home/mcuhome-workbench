@@ -87,11 +87,40 @@ spellings in its hint texts — the retirement touches those too).
 - The dashboard's build-method deployment setting (dashboard ADR 0013)
   becomes a consumer of this model when the dashboard adopts ADR 0022.
 
+## Pinned during implementation (2026-08-14)
+
+- The model lives in `mcuhome.workbench.builders` (vocabulary: parse,
+  merge-by-name, selection) and
+  `mcuhome.workbench.configuration.resolve_builder` (the layer- and
+  secrets-aware entry point the tools call); `builders` and
+  `default_builder` are ordinary options of ADR 0022's registry.
+- Channels: `builders` is **file-layers only** — deployment
+  configuration; the per-invocation channel is the manual rung.
+  `default_builder` is settable up to the environment
+  (`MCUHOME_DEFAULT_BUILDER`); the *invocation* selects with
+  `--builder`, which is selection rather than configuration, so the
+  option's own arguments channel is off. (This sharpens §2's "settable
+  through all five" example in ADR 0022 §3 for this one option.)
+- A builder's name becomes the credentials file name, so it is
+  restricted like a device name: lowercase, digits, dashes.
+- `local` accepts an optional `image`; `local-dev` requires
+  `workspace` (`~` and relative paths resolve per ADR 0022's file
+  rule); `remote` requires `server`. A `token` key in the builder list
+  itself is refused toward the secrets file.
+- `secrets/build-server/<name>.yaml` carries `token` (a string).
+  Unknown keys there are tolerated — future TLS/certificate material,
+  not typos. The **nearest existing file answers whole** (a project
+  file without a `token` key means "no token", it does not fall
+  through to the user's); no file anywhere is a tokenless builder,
+  which stays permitted. File hygiene per ADR 0022 §5: a warning for
+  an exposed token file, refusal is reserved for key material.
+- `config print` shows each merged builder with the layer that defined
+  it — merge-by-name makes origin a per-builder fact.
+- §5's retirements are done in the workbench's own texts (the
+  `buildmethods` refusals now speak this ADR's vocabulary); the CLI's
+  spellings retire with the vocabulary step (cli ADR 0003).
+
 ## Open points
 
 - Builder-level defaults beyond type options (preferred image, jobs) —
   deliberately not included yet.
-- The exact YAML keys of `secrets/build-server/<name>.yaml` (today:
-  `token`) are pinned during implementation.
-- ~~§4's user/system-level `secrets/build-server/` directories~~ —
-  confirmed by the product owner (2026-08-14): intended exactly so.

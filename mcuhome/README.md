@@ -40,7 +40,8 @@ pytest                           # the suite in ../tests_py/
 |---|---|---|
 | `workbench/api.py` | — | the supported programmatic surface over everything below |
 | `workbench/project.py` | — | the project directory (ADR 0022): marker, layout, `init`, secrets hygiene, `<device>` resolution |
-| `workbench/configuration.py` | — | the five-layer option model (ADR 0022): registry, precedence, origins |
+| `workbench/configuration.py` | — | the five-layer option model (ADR 0022): registry, precedence, origins, builder selection |
+| `workbench/builders.py` | — | named builders (ADR 0023): vocabulary, merge-by-name, selection |
 | `workbench/loader.py` | 1 | YAML parsing (ruamel, with line/column) and `!secret` |
 | `workbench/schema.py` | 2a | typed model of the raw configuration; shape errors |
 | `workbench/validate.py` | 2b | cross-references, v0.1 scope gates, Matter conformance |
