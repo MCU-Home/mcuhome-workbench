@@ -534,39 +534,39 @@ def test_sign_report_runs_the_plan_and_never_generates_a_key(tmp_path) -> None:
     assert plan.parameters.slot_size == 933888
 
 
-def test_a_project_key_signs_through_a_short_lived_file_and_the_plan_names_its_home(
+def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
     tmp_path,
 ) -> None:
-    """The secrets YAML is not a ``--key`` argument, and the plan says where the key lives.
+    """imgtool gets the project's ``mcuboot.pem`` itself.
 
-    Two halves of one materialization contract
-    (:meth:`~mcuhome.workbench.signing.SigningKey.key_file`): the file
-    imgtool actually read exists only while the commands run — inside
-    ``secrets/firmware/``, never afterwards — and the returned plan
-    carries the key's durable home, because that is the path a caller
-    prints to a user after the fact.
+    Nothing is materialized and nothing cleaned up (PO 2026-08-14): the
+    ``!file`` reference in the secrets YAML resolves to a real file, that
+    file is the ``--key`` argument, and the returned plan carries the
+    same durable path — the one a caller prints to a user after the
+    fact, and the one that is still there when they look.
     """
     from mcuhome.workbench.project import init_project
 
     out = _report_dir(tmp_path)
     project = init_project(tmp_path / "project").project
-    signing.signing_key(env={}, project=project)  # generate into the secrets YAML
+    generated = signing.signing_key(env={}, project=project)
     used_keys: list[Path] = []
 
     def runner(command: list[str]) -> tuple[int, str]:
         key_arg = Path(command[command.index("--key") + 1])
         used_keys.append(key_arg)
-        assert key_arg.is_file()  # exists while imgtool runs...
-        assert key_arg.parent == project.firmware_secrets_file.parent
+        assert key_arg.is_file()
         Path(command[-1]).write_bytes(b"signed")
         return 0, ""
 
     plan = imgtool.sign_report(
         out, env={imgtool.IMGTOOL_VAR: "imgtool"}, project=project, runner=runner
     )
-    assert used_keys and all(not path.exists() for path in used_keys)  # ...and only while
-    assert all(path != project.firmware_secrets_file for path in used_keys)
-    assert plan.key == project.firmware_secrets_file
+    assert used_keys and all(path == generated.path for path in used_keys)
+    assert generated.path.is_file()  # the durable home, untouched
+    assert plan.key == generated.path
+    assert plan.key.name == signing.PRIVATE_KEY_FILE
+    assert plan.key != project.firmware_secrets_file  # the YAML is never a --key
 
 
 def test_sign_report_refuses_a_missing_key_rather_than_making_one(tmp_path) -> None:

@@ -56,7 +56,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from mcuhome.model import manifest as manifest_module
@@ -215,11 +215,9 @@ class SignPlan:
     #: Directory the manifest lives in; every path below is under it.
     out_dir: Path
     manifest_path: Path
-    #: Where the signing key *lives* — the file a caller may name to a
-    #: user afterwards. For a key kept in the project's secrets YAML the
-    #: commands below carry a short-lived materialized path instead
-    #: (:meth:`~mcuhome.workbench.signing.SigningKey.key_file`), which is
-    #: gone by the time a caller holds this plan.
+    #: The signing key file — the same durable file the commands below
+    #: carry: the project's referenced ``mcuboot.pem`` or the override's
+    #: plain PEM (:attr:`~mcuhome.workbench.signing.SigningKey.path`).
     key: Path
     parameters: SigningParameters
     #: One entry per artifact format, in a stable order: format, command,
@@ -502,19 +500,15 @@ def sign_report(
     The build-report counterpart of :func:`sign_build`. The key is
     resolved exactly as a build resolves it (``--signing-key``, then
     :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s
-    ``secrets/firmware/mcuboot.yaml``) and, as there, **never generated**
-    here: a delivered build has to be signed with the key its device's
-    bootloader already carries. A key that lives in the secrets YAML
-    exists as a file only while imgtool runs
-    (:meth:`~mcuhome.workbench.signing.SigningKey.key_file`).
+    ``secrets/firmware/mcuboot.yaml`` reference) and, as there, **never
+    generated** here: a delivered build has to be signed with the key
+    its device's bootloader already carries. The resolved key is a file
+    either way, and imgtool gets exactly that file.
     """
     resolved = signing.signing_key(key, env=env, project=project, create=False)
-    with resolved.key_file() as key_path:
-        plan = plan_report_signing(target, key=key_path, env=env, topdir=topdir)
-        run_signing(plan, runner=runner)
-    # The returned plan names the key's durable home, not the
-    # materialized file the commands used — that one is already gone.
-    return replace(plan, key=resolved.path)
+    plan = plan_report_signing(target, key=resolved.path, env=env, topdir=topdir)
+    run_signing(plan, runner=runner)
+    return plan
 
 
 def run_signing(plan: SignPlan, *, runner: Runner | None = None) -> list[Path]:
@@ -588,7 +582,6 @@ def sign_build(
     ``workspace.find_topdir(...)``.
     """
     resolved = signing.signing_key(key, env=env, project=project, create=False)
-    with resolved.key_file() as key_path:
-        plan = plan_signing(target, key=key_path, env=env, topdir=topdir)
-        run_signing(plan, runner=runner)
-    return replace(plan, key=resolved.path)
+    plan = plan_signing(target, key=resolved.path, env=env, topdir=topdir)
+    run_signing(plan, runner=runner)
+    return plan

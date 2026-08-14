@@ -1102,11 +1102,14 @@ def test_the_packer_refuses_private_key_material_by_name_and_by_content(tmp_path
     packed = sc.pack_context(context, spool=tmp_path / "clean.tar.zst")
     assert "keys/signing.pub" in packed.members
 
-    # Also refuse mcuboot.yaml by name (the other known private key name).
-    (context / "keys" / "mcuboot.yaml").write_text(private_pem, encoding="utf-8")
-    with pytest.raises(sc.PrivateKeyRefused, match="keys/mcuboot.yaml"):
-        sc.pack_context(context, spool=tmp_path / "mcuboot.tar.zst")
-    (context / "keys" / "mcuboot.yaml").unlink()
+    # Also refuse the other known private-key names outright: the
+    # project's mcuboot.yaml (which references the key) and the
+    # referenced mcuboot.pem (which IS the key).
+    for name in ("mcuboot.yaml", "mcuboot.pem"):
+        (context / "keys" / name).write_text(private_pem, encoding="utf-8")
+        with pytest.raises(sc.PrivateKeyRefused, match=f"keys/{name}"):
+            sc.pack_context(context, spool=tmp_path / f"{name}.tar.zst")
+        (context / "keys" / name).unlink()
 
 
 def test_the_public_api_has_no_slot_a_private_key_could_occupy(tmp_path: Path) -> None:

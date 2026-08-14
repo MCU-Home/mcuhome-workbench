@@ -300,6 +300,48 @@ def test_a_non_string_token_is_refused_with_the_quoting_hint(project: Project) -
     assert 'token: "12345"' in (caught.value.hint or "")
 
 
+def test_the_token_may_reference_its_own_file(project: Project) -> None:
+    """`token: !file <name>` — the generic mechanism, free of extra code.
+
+    The referenced file follows the old token-file rule (E63): a
+    trailing newline is an editor's habit and ignored, the content is
+    the token.
+    """
+    write_project(project, REMOTE_ATTIC + "default_builder: attic\n")
+    token_file = project.builder_secrets_file("attic").parent / "attic.token"
+    token_file.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    token_file.write_text("s3cret\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    write_token(project, "attic", "token: !file attic.token\n")
+    settings = resolve_settings(project=project, env={})
+    assert resolve_builder(settings, project=project, env={}).token == "s3cret"
+
+
+def test_a_referenced_token_file_with_more_than_a_token_is_refused(project: Project) -> None:
+    write_project(project, REMOTE_ATTIC + "default_builder: attic\n")
+    token_file = project.builder_secrets_file("attic").parent / "attic.token"
+    token_file.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    token_file.write_text("not a\nbare token\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    write_token(project, "attic", "token: !file attic.token\n")
+    settings = resolve_settings(project=project, env={})
+    with pytest.raises(ConfigError) as caught:
+        resolve_builder(settings, project=project, env={})
+    assert "does not hold a bare token" in caught.value.message
+    assert str(token_file) in (caught.value.hint or "")
+
+
+def test_a_missing_referenced_token_file_is_a_located_refusal(project: Project) -> None:
+    """The !file contract: a dangling reference stops the run at once."""
+    write_project(project, REMOTE_ATTIC + "default_builder: attic\n")
+    write_token(project, "attic", "token: !file gone.token\n")
+    settings = resolve_settings(project=project, env={})
+    with pytest.raises(ConfigError) as caught:
+        resolve_builder(settings, project=project, env={})
+    assert "gone.token" in caught.value.message
+    assert "does not exist" in caught.value.message
+
+
 def test_an_exposed_credentials_file_draws_a_warning(project: Project) -> None:
     write_project(project, REMOTE_ATTIC + "default_builder: attic\n")
     file = write_token(project, "attic", "token: s3cret\n")

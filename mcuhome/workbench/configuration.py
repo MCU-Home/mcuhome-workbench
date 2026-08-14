@@ -52,7 +52,7 @@ from mcuhome.model.userpaths import config_dir, expand
 
 from mcuhome.workbench import builders as builders_module
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
-from mcuhome.workbench.loader import load_yaml_file
+from mcuhome.workbench.loader import FileRef, load_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file
 
 __all__ = [
@@ -555,6 +555,25 @@ def _builder_token(
             # (TLS pinning, certificates — ADR 0023 §4); an unknown
             # key is the future, not a typo worth refusing.
             return None
+        if isinstance(token, FileRef):
+            # `token: !file <name>`: the referenced file is the secret,
+            # so it gets the same §5 check as this one — and the old
+            # token-file rule (E63) holds for its content: surrounding
+            # whitespace is an editor's newline, whitespace inside is a
+            # file with something else in it.
+            check_secret_file(token.path, key_material=False, on_warning=on_warning)
+            bare = token.strip()
+            if not bare or any(character.isspace() for character in bare):
+                raise ConfigError(
+                    f"The file behind {CREDENTIALS_TOKEN_KEY} in {file} does not hold "
+                    "a bare token.",
+                    location=Location(file=file, key=CREDENTIALS_TOKEN_KEY),
+                    hint=(
+                        f"{token.path} must hold the bearer token and nothing else — "
+                        "a trailing newline is fine and ignored"
+                    ),
+                )
+            return bare
         if not isinstance(token, str):
             raise ConfigError(
                 f"The {CREDENTIALS_TOKEN_KEY} in {file} must be a string.",

@@ -756,7 +756,7 @@ _PRIVATE_KEY_MARKER = b"PRIVATE KEY-----"
 #: File names this workbench has ever kept private key material under:
 #: a plain key file (the ``--signing-key``/dashboard form) and the
 #: project's ``secrets/firmware/mcuboot.yaml`` (ADR 0015 decision 8).
-_PRIVATE_KEY_NAMES = ("signing.key", "mcuboot.yaml")
+_PRIVATE_KEY_NAMES = ("signing.key", "mcuboot.yaml", "mcuboot.pem")
 
 
 def _holds_private_key(source: Path) -> bool:

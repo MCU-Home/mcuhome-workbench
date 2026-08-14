@@ -12,11 +12,15 @@ theatre, and shipping it would be worse than shipping nothing, because it
 looks like a signature.
 
 **Where the key lives.** In the project (PO 2026-08-14; originally per
-user under ``$XDG_CONFIG_HOME``): ``secrets/firmware/mcuboot.yaml``,
-under the YAML key ``firmware_signing_key`` — ADR 0022 §5's rules
-apply, directories 700, the file 600, and a key file other users can
-read is refused, not warned about. All devices of a project share the
-key; a user who wants one vendor key across projects copies the file.
+user under ``$XDG_CONFIG_HOME``): the key material is its own file,
+``secrets/firmware/mcuboot.pem`` (:data:`PRIVATE_KEY_FILE`), and
+``secrets/firmware/mcuboot.yaml`` references it under
+``firmware_signing_key`` with the loader's ``!file`` tag — never as an
+inline PEM block (PO 2026-08-14; the inline form is refused with the
+migration in the hint). ADR 0022 §5's rules apply to **both** files:
+directories 700, files 600, and key material other users can read is
+refused, not warned about. All devices of a project share the key; a
+user who wants one vendor key across projects copies the pair.
 ``--signing-key`` and :data:`KEY_VAR` point somewhere else, at a plain
 PEM file — that is the dashboard's path, which keeps the key in its own
 state directory (in a Home Assistant add-on,
@@ -24,13 +28,10 @@ state directory (in a Home Assistant add-on,
 fixes is *where the user's controlling instance runs, never on a build
 server*.
 
-The YAML home has one practical consequence: ``imgtool`` signs with a
-``--key <file>`` argument, so a key that lives inside a YAML document
-must briefly exist as a file to sign with.
-:meth:`SigningKey.key_file` owns that moment — the file appears next
-to ``mcuboot.yaml`` inside the 700 ``secrets/firmware/`` directory,
-mode 600 from the first byte, and is removed before the call returns.
-It never appears in a build directory and never outside ``secrets/``.
+Either way the resolved key **is a file** (:attr:`SigningKey.path` —
+the referenced ``mcuboot.pem``, or the override's PEM), so ``imgtool``'s
+``--key <file>`` gets that path directly: nothing is ever materialized,
+copied, or written into a build directory to sign with.
 
 **Why signing is a separate concern from building.** MCUboot signing is a
 detached post-build step: ``imgtool`` runs over the finished binary, so a
@@ -59,26 +60,24 @@ from __future__ import annotations
 
 import base64
 import binascii
-import contextlib
 import os
 import secrets
 import stat
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from mcuhome.model import p256
 from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand
-from ruamel.yaml import YAML
-from ruamel.yaml.scalarstring import LiteralScalarString
+from ruamel.yaml.comments import TaggedScalar
 
-from mcuhome.workbench.loader import load_yaml_file
+from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file, ensure_secrets_dir
 
 __all__ = [
     "FIRMWARE_KEY",
     "KEY_VAR",
+    "PRIVATE_KEY_FILE",
     "PUBLIC_KEY_FILE",
     "SigningKey",
     "generate_key_pem",
@@ -88,9 +87,13 @@ __all__ = [
     "signing_key",
 ]
 
-#: The YAML key the private PEM lives under in the project's
-#: ``secrets/firmware/mcuboot.yaml`` (ADR 0015 decision 8).
+#: The YAML key in the project's ``secrets/firmware/mcuboot.yaml`` that
+#: references the private key file (ADR 0015 decision 8).
 FIRMWARE_KEY = "firmware_signing_key"
+
+#: File name of the project's private key, next to the YAML that
+#: references it: ``secrets/firmware/mcuboot.pem``.
+PRIVATE_KEY_FILE = "mcuboot.pem"
 
 #: Conventional file name of the *public* half — the only part of the key
 #: pair that ever leaves the machine it was generated on. A build server
@@ -331,45 +334,21 @@ def looks_like_p256_key(text: str) -> bool:
 class SigningKey:
     """The key this build signs with, and whether it had to be made."""
 
-    #: Where the key lives: the project's ``mcuboot.yaml`` when
-    #: :attr:`in_secrets` is true, a plain PEM file otherwise.
+    #: The key **file**: the project's ``secrets/firmware/mcuboot.pem``
+    #: when :attr:`in_secrets` is true (the file ``mcuboot.yaml``
+    #: references with ``!file``), the override's plain PEM file
+    #: otherwise. Always a real absolute path, ready for an external
+    #: tool's ``--key <file>`` — nothing is ever materialized to sign.
     path: Path
-    #: The private key itself, PKCS#8 PEM. In memory only — consumers
-    #: that need a *file* go through :meth:`key_file`.
+    #: The private key itself, PKCS#8 PEM — the content of :attr:`path`.
     pem: str
-    #: True when the key lives under :data:`FIRMWARE_KEY` inside the
-    #: project's secrets YAML rather than as a plain file.
+    #: True when the key was resolved through the project's
+    #: ``mcuboot.yaml`` reference rather than a plain-file override.
     in_secrets: bool
     #: True when this call created it. The caller says so out loud:
     #: firmware signed with a new key is not accepted by a device that
     #: was bootstrapped with an older one.
     created: bool
-
-    @contextlib.contextmanager
-    def key_file(self) -> Iterator[Path]:
-        """The key as a file on disk, for exactly as long as the block runs.
-
-        ``imgtool`` takes ``--key <file>``, so a key that lives inside
-        the secrets YAML has to be materialized to sign with. The file
-        appears **next to** ``mcuboot.yaml`` — inside the 700
-        ``secrets/firmware/`` directory, never in a build directory —
-        with owner-only permissions from the moment it exists, and is
-        removed before this returns, success or not. A key that already
-        is a plain file is simply yielded; nothing is copied.
-        """
-        if not self.in_secrets:
-            yield self.path
-            return
-        scratch = self.path.parent / f".{secrets.token_hex(8)}.mcuboot.pem"
-        descriptor = os.open(
-            scratch, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR
-        )
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(self.pem)
-            yield scratch
-        finally:
-            scratch.unlink(missing_ok=True)
 
 
 def _refuse_unreadable(path: Path, reason: str) -> BuildError:
@@ -425,17 +404,16 @@ def _refuse_no_project() -> BuildError:
     )
 
 
-def _refuse_not_a_yaml_key(file: Path) -> BuildError:
+def _refuse_inline_key(file: Path) -> BuildError:
     return BuildError(
-        f"The {FIRMWARE_KEY} entry in {file} is not an ECDSA P-256 private key in PEM form.",
+        f"The {FIRMWARE_KEY} entry in {file} must be a !file reference to the key file.",
         hint=(
-            "MCUHome signs with ECDSA P-256 (ADR 0015 decision 8) and will not "
-            "overwrite key material it does not recognize. Fix or remove the entry "
-            "so MCUHome can generate a fresh key — but note that a device already "
-            "running firmware signed with the old key will refuse the new one "
-            "until it is bootstrapped again.\n"
-            "The value must be the full PEM block, written as a YAML literal "
-            f"block ({FIRMWARE_KEY}: | …)."
+            "the key material lives in its own file next to this one, and the "
+            "YAML only points at it (ADR 0015 decision 8):\n"
+            f"    {FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}\n"
+            "If the entry currently holds the PEM itself, move that block into "
+            f"{PRIVATE_KEY_FILE} (same directory, chmod 600) and replace it with "
+            "the reference above."
         ),
     )
 
@@ -501,57 +479,91 @@ def _plain_file_key(path: Path, *, create: bool) -> SigningKey:
 
 
 def _project_key(project: Project, *, create: bool) -> SigningKey:
-    """The project's key in ``secrets/firmware/mcuboot.yaml`` (ADR 0015 §8)."""
+    """The project's key: ``mcuboot.pem``, referenced from ``mcuboot.yaml``.
+
+    The YAML holds a ``!file`` reference and nothing key-shaped; the
+    material lives in its own file (ADR 0015 §8, PO 2026-08-14). Both
+    are under the key-material rule of ADR 0022 §5 — insecure
+    permissions are a refusal, never a warning, checked before the
+    first byte is used. An inline PEM block is refused with the
+    migration in the hint: the two-file shape is the only one.
+    """
     file = project.firmware_secrets_file
+    data: dict | None = None
     if file.exists():
         if file.is_dir():
             raise _refuse_unreadable(file, "it is a directory")
-        # Key material: insecure permissions are a refusal, never a
-        # warning (ADR 0022 §5) — checked before the first byte is read.
         check_secret_file(file, key_material=True)
         data = load_yaml_file(file)
         if data is None:
             data = {}
         if not isinstance(data, dict):
             raise _refuse_unreadable(file, "it is not a mapping of `name: value` pairs")
-        pem = data.get(FIRMWARE_KEY)
-        if pem is not None:
-            if not isinstance(pem, str) or not looks_like_p256_key(pem):
-                raise _refuse_not_a_yaml_key(file)
-            return SigningKey(path=file, pem=pem, in_secrets=True, created=False)
+        value = data.get(FIRMWARE_KEY)
+        if value is not None:
+            if not isinstance(value, FileRef):
+                raise _refuse_inline_key(file)
+            check_secret_file(value.path, key_material=True)
+            if not looks_like_p256_key(str(value)):
+                raise _refuse_not_a_key(value.path)
+            return SigningKey(path=value.path, pem=str(value), in_secrets=True, created=False)
         if not create:
             raise _refuse_unreadable(file, f"it has no {FIRMWARE_KEY} entry")
-        # The file exists with other content: add the key to it,
-        # round-trip, so nothing the user put there is disturbed. The
-        # rewrite goes through the existing inode — permissions (just
-        # checked) survive.
-        pem = generate_key_pem()
-        data[FIRMWARE_KEY] = LiteralScalarString(pem)
-        try:
-            with file.open("w", encoding="utf-8") as handle:
-                YAML(typ="rt").dump(data, handle)
-        except OSError as error:
-            raise _refuse_unwritable(file, error.strerror or "cannot write") from error
-        return SigningKey(path=file, pem=pem, in_secrets=True, created=True)
-
-    if not create:
+    elif not create:
         raise _refuse_unreadable(file, "no such file")
 
-    pem = generate_key_pem()
-    body = "\n".join("  " + line for line in pem.strip().splitlines())
-    text = (
-        "# MCUHome firmware signing key (ADR 0015 decision 8).\n"
-        "# The private half of the project's MCUboot key pair. It never leaves\n"
-        "# this machine: never commit it, never copy it into a build directory,\n"
-        "# never hand it to a build server.\n"
-        f"{FIRMWARE_KEY}: |\n{body}\n"
-    )
+    # Create: the key file first, then the reference — a crash between
+    # the two leaves a valid pem that the next run adopts, never a
+    # dangling reference.
     try:
-        ensure_secrets_dir(project.root, "firmware")
-        _write_owner_only(file, text)
+        directory = ensure_secrets_dir(project.root, "firmware")
     except OSError as error:
         raise _refuse_unwritable(file, error.strerror or "cannot write") from error
-    return SigningKey(path=file, pem=pem, in_secrets=True, created=True)
+    pem_path = directory / PRIVATE_KEY_FILE
+    created = False
+    if pem_path.exists():
+        # An unreferenced key at the canonical spot — a user's import, or
+        # the crash recovery above. Adopt it rather than overwrite it:
+        # generating over existing key material is the one thing this
+        # function must never do.
+        check_secret_file(pem_path, key_material=True)
+        try:
+            pem = pem_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            reason = getattr(error, "strerror", None) or "it is not a text file"
+            raise _refuse_unreadable(pem_path, reason) from error
+        if not looks_like_p256_key(pem):
+            raise _refuse_not_a_key(pem_path)
+    else:
+        pem = generate_key_pem()
+        try:
+            _write_owner_only(pem_path, pem)
+        except OSError as error:
+            raise _refuse_unwritable(pem_path, error.strerror or "cannot write") from error
+        created = True
+
+    reference = f"{FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}\n"
+    try:
+        if data is not None:
+            # The file exists with other content: add the reference,
+            # round-trip, so nothing the user put there is disturbed —
+            # including other !file references, which editing_yaml
+            # writes back as the references they are.
+            data[FIRMWARE_KEY] = TaggedScalar(value=PRIVATE_KEY_FILE, tag="!file")
+            with file.open("w", encoding="utf-8") as handle:
+                editing_yaml().dump(data, handle)
+        else:
+            _write_owner_only(
+                file,
+                "# MCUHome firmware signing key (ADR 0015 decision 8).\n"
+                f"# The private half of the project's MCUboot key pair lives next to\n"
+                f"# this file as {PRIVATE_KEY_FILE} and is referenced below. It never\n"
+                "# leaves this machine: never commit it, never copy it into a build\n"
+                "# directory, never hand it to a build server.\n" + reference,
+            )
+    except OSError as error:
+        raise _refuse_unwritable(file, error.strerror or "cannot write") from error
+    return SigningKey(path=pem_path, pem=pem, in_secrets=True, created=created)
 
 
 def _write_owner_only(path: Path, text: str) -> None:

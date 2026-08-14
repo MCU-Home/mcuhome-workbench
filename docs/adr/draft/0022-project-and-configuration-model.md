@@ -154,11 +154,33 @@ Pinned during implementation: the check is per file (a 600 file is
 protected whatever its directory says), runs in every reader — the
 `!secret` loader and the signing-key reader today — and warnings
 travel through a caller-supplied `on_warning` callback, because the
-workbench prints nothing. The signing key's YAML home has one
-practical consequence: `imgtool` signs with `--key <file>`, so the key
-is materialized as a short-lived owner-only file **inside**
-`secrets/firmware/` for exactly the duration of the imgtool run, and
-never anywhere else (ADR 0015 §8).
+workbench prints nothing.
+
+**The `!file` tag** (second PO round 2026-08-14): any YAML the
+workbench loader reads may make a value out of an external file —
+`key: !file name.pem` — and the mechanism is deliberately generic, for
+every current and future value an external tool wants *as a file*.
+The resolved value is the file's raw content (a `str` to every
+consumer, so it composes with existing readers unchanged) and carries
+the file as `value.path`, always the real absolute path (symlinks
+resolved), ready for a tool boundary like `imgtool --key <file>`.
+Rules, pinned: a relative reference resolves against the referencing
+YAML file's directory (this section's path rule); `~` is refused with
+the reason (a configuration file answers for itself); resolution is
+eager and strict — a reference to a file that does not exist or cannot
+be read stops the load at once, located at the tag's line; the tag is
+**not** `!include`, because in the Home Assistant world that means
+"parse and inline YAML" and this means "the bytes of that file,
+verbatim". A consumer that treats such a value as a secret extends its
+permission check to `value.path` (the signing key refuses, the builder
+token warns — same ladder as the file the reference stands in). Writers
+that round-trip a loaded document use the loader's `editing_yaml`, which
+writes a reference back as the reference — never as the content.
+
+The founding consumer is the signing key: `secrets/firmware/mcuboot.pem`
+referenced from `mcuboot.yaml`, imgtool takes the path directly, and
+the short-lived key materialization this paragraph used to describe is
+gone with the inline PEM form (ADR 0015 §8).
 
 ## Consequences
 

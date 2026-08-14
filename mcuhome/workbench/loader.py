@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Pipeline stage 1: YAML parsing and ``!secret`` resolution.
+"""Pipeline stage 1: YAML parsing, ``!secret`` and ``!file`` resolution.
 
 The parser is ruamel.yaml in round-trip mode for exactly one reason: it
 keeps line and column information on every mapping and sequence, and the
@@ -15,6 +15,20 @@ a secret reference — and an unknown secret is reported with the line of
 the ``!secret`` tag, not of the file it should have been in. Reading the
 secrets file runs the permission check of ADR 0022 §5: a file other
 users can reach draws a warning through the caller's *on_warning*.
+
+``!file path`` makes a value out of an external file (PO 2026-08-14):
+the value **is** the file's raw content — a :class:`FileRef`, a plain
+``str`` to every consumer — and the file itself stays reachable as
+``value.path`` for the consumer that must hand a *file* to an external
+tool (imgtool's ``--key`` is the founding case; whatever comes next gets
+the same two answers for free). Deliberately not ``!include``: in the
+Home Assistant world that tag means "parse and inline YAML", and this
+one means "the bytes of that file, verbatim". Resolution is eager and
+strict — a relative path resolves against the referencing YAML file's
+directory, ``path`` is always the real absolute path, and a file that
+does not exist or cannot be read is a located refusal at load time,
+before any value is consumed. A consumer that treats such a value as a
+secret extends its ADR 0022 §5 permission check to ``value.path``.
 """
 
 from __future__ import annotations
@@ -29,7 +43,14 @@ from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench.project import check_secret_file
 
-__all__ = ["SecretRef", "load_config", "load_yaml_file", "resolve_secrets"]
+__all__ = [
+    "FileRef",
+    "SecretRef",
+    "editing_yaml",
+    "load_config",
+    "load_yaml_file",
+    "resolve_secrets",
+]
 
 
 @dataclass(frozen=True)
@@ -53,9 +74,106 @@ def _secret_constructor(constructor: Any, node: Any) -> SecretRef:
     )
 
 
-def _yaml() -> YAML:
+class FileRef(str):
+    """The raw content of a ``!file``-referenced file, and the file itself.
+
+    A plain ``str`` to every consumer that wants the value (equality,
+    hashing and serialization are the content's), so ``!file`` composes
+    with existing readers without a code change. The two extras carry
+    what the tag adds:
+
+    - :attr:`path` — the referenced file as a **real absolute path**
+      (symlinks resolved), safe to hand to an external tool from any
+      working directory.
+    - :attr:`raw` — the reference exactly as the YAML spelled it, so a
+      round-trip write (:func:`editing_yaml`) reproduces ``!file <raw>``
+      instead of spilling the content into the document.
+    """
+
+    __slots__ = ("path", "raw")
+
+    path: Path
+    raw: str
+
+    def __new__(cls, content: str, *, path: Path, raw: str) -> FileRef:
+        ref = super().__new__(cls, content)
+        ref.path = path
+        ref.raw = raw
+        return ref
+
+
+def _file_constructor(file: Path) -> Callable[[Any, Any], FileRef]:
+    """The ``!file`` constructor, bound to the YAML file being parsed."""
+
+    def construct(constructor: Any, node: Any) -> FileRef:
+        del constructor
+        location = Location(
+            file=file, line=node.start_mark.line + 1, column=node.start_mark.column + 1
+        )
+        if node.id != "scalar" or not str(node.value).strip():
+            raise ConfigError(
+                "!file needs a file path.",
+                location=location,
+                hint="reference the file whose content this value is:\n    key: !file name.pem",
+            )
+        raw = str(node.value).strip()
+        if raw.startswith("~"):
+            raise ConfigError(
+                f'"{raw}" starts with `~`, which !file does not expand.',
+                location=location,
+                hint=(
+                    "a configuration file answers for itself, independent of who "
+                    "reads it — write the path relative to this file, or absolute"
+                ),
+            )
+        target = Path(raw)
+        if not target.is_absolute():
+            target = file.parent / target
+        target = target.resolve()
+        try:
+            content = target.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise ConfigError(
+                f'The file "{raw}" referenced here does not exist (looked at {target}).',
+                location=location,
+                hint=(
+                    "a !file reference resolves relative to the file that contains "
+                    "it; create the file, or fix the path"
+                ),
+            ) from exc
+        except (OSError, UnicodeDecodeError) as exc:
+            reason = getattr(exc, "strerror", None) or "it is not a text file"
+            raise ConfigError(
+                f'The file "{raw}" referenced here cannot be read: {reason}.',
+                location=location,
+            ) from exc
+        return FileRef(content, path=target, raw=raw)
+
+    return construct
+
+
+def _yaml(path: Path) -> YAML:
     yaml = YAML(typ="rt")
     yaml.constructor.add_constructor("!secret", _secret_constructor)
+    yaml.constructor.add_constructor("!file", _file_constructor(path))
+    return yaml
+
+
+def _fileref_representer(representer: Any, ref: FileRef) -> Any:
+    return representer.represent_scalar("!file", ref.raw)
+
+
+def editing_yaml() -> YAML:
+    """A round-trip YAML instance for writing loaded data back.
+
+    The one wrinkle it exists for: a loaded document may hold
+    :class:`FileRef` values, and a plain dump would write their *content*
+    where the ``!file`` reference stood — replacing a pointer to a secret
+    with the secret. This instance writes every ``FileRef`` back as
+    ``!file <raw>``, byte-for-byte the reference the user wrote.
+    """
+    yaml = YAML(typ="rt")
+    yaml.representer.add_representer(FileRef, _fileref_representer)
     return yaml
 
 
@@ -76,7 +194,7 @@ def load_yaml_file(path: Path) -> Any:
         ) from exc
 
     try:
-        return _yaml().load(text)
+        return _yaml(path).load(text)
     except YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         problem = getattr(exc, "problem", None) or "the file is not valid YAML"
