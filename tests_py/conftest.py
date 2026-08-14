@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Shared fixtures and helpers for the builder tests."""
+"""Shared fixtures and helpers for the builder tests.
+
+Arranged in two halves, and the order is the point. Everything above the
+marked block near the bottom needs nothing but :mod:`mcuhome.model` and
+:mod:`mcuhome.compiler`; everything below it needs
+:mod:`mcuhome.workbench`. ADR 0024 moves the first two into a repository
+of their own, so the marker is where this file gets cut — not a tidiness
+convention but the seam, kept visible while both halves still live here.
+"""
 
 from __future__ import annotations
 
@@ -12,14 +20,11 @@ import pytest
 from mcuhome.compiler import container
 from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
-from mcuhome.workbench.api import load_model
-from mcuhome.workbench.tree import ConfigTree, find_config_root
 
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
 EXAMPLES_DIR = REPO_ROOT / "docs" / "design" / "examples"
 DATA_DIR = TESTS_DIR / "data"
-FIXTURE_TREE = DATA_DIR / "tree"
 GOLDEN_DIR = DATA_DIR / "golden"
 
 #: The import package the three distributions of ADR 0020 share, and the
@@ -100,40 +105,6 @@ def package_modules() -> list[Path]:
     return sorted(found)
 
 
-#: A configuration that passes every check, used as the baseline the
-#: gate tests break one thing at a time.
-VALID_CONFIG = """\
-device:
-  name: bench-node
-  board: nrf7002dk/nrf5340/cpuapp
-
-network:
-  thread:
-    device_role: ftd
-  matter:
-    enabled: true
-    use_test_pairing: true
-
-hardware:
-  buses:
-    i2c0:
-      controller: arduino_i2c
-  peripherals:
-    baro:
-      driver: bosch,bmp180
-      bus: i2c0
-
-node:
-  endpoints:
-    - id: 1
-      device_type: temperature_sensor
-      clusters:
-        temperature_measurement:
-          source: baro.temperature
-          sampling: 10s
-"""
-
-
 @pytest.fixture(autouse=True)
 def _no_real_signing_key(monkeypatch, tmp_path):
     """No test may touch the developer's own firmware signing key.
@@ -182,6 +153,59 @@ def _no_docker(monkeypatch):
         )
 
     monkeypatch.setattr(container, "_run_quiet", refuse)
+
+
+# --- workbench-side fixtures (leave in the tools repo at the split) ---
+#
+# Everything below this line resolves a configuration, and resolving is
+# stages 1-3, which is `mcuhome.workbench`. ADR 0024 leaves the workbench
+# where it is and moves model+compiler out, so the cut is exactly here:
+# the half above travels, this half stays, and the two imports that make
+# the difference are the first thing in the block rather than mixed into
+# the header (E402 is the price of saying so in one place).
+#
+# `ConfigError`, `ConfigErrorGroup` and `DeviceModel` are imported at the
+# top because they are `mcuhome.model`, which both repositories depend
+# on; after the cut they are used only here, so the departing half drops
+# them.
+
+from mcuhome.workbench.api import load_model  # noqa: E402
+from mcuhome.workbench.tree import ConfigTree, find_config_root  # noqa: E402
+
+FIXTURE_TREE = DATA_DIR / "tree"
+
+#: A configuration that passes every check, used as the baseline the
+#: gate tests break one thing at a time.
+VALID_CONFIG = """\
+device:
+  name: bench-node
+  board: nrf7002dk/nrf5340/cpuapp
+
+network:
+  thread:
+    device_role: ftd
+  matter:
+    enabled: true
+    use_test_pairing: true
+
+hardware:
+  buses:
+    i2c0:
+      controller: arduino_i2c
+  peripherals:
+    baro:
+      driver: bosch,bmp180
+      bus: i2c0
+
+node:
+  endpoints:
+    - id: 1
+      device_type: temperature_sensor
+      clusters:
+        temperature_measurement:
+          source: baro.temperature
+          sampling: 10s
+"""
 
 
 def line_of(text: str, needle: str) -> int:

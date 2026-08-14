@@ -16,6 +16,16 @@ Kconfig symbol is the hazard whatever surrounds it. Here the hazard is a
 real access: a module that explains in prose why it takes ``env`` instead
 of reading ``os.environ`` is doing the right thing, and a text search
 would fail it for saying so.
+
+**This file has no workbench half to move out.** Its subject is
+``mcuhome.model.userpaths`` and the invariant runs over whatever
+``conftest.PACKAGES`` names, so at the ADR 0024 cut it travels whole and
+covers model+compiler. The workbench is where session-serving code makes
+these reads most tempting, so the tools repository has to keep covering
+it: duplicate :data:`FORBIDDEN_ATTRIBUTES`, :data:`PROCESS_MODULES`,
+:func:`_is_main_guard` and :func:`_process_reads` there against
+``PACKAGES = ("mcuhome.workbench",)``. That is a *second* test rather
+than a move, which is why it is written down here instead of done here.
 """
 
 from __future__ import annotations
