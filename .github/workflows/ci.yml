@@ -82,7 +82,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          # The workbench itself supports >=3.11; 3.13 is the floor of
+          # mcuhome-build-server, installed below as the live peer
+          # test_sessionclient.py drives its client against.
+          python-version: "3.13"
 
       # mcuhome-model and mcuhome-compiler from the SDK checkout,
       # mcuhome-workbench (this repo, with the `remote` extra for
