@@ -28,6 +28,20 @@ The cut cannot follow "Python vs. C": the compiler is delivered
 imports the model. A tools-side compiler or model would make the
 SDK-first release order circular.
 
+The split survey (2026-08-14) found the premise incomplete: the
+compiler also leaned on the **workbench** — a pip pin
+(`mcuhome-workbench==`) and runtime imports (`abi.py` pulled
+`workbench.contextdir` for verify/build; the SDK package only worked
+because it shipped the whole namespace). The split therefore carries a
+prerequisite refactor: the compiler gets its own, independent context
+read/verify implementation on model primitives — legitimate by the
+contract's own philosophy (each side computes from the bytes it holds,
+pinned against the shared golden vectors) — and the pin-resolution
+edges invert (the workbench resolves, compiler executors receive
+resolved values). After it, `mcuhome-compiler` depends on
+`mcuhome-model` alone, and the workbench gains the `local` extra that
+cli ADR 0002 requires.
+
 ## Decision
 
 ### 1. Two repositories
