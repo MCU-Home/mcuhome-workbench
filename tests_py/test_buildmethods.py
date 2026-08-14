@@ -3,7 +3,7 @@
 """The three build methods behind one interface (``buildmethods.py``).
 
 No container, no toolchain and no socket: every method is stubbed at its
-own backend seam — ``run_local_build``, ``run_dev_build``,
+own backend seam — ``compose_local_build``, ``run_dev_build``,
 ``run_remote_build`` — and what is asserted is the layer above them. That
 is deliberately the whole point of the module: the three compositions are
 tested where they live (``test_localbuild.py``, ``test_workspace.py``,
@@ -121,7 +121,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             image="ghcr.io/mcu-home/builder:test",
         )
 
-    monkeypatch.setattr(localbuild, "run_local_build", fake)
+    monkeypatch.setattr(buildmethods, "compose_local_build", fake)
     outcome = _run(
         buildmethods.BuildRequest(
             model=model,

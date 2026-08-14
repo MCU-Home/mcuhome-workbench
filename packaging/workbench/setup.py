@@ -61,5 +61,13 @@ setup(
         # against, and `<4` is there because aiohttp 4 changes its
         # WebSocket surface.
         "remote": ["aiohttp>=3.10,<4", "zstandard>=0.22"],
+        # The `local` and `local-dev` build methods: stages 4-5 and the
+        # backend that drives the build container live in
+        # mcuhome-compiler, an optional edge resolved at call time
+        # (buildmethods._compiler, ADR 0020 decision 3). The CLI depends
+        # on mcuhome-workbench[local,remote] so all three methods work
+        # out of the box (cli ADR 0002); the dashboard deliberately
+        # installs neither this extra nor the compiler.
+        "local": [f"mcuhome-compiler=={__version__}"],
     },
 )

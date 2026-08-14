@@ -80,15 +80,11 @@ __all__ = [
     "resolve_version",
 ]
 
-#: The distribution name the SDK package is indexed under, from the one
-#: script that writes the index (``scripts/build_sdk_archive.py``). Not a
-#: value anybody invents: an index keyed by any other name is one no pin
-#: can be resolved from.
-SDK_PACKAGE_NAME = "mcuhome-sdk"
-
-#: The static index a source directory carries, next to the archives it
-#: indexes (``scripts/build_sdk_archive.py``).
-INDEX_FILE = "index.json"
+# The index file and package name are shared vocabulary — a backend
+# re-reads the same directory to fetch the bytes (contract §9.1) and may
+# not import this module to know the names, so both live in the model
+# and are re-exported here under the names this module always offered.
+from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
 
 #: The SDK constraint a build resolves with when the caller states none:
 #: "the newest the configured sources offer". A device configuration can

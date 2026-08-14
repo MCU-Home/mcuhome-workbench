@@ -22,7 +22,7 @@ an unimplemented action refuses: ``status: "unsupported"``, ``reason:
 on rather than a crash.
 
 ``verify`` computes nothing itself. Every hash and the effective context
-ID come from :func:`~mcuhome.workbench.contextdir.verify_context`, the one
+ID come from :func:`~mcuhome.compiler.contextread.verify_context`, the one
 implementation of §3.3's normative rule in this project: "Implementations
 on both sides of the contract MUST compute the ID independently from the
 bytes they actually hold", which is only worth anything while each side
@@ -267,7 +267,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.modelfile import read_model
 
-# mcuhome.workbench.contextdir is imported inside _open_context, not
+# mcuhome.compiler.contextread is imported inside _open_context, not
 # here: the SDK entry point (§6.1) imports this module for
 # run_invocation, and its runtime is what the SDK package declares — a
 # bare interpreter, no third-party packages. contextdir carries the YAML
@@ -275,7 +275,7 @@ from mcuhome.model.modelfile import read_model
 # environment provides. tests_py/test_container_closure.py pins the
 # entry point's closure to stdlib plus mcuhome.
 if TYPE_CHECKING:
-    from mcuhome.workbench.contextdir import ContextVerification
+    from mcuhome.compiler.contextread import ContextVerification
 
 __all__ = [
     "BOOTLOADER_ARTIFACT",
@@ -1144,7 +1144,7 @@ def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
     Shared by ``verify`` and ``build``, which is the point: both compute
     the effective context ID, and §3.3 is only worth anything while each
     side of the contract has *one* implementation of it. Every hash and
-    the ID come from :func:`~mcuhome.workbench.contextdir.verify_context`.
+    the ID come from :func:`~mcuhome.compiler.contextread.verify_context`.
 
     The refusals are §3.1's and §3.2's, and neither is action-specific:
     a context with no ``manifest.yaml`` "is missing a file the action
@@ -1163,7 +1163,7 @@ def _open_context(echo: dict[str, Any], root: Path) -> ContextVerification:
     # Lazy on purpose — see the note at the module's import block: the
     # SDK entry point imports this module under a bare runtime, and only
     # the actions that measure a context may pull the YAML machinery.
-    from mcuhome.workbench.contextdir import ContextFormatVersionError, verify_context
+    from mcuhome.compiler.contextread import ContextFormatVersionError, verify_context
 
     if not (root / MANIFEST_FILE).is_file():
         # "is missing a file the action needs … the missing path in
@@ -1228,10 +1228,10 @@ def _verify(echo: dict[str, Any], document: dict[str, Any]) -> dict[str, Any]:
     offending paths in ``error.details``."
 
     Every hash and the ID itself come from
-    :func:`~mcuhome.workbench.contextdir.verify_context`, never from this module —
+    :func:`~mcuhome.compiler.contextread.verify_context`, never from this module —
     see the module docstring for why a second implementation of §3.3 here
     would be the defect that rule exists against. Its
-    :attr:`~mcuhome.workbench.contextdir.ContextVerification.ok` covers one case
+    :attr:`~mcuhome.compiler.contextread.ContextVerification.ok` covers one case
     §7.3 does not enumerate and §3.3 demands anyway: a manifest whose
     declared ``id`` is not the ID its own contents yield. "Implementations
     … MUST NOT trust a declared ``id`` value" — and a declared value
@@ -1338,7 +1338,7 @@ def patchset(layer_dir: Path) -> str:
     64 lowercase hex digits, and each ``<64 hex chars>`` inside the input
     is lowercase (§3.3.1)." The sort is over the filename's **bytes**, not
     over its code points — the two agree for the ``NNNN-name.patch``
-    grammar :mod:`mcuhome.workbench.contextdir` enforces, and stating the byte order
+    grammar :mod:`mcuhome.compiler.contextread` enforces, and stating the byte order
     is what makes a second implementation agree for a name outside it.
     """
     files = sorted(

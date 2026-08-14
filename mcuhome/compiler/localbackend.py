@@ -63,8 +63,10 @@ from pathlib import Path
 from typing import Any
 
 import zstandard
+from packaging.version import InvalidVersion, Version
 
 from mcuhome.compiler import abi
+from mcuhome.compiler.contextread import read_context_manifest
 
 # `Artifact` is vocabulary, not backend machinery: the `remote` method
 # reports the same four fields off the session protocol's verdict and may
@@ -75,15 +77,17 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextManifest
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
-from mcuhome.model.toolchain import satisfies_line
-from mcuhome.workbench.contextdir import read_context_manifest
 
-# The package name, the index file name and the resolution rule are the
-# client's as much as this backend's — the same directory is read by
-# whoever resolves a pin and by whoever fetches the bytes — so all three
-# live in the workbench and are re-exported here under the names this
-# module already offered (`localbackend.SDK_PACKAGE_NAME`).
-from mcuhome.workbench.resolve_pins import INDEX_FILE, SDK_PACKAGE_NAME, resolve_from_index
+# The package name and the index file name are shared vocabulary and
+# live in the model (`mcuhome.model.sdkindex`); they are re-exported
+# here under the names this module always offered
+# (`localbackend.SDK_PACKAGE_NAME`). The resolution against the index is
+# deliberately this backend's own: contract §9.1 makes acquiring the
+# pinned bytes a backend duty, by exact version — constraint resolution
+# is the workbench's job (E65) and by the time a context exists its pin
+# is one version, not a range.
+from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME
+from mcuhome.model.toolchain import satisfies_line
 
 __all__ = [
     "ACTION_BUILD",
@@ -988,6 +992,36 @@ def _lstat(path: Path) -> os.stat_result | None:
 # --------------------------------------------------------------------------
 
 
+def _exact_index_entry(index: object, version: str) -> tuple[str, str] | None:
+    """The ``(file, sha256)`` the index states for exactly *version*, else ``None``.
+
+    The backend's own reading of the index the workbench also writes and
+    reads — independent on purpose (§9.1: the hash decides, never the
+    resolver), and exact-only: by the time a context exists its pin is
+    one version, not a range. Version equality is PEP 440 equality, so
+    an index that spells ``2.4`` still answers a pin of ``2.4.0``.
+    """
+    packages = index.get("packages") if isinstance(index, dict) else None
+    entries = packages.get(SDK_PACKAGE_NAME) if isinstance(packages, dict) else None
+    if not isinstance(entries, dict):
+        return None
+    try:
+        wanted = Version(version)
+    except InvalidVersion:
+        return None
+    for candidate, entry in entries.items():
+        try:
+            if Version(str(candidate)) != wanted:
+                continue
+        except InvalidVersion:
+            continue
+        try:
+            return str(entry["file"]), str(entry["sha256"])
+        except (KeyError, TypeError):
+            return None
+    return None
+
+
 def acquire_sdk(*, version: str, sha256: str, sources: Sequence[Path], into: Path) -> SdkPackage:
     """Find the pinned SDK package, verify its bytes, unpack it safely.
 
@@ -1015,19 +1049,19 @@ def acquire_sdk(*, version: str, sha256: str, sources: Sequence[Path], into: Pat
             index = json.loads(index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        try:
-            resolved = resolve_from_index(index, SDK_PACKAGE_NAME, f"=={version}")
-        except BuildError:
+        resolved = _exact_index_entry(index, version)
+        if resolved is None:
             continue
-        candidate = directory / resolved.file
+        resolved_file, resolved_sha256 = resolved
+        candidate = directory / resolved_file
         if not candidate.is_file():
             continue
-        if resolved.sha256 != sha256:
+        if resolved_sha256 != sha256:
             raise _sdk_unavailable(
                 version,
                 sha256,
                 searched,
-                f"{index_path} lists {resolved.file} with sha256 {resolved.sha256}, and the "
+                f"{index_path} lists {resolved_file} with sha256 {resolved_sha256}, and the "
                 f"context pins {sha256}",
             )
         measured = sha256_file(candidate)

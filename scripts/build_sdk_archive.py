@@ -47,11 +47,13 @@ below has a consumer that fails without it:
 ``bin/generate``                 the entry point itself — spawned as a child by
                                  absolute path, so its **exec bit** is archive
                                  content and not repository cosmetics
-``mcuhome/``                     the program body: ``containers/builder/run``
-                                 refuses (exit 70) without
-                                 ``mcuhome/compiler/abi.py``, and that module
-                                 imports ``mcuhome.workbench`` at module level,
-                                 so all three subpackages travel together
+``mcuhome/model``,               the program body: ``containers/builder/run``
+``mcuhome/compiler``             refuses (exit 70) without
+                                 ``mcuhome/compiler/abi.py``, whose import
+                                 closure since ADR 0024 is the model and the
+                                 compiler itself — the workbench neither
+                                 travels in the SDK package nor exists in a
+                                 build container
 ``west.yml``                     west re-reads it on every CMake configure, out
                                  of the manifest repository's directory, which
                                  is exactly where the SDK is mounted
@@ -180,7 +182,8 @@ SDK_TREES = (
     "dts",
     "include",
     "lib",
-    "mcuhome",
+    "mcuhome/compiler",
+    "mcuhome/model",
     "samples",
     "scripts/pyshim",
     "snippets",

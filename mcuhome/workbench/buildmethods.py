@@ -74,14 +74,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
 from mcuhome.model.artifacts import Artifact
+from mcuhome.model.context import ContainerResolution
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
-from mcuhome.workbench.contextdir import create_build_context
+from mcuhome.workbench.contextdir import create_build_context, lock_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
 __all__ = [
@@ -368,17 +370,81 @@ async def run_build(request: BuildRequest, *, method: str = DEFAULT_METHOD) -> B
     return await _run_remote(request)
 
 
-async def _run_local(request: BuildRequest) -> BuildOutcome:
-    """The container method: :func:`mcuhome.compiler.localbuild.run_local_build`.
+def compose_local_build(
+    model: DeviceModel,
+    *,
+    signing_pub: str,
+    sdk_sources: Sequence[Path],
+    work_root: Path,
+    env: dict[str, str],
+    image: str | None = None,
+    jobs: int = 1,
+    mode: str = "clean",
+    created: datetime | None = None,
+    on_line: Any = None,
+    docker: Any = None,
+):
+    """The ``local`` method's composition: resolve, create, lock, drive.
 
-    Synchronous underneath — it drives ``docker`` with a subprocess per
-    invocation — so it is offloaded rather than awaited. The module is
-    looked up rather than imported so that a caller (or a test) that
-    replaced ``run_local_build`` on it is the one that runs.
+    The two roles E61 separates, composed where the client half lives:
+    the workbench states the requirement — it creates and locks the
+    context, recording the image the compiler half answered with — and
+    the compiler's backend half does the answering
+    (:func:`~mcuhome.compiler.localbuild.resolve_checked_image`) and the
+    driving (:func:`~mcuhome.compiler.localbuild.run_locked_build`).
+    Order is the composition's promise: the image refusals cost no
+    context directory and no SDK lookup. Synchronous — ``run_build``
+    offloads it; *docker* is the test seam, threaded through to both
+    compiler halves.
     """
     localbuild = _compiler("localbuild", LOCAL)
+    sources = tuple(Path(source) for source in sdk_sources)
+    resolved = localbuild.resolve_checked_image(
+        image, line=model.toolchain.zephyr_line, env=dict(env), docker=docker
+    )
+    work_root = Path(work_root)
+    context_dir = work_root / "context"
+    # The pin resolution and the context layout are the workbench's, and
+    # deliberately the same call the `remote` method makes (E65): what a
+    # context is does not depend on which build method sends it anywhere.
+    create_build_context(
+        model,
+        out_dir=context_dir,
+        sdk_sources=sources,
+        signing_pub=signing_pub,
+        created=created or datetime.now(UTC),
+    )
+    lock_context(
+        context_dir,
+        # The backend half's answer, recorded verbatim — including a
+        # `None` digest for an image that was never pushed, which says
+        # "these bytes are not fetchable anywhere" rather than inventing
+        # a digest that looks as if they were.
+        container=ContainerResolution.from_reference(resolved.reference, digest=resolved.digest),
+    )
+    return localbuild.run_locked_build(
+        context_dir,
+        image=resolved.reference,
+        sdk_sources=sources,
+        work_root=work_root / "backend",
+        env=dict(env),
+        jobs=jobs,
+        mode=mode,
+        on_line=on_line,
+        docker=docker,
+    )
+
+
+async def _run_local(request: BuildRequest) -> BuildOutcome:
+    """The container method: :func:`compose_local_build`, offloaded.
+
+    Synchronous underneath — it drives ``docker`` with a subprocess per
+    invocation — so it is offloaded rather than awaited. The composition
+    is looked up as a module global so that a caller (or a test) that
+    replaced ``compose_local_build`` is the one that runs.
+    """
     result = await asyncio.to_thread(
-        localbuild.run_local_build,
+        compose_local_build,
         request.model,
         signing_pub=request.signing_pub,
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),

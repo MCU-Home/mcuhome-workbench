@@ -23,7 +23,17 @@ from mcuhome.model import __version__  # noqa: E402 - needs the path above
 
 setup(
     install_requires=[
-        f"mcuhome-workbench=={__version__}",
+        # The model and nothing above it (ADR 0024): the compiler ships
+        # inside the SDK package and runs in the build container, where
+        # the workbench neither exists nor belongs. The workbench pulls
+        # THIS package through its `local` extra, never the other way.
+        f"mcuhome-model=={__version__}",
+        # mcuhome.compiler.contextread parses manifest.yaml — the same
+        # parser the workbench uses, declared here in its own right.
+        "ruamel.yaml>=0.18",
+        # PEP 440 version equality for the backend's exact index match
+        # (mcuhome.compiler.localbackend._exact_index_entry).
+        "packaging>=23",
         # The local build method (mcuhome.compiler.localbackend) unpacks the
         # SDK package, and that package is a tar.zst (E41) — so it needs a
         # zstd binding. zstandard is the one the build server already uses

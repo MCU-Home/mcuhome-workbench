@@ -4,7 +4,9 @@
 
 **Docker never runs here** — the same rule as ``test_localbackend.py``, and
 this module reuses that suite's scripted seam. What is asserted is the
-composition above the backend: that a device model becomes a locked
+composition above the backend — since the ADR 0024 inversion it lives in
+the workbench (:func:`mcuhome.workbench.buildmethods.compose_local_build`)
+over the compiler's two halves: that a device model becomes a locked
 context and one ``build`` invocation, that the two typed refusals E54 asks
 for (a missing image, a missing SDK source) land before a container
 starts, and — the E55 security invariant — that the **private** key never
@@ -29,7 +31,9 @@ from test_localbackend import (
 from mcuhome.compiler import localbuild
 from mcuhome.compiler.localbackend import Docker
 from mcuhome.model.errors import BuildError
+from mcuhome.workbench import buildmethods
 from mcuhome.workbench.contextdir import read_context_manifest
+from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 from mcuhome.workbench.signing import (
     generate_key_pem,
     looks_like_p256_key,
@@ -54,7 +58,7 @@ def public_pem() -> str:
 def _conforming(request) -> None:
     """Play a conforming build, computing the context id the backend expects.
 
-    The context id is not known until :func:`run_local_build` has created
+    The context id is not known until the composition has created
     and locked the context, so the seam reads it back from the manifest at
     the ``context`` path the request names — exactly what a real program
     does when it computes ``result.context`` from the context as mounted.
@@ -84,7 +88,7 @@ def _flatten(calls: list[list[str]]) -> str:
 def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model, public_pem):
     make_sdk_source(tmp_path / "src")
     seam = _seam()
-    result = localbuild.run_local_build(
+    result = buildmethods.compose_local_build(
         model,
         signing_pub=public_pem,
         sdk_sources=(tmp_path / "src",),
@@ -118,8 +122,8 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
     grepped for across every composed docker command the backend produced —
     the run that starts the container, the exec that invokes the program,
     every mount argument. It appears in none of them, because
-    :func:`run_local_build` has no way to receive it: its only key input is
-    the public PEM.
+    :func:`~mcuhome.workbench.buildmethods.compose_local_build` has no way
+    to receive it: its only key input is the public PEM.
     """
     private_pem = generate_key_pem(TEST_SCALAR)
     private_path = tmp_path / "signing.key"
@@ -128,7 +132,7 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
 
     make_sdk_source(tmp_path / "src")
     seam = _seam()
-    result = localbuild.run_local_build(
+    result = buildmethods.compose_local_build(
         model,
         signing_pub=public_pem,
         sdk_sources=(tmp_path / "src",),
@@ -172,7 +176,7 @@ def test_a_missing_image_refuses_before_a_container_starts(tmp_path, model, publ
         raise AssertionError(f"nothing else is asked once the image is missing: {argv}")
 
     with pytest.raises(BuildError) as caught:
-        localbuild.run_local_build(
+        buildmethods.compose_local_build(
             model,
             signing_pub=public_pem,
             sdk_sources=(tmp_path / "src",),
@@ -189,7 +193,7 @@ def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
 ):
     """E61's requirement, checked by the half that states it.
 
-    ``run_local_build`` plays both roles: it writes the requirement into
+    The composition plays both roles: it writes the requirement into
     ``context.yaml`` and it answers that requirement out of this host's
     images. So the mismatch is caught here, before the context directory
     or the SDK lookup exist — a refusal that costs nothing and names both
@@ -216,7 +220,7 @@ def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
         raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
 
     with pytest.raises(BuildError) as caught:
-        localbuild.run_local_build(
+        buildmethods.compose_local_build(
             model,
             signing_pub=public_pem,
             sdk_sources=(tmp_path / "src",),
@@ -258,7 +262,7 @@ def test_an_image_with_no_zephyr_label_refuses_before_anything_is_written(
         raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
 
     with pytest.raises(BuildError) as caught:
-        localbuild.run_local_build(
+        buildmethods.compose_local_build(
             model,
             signing_pub=public_pem,
             sdk_sources=(tmp_path / "src",),
@@ -282,7 +286,7 @@ def test_no_sdk_source_configured_is_a_typed_refusal(tmp_path, model, public_pem
         raise AssertionError(f"no container should start with no SDK: {argv}")
 
     with pytest.raises(BuildError) as caught:
-        localbuild.run_local_build(
+        buildmethods.compose_local_build(
             model,
             signing_pub=public_pem,
             sdk_sources=(),
@@ -305,7 +309,7 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
         raise AssertionError(f"no container should start: {argv}")
 
     with pytest.raises(BuildError) as caught:
-        localbuild.run_local_build(
+        buildmethods.compose_local_build(
             model,
             signing_pub=public_pem,
             sdk_sources=(empty,),
@@ -334,7 +338,7 @@ def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem
     """
     make_sdk_source(tmp_path / "src")
     seam = _seam(facts=image_facts(digest=None))
-    result = localbuild.run_local_build(
+    result = buildmethods.compose_local_build(
         model,
         signing_pub=public_pem,
         sdk_sources=(tmp_path / "src",),
@@ -357,10 +361,10 @@ def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem
 
 def test_resolve_sdk_pin_reads_the_source_index(tmp_path):
     real = make_sdk_source(tmp_path / "src")
-    constraint, version, sha256 = localbuild.resolve_sdk_pin((tmp_path / "src",))
+    constraint, version, sha256 = resolve_sdk_pin((tmp_path / "src",))
     assert sha256 == real
     assert version
-    assert constraint == localbuild.SDK_ANY
+    assert constraint == SDK_ANY
 
 
 def test_resolve_sdk_pin_resolves_a_dev_only_source_under_any(tmp_path):
@@ -394,15 +398,15 @@ def test_resolve_sdk_pin_resolves_a_dev_only_source_under_any(tmp_path):
         ),
         encoding="utf-8",
     )
-    constraint, version, sha256 = localbuild.resolve_sdk_pin((source,))
+    constraint, version, sha256 = resolve_sdk_pin((source,))
     assert version == "0.1.0.dev0"
     assert sha256 == "ab" * 32
-    assert constraint == localbuild.SDK_ANY
+    assert constraint == SDK_ANY
 
 
 def test_resolve_sdk_pin_without_a_source_refuses(tmp_path):
     with pytest.raises(BuildError) as caught:
-        localbuild.resolve_sdk_pin(())
+        resolve_sdk_pin(())
     assert "SDK source" in caught.value.message
 
 
