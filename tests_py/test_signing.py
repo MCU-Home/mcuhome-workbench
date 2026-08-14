@@ -16,9 +16,9 @@ import base64
 import stat
 
 import pytest
-
 from mcuhome.model import p256
 from mcuhome.model.errors import BuildError, ConfigError
+
 from mcuhome.workbench import signing
 
 #: One key the suite can compare bytes against, so nothing here draws a

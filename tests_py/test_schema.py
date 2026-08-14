@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from conftest import VALID_CONFIG, expect_failure, find_error, line_of, resolve_file
-
 from mcuhome.model.errors import ConfigError, Location
 
 

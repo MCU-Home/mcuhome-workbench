@@ -2,11 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """``mcuhome init-pairing``: :mod:`mcuhome.workbench.provision`.
 
-The workbench half of the commissioning credentials. The math, the
-CHIP vectors and the atomic Kconfig group are :mod:`mcuhome.model.pairing`
-and live in ``test_pairing.py``; what this file covers is the one command
-that *draws* credentials — once, into the user's YAML, never per build
-(yaml-schema.md §4.1) — and then the builder accepting what it wrote.
+The workbench half of the commissioning credentials. The math, the CHIP
+vectors and the atomic Kconfig group are :mod:`mcuhome.model.pairing` and
+live in ``mcuhome-sdk``'s ``tests_py/test_pairing.py``; what this file
+covers is the one command that *draws* credentials — once, into the
+user's YAML, never per build (yaml-schema.md §4.1) — and then the builder
+accepting what it wrote.
+
+Plus, at the bottom, this repository's half of that file's whole-package
+invariant, created from the recipe it left behind: the seven Kconfig
+symbols that carry a device's commissioning identity are emitted by one
+function, and the search that proves no second spelling exists runs over
+``conftest.PACKAGES`` — which names the workbench alone since ADR 0024,
+so the claim has to be made once on each side of the split.
 """
 
 from __future__ import annotations
@@ -14,11 +22,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import VALID_CONFIG, resolve_file
-
+from conftest import VALID_CONFIG, package_modules, resolve_file
 from mcuhome.model import pairing
 from mcuhome.model.errors import ConfigError
 from mcuhome.model.model import PairingModel
+
 from mcuhome.workbench import provision
 
 FIXED = pairing.Pairing(
@@ -178,3 +186,50 @@ def test_a_configuration_without_a_matter_section_gets_one(write_config) -> None
     text = path.read_text(encoding="utf-8")
     assert "  matter:\n" in text
     assert resolve_file(path).network.pairing is not None
+
+
+# --------------------------------------------------------------------------
+# The atomic Kconfig group, from this side of the split
+# --------------------------------------------------------------------------
+
+#: Every Kconfig symbol that carries part of the commissioning identity.
+#: The same seven ``mcuhome.model.pairing.kconfig_lines()`` writes from
+#: one tuple, restated because this repository cannot import a list out
+#: of the other one's test suite.
+IDENTITY_SYMBOLS = (
+    "CONFIG_CHIP_DEVICE_VENDOR_ID",
+    "CONFIG_CHIP_DEVICE_PRODUCT_ID",
+    "CONFIG_CHIP_DEVICE_DISCRIMINATOR",
+    "CONFIG_CHIP_DEVICE_SPAKE2_PASSCODE",
+    "CONFIG_CHIP_DEVICE_SPAKE2_IT",
+    "CONFIG_CHIP_DEVICE_SPAKE2_SALT",
+    "CONFIG_CHIP_DEVICE_SPAKE2_TEST_VERIFIER",
+)
+
+
+def test_no_workbench_module_spells_an_identity_symbol() -> None:
+    """The names exist in exactly one file, which is why one call suffices.
+
+    The footgun is a builder that emits a passcode without the verifier
+    derived from it: the image builds, boots and advertises itself, and
+    then refuses every commissioner, with nothing in the build log to
+    look at. One call is what makes that half-written state unreachable,
+    and one call is only true while one file spells the names.
+
+    ``provision.py`` is asserted to be among the modules examined because
+    it is the plausible place a second spelling would appear here — it is
+    the module that *draws* the credentials, one editing step away from
+    writing them out as Kconfig too. Asserting it was reached is what
+    keeps this test from passing while looking at less than it did
+    yesterday. Text and not syntax, deliberately: a symbol named in a
+    comment is a second spelling waiting to be uncommented.
+    """
+    modules = package_modules()
+    assert any(path.name == "provision.py" for path in modules), (
+        "the search no longer reaches provision.py, where a second spelling "
+        "would appear — extend conftest.PACKAGES"
+    )
+    for module in modules:
+        text = module.read_text(encoding="utf-8")
+        for symbol in IDENTITY_SYMBOLS:
+            assert symbol not in text, f"{module.name} names {symbol}"

@@ -1,12 +1,18 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The design examples in ``docs/design/examples/``.
+"""The design examples in ``data/examples/``.
 
 Example 0 is the hardware-verified device and must validate. Examples
 1-3 are *design targets*: they describe the finished schema, and the
 builder must reject them today — with the specific "not supported yet"
 message for the specific feature each one is ahead of, never with a
 generic failure.
+
+These four files are also published as ``docs/design/examples/`` in
+``mcuhome-sdk``, where they are documentation. Here they are input: this
+is the repository that holds the resolver they are fed to, so they travel
+with the suite rather than with a documentation directory this repository
+no longer owns.
 """
 
 from __future__ import annotations

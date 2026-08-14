@@ -20,9 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML, YAMLError
-
 from mcuhome.model.errors import ConfigError, Location
+from ruamel.yaml import YAML, YAMLError
 
 __all__ = ["SecretRef", "load_config", "load_yaml_file", "resolve_secrets"]
 

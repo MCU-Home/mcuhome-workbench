@@ -5,7 +5,7 @@
 The workbench half of the subject: :mod:`mcuhome.workbench.configschema`
 builds the ``main.yaml`` JSON Schema, and it has to describe exactly the
 configuration :mod:`mcuhome.workbench.schema`'s parser accepts. Like the
-registry next door in ``test_export.py``, the document is a contract with
+registry in ``mcuhome-sdk``'s ``test_export.py``, the document is a contract with
 a consumer that is not in this repository (dashboard ADR 0011): an editor
 validates against it. It is therefore golden-tested byte for byte — a
 change to it is a change a human approves, not one that happens.
@@ -18,8 +18,8 @@ import re
 
 import pytest
 from conftest import GOLDEN_DIR
-
 from mcuhome.model import __version__, export, registry
+
 from mcuhome.workbench import configschema, schema
 
 SCHEMA_GOLDEN = GOLDEN_DIR / "main.schema.json"

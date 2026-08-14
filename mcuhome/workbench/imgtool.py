@@ -64,6 +64,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
 from mcuhome.model.registry import SIGNATURE_TYPE
 from mcuhome.model.userpaths import expand
+
 from mcuhome.workbench import signing
 
 __all__ = [

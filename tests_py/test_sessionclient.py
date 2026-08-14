@@ -46,10 +46,10 @@ from typing import Any
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-
 from mcuhome.compiler.localbackend import LocalOutcome
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextRequest, SdkPin
+
 from mcuhome.workbench import buildmethods, imgtool, resolve_pins, signing
 from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
@@ -60,15 +60,15 @@ from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 #: skip with one reason naming exactly what is missing: a suite that
 #: reports "22 skipped" for seven different reasons is a suite nobody
 #: reads, and the two tests here that need none of this have been moved
-#: to ``test_packaging.py`` so they run in every environment.
+#: to ``test_packaging_workbench.py`` so they run in every environment.
 #:
 #: Note for CI: ``mcuhome-build-server`` lives in a private sibling
 #: repository and ``.github/workflows/ci.yml`` has no deploy key for it
 #: (only ``CLI_DEPLOY_KEY``), so everything below is skipped there until
 #: one exists. That is a known, stated gap and not a silent one.
 NEEDED = {
-    "aiohttp": "pip install -e './packaging/workbench[remote]'",
-    "zstandard": "pip install -e './packaging/workbench[remote]'",
+    "aiohttp": "pip install -e '.[remote]'",
+    "zstandard": "pip install -e '.[remote]'",
     "mcuhome_buildserver": "pip install -e ../build-server",
 }
 MISSING = sorted(name for name in NEEDED if importlib.util.find_spec(name) is None)

@@ -113,6 +113,7 @@ from mcuhome.model.context import (
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
+
 from mcuhome.workbench.contextdir import read_context_request
 from mcuhome.workbench.signing import KEY_FILE as SIGNING_KEY_FILE
 

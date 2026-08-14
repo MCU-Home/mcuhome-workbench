@@ -4,8 +4,8 @@
 - Date: 2026-08-14
 - Will supersede on finalization: parts of [0017](../0017-repo-and-packaging-layout.md)
   (repo topology), and it retargets details of
-  [0004](../0004-zephyr-west-t2-manifest-and-module.md) (the manifest
-  repository's name) and [0020](../0020-package-layout-and-the-asynchronous-library.md)
+  [0004](https://github.com/mcu-home/mcuhome-sdk/blob/main/docs/adr/0004-zephyr-west-t2-manifest-and-module.md)
+  (the manifest repository's name) and [0020](../0020-package-layout-and-the-asynchronous-library.md)
   (where the distributions build from, the version-source mechanics)
 
 ## Context

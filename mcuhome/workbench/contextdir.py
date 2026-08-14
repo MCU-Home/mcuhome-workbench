@@ -30,8 +30,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ruamel.yaml import YAML, YAMLError
-
 from mcuhome.model.context import (
     BACKEND_DIR,
     CONTEXT_FILE,
@@ -52,6 +50,8 @@ from mcuhome.model.context import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
+from ruamel.yaml import YAML, YAMLError
+
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk
 from mcuhome.workbench.signing import looks_like_p256_public_key
 

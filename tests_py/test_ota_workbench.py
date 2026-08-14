@@ -3,7 +3,8 @@
 """The Matter OTA file (:mod:`mcuhome.workbench.otafile`).
 
 The workbench half of the subject; the version the file carries comes
-from :mod:`mcuhome.model.ota` and is tested in ``test_ota.py``.
+from :mod:`mcuhome.model.ota` and is tested in ``mcuhome-sdk``'s
+``test_ota.py``.
 
 What is worth pinning here is one claim: the **.ota file is
 byte-identical to CHIP's own tool's output**, which is the check that
@@ -19,9 +20,9 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from mcuhome.model import ota, pairing
 from mcuhome.model.errors import BuildError
+
 from mcuhome.workbench import otafile
 
 #: CHIP's own OTA image tool, when this checkout sits in a west workspace

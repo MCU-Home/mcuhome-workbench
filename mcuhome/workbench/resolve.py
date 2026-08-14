@@ -48,6 +48,7 @@ from mcuhome.model.model import (
     ToolchainModel,
 )
 from mcuhome.model.toolchain import resolve_toolchain
+
 from mcuhome.workbench.schema import RawConfig, RawEndpoint, assign_endpoint_ids
 
 __all__ = [

@@ -83,6 +83,7 @@ from mcuhome.model.context import ContainerResolution
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
+
 from mcuhome.workbench.contextdir import create_build_context, lock_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 

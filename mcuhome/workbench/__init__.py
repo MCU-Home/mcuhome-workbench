@@ -39,3 +39,8 @@ already has them.
 surface and the only part covered by the project's SemVer promise
 (ADR 0005); every other module here may change shape between releases.
 """
+
+#: The workbench's own version since the ADR 0024 repo split — no longer
+#: read from mcuhome.model, which versions with the SDK repository. From
+#: v1.0 the two are coupled at major.minor (~=X.Y.0 edges).
+__version__ = "0.1.0.dev0"

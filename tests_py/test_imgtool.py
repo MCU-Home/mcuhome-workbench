@@ -31,11 +31,11 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from mcuhome.compiler import workspace
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
 from mcuhome.model.registry import SIGNATURE_TYPE
+
 from mcuhome.workbench import imgtool, signing
 
 PARAMETERS = SigningParameters(header_size=512, align=4, slot_size=933888, version="0.0.0+0")

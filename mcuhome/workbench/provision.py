@@ -33,10 +33,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ruamel.yaml import YAML
-
 from mcuhome.model import pairing
 from mcuhome.model.errors import ConfigError, Location
+from ruamel.yaml import YAML
+
 from mcuhome.workbench.loader import load_yaml_file
 from mcuhome.workbench.validate import PAIRING_KEYS
 

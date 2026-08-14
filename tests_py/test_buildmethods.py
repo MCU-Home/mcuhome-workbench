@@ -6,9 +6,10 @@ No container, no toolchain and no socket: every method is stubbed at its
 own backend seam — ``compose_local_build``, ``run_dev_build``,
 ``run_remote_build`` — and what is asserted is the layer above them. That
 is deliberately the whole point of the module: the three compositions are
-tested where they live (``test_localbuild.py``, ``test_workspace.py``,
-``test_sessionclient.py``), and this file asserts that a caller reaches
-the right one and reads one answer whichever ran.
+tested where they live (``test_localbuild.py`` and ``test_sessionclient.py``
+here, ``test_workspace.py`` in ``mcuhome-sdk`` since ADR 0024), and this
+file asserts that a caller reaches the right one and reads one answer
+whichever ran.
 
 The properties, in the order they matter:
 
@@ -35,11 +36,11 @@ import builtins
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-
 from mcuhome.compiler import devbuild, localbuild
 from mcuhome.compiler import localbackend as lb
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.manifest import MANIFEST_FILE
+
 from mcuhome.workbench import buildmethods, sessionclient
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
@@ -388,11 +389,11 @@ def test_a_broken_dependency_inside_an_installed_compiler_surfaces_unchanged(
 def test_importing_the_dispatch_does_not_drag_in_the_compiler() -> None:
     """ADR 0020 decision 3, as the property rather than as syntax.
 
-    ``test_packaging.py`` asserts no ``import mcuhome.compiler`` appears
-    in this package's syntax tree; that is the rule, and this is what the
-    rule is *for*: a dashboard install that carries no toolchain must be
-    able to import the dispatch. Checked in a fresh interpreter, because
-    this suite's own imports have long since loaded everything.
+    ``test_packaging_workbench.py`` asserts no ``import mcuhome.compiler``
+    appears in this package's syntax tree; that is the rule, and this is
+    what the rule is *for*: a dashboard install that carries no toolchain
+    must be able to import the dispatch. Checked in a fresh interpreter,
+    because this suite's own imports have long since loaded everything.
     """
     import subprocess
     import sys

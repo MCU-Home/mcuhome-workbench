@@ -69,7 +69,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcuhome.model import __version__
 from mcuhome.model.errors import (
     BuildError,
     ConfigError,
@@ -83,6 +82,8 @@ from mcuhome.model.export import registry_data
 from mcuhome.model.manifest import MANIFEST_FILE, read_manifest
 from mcuhome.model.model import MODEL_VERSION, DeviceModel
 from mcuhome.model.modelfile import read_model
+
+from mcuhome.workbench import __version__
 from mcuhome.workbench.buildmethods import (
     DEFAULT_METHOD,
     LOCAL,
@@ -154,7 +155,9 @@ __all__ = [
     "validate_device",
 ]
 
-#: The builder's version, for a consumer that declares a supported range.
+#: The workbench's own version, for a consumer that declares a supported
+#: range — deliberately not the model's, which versions with the SDK
+#: repository (ADR 0024).
 VERSION = __version__
 
 

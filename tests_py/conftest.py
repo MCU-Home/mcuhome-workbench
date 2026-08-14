@@ -1,13 +1,21 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Shared fixtures and helpers for the builder tests.
+"""Shared fixtures and helpers for the workbench tests.
 
-Arranged in two halves, and the order is the point. Everything above the
-marked block near the bottom needs nothing but :mod:`mcuhome.model` and
-:mod:`mcuhome.compiler`; everything below it needs
-:mod:`mcuhome.workbench`. ADR 0024 moves the first two into a repository
-of their own, so the marker is where this file gets cut — not a tidiness
-convention but the seam, kept visible while both halves still live here.
+Everything here is the tools repository's half of what used to be one
+suite. :mod:`mcuhome.model` and :mod:`mcuhome.compiler` moved to
+``mcuhome-sdk`` with ADR 0024 and are *installed dependencies* now, not
+sources in this tree — so they are imported freely and never searched.
+Every whole-package invariant runs over :data:`PACKAGES`, which names
+:mod:`mcuhome.workbench` and nothing else.
+
+The device configurations the resolver is exercised against live in
+``data/examples/``. They used to be read out of ``docs/design/examples/``,
+which went to the SDK repository with the rest of ``docs/design/``; they
+are test input here — the golden model in ``data/golden/`` is pinned
+against what this repository's resolver makes of them — so the input
+travels with the suite rather than with a documentation directory this
+repository no longer owns.
 """
 
 from __future__ import annotations
@@ -16,18 +24,20 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-
 from mcuhome.compiler import container
 from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
+from mcuhome.workbench.api import load_model
+from mcuhome.workbench.tree import ConfigTree, find_config_root
+
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TESTS_DIR.parent
-EXAMPLES_DIR = REPO_ROOT / "docs" / "design" / "examples"
 DATA_DIR = TESTS_DIR / "data"
+EXAMPLES_DIR = DATA_DIR / "examples"
 GOLDEN_DIR = DATA_DIR / "golden"
 
-#: The import package the three distributions of ADR 0020 share, and the
+#: The import package the distributions of ADR 0020 share, and the
 #: directory it is assembled from in this checkout. It is a PEP 420
 #: namespace package, which is why the directory is named here at all:
 #: the import system cannot enumerate one. ``find_spec("mcuhome")``
@@ -37,11 +47,13 @@ GOLDEN_DIR = DATA_DIR / "golden"
 NAMESPACE = "mcuhome"
 NAMESPACE_DIR = REPO_ROOT / NAMESPACE
 
-#: The packages the whole-package invariant searches must cover — the
-#: three distributions of ADR 0020 decision 1, by import name.
-#: :func:`package_modules` checks this list against what is actually in
-#: :data:`NAMESPACE_DIR`, so a fourth subpackage cannot arrive unsearched.
-PACKAGES = ("mcuhome.compiler", "mcuhome.model", "mcuhome.workbench")
+#: The packages the whole-package invariant searches must cover — the one
+#: distribution of ADR 0020 decision 1 this repository ships, by import
+#: name. ``mcuhome.model`` and ``mcuhome.compiler`` are the SDK
+#: repository's since ADR 0024 and are covered by the same searches
+#: there; a copy of either appearing in this tree would be the defect,
+#: which is what the enumeration in :func:`package_modules` catches.
+PACKAGES = ("mcuhome.workbench",)
 
 
 def package_modules() -> list[Path]:
@@ -59,21 +71,25 @@ def package_modules() -> list[Path]:
     because none of them has a module a caller could name:
 
     * ``mcuhome`` is still a namespace package. An ``__init__.py`` there
-      would have to belong to one of three distributions that all deliver
+      would have to belong to one of the distributions that all deliver
       into that directory, and PEP 420 forbids it for exactly that reason.
     * No module sits directly under the namespace directory. Such a file
-      is in no distribution, ships with none of the three, and is
-      invisible to every search below.
+      is in no distribution, ships with none of them, and is invisible to
+      every search below.
     * :data:`PACKAGES` lists every subpackage there is, and each one is
       imported *from this checkout*. The second half matters as much as
       the first: against a non-editable install the searches would read
-      copies in ``site-packages`` while the tests exercise the tree.
+      copies in ``site-packages`` while the tests exercise the tree. Since
+      ADR 0024 it does a third job — a leftover ``mcuhome/model/`` or
+      ``mcuhome/compiler/`` directory here is not inert: it is an earlier
+      portion of the same namespace and shadows the SDK's real package,
+      so the enumeration failing is the only warning anybody gets.
     """
     spec = importlib.util.find_spec(NAMESPACE)
     assert spec is not None, f"{NAMESPACE} is not importable"
     assert spec.origin is None, (
         f"{NAMESPACE} has become a regular package (origin={spec.origin}). "
-        "PEP 420 forbids an __init__.py there — three distributions deliver "
+        "PEP 420 forbids an __init__.py there — several distributions deliver "
         "into that directory and only one of them could own the file."
     )
 
@@ -82,9 +98,11 @@ def package_modules() -> list[Path]:
         f"{loose} sit directly under {NAMESPACE_DIR} — no distribution "
         "ships them and no invariant searches them"
     )
-    subpackages = {
-        path.name for path in NAMESPACE_DIR.iterdir() if (path / "__init__.py").is_file()
-    }
+    # Every directory, not only those carrying an __init__.py: a
+    # directory without one is a namespace *portion*, which is exactly
+    # how a stale mcuhome/model/ shadows the installed mcuhome.model
+    # rather than being ignored.
+    subpackages = {path.name for path in NAMESPACE_DIR.iterdir() if path.is_dir()} - {"__pycache__"}
     expected = {name.rpartition(".")[2] for name in PACKAGES}
     assert subpackages == expected, (
         f"the namespace holds {sorted(subpackages)} but the searches cover "
@@ -123,8 +141,8 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     them covers half the paths that lead there.
 
     **What this fixture no longer has to catch.** The package itself
-    stopped reading the process — ``tests_py/test_userpaths.py`` proves
-    it for every module — so nothing here resolves a key out of the
+    stopped reading the process — ``tests_py/test_userpaths_workbench.py``
+    proves it for every module — so nothing here resolves a key out of the
     environment pytest happens to run in. What is left for this fixture
     is everything that hands the process environment *in*: the command
     line's ``env=os.environ``, and any test that does the same.
@@ -155,22 +173,15 @@ def _no_docker(monkeypatch):
     monkeypatch.setattr(container, "_run_quiet", refuse)
 
 
-# --- workbench-side fixtures (leave in the tools repo at the split) ---
+# --- resolving a configuration (stages 1-3) --------------------------
 #
-# Everything below this line resolves a configuration, and resolving is
-# stages 1-3, which is `mcuhome.workbench`. ADR 0024 leaves the workbench
-# where it is and moves model+compiler out, so the cut is exactly here:
-# the half above travels, this half stays, and the two imports that make
-# the difference are the first thing in the block rather than mixed into
-# the header (E402 is the price of saying so in one place).
-#
-# `ConfigError`, `ConfigErrorGroup` and `DeviceModel` are imported at the
-# top because they are `mcuhome.model`, which both repositories depend
-# on; after the cut they are used only here, so the departing half drops
-# them.
-
-from mcuhome.workbench.api import load_model  # noqa: E402
-from mcuhome.workbench.tree import ConfigTree, find_config_root  # noqa: E402
+# The cut of ADR 0024 ran through this file and everything from here down
+# is what stayed: resolving a configuration is stages 1-3, which is
+# `mcuhome.workbench`. The half that travelled took the context writer
+# and the golden-model reader with it; what those two repositories still
+# share is `data/golden/00-bmp180-two-endpoints.device-model.json` —
+# pinned here against the real resolver (`test_model_golden.py`) and read
+# there as the model itself.
 
 FIXTURE_TREE = DATA_DIR / "tree"
 

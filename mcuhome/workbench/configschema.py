@@ -31,6 +31,7 @@ from typing import Any
 
 from mcuhome.model import __version__, ota, registry
 from mcuhome.model.export import to_json
+
 from mcuhome.workbench import schema
 
 __all__ = [

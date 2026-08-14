@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Driving a ``local`` build from a device model (``localbuild.py``).
 
-**Docker never runs here** — the same rule as ``test_localbackend.py``, and
-this module reuses that suite's scripted seam. What is asserted is the
+**Docker never runs here.** The one impure operation is the seam: a
+scripted stand-in dispatches on the argv the real
+:class:`~mcuhome.compiler.localbackend.Docker` composed and writes the
+result document a real container would. What is asserted is the
 composition above the backend — since the ADR 0024 inversion it lives in
 the workbench (:func:`mcuhome.workbench.buildmethods.compose_local_build`)
 over the compiler's two halves: that a device model becomes a locked
@@ -11,26 +13,34 @@ context and one ``build`` invocation, that the two typed refusals E54 asks
 for (a missing image, a missing SDK source) land before a container
 starts, and — the E55 security invariant — that the **private** key never
 appears in any docker argv and the context carries only the public half.
+
+The seam and the SDK-source fixture used to be imported from
+``test_localbackend.py``, which went to ``mcuhome-sdk`` with the backend
+it tests. They are restated below rather than reached across a repository
+boundary, and they are deliberately the *smaller* half: the backend's own
+suite over there builds a context too, this one must not — the whole
+subject here is that ``compose_local_build`` creates and locks the
+context itself, so a context these tests wrote would be the one thing
+capable of hiding a defect in it.
 """
 
 from __future__ import annotations
 
+import io
+import json
+import tarfile
 from pathlib import Path
+from typing import Any
 
 import pytest
+import zstandard
 from conftest import EXAMPLES_DIR, resolve_file
-from test_localbackend import (
-    IMAGE,
-    Seam,
-    build_result,
-    describe_result_document,
-    image_facts,
-    make_sdk_source,
-)
-
+from mcuhome.compiler import localbackend as lb
 from mcuhome.compiler import localbuild
 from mcuhome.compiler.localbackend import Docker
 from mcuhome.model.errors import BuildError
+from mcuhome.model.hashes import sha256_file
+
 from mcuhome.workbench import buildmethods
 from mcuhome.workbench.contextdir import read_context_manifest
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
@@ -43,6 +53,202 @@ from mcuhome.workbench.signing import (
 
 #: A P-256 key with a known scalar, so this module never draws one.
 TEST_SCALAR = 0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEF0
+
+DIGEST = "sha256:" + "1" * 64
+SDK_VERSION = "0.1.0"
+IMAGE = "ghcr.io/mcu-home/build-container"
+CONTAINER_ID = "c" * 64
+
+#: The ``program`` block a conforming image answers ``describe`` with
+#: (build-container-contract.md §7.1). Only the fields the preflight
+#: judges are load-bearing here.
+PROGRAM_BLOCK = {
+    "id": "org.mcuhome.build-container",
+    "version": "0.1.0",
+    "contract": 1,
+    "request": [1],
+    "result": [1],
+    "actions": ["describe", "verify", "build"],
+    "trees": {"sdk": {"path": None}, "zephyr": {"path": "/mcuhome/workspace/zephyr"}},
+}
+
+
+# --------------------------------------------------------------------------
+# A real SDK package, built the way scripts/build_sdk_archive.py builds one
+# --------------------------------------------------------------------------
+
+
+def build_sdk_archive(members: dict[str, tuple[bytes, bool]]) -> bytes:
+    """A deterministic ``.tar.zst`` of *members* (path -> (bytes, executable))."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for name, (content, executable) in sorted(members.items()):
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = 0o755 if executable else 0o644
+            tar.addfile(info, io.BytesIO(content))
+    return zstandard.ZstdCompressor(level=3).compress(buffer.getvalue())
+
+
+def make_sdk_source(directory: Path) -> str:
+    """A source directory with one SDK archive and the index that names it.
+
+    Returns the archive's **real** sha256 — the value the pin resolution
+    reads out of the index and writes into the context it creates.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = build_sdk_archive(
+        {
+            "mcuhome-sdk.json": (
+                b'{"sdk": 1, "generate": {"program": "bin/generate", "runtime": "python3"}}',
+                False,
+            ),
+            "bin/generate": (b"#!/usr/bin/env python3\n", True),
+            "mcuhome/model/__init__.py": (b'__version__ = "0.1.0"\n', False),
+        }
+    )
+    filename = f"mcuhome-sdk-{SDK_VERSION}.tar.zst"
+    (directory / filename).write_bytes(archive)
+    real = sha256_file(directory / filename)
+    index = {
+        "packages": {
+            "mcuhome-sdk": {SDK_VERSION: {"file": filename, "sha256": real, "size": len(archive)}}
+        }
+    }
+    (directory / "index.json").write_text(json.dumps(index), "utf-8")
+    return real
+
+
+# --------------------------------------------------------------------------
+# The scripted docker seam
+# --------------------------------------------------------------------------
+
+
+def image_facts(*, digest: str | None = DIGEST, labels: dict[str, str] | None = None) -> str:
+    """What ``docker image inspect`` answers for a conforming image."""
+    facts = {
+        "Id": "sha256:" + "f" * 64,
+        "RepoDigests": [f"{IMAGE}@{digest}"] if digest else [],
+        "Config": {
+            "Labels": labels
+            or {
+                "org.mcuhome.contract": "1",
+                "org.mcuhome.zephyr": "4.4.0",
+                "org.mcuhome.toolchain": "zephyr-0.16.8",
+            }
+        },
+    }
+    return json.dumps(facts)
+
+
+def describe_result_document(program: dict[str, Any] | None = None) -> str:
+    return json.dumps(
+        {
+            "result": 1,
+            "status": "success",
+            "action": "describe",
+            "program": program or PROGRAM_BLOCK,
+        }
+    )
+
+
+def build_result(
+    request: dict[str, Any],
+    *,
+    context: str,
+    status: str = "success",
+    action: str = "build",
+) -> None:
+    """Write the artifacts under ``out`` and a conforming result document.
+
+    Every written file is hashed from disk and declared with the one legal
+    hash spelling, so the §5.3 judgment the backend performs runs over a
+    document that really matches what is on disk.
+    """
+    out = Path(request["out"])
+    files = {"firmware.hex": b"HEX", "firmware.bin": b"BIN", "build-report.json": b'{"report": 1}'}
+    roles = {"firmware.hex": "firmware", "firmware.bin": "firmware", "build-report.json": "report"}
+    declared: list[dict[str, Any]] = []
+    for name, data in files.items():
+        (out / name).write_bytes(data)
+        declared.append(
+            {
+                "root": "out",
+                "path": name,
+                "role": roles[name],
+                "hashes": {"sha256": sha256_file(out / name)},
+            }
+        )
+    document: dict[str, Any] = {
+        "result": 1,
+        "status": status,
+        "action": action,
+        "session": request.get("session"),
+        "reason": None if status in ("success", "cancelled") else "error.build.failed",
+        "error": None
+        if status in ("success", "cancelled")
+        else {"retryable": False, "message": "x"},
+        "context": context,
+    }
+    if action == "build" and status == "success":
+        document["artifacts"] = declared
+        document["layers"] = {}
+    Path(request["result"]).write_text(json.dumps(document), "utf-8")
+
+
+class Seam:
+    """A scripted stand-in for docker, recording every argv it is handed.
+
+    Dispatches on the composed argv the real
+    :class:`~mcuhome.compiler.localbackend.Docker` produced, so the tests
+    exercise the true argv composition and can then assert it.
+    """
+
+    def __init__(
+        self,
+        *,
+        facts: str,
+        build,
+        describe_static: str | None = None,
+        container_id: str = CONTAINER_ID,
+        start_status: int = 0,
+        exec_status: int = 0,
+    ) -> None:
+        self.facts = facts
+        self.build = build
+        self.describe_static = describe_static
+        self.container_id = container_id
+        self.start_status = start_status
+        self.exec_status = exec_status
+        self.calls: list[list[str]] = []
+        self.exec_request: dict[str, Any] | None = None
+        self.describe_invoked = False
+
+    def __call__(self, argv, on_line=None) -> lb.Completed:
+        argv = list(argv)
+        self.calls.append(argv)
+        verb = argv[1] if len(argv) > 1 else ""
+        if argv[1:3] == ["image", "inspect"]:
+            return lb.Completed(0, self.facts)
+        if verb == "run" and "cat" in argv:
+            if self.describe_static is None:
+                return lb.Completed(1, "no such file")
+            return lb.Completed(0, self.describe_static)
+        if verb == "run" and lb.PROGRAM in argv and lb.ACTION_DESCRIBE in argv:
+            self.describe_invoked = True
+            request = json.loads(Path(argv[-1]).read_text("utf-8"))
+            Path(request["result"]).write_text(describe_result_document(), "utf-8")
+            return lb.Completed(0, "")
+        if verb == "run" and "--detach" in argv:
+            return lb.Completed(self.start_status, self.container_id + "\n")
+        if verb == "exec":
+            request = json.loads(Path(argv[-1]).read_text("utf-8"))
+            self.exec_request = request
+            self.build(request)
+            return lb.Completed(self.exec_status, "compiling...\n")
+        if verb == "rm":
+            return lb.Completed(0, "")
+        raise AssertionError(f"unexpected docker call: {argv}")
 
 
 @pytest.fixture
@@ -205,9 +411,7 @@ def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
     def runner(argv, on_line=None):
         seen.append(argv)
         if argv[1:3] == ["image", "inspect"]:
-            from mcuhome.compiler.localbackend import Completed
-
-            return Completed(
+            return lb.Completed(
                 0,
                 image_facts(
                     labels={
@@ -256,9 +460,7 @@ def test_an_image_with_no_zephyr_label_refuses_before_anything_is_written(
 
     def runner(argv, on_line=None):
         if argv[1:3] == ["image", "inspect"]:
-            from mcuhome.compiler.localbackend import Completed
-
-            return Completed(0, image_facts(labels={"org.mcuhome.contract": "1"}))
+            return lb.Completed(0, image_facts(labels={"org.mcuhome.contract": "1"}))
         raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
 
     with pytest.raises(BuildError) as caught:
@@ -411,12 +613,8 @@ def test_resolve_sdk_pin_without_a_source_refuses(tmp_path):
 
 
 def _image_ok():
-    from mcuhome.compiler.localbackend import Completed
-
-    return Completed(0, image_facts())
+    return lb.Completed(0, image_facts())
 
 
 def _missing_image():
-    from mcuhome.compiler.localbackend import Completed
-
-    return Completed(1, "No such image")
+    return lb.Completed(1, "No such image")

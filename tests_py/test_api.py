@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, REPO_ROOT, VALID_CONFIG
-
 from mcuhome.model.errors import (
     BuildError,
     ConfigError,
@@ -26,6 +25,7 @@ from mcuhome.model.errors import (
     MCUHomeError,
     error_dicts,
 )
+
 from mcuhome.workbench import api
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
@@ -52,9 +52,16 @@ def test_the_supported_names_are_all_there() -> None:
 
 
 def test_the_version_is_the_package_version() -> None:
-    from mcuhome.model import __version__
+    """The API states the workbench's version, not the model's.
+
+    The two version literals are equal today, so equality with the model
+    would pass by coincidence — the import is the assertion (ADR 0024:
+    the workbench versions independently of the SDK repository).
+    """
+    from mcuhome.workbench import __version__
 
     assert __version__ == api.VERSION
+    assert "from mcuhome.workbench import __version__" in Path(api.__file__).read_text("utf-8")
 
 
 def test_the_build_methods_are_part_of_the_surface() -> None:

@@ -63,10 +63,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from mcuhome.model.errors import BuildError
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
-
-from mcuhome.model.errors import BuildError
 
 __all__ = [
     "INDEX_FILE",

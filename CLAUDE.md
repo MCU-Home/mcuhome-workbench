@@ -4,9 +4,10 @@
 
 ## Claude Code specifics
 
-- Project subagents live in `.claude/agents/` (`zephyr-code-reviewer`,
-  `twister-runner`, `ncs-reference-miner`).
-- Shared project settings and hooks: `.claude/settings.json`. Personal
-  overrides go to `.claude/settings.local.json` (gitignored — never commit).
-- A `PostToolUse` hook auto-formats edited `.c`/`.h` files with
-  clang-format (`.claude/hooks/format-c.sh`); don't hand-format C code.
+- Shared project settings: `.claude/settings.json`. Personal overrides go
+  to `.claude/settings.local.json` (gitignored — never commit).
+- No project subagents or hooks live here. The C/Zephyr-shaped ones
+  (`zephyr-code-reviewer`, `twister-runner`, `ncs-reference-miner`, the
+  clang-format `PostToolUse` hook) belong to the SDK repository,
+  [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) — see
+  its `.claude/`.

@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The context directory: :mod:`mcuhome.workbench.contextdir`.
 
-The workbench half of the subject. ``test_context.py`` next door pins the
-format and the normative ID rule (:mod:`mcuhome.model.context`); this
-file pins the directory the rule is applied to — what ``create_context``
+The workbench half of the subject. ``mcuhome-sdk``'s ``test_context.py``
+pins the format and the normative ID rule (:mod:`mcuhome.model.context`);
+this file pins the directory the rule is applied to — what ``create_context``
 writes, what ``lock_context`` freezes, and what ``verify_context`` makes
 of a directory that has since been edited. ADR 0020 puts the two in
 different packages on purpose: a build server recomputes the ID from
@@ -20,8 +20,6 @@ from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from ruamel.yaml import YAML
-
 from mcuhome.model.context import (
     BACKEND_DIR,
     CONTEXT_FILE,
@@ -37,6 +35,8 @@ from mcuhome.model.context import (
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
+from ruamel.yaml import YAML
+
 from mcuhome.workbench.contextdir import (
     create_context,
     lock_context,
@@ -49,7 +49,8 @@ from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
-# The fixed synthetic inputs, spelled the same way test_context.py spells
+# The fixed synthetic inputs, spelled the same way mcuhome-sdk's
+# test_context.py spells
 # them — duplicated rather than imported, because the two files are two
 # repositories after ADR 0024.
 DIGEST = "sha256:" + "ab" * 32

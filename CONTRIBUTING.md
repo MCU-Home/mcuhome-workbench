@@ -1,31 +1,30 @@
 # Contributing to MCUHome
 
-Thank you for considering a contribution! MCUHome is in its design phase, so
-the most valuable contributions right now are discussion and review of the
-[architecture decision records](docs/adr/) and participation in
+Thank you for considering a contribution! This is the MCUHome **flagship**
+repository — `mcuhome.workbench` (distribution `mcuhome-workbench`) and
+the project-wide architecture decision records. Firmware/SDK
+contributions (west manifest, C runtime, `mcuhome.model`/`mcuhome.compiler`)
+go to [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk)
+instead — see its own CONTRIBUTING.md.
+
+The most valuable contributions right now are discussion and review of
+the [architecture decision records](docs/adr/) and participation in
 [GitHub Discussions](https://github.com/mcu-home/mcuhome/discussions).
 
 ## Development environment
 
-MCUHome is a Zephyr west workspace application (T2 topology). The workspace
-top directory must **not** be a git repository:
+No west workspace here — this repository is plain Python. Clone
+[mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) next to
+it for the two packages the workbench builds on:
 
 ```sh
-mkdir mcuhome-workspace && cd mcuhome-workspace
 git clone https://github.com/mcu-home/mcuhome
-west init -l mcuhome
-west update
-```
-
-Install the [Zephyr SDK](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
-matching the Zephyr release pinned in [west.yml](west.yml).
-
-For the Python builder package:
-
-```sh
+git clone https://github.com/mcu-home/mcuhome-sdk
 cd mcuhome
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e .
+pip install -e ../mcuhome-sdk/packaging/model \
+            -e ../mcuhome-sdk/packaging/compiler \
+            -e '.[remote]'
 pre-commit install --install-hooks
 pre-commit install --hook-type commit-msg
 ```
@@ -33,34 +32,22 @@ pre-commit install --hook-type commit-msg
 ## Building and testing
 
 ```sh
-west twister -T mcuhome/tests --integration      # C test suites (native_sim)
-pytest                                           # builder test suite (tests_py/)
+pytest    # tests_py/ — the workbench test suite
 ```
 
-For a full firmware build, build a device from its YAML description — or
-a sample, if you want the framework without the builder in the picture:
-
-```sh
-mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
-  --build-dir build/bmp180-node
-west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt \
-  mcuhome/samples/matter-node
-```
-
-`mcuhome/app` is not a buildable application: it holds the generic
-application main the builder compiles into every generated device, and
-building it directly is refused with a message saying so.
+The `remote` build method's own suite needs one more peer: clone
+[mcu-home/build-server](https://github.com/mcu-home/build-server) next
+to this repository and `pip install -e ../build-server`. Without it,
+`tests_py/test_sessionclient.py` skips itself with one reason naming
+exactly what is missing (`pytest -rs`).
 
 ## Coding standards
 
-- **C:** Zephyr coding style, enforced by the repo's `.clang-format`
-  (tabs, Linux-kernel-derived style). Prefer static allocation; no heap
-  allocation after initialization; keep Sleepy End Device power budgets in
-  mind (no busy-waiting, no unnecessary wakeups).
 - **Python:** `ruff` (lint + format), settings in `pyproject.toml`.
 - **Licensing:** every new file needs SPDX headers (a
   `SPDX-FileCopyrightText` line and an `Apache-2.0` license identifier —
-  copy them from any existing file).
+  copy them from any existing file; Markdown files are covered by
+  `REUSE.toml`'s fallback annotation and need no inline header).
   **Never copy code from GPL-licensed projects — this explicitly includes
   ESPHome's C++ runtime.**
 
@@ -75,7 +62,10 @@ building it directly is refused with a message saying so.
 - Non-trivial design decisions need an ADR draft in
   [docs/adr/draft/](docs/adr/draft/) — propose it in the PR. Drafts are
   living documents; the final ADR is written from the real result once
-  the component is done ([docs/adr/README.md](docs/adr/README.md)).
+  the component is done ([docs/adr/README.md](docs/adr/README.md)). This
+  is the flagship repo, so **project-wide decisions live here**;
+  SDK-shaped decisions go to
+  [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) instead.
 
 ## Reporting issues
 

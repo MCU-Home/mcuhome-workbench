@@ -30,6 +30,7 @@ from fractions import Fraction
 from mcuhome.model import ota, pairing, registry
 from mcuhome.model.errors import ErrorCollector, Location
 from mcuhome.model.toolchain import resolve_toolchain
+
 from mcuhome.workbench.schema import (
     RawBase,
     RawCluster,

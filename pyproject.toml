@@ -1,57 +1,81 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# TOOL CONFIGURATION ONLY — this file is not a distribution.
-#
-# It used to build one, named `mcuhome`. ADR 0020 ended that twice over:
-# decision 2 reserves the plain name for the command line, because `pip
-# install mcuhome` should yield the command a user expects; and decision
-# 1 splits what this repository publishes into three distributions, whose
-# project files are `packaging/{model,workbench,compiler}/pyproject.toml`.
-#
-# What is deliberately NOT here is a fourth, aggregate distribution. It
-# could not do the job it would exist for: a `[project]` table can depend
-# on `mcuhome-model` from an index, never on the copy in this working
-# tree, so `pip install -e '.[dev]'` would install three *published*
-# distributions over the three editable ones and quietly undo the setup
-# it was asked for. The three paths are named explicitly instead — one
-# pip invocation, and every word of it true (AGENTS.md, "Commands"):
-#
-#     pip install -e ./packaging/model -e ./packaging/workbench \
-#                 -e ./packaging/compiler 'pytest>=8.0'
-#
-# The tool sections below stay in one file because that is what they are:
-# settings for the repository, not for any one distribution. Splitting
-# them into ruff.toml + pytest.ini + .codespellrc would be three files
-# replacing one, for nothing. The project files under `packaging/` carry
-# no `[tool.ruff]` section, so ruff keeps resolving this one from there.
+# `mcuhome-workbench` — driving a build (ADR 0020 decision 1), at the
+# repository root since the ADR 0024 split: this repository is the
+# workbench's home, the SDK (model, compiler, C runtime, west manifest)
+# lives in github.com/mcu-home/mcuhome-sdk.
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcuhome-workbench"
+version = "0.1.0.dev0"
+description = "MCUHome's build workbench: configuration pipeline, build context, the three build methods, signing."
+readme = { text = """
+Everything between a YAML device configuration and something a compiler
+can be handed: parse, validate, resolve, create the build context, and
+drive the build — locally, in a build container, or through a build
+server — behind one interface. Plus client-side firmware signing.
+
+`mcuhome.workbench.api` is the supported programmatic surface.
+
+Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome
+""", content-type = "text/markdown" }
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "The MCUHome Contributors" }]
+keywords = ["zephyr", "matter", "thread", "home-assistant", "firmware"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Home Automation",
+]
+# Cross-repository edges since ADR 0024: unpinned while nothing is
+# published (development runs on editable checkouts); from v1.0 every
+# edge becomes `~=X.Y.0` — same major.minor family, newest patch wins.
+dependencies = [
+  "mcuhome-model",
+  # ruamel.yaml keeps line/column information on the parsed tree; every
+  # validation error in this package points at a line.
+  "ruamel.yaml>=0.18",
+  # PEP 440 constraint resolution for the SDK and container pins (E52).
+  "packaging>=23",
+]
+
+[project.optional-dependencies]
+# The `remote` build method and nothing else (E18, ADR 0019): the
+# session client needs an async HTTP stack and a zstd codec. Bounds
+# match the build server's for the same two libraries.
+remote = ["aiohttp>=3.10,<4", "zstandard>=0.22"]
+# The `local` and `local-dev` build methods: stages 4-5 and the backend
+# that drives the build container live in mcuhome-compiler, an optional
+# edge resolved at call time (ADR 0020 decision 3). The CLI depends on
+# mcuhome-workbench[local,remote] so all three methods work out of the
+# box (cli ADR 0002); the dashboard deliberately installs neither.
+local = ["mcuhome-compiler"]
+
+[project.urls]
+Homepage = "https://github.com/mcu-home/mcuhome"
+Issues = "https://github.com/mcu-home/mcuhome/issues"
+
+[tool.setuptools]
+packages = ["mcuhome.workbench"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-# Design documents are prose; the Python sketches inside them illustrate
-# an idea and are not source. `ruff format` reformats fenced code blocks
-# in Markdown, which would silently rewrite approved design records.
+# ADRs are prose; ruff format would rewrite fenced code blocks.
 extend-exclude = ["docs/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
-# Python tests live in tests_py/, not in tests/: tests/ holds Zephyr
-# twister suites (testcase.yaml per directory) and twister recurses into
-# whatever it is pointed at. Two runners, two roots, no overlap — see
-# tests_py/README.md.
 [tool.pytest.ini_options]
 testpaths = ["tests_py"]
 
-# Domain vocabulary codespell would "correct" into errors: OTA Requestor
-# is the Matter specification's own cluster name, PASE/OT are protocol
-# names, rsource is Kconfig syntax.
-#
-# The generated .matter IDL is skipped: ZAP writes it from CHIP's own
-# cluster XML, spelling mistakes included, and it is regenerated per
-# release — so a fix here would be undone by the next regeneration and
-# belongs upstream instead.
 [tool.codespell]
 ignore-words-list = "requestor,pase,ot,rsource"
-skip = "./components/matter/zap/*.matter"

@@ -33,6 +33,7 @@ from pathlib import Path
 
 from mcuhome.model import ota, registry
 from mcuhome.model.errors import ConfigError, Location
+
 from mcuhome.workbench import schema
 from mcuhome.workbench.tree import (
     DEVICE_ENTRY,

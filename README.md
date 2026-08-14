@@ -27,150 +27,86 @@ controller out of the box — no custom integration required.
 **Phase 1 complete.** The firmware runtime — tables-contract framework,
 channel layer, netcore entropy service, and a BMP180 two-endpoint sample
 — is implemented and hardware-verified: commissioned into a production
-Home Assistant instance over Thread (design record: see
-[docs/adr/](docs/adr/)). The Python YAML builder (phase 2) is under
-construction, and now goes end to end: `mcuhome validate <device>`
-checks a configuration and prints what it resolves to, and `mcuhome
-build <device>` generates the Zephyr application for it and compiles it
-into a flashable image, reporting where the image is and what it costs
-in flash and RAM. Compiling happens in the versioned builder image
-([ADR 0007](docs/adr/0007-containerized-toolchain.md)), so the host needs
-nothing but git and docker.
-The companion web interface lives in
+Home Assistant instance over Thread. The Python YAML builder (phase 2)
+goes end to end: validating a device configuration and compiling it into
+a flashable image, reporting where the image is and what it costs in
+flash and RAM. That build pipeline — parsing, validation, code
+generation, the three build methods and client-side signing — is
+`mcuhome.workbench`, published from **this repository**. The firmware,
+the C runtime and the west workspace that consumes it live in
+[mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk); the
+companion web interface lives in
 [mcu-home/dashboard](https://github.com/mcu-home/dashboard).
 
-## Repository layout
+## This repository: the workbench
 
-This repository has a dual role: it is the **west manifest repository** of
-the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
+Since the repository split (draft [ADR 0024](docs/adr/draft/0024-sdk-and-tools-repositories.md))
+this is the MCUHome **flagship** repository. It holds:
+
+- **`mcuhome.workbench`** (distribution `mcuhome-workbench`) — everything
+  between a parsed YAML device configuration and something a compiler can
+  be handed: parse, validate, resolve, create the build context, and
+  drive a build behind one interface — locally, in a build container, or
+  through a build server (the three build methods of
+  [ADR 0020](docs/adr/0020-package-layout-and-the-asynchronous-library.md)
+  decision 6) — plus client-side firmware signing.
+  **`mcuhome.workbench.api`** is the supported programmatic surface, and
+  the only part of this package covered by the SemVer promise of
+  [draft ADR 0005](docs/adr/draft/0005-semver-and-conventional-commits.md).
+- **The project-wide architecture decision records** ([docs/adr/](docs/adr/))
+  — one number sequence shared with the SDK repository; see
+  [docs/adr/README.md](docs/adr/README.md) for the split index.
+- The community files (license, code of conduct, security policy, …).
 
 | Path | Purpose |
 |---|---|
-| `west.yml` | West manifest pinning Zephyr and modules |
-| `zephyr/module.yml` | Zephyr module definition (boards, DTS, snippets roots) |
-| `mcuhome/` | Python source tree: a PEP 420 namespace with one subpackage per published distribution (ADR 0020) — `model/` (shared vocabulary), `workbench/` (config pipeline, build methods, signing), `compiler/` (codegen, west orchestration). `mcuhome.workbench.api` is the supported surface (the `mcuhome` command is its own repo, [mcu-home/cli](https://github.com/mcu-home/cli)) |
-| `packaging/` | The project file of each distribution: `mcuhome-model`, `mcuhome-workbench`, `mcuhome-compiler` — one version, one tag, one release |
-| `components/` | MCUHome components (Python schema + C sources side by side) |
-| `app/` | The generic application main every generated device shares |
-| `boards/`, `drivers/`, `dts/bindings/` | Out-of-tree Zephyr hardware support |
-| `snippets/` | Connectivity/device-class variants (wifi, thread-sed, …) |
-| `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
-| `samples/`, `tests/` | Twister-driven samples and test suites |
-| `tests_py/` | pytest suite of the three Python packages |
-| `containers/build-container/` | The build-container image — the contract's reference implementation (ADR 0007) |
-| `scripts/` | Development tooling and future custom west extension commands |
+| `pyproject.toml` | Project file for `mcuhome-workbench` — the whole distribution builds from the repository root |
+| `mcuhome/workbench/` | The one subpackage this repo publishes — part of the PEP 420 `mcuhome.*` namespace shared with `mcuhome-model`/`mcuhome-compiler` in mcuhome-sdk |
+| `tests_py/` | pytest suite for this package |
 | `docs/adr/` | Architecture decision records |
+
+## Firmware and the west workspace
+
+The Zephyr west manifest, the C runtime, the build-container definition
+and the `mcuhome.model`/`mcuhome.compiler` packages live in
+[mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) — start
+there to build actual firmware; its
+[README](https://github.com/mcu-home/mcuhome-sdk#readme) covers the west
+workspace setup and the `mcuhome` command-line walkthrough.
+
+## Other repositories
+
+| Repo | What it is |
+|---|---|
+| [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) | West manifest, Zephyr module, C runtime, build-container definition, `mcuhome-model` + `mcuhome-compiler` |
+| [mcu-home/cli](https://github.com/mcu-home/cli) | The `mcuhome` command line — a thin shell over this repository's workbench |
+| [mcu-home/dashboard](https://github.com/mcu-home/dashboard) | The web interface |
+| [mcu-home/build-server](https://github.com/mcu-home/build-server) | The remote-build orchestrator the `remote` build method talks to |
 
 ## Getting started (developers)
 
-MCUHome uses a [west workspace](https://docs.zephyrproject.org/latest/develop/west/workspaces.html).
-The workspace top directory must **not** be a git repository:
+This repository is plain Python — no west workspace, no Zephyr SDK, no
+docker required to work on it. Clone
+[mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) next to
+it for the two packages the workbench builds on:
 
 ```sh
-mkdir mcuhome-workspace && cd mcuhome-workspace
 git clone https://github.com/mcu-home/mcuhome
-west init -l mcuhome
-west update
+git clone https://github.com/mcu-home/mcuhome-sdk
+cd mcuhome
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ../mcuhome-sdk/packaging/model \
+            -e ../mcuhome-sdk/packaging/compiler \
+            -e '.[remote]'
+pytest
 ```
 
-Requirements on your machine: **git, docker and Python ≥ 3.11** — no
-Zephyr SDK, no cross-compilers, no vendor tools. The toolchain lives in
-the MCUHome builder image
-([ADR 0007](docs/adr/0007-containerized-toolchain.md)), which is
-versioned in lockstep with the pinned Zephyr release:
+The `remote` extra pulls in the session-protocol client's dependencies
+(`aiohttp`, `zstandard`); its own test file needs a live
+`mcu-home/build-server` peer too and skips itself with one reason if it
+is missing — see [AGENTS.md](AGENTS.md) for details.
 
-```sh
-docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8
-```
-
-Then build a device from its YAML description. The `mcuhome` command is
-a thin shell in its own repository
-([mcu-home/cli](https://github.com/mcu-home/cli)); until the packages
-are published it is installed from a checkout next to this one:
-
-```sh
-pip install -e mcuhome/packaging/model \
-            -e mcuhome/packaging/workbench \
-            -e mcuhome/packaging/compiler   # the three Python packages
-git clone https://github.com/mcu-home/cli
-pip install -e cli                # the `mcuhome` command
-mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
-  --build-dir build/bmp180-node
-```
-
-That writes the generated Zephyr application to `build/bmp180-node/app`,
-compiles it in the container as your own user, and prints both images —
-MCUboot and the application signed for it — with their flash/RAM
-footprints and the flash layout they were built against. The first build
-also draws your own ECDSA P-256 signing key into
-`~/.config/mcuhome/signing.key` and says so: every device you flash
-verifies its firmware against it, so it is worth keeping (ADR 0015). `--generate-only` stops after the
-generating half, which needs nothing but Python; `--method local-dev`
-compiles on a host toolchain instead, for people working on MCUHome itself. Details,
-including how to build the image yourself, are in
-[containers/build-container/README.md](containers/build-container/README.md).
-
-Build parallelism is auto-detected from CPU count and available RAM (a
-Matter compile unit peaks around 1-1.5 GiB, so the formula budgets 2 GiB
-per job and never exceeds the core count) — `MCUHOME_JOBS=N` overrides
-the auto-detection, `--jobs N` overrides both, and it applies inside the
-builder container too, resolved on the host before `docker run`.
-
-### Starting a device from nothing
-
-```sh
-mcuhome new bedroom-climate --board nrf7002dk/nrf5340/cpuapp
-mcuhome init-pairing bedroom-climate      # this device's commissioning codes
-mcuhome validate bedroom-climate
-```
-
-`mcuhome new` writes `devices/bedroom-climate/main.yaml` — a complete
-configuration with a commented, working hardware example to uncomment.
-It never draws commissioning credentials itself: those are drawn once,
-by their own command, so that every build of a device is byte-identical
-(`docs/design/yaml-schema.md` §4.1).
-
-### Signing where the key is, building where the CPU is
-
-Every image is signed with your own key
-([ADR 0015](docs/adr/draft/0015-update-and-partition-architecture.md) decision 8).
-Normally that happens during the build. When the machine that compiles
-is not the machine that owns the key — a build server, or the future
-dashboard's build App — the two are separated:
-
-```sh
-mcuhome public-key -o signing.pub          # the half that may travel
-mcuhome build <device> --no-sign --public-key signing.pub
-mcuhome sign build/<device>                # where the private key is
-```
-
-The unsigned build compiles the bootloader with the public key in it and
-leaves the application unsigned, and writes `build-manifest.json` stating
-the exact `imgtool` parameters (`--version`, `--header-size`,
-`--slot-size`, `--align`). `mcuhome sign` reads them back and runs the
-same tool with the same arguments — the result is the same image, and
-`--no-sign` deliberately leaves no file behind that looks flashable and
-is not.
-
-### Machine-readable output
-
-```sh
-mcuhome validate <device> --json    # the resolved model, or the errors
-mcuhome build    <device> --json    # the build manifest (log on stderr)
-
-# A machine that only compiles takes the resolved model and nothing else:
-# no configuration tree, no secrets (dashboard ADR 0007 decision 1). The
-# generated tree is byte-identical to the one the direct route produces.
-mcuhome build --model device-model.json --build-dir build/<device>
-mcuhome schema                      # JSON Schema for main.yaml
-mcuhome schema registry             # boards, drivers, clusters, device types
-```
-
-### Using the builder from Python
-
-`mcuhome.workbench.api` is the supported programmatic surface, and the
-only part of these packages covered by the SemVer promise of
-[ADR 0005](docs/adr/draft/0005-semver-and-conventional-commits.md):
+## Using the workbench from Python
 
 ```python
 from mcuhome.workbench import api
@@ -188,22 +124,10 @@ else:
 `validate_device` reports **every** problem rather than raising on the
 first, which is what lets an editor show a whole configuration's markers
 in one pass. `api.registry_data()` and `api.config_json_schema()` are the
-same documents `mcuhome schema` prints; `api.read_manifest()` loads a
-build manifest. Everything else in the three packages is an
-implementation detail and may change between releases.
-
-To see the framework run without the builder in the picture, build the
-reference sample by hand:
-
-```sh
-west build -p -b nrf7002dk/nrf5340/cpuapp -S matter -S debug-rtt mcuhome/samples/matter-node
-```
-
-The `matter` and `debug-rtt` snippets are mandatory, not optional. See
-[samples/matter-node/README.md](samples/matter-node/README.md) for
-hardware prerequisites and wiring. Note that `mcuhome/app` is *not* a
-buildable application — it holds the generic main the builder compiles
-into every generated device ([app/README.md](app/README.md)).
+same documents the `mcuhome schema` command prints; `api.read_manifest()`
+loads a build manifest, and `api.run_build()` drives any of the three
+build methods behind one awaitable call. Everything else in this package
+is an implementation detail and may change between releases.
 
 ## Relationship to ESPHome
 

@@ -3,18 +3,24 @@
 """Golden-file test of the canonical model (builder-pipeline.md §9).
 
 The fixture is the resolved model of ``00-bmp180-two-endpoints.yaml``,
-the YAML form of ``samples/matter-node``. Its numbers are cross-checked
-against the hand-written golden tables in
-``samples/matter-node/src/mcuhome_config.c`` and ``src/main.c``: those
-files are what the code generator has to reproduce, so if this model ever
-stops matching them, the generator would emit a different device than the
-one that was commissioned into a real Home Assistant.
+the YAML form of ``mcuhome-sdk``'s ``samples/matter-node``. Its numbers
+are cross-checked against the hand-written golden tables in that sample's
+``src/mcuhome_config.c`` and ``src/main.c``: those files are what the
+code generator has to reproduce, so if this model ever stops matching
+them, the generator would emit a different device than the one that was
+commissioned into a real Home Assistant.
+
+**This is the cross-repository contract of ADR 0024.** The golden model
+document in ``data/golden/`` is pinned here — against the real resolver,
+which is this repository's — and read over there as the model itself, by
+a suite that has no resolver to run. Both halves of the split therefore
+test the same device without sharing a line of code, and this file is the
+half that decides what that device is.
 """
 
 from __future__ import annotations
 
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, GOLDEN_DIR, resolve_file
-
 from mcuhome.model.model import MODEL_VERSION, DeviceModel
 
 GOLDEN = GOLDEN_DIR / "00-bmp180-two-endpoints.device-model.json"

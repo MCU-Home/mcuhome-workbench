@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 from conftest import FIXTURE_TREE
-
 from mcuhome.model.errors import ConfigError
+
 from mcuhome.workbench.tree import ConfigTree, find_config_root, open_tree, resolve_device
 
 

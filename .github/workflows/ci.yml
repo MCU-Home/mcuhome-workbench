@@ -1,32 +1,21 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# CI for the MCUHome firmware framework. Four gates:
+# CI for the MCUHome workbench (the flagship/tools repository, ADR
+# 0024). Two gates:
 #
-#   lint     — the same ruff/REUSE/debug-output checks
-#              .pre-commit-config.yaml runs locally. Needs nothing but
-#              Python.
-#   pytest   — the Python suite in tests_py/, the fast half of the test
-#              strategy. Needs nothing but Python either, which is why
-#              running it nowhere automated was never a cost worth
-#              paying.
-#   twister  — the Zephyr test suites in tests/, compiled and run inside
-#              the MCUHome builder image (ADR 0007). The image is the same
-#              one `mcuhome build` uses, which is the point of having one:
-#              "passes in CI" and "builds on my machine" mean the same
-#              thing or the container strategy is not worth its weight.
-#   matter   — one real Matter firmware, built end to end the way a user
-#              builds one: patched west projects, the builder image, the
-#              generator, `mcuhome build`. The expensive gate, and the
-#              only one that touches the Matter SDK at all; it runs only
-#              when something that can break it changed. `matter-gate`
-#              below decides that, and the head comment of `matter` says
-#              why the job exists.
-#
-# And one job that is not a gate: `sdk-package` builds the
-# `mcuhome-sdk-<version>` archive on `main` and uploads it as a workflow
-# artifact. It publishes nothing and can fail nothing that a pull request
-# would notice; see its own head comment.
+#   lint   — the same ruff/REUSE checks .pre-commit-config.yaml runs
+#            locally. Needs nothing but Python.
+#   pytest — the Python suite in tests_py/, testing mcuhome.workbench.
+#            Needs mcuhome-model and mcuhome-compiler, which this repo
+#            does not publish any more (ADR 0024) — they come from a
+#            plain public checkout of the sibling mcu-home/mcuhome-sdk
+#            repository. The `remote` build method's own suite
+#            (test_sessionclient.py) additionally needs a live
+#            mcuhome-build-server peer, so mcu-home/build-server is
+#            checked out the same way. Both repositories are public, so
+#            no deploy key is needed for either checkout — ADR 0024 §3
+#            retired those together with repository privacy.
 #
 # All actions are pinned to commit SHAs, not tags (see dependabot.yml,
 # which keeps the pins current via its github-actions ecosystem entry).
@@ -37,10 +26,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Manual runs exist for the `matter` gate: it is path-triggered, and
-  # "run it anyway" (after a builder-image publish, before a release, to
-  # reproduce a bench failure) has to be possible without an empty
-  # commit. lint and twister come along, which costs a minute.
   workflow_dispatch:
 
 permissions:
@@ -73,26 +58,6 @@ jobs:
       - name: REUSE lint
         run: reuse lint
 
-      # Debug output is load-bearing (AGENTS.md): config fragments must
-      # not reduce diagnostics without a recorded decision and its
-      # `# debug-output: approved <reason>` marker.
-      - name: Debug-output policy
-        run: python scripts/check_debug_output.py
-
-  # The Python suite in tests_py/ — the fast half of the test strategy
-  # (docs/design/builder-pipeline.md §9), which until now ran nowhere
-  # automated at all: three distributions' worth of invariants, the
-  # golden generator output and every refusal message, none of them
-  # gated by anything but a developer remembering to run pytest.
-  #
-  # The `remote` extra is installed with the workbench, so the session
-  # protocol client's optional dependencies are resolved here too. Its
-  # test file needs one more thing this runner cannot have: a checkout of
-  # the private sibling repository mcu-home/build-server, which those
-  # tests drive the client against as a real peer. There is no deploy key
-  # for it (CLI_DEPLOY_KEY, used by the `matter` job, covers mcu-home/cli
-  # only), so that file skips itself with one loud reason — `-rs` below is
-  # what puts that reason in the log rather than in a dot.
   pytest:
     name: pytest (tests_py)
     runs-on: ubuntu-latest
@@ -100,554 +65,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Plain public checkouts — both repositories are public (ADR 0024
+      # §3), so no token or deploy key is needed for either.
+      - name: Checkout mcu-home/mcuhome-sdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-sdk
+          path: .deps/mcuhome-sdk
+
+      - name: Checkout mcu-home/build-server
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/build-server
+          path: .deps/build-server
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
-      # The three editable installs AGENTS.md prescribes, and no
-      # aggregate distribution over them (ADR 0020 decision 2 and the
-      # head comment of the root pyproject.toml).
-      - name: Install the three distributions
+      # mcuhome-model and mcuhome-compiler from the SDK checkout,
+      # mcuhome-workbench (this repo, with the `remote` extra for
+      # test_sessionclient.py's aiohttp/zstandard dependency) and
+      # mcuhome-build-server as the real peer that same file drives its
+      # session-protocol client against.
+      - name: Install the distributions
         run: |
           python -m pip install --disable-pip-version-check \
-            -e ./packaging/model \
-            -e './packaging/workbench[remote]' \
-            -e ./packaging/compiler \
+            -e ./.deps/mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome-sdk/packaging/compiler \
+            -e '.[remote]' \
+            -e ./.deps/build-server \
             'pytest>=8.0'
 
       - name: pytest
         run: pytest -q -rs
-
-  twister:
-    name: Twister (native_sim, in the builder image)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # For pushing the builder image to ghcr.io. The package inherits the
-      # repository's visibility, so it is private while the repository is.
-      packages: write
-    steps:
-      # The checkout goes one level down: this repository is the west
-      # manifest repository of a T2 workspace, and the workspace top
-      # directory (GITHUB_WORKSPACE, here) must not be a git repository.
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: mcuhome
-
-      # One source of truth for the image name, and it is the builder's:
-      # mcuhome/compiler/container.py carries the Zephyr release and the
-      # image revision, and the builder resolves the very same string when
-      # a developer runs `mcuhome build`. Importing it needs no third-party
-      # package — that module is standard library only, on purpose.
-      - name: Resolve the builder image reference
-        id: image
-        run: |
-          python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          import sys
-          sys.path.insert(0, "mcuhome")
-          from mcuhome.compiler.container import IMAGE, IMAGE_REPOSITORY, ZEPHYR_RELEASE
-          print(f"reference={IMAGE}")
-          print(f"alias={IMAGE_REPOSITORY}:zephyr-{ZEPHYR_RELEASE}")
-          PY
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # "Has the image changed?" is answered by asking the registry, not by
-      # diffing the Dockerfile: the tag *is* the content identity
-      # (zephyr-<line>-r<revision>), so a tag that does not exist yet means
-      # an image input changed and its revision was bumped — and a bump
-      # that somebody forgot fails loudly here instead of quietly testing
-      # against a stale environment. Since r3 the image inputs are
-      # containers/builder/ AND west.yml AND patches/, because the image
-      # bakes a west workspace with the patch set applied.
-      - name: Pull the builder image, or build it
-        id: builder
-        run: |
-          reference='${{ steps.image.outputs.reference }}'
-          if docker pull --quiet "$reference"; then
-            echo "Using the published image."
-          else
-            echo "::notice::$reference is not published yet — building it."
-            # The context is the repository, not containers/builder/:
-            # since r3 the image bakes a west workspace, so west.yml
-            # and patches/ are image inputs too.
-            docker build --tag "$reference" \
-              --file mcuhome/containers/builder/Dockerfile mcuhome
-            echo "built=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Only from main: a pull request that changes the Dockerfile is built
-      # and tested with its own image, but does not get to publish one.
-      - name: Publish the builder image
-        if: steps.builder.outputs.built == 'true' && github.event_name == 'push'
-        run: |
-          reference='${{ steps.image.outputs.reference }}'
-          alias='${{ steps.image.outputs.alias }}'
-          docker push "$reference"
-          docker tag "$reference" "$alias"
-          docker push "$alias"
-
-      # Keyed on west.yml alone: that file is the complete description of
-      # what `west update` produces. Zephyr and the modules are fetched
-      # shallow and narrow, which is what keeps this cache small enough to
-      # be worth having.
-      #
-      # The path list must cover EVERY directory west creates, because a
-      # cache hit skips `west update` entirely: a project the cache did
-      # not carry is then simply absent from the workspace. That is not
-      # hypothetical — mcuboot lands in bootloader/, the original list
-      # stopped at modules/, and the first warm-cache run after the
-      # ota_staging suite appeared failed on a missing
-      # bootutil/bootutil_public.h (flash_img includes it via
-      # CONFIG_IMG_MANAGER). The `west-2` segment versions the path set:
-      # bumping it retires caches saved with the old, incomplete list,
-      # which a key based on west.yml alone would happily restore.
-      - name: Restore the west workspace
-        id: west-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .west
-            zephyr
-            modules
-            bootloader
-          key: west-2-${{ runner.os }}-${{ hashFiles('mcuhome/west.yml') }}
-
-      # Without the Matter SDK: every suite in tests/ is CHIP-free by
-      # design (ADR 0014, and the reason tests/matter_tables/ tests the
-      # table validator rather than the runtime). Skipping the `matter`
-      # group keeps a multi-gigabyte clone with submodules out of CI.
-      - name: Initialize the west workspace
-        if: steps.west-cache.outputs.cache-hit != 'true'
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:$PWD" --workdir "$PWD" \
-            '${{ steps.image.outputs.reference }}' \
-            sh -euc '
-              west init -l mcuhome
-              west config manifest.group-filter -- -matter
-              west update --narrow -o=--depth=1
-            '
-
-      - name: Run the Zephyr test suites
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" \
-            --volume "$PWD:$PWD" --workdir "$PWD" \
-            '${{ steps.image.outputs.reference }}' \
-            west twister -T mcuhome/tests --integration --inline-logs -v -j 2
-
-  # ------------------------------------------------------------------
-  # The trigger for the `matter` job below.
-  #
-  # A Matter build is a quarter of an hour of runner time (13:38 cold on
-  # four cores, REMOTE-BUILD.md), so it must not run on every pull
-  # request — but GitHub has no per-job path filter, and the workflow's
-  # own `on:` block is shared with lint and twister, which DO run on
-  # everything. Hence this gate: ten seconds of plain git, no third-party
-  # action, deciding from the diff whether anything that can break a
-  # Matter build was touched.
-  #
-  # The path list is the firmware and the builder, named explicitly:
-  #
-  #   west.yml                  the pinned Zephyr/CHIP revisions the
-  #                             patches are generated against
-  #   patches/                  the patch set itself
-  #   compat/                   headers on CHIP's include path that are
-  #                             not in any patch (compat/README.md)
-  #   containers/builder/       the build environment, contents included
-  #   components/, app/, lib/, include/, drivers/, dts/, boards/,
-  #   snippets/, CMakeLists.txt, Kconfig, zephyr/
-  #                             everything that gets compiled into the
-  #                             image or decides how
-  #   mcuhome/                  the generator and the build orchestration
-  #   scripts/                  pyshim (CHIP codegen imports it) and this
-  #                             job's artifact check
-  #   the reference example     what the job builds
-  #   this workflow             so a change to the job runs the job
-  #
-  # Deliberately NOT in the list: docs/ other than that one example,
-  # tests/, tests_py/, samples/ and the community files. A change there
-  # cannot alter the firmware this job produces — samples/matter-node is
-  # generator OUTPUT (ADR 0014), compared byte for byte by the pytest
-  # suite, so a real change to it arrives together with a change under
-  # mcuhome/ that is in the list.
-  #
-  # Fail-open: if the base commit cannot be resolved (a force push, a new
-  # branch, a shallow history), the job runs. A missed regression is more
-  # expensive than a wasted quarter of an hour.
-  matter-gate:
-    name: Matter build — does this change touch it?
-    runs-on: ubuntu-latest
-    outputs:
-      run: ${{ steps.decide.outputs.run }}
-    steps:
-      # No sub-directory here: this job builds nothing, so it needs no
-      # west workspace and no topdir rule. Full history, because the diff
-      # reaches back to the base of the pull request or the push.
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Decide
-        id: decide
-        run: |
-          paths='
-            .github/workflows/ci.yml
-            CMakeLists.txt
-            Kconfig
-            west.yml
-            app
-            boards
-            compat
-            components
-            containers/builder
-            docs/design/examples/00-bmp180-two-endpoints.yaml
-            drivers
-            dts
-            include
-            lib
-            mcuhome
-            patches
-            scripts
-            snippets
-            zephyr
-          '
-          case '${{ github.event_name }}' in
-            workflow_dispatch) base='' ;;
-            pull_request)      base='${{ github.event.pull_request.base.sha }}' ;;
-            *)                 base='${{ github.event.before }}' ;;
-          esac
-          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "::notice::No base commit to compare against — running the Matter build."
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --quiet "$base" HEAD -- $paths; then
-            echo "Nothing on the Matter build path changed since $base."
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Changed on the Matter build path since $base:"
-            git diff --name-only "$base" HEAD -- $paths
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  # ------------------------------------------------------------------
-  # WHY THIS JOB EXISTS. On 2026-08-08 three build inputs turned out to
-  # be missing, all three found by hand, none of them by CI:
-  #
-  #   1. the mbedTLS shim headers the CHIP patch puts on the include path
-  #      lived in an untracked directory outside every repository (they
-  #      are compat/mbedtls/ now);
-  #   2. build_overrides/pigweed_environment.gni was a hand-written stub
-  #      sitting in CHIP's own .gitignore and in no patch — every fresh
-  #      workspace was one file short (it is a new-file hunk now);
-  #   3. `cryptography` was absent from the builder image although
-  #      sysbuild runs `imgtool getpub` on EVERY build, signing or not,
-  #      and imgtool imports it at module load (image revision r2).
-  #
-  # Three independent blind spots hid the same gap: the twister job
-  # filters the `matter` west group out, the suites in tests/ are
-  # CHIP-free by design (ADR 0014), and every Matter build anyone ran
-  # locally used the host method, where the host interpreter quietly supplied
-  # what the image lacked. Nothing had ever walked the container path for
-  # a Matter build. This job is that walk — patch set, compat headers,
-  # image contents, west pins, generator and `mcuhome build`, exercised
-  # together on the example the node on the bench was commissioned from.
-  # Delete it and those three classes of failure become invisible again.
-  matter:
-    name: Matter firmware build (nRF7002-DK, in the builder image)
-    needs: matter-gate
-    if: needs.matter-gate.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # Pull only. Publishing the builder image is the twister job's
-      # business (it runs on the same events and owns the tag).
-      packages: read
-    env:
-      # Pins the host-side ccache directory into the workspace so the
-      # cache action has a path it can name. Without it
-      # mcuhome.compiler.container falls back to $XDG_CACHE_HOME/$HOME, which is
-      # the runner's business and not stable across runner images.
-      # `mcuhome build` creates the directory and mounts it at /ccache.
-      MCUHOME_CCACHE_DIR: ${{ github.workspace }}/.ccache
-    steps:
-      # Same topdir rule as the twister job: the workspace top directory
-      # must not be a git repository, so this repo goes one level down.
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: mcuhome
-
-      # The `mcuhome` command is a thin shell in its own repository
-      # (ADR 0017) and this job needs the command, not just the library.
-      # While both repositories are private that means a read-only deploy
-      # key, mirroring what mcu-home/cli already does in the other
-      # direction. To rotate it (repository settings, no tooling):
-      #
-      #   1. ssh-keygen -t ed25519 -N '' -C ci-mcuhome-read -f cli-deploy-key
-      #   2. mcu-home/cli → Settings → Deploy keys → add
-      #      cli-deploy-key.pub, read-only
-      #   3. mcu-home/mcuhome → Settings → Secrets and variables →
-      #      Actions → secret CLI_DEPLOY_KEY with the private key's content
-      #   4. delete both local key files
-      #
-      # If the secret is missing this step fails, which is correct: a
-      # gate that cannot run is not a gate that passes. Once the packages
-      # are published this becomes a plain pip install and the key goes.
-      - name: Checkout the mcuhome command line
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/cli
-          ssh-key: ${{ secrets.CLI_DEPLOY_KEY }}
-          path: .deps/cli
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
-
-      # Editable, and that is not a style preference: mcuhome.compiler.workspace's
-      # installed_module_dir() resolves the module directory from the
-      # package's own location and the container mounts it, so a copy in
-      # site-packages would take the Python half of the SDK into the
-      # build and leave the Zephyr module
-      # — components/, compat/, scripts/pyshim/ — behind.
-      #
-      # Three project directories since ADR 0020: this repository
-      # publishes mcuhome-model, mcuhome-workbench and mcuhome-compiler
-      # out of one source tree (packaging/), and there is deliberately no
-      # aggregate to install instead — see the head comment of the root
-      # pyproject.toml. One pip invocation installs all three; the order
-      # is the dependency order, which pip does not need but a reader
-      # does. This job builds firmware, so it needs the compiler too.
-      - name: Install the builder and its command line
-        run: |
-          python -m pip install --disable-pip-version-check \
-            -e ./mcuhome/packaging/model \
-            -e ./mcuhome/packaging/workbench \
-            -e ./mcuhome/packaging/compiler
-          python -m pip install --disable-pip-version-check -e ./.deps/cli
-          # The build container delivers an UNSIGNED image and the host
-          # signs it afterwards (ADR 0015 decision 8) — so signing is a
-          # host duty and imgtool a host tool. This job has no west
-          # workspace to borrow bootloader/mcuboot/scripts/imgtool.py
-          # from (the r7 image bakes its own), so it takes the pip
-          # release, pinned to the version the mcuboot pin in west.yml
-          # ships.
-          python -m pip install --disable-pip-version-check imgtool==2.4.0
-
-      # Measured on the 2026-08-09 run: 72 GB total, 34 GB free after this
-      # step. That is comfortable for what the job wants at once — the
-      # build container (the r7 image bakes a west workspace, Matter
-      # included), a restored compiler cache (up to the 5 GB
-      # /etc/ccache.conf allows) and the build tree the container writes
-      # back to the host. The host no longer clones connectedhomeip and
-      # its four submodules, so the multi-gigabyte checkout that used to
-      # sit beside the image is gone. The step stays because the
-      # preinstalled Android/.NET/Haskell toolchains are worth tens of
-      # gigabytes, nothing here uses them, and the headroom is what lets
-      # the image grow without this job becoming the thing that discovers
-      # it.
-      - name: Make room on the runner
-        run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
-          df -h /
-
-      # Same resolution as the twister job, and for the same reason: the
-      # builder decides what the image is called, nothing else does.
-      - name: Resolve the builder image reference
-        id: image
-        run: |
-          python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          import sys
-          sys.path.insert(0, "mcuhome")
-          from mcuhome.compiler.container import IMAGE
-          print(f"reference={IMAGE}")
-          PY
-
-      - name: Log in to ghcr.io
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Pull-or-build, as in the twister job, minus the publish: the two
-      # jobs run on the same event and would otherwise race for the tag.
-      # This one builds its own copy when the tag is not published yet —
-      # which is exactly the case a revision bump creates, and precisely
-      # the case whose image contents this job is here to exercise.
-      - name: Pull the builder image, or build it
-        run: |
-          reference='${{ steps.image.outputs.reference }}'
-          if docker pull --quiet "$reference"; then
-            echo "Using the published image."
-          else
-            echo "::notice::$reference is not published yet — building it."
-            # The context is the repository, not containers/builder/:
-            # since r3 the image bakes a west workspace, so west.yml
-            # and patches/ are image inputs too.
-            docker build --tag "$reference" \
-              --file mcuhome/containers/builder/Dockerfile mcuhome
-          fi
-
-      # No west workspace is initialised and no patch is applied on the
-      # host any more, and neither is a gap. The r7 image bakes a west
-      # workspace with the `matter` group included and both files in
-      # patches/ already applied (ADR 0020 decision E5), and the new
-      # default backend builds inside the container against that baked
-      # workspace. The host therefore never clones connectedhomeip and
-      # its four submodules — the multi-gigabyte checkout this job used
-      # to carry, and the reason for the make-room step, is gone with the
-      # two steps that were here.
-      #
-      # The drift-detection story the removed `git apply` step told is
-      # not lost, only moved earlier. A patch that no longer applies to
-      # the revision west.yml pins fails the IMAGE build, and the
-      # "Pull the builder image, or build it" step above builds r7 from
-      # this repository whenever that tag is not yet published — which is
-      # exactly the case a patch or a pin change creates (west.yml and
-      # patches/ are image inputs since r3). So a drifted patch still
-      # fails this job, at image build, before a single artifact exists.
-
-      # Carrying the compiler cache is what makes this job affordable to
-      # run twice in a row (13:38 cold against 2:02 warm on four cores,
-      # REMOTE-BUILD.md). It works across runners only because the image
-      # is configured for it: compiler_check = content survives a docker
-      # pull where the default mtime check does not, and CCACHE_BASEDIR
-      # normalizes the workspace path (containers/builder/Dockerfile,
-      # mcuhome/compiler/container.py). Nothing had to be invented here.
-      #
-      # Restore always, save only from main: an entry may approach the
-      # 5 GB the image allows, and a pull request saving one per run
-      # would spend the repository's cache budget and evict the twister
-      # job's west workspace.
-      - name: Restore the compiler cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .ccache
-          key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-matter-1-${{ runner.os }}-
-
-      # The default `mcuhome build` resolves the device's SDK pin against
-      # the source directories `--sdk-source` names (build-container
-      # contract v1's first tier) and mounts the selected package into
-      # the container as the SDK tree, so this job has to produce one.
-      # It is the same archive the sdk-package job publishes, built by the
-      # same script into a directory next to the index.json that maps the
-      # pin to it — seconds of work (a `git archive` and one zstd frame),
-      # not the multi-gigabyte west clone the removed steps did. The
-      # script reads the committed revision (HEAD), never the working
-      # tree, and `--repo` defaults to the checkout the script lives in
-      # (here mcuhome/). zstandard is unpinned on purpose: this archive is
-      # a throwaway build input consumed in the same run, so its bytes
-      # need not reproduce a release's the way the sdk-package job's must.
-      - name: Build the SDK source archive
-        run: |
-          python -m pip install --disable-pip-version-check zstandard
-          python mcuhome/scripts/build_sdk_archive.py --output-dir dist/sdk
-
-      # The example the bench node was commissioned from — the YAML form
-      # of samples/matter-node — built the way AGENTS.md documents it:
-      # from the workspace top directory, in the builder image (the
-      # default path, not the host method, which is the whole point), against
-      # the SDK archive built above, with the RTT snippet the
-      # debug-output directive requires. The signing key is generated on
-      # first use and dies with the runner; nothing commissions this
-      # image, and no key of any consequence exists on a CI runner. Job
-      # count is left to the builder's own CPU/RAM detection
-      # (mcuhome.compiler.workspace.auto_jobs).
-      - name: Build the reference Matter device
-        run: |
-          mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
-            --build-dir build/bmp180-node --sdk-source dist/sdk -S debug-rtt
-
-      # A green build that produced nothing is worse than a red one. This
-      # is the default (container) path, so the build directory holds a
-      # build-report.json rather than a build-manifest.json: the checker
-      # picks the shape by which file is present and here verifies that
-      # the report is a well-formed §7.2.1 document, and that the unsigned
-      # firmware, the host-signed firmware in both formats and the one
-      # .ota image are present and non-empty. The container already
-      # re-hashed every artifact on egress (contract §5.3), so this is a
-      # presence-and-shape gate, not a second hash oracle.
-      - name: Check the artifact set
-        run: python3 mcuhome/scripts/check_build_artifacts.py build/bmp180-node
-
-      - name: Save the compiler cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .ccache
-          key: ccache-matter-1-${{ runner.os }}-${{ github.run_id }}
-
-  # ------------------------------------------------------------------
-  # The SDK package (B2)
-  # ------------------------------------------------------------------
-  #
-  # ADR 0019's amendment says "CI builds and hashes the
-  # `mcuhome-sdk-<version>` archive"; this is that sentence. It is not a
-  # gate — nothing about it can fail a pull request, because it runs on
-  # `main` only — and it publishes nowhere. What it produces is a
-  # workflow artifact: a file an operator can download into the local
-  # source directory the build server searches first, which is "the whole
-  # first implementation" of the package index that same amendment
-  # describes.
-  #
-  # The pytest suite (tests_py/test_sdk_archive.py) is what proves the
-  # bytes are deterministic and the allowlist holds; this job's value is
-  # that the archive gets built from a clean checkout by something other
-  # than a developer's machine, which is the same reason the `matter` job
-  # exists.
-  sdk-package:
-    name: SDK package (build and upload)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.11"
-
-      # Pinned, because the compressor decides the bytes. Identical zstd
-      # parameters give identical output for one libzstd and not across
-      # two, and the archive's SHA-256 is what a build context pins (ADR
-      # 0018 §6) — so an unpinned compressor would quietly change the
-      # identity of every build that used the package.
-      - name: Install zstandard
-        run: python -m pip install --disable-pip-version-check zstandard==0.25.0
-
-      # HEAD, and therefore the commit — never the working tree. The
-      # script reads the release version out of that same commit, so the
-      # file name and the content cannot disagree.
-      - name: Build the archive
-        run: python scripts/build_sdk_archive.py --output-dir dist/sdk --revision HEAD
-
-      - name: Show what was built
-        run: |
-          ls -l dist/sdk
-          cat dist/sdk/index.json
-          (cd dist/sdk && sha256sum -c ./*.sha256)
-
-      # The archive, its sidecar and the index together: a downloaded
-      # artifact is then already a source directory the build server can
-      # be pointed at, rather than three things to reassemble.
-      - name: Upload the archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mcuhome-sdk-package
-          path: dist/sdk
-          if-no-files-found: error

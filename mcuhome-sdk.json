@@ -1,7 +1,0 @@
-{
-  "sdk": 1,
-  "generate": {
-    "program": "bin/generate",
-    "runtime": "python3"
-  }
-}

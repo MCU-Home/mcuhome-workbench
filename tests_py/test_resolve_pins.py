@@ -14,8 +14,8 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from mcuhome.model.errors import BuildError
+
 from mcuhome.workbench.resolve_pins import (
     SDK_ANY,
     ResolvedPackage,
