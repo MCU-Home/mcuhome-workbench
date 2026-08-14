@@ -93,6 +93,5 @@ spellings in its hint texts — the retirement touches those too).
   deliberately not included yet.
 - The exact YAML keys of `secrets/build-server/<name>.yaml` (today:
   `token`) are pinned during implementation.
-- §4's user/system-level `secrets/build-server/` directories complete
-  the layer model beyond the decision round's letter (which placed the
-  file in the project) — flagged for product-owner confirmation.
+- ~~§4's user/system-level `secrets/build-server/` directories~~ —
+  confirmed by the product owner (2026-08-14): intended exactly so.

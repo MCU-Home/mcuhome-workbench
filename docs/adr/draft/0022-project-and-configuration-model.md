@@ -37,6 +37,7 @@ secrets/                  # ALL secrets, no exceptions (mode 700)
   main.yaml               #   project-wide secrets (the former secrets.yaml)
   devices/<name>.yaml     #   per-device secrets (future)
   build-server/<name>.yaml #  per-builder credentials (ADR 0023)
+  firmware/mcuboot.yaml   #   MCUboot signing key (`firmware_signing_key`, draft 0015 §8)
 build/                    # build output (disposable, created by builds)
 .gitignore                # contains secrets/
 ```
@@ -61,6 +62,11 @@ Ascending — later wins:
 Two deliberate bootstrap exceptions: `--project-dir` and
 `MCUHOME_PROJECT_DIR` are evaluated **before** the project layer —
 they decide where that layer even is.
+
+The system/user files are deliberately **not** named `mcuhome.yaml`:
+only a project directory may look like a project directory — a config
+directory must never be mistaken for one by the upward search or by a
+user working inside it (PO 2026-08-14).
 
 ### 3. Schema-driven, with per-option channels
 
@@ -114,10 +120,8 @@ committed without ever committing its secrets.
 - Merge/list semantics for structured values other than builders
   (builders are defined in ADR 0023); scalars are simply
   nearest-wins.
-- The system/user layer file name `configuration.yaml` (the project
-  layer is `mcuhome.yaml`) completes the naming beyond the decision
-  round — flagged for product-owner confirmation.
-- The per-user signing key (draft ADR 0015 §8:
-  `$XDG_CONFIG_HOME/mcuhome/signing.key`) predates the
-  everything-in-`secrets/` rule; whether it moves under a user-level
-  `secrets/` directory is open — flagged for product-owner decision.
+- ~~The system/user file name~~ — decided (PO 2026-08-14):
+  `configuration.yaml`, rationale in §2.
+- ~~The signing-key location~~ — decided (PO 2026-08-14): per project,
+  `secrets/firmware/mcuboot.yaml` under `firmware_signing_key`
+  (draft 0015 §8 updated).

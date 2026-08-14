@@ -406,12 +406,14 @@ Two invariants keep that door open:
 
 ### 8. Signing keys, and no downgrade prevention in v0.x
 
-**One real signing key per user.** Each MCUHome user is their own
-firmware vendor: the builder generates an ECDSA P-256 key pair on first
-need into `$XDG_CONFIG_HOME/mcuhome/signing.key` (owner-only
-permissions), outside every repository and every build directory;
-`MCUHOME_SIGNING_KEY` (and the CLI's `--signing-key`, cli ADR 0003)
-points elsewhere. The key
+**One real signing key per project** (PO 2026-08-14; originally per
+user in `$XDG_CONFIG_HOME/mcuhome/signing.key`): the builder generates
+an ECDSA P-256 key pair on first need into the project's
+`secrets/firmware/mcuboot.yaml`, under the key `firmware_signing_key`
+(ADR 0022's secrets rules — 700/600, checked, refusal on insecure key
+material). All devices of a project share it; a user who wants one
+vendor key across projects copies the file. `MCUHOME_SIGNING_KEY` (and
+the CLI's `--signing-key`, cli ADR 0003) still points elsewhere. The key
 lives **where the user's controlling instance runs, never on a build
 server**: the dashboard generates it on first need and keeps it in its
 own state (in a Home Assistant add-on, `/config/mcuhome/signing.key` —
