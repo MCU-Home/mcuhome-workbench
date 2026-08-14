@@ -367,15 +367,17 @@ is its own later design; the artifacts above are designed so both work.
 
 The command vocabulary, its flags and the `--json`/exit-code contract
 are the CLI's own decisions, recorded in the cli repository since
-2026-08-14 (cli ADR 0003; the method/server/SDK-source ladders in cli
-ADR 0004). The enumeration this section used to carry had drifted —
+2026-08-14 (vocabulary: cli ADR 0003; output/exit-code contract: cli
+ADR 0004; configuration and builder selection are platform decisions,
+ADR 0022/0023). The enumeration this section used to carry had drifted —
 it listed `--keep-going`, which was never built — and is not repeated
 here.
 
 What stays pipeline-relevant: `<device>` is a folder name resolved
 against the config tree root (`devices/<name>/main.yaml`; an explicit
 path works too; tree root `--config-root`, else auto-discovered cwd
-upwards). `init-pairing` is the exception to "the builder never
+upwards — as built today; the target model, a project directory with
+`mcuhome.yaml` and `--project-dir`, is ADR 0022). `init-pairing` is the exception to "the builder never
 writes into the configuration tree" (§2), and it exists because of
 §1.4: a device needs credentials nobody else has, and a build has to
 be reproducible, so the randomness happens once — into the device's

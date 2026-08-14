@@ -64,3 +64,6 @@ Numbers missing above live here — they are the same sequence.
 | [0013](draft/0013-binary-blob-policy.md) | Binary blob policy, build profiles, and per-device Zephyr pinning |
 | [0015](draft/0015-update-and-partition-architecture.md) | Update and partition architecture per board class |
 | [0016](draft/0016-device-onboarding-and-flash-transport.md) | Device onboarding, the MCUHome standard state, and flash transport |
+| [0022](draft/0022-project-and-configuration-model.md) | The project directory and the configuration model |
+| [0023](draft/0023-builder-configuration.md) | Builder configuration |
+| [0024](draft/0024-sdk-and-tools-repositories.md) | The SDK repository and the tools repository (public from here on) |

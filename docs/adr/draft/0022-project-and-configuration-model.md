@@ -1,0 +1,123 @@
+# 0022 — The project directory and the configuration model
+
+- Status: draft
+- Date: 2026-08-14
+
+Product-owner design round of 2026-08-14. Platform-owned on purpose:
+the CLI and, later, the dashboard resolve configuration through the
+same module — same machine, same user, same project ⇒ same behavior,
+whichever tool asks.
+
+## Context
+
+The user-facing tools grew ad-hoc configuration: a tree root
+auto-discovered from the cwd, one TOML file for build servers, a
+handful of `MCUHOME_*` variables read in different places, and no way
+to set most options outside the command line. When the dashboard later
+changes a default, today's CLI would not notice — the two tools have
+no shared notion of "the configuration".
+
+## Decision
+
+### 1. The project directory
+
+A user's work lives in a **project directory**: the folder holding
+`mcuhome.yaml`, which is both the **project marker** and the
+**project-level configuration file**. Resolution: start at the cwd and
+search **upward** (git-like) for `mcuhome.yaml`. An explicit
+`--project-dir PATH` or `MCUHOME_PROJECT_DIR` disables the search and
+is an error if the named directory carries no `mcuhome.yaml`.
+
+Project layout:
+
+```
+mcuhome.yaml              # marker + project configuration
+devices/<name>/main.yaml  # one folder per device
+secrets/                  # ALL secrets, no exceptions (mode 700)
+  main.yaml               #   project-wide secrets (the former secrets.yaml)
+  devices/<name>.yaml     #   per-device secrets (future)
+  build-server/<name>.yaml #  per-builder credentials (ADR 0023)
+build/                    # build output (disposable, created by builds)
+.gitignore                # contains secrets/
+```
+
+`mcuhome init` creates the durable part of this — `mcuhome.yaml`,
+`devices/`, `secrets/` (mode 700) and the `.gitignore` — after
+checking the target directory: a non-empty directory draws a warning
+and a refusal, `--force` proceeds anyway (and may overwrite files).
+
+### 2. Five configuration layers, strict precedence
+
+Ascending — later wins:
+
+| Layer | Where | Via |
+|---|---|---|
+| system | platformdirs site config (Linux `/etc/mcuhome/`, Windows `ProgramData\mcuhome\`) `configuration.yaml` | file |
+| user | platformdirs user config (Linux `$XDG_CONFIG_HOME/mcuhome/`, Windows `%APPDATA%\mcuhome\`) `configuration.yaml` | file |
+| project | `mcuhome.yaml` in the project directory | file |
+| environment | `MCUHOME_*` variables | env |
+| command | the invocation's arguments | args |
+
+Two deliberate bootstrap exceptions: `--project-dir` and
+`MCUHOME_PROJECT_DIR` are evaluated **before** the project layer —
+they decide where that layer even is.
+
+### 3. Schema-driven, with per-option channels
+
+Every option is declared exactly once — name, type, default, and
+**which channels may set it** — and the flag spelling, the `MCUHOME_*`
+name and the config key derive from that declaration. Not every option
+belongs in every channel: a per-invocation value (the device to build)
+is argument+environment only and never lives in a static file; an
+environment-shaped value (the default builder) is settable through all
+five. The declaration is the single source; "settable everywhere it
+makes sense" holds by construction, and `mcuhome config print` (the
+resolved tree, each value with its origin layer) falls out of the same
+registry.
+
+### 4. Ownership: an explicitly-invoked workbench module
+
+The model is implemented once, as a workbench module the tools call
+**explicitly** (resolve → explicit values → `api`).
+`mcuhome.workbench.api` itself keeps taking explicit inputs only — it
+never reads environment variables or configuration files, so embedders
+and third parties see no hidden magic. The dashboard adopts the same
+module when its turn comes; until then this module is the contract.
+
+### 5. Secrets hygiene
+
+`secrets/` is created mode 700, files in it 600. Every reader checks
+permissions: insecure permissions draw a warning, and for key material
+(signing keys, future Matter/attestation keys) the tools **refuse**.
+`mcuhome init` writes the `.gitignore` line so a project can be
+committed without ever committing its secrets.
+
+## Consequences
+
+- The CLI's `--config-root` and the cwd-upward *tree* discovery are
+  superseded by the project directory; `devices/<name>/main.yaml`
+  keeps its shape, so device configurations move unchanged.
+- The former tree-root `secrets.yaml` becomes `secrets/main.yaml`;
+  the `!secret` mechanism (yaml-schema.md §9) follows — a platform
+  change tracked with this draft.
+- Tool symmetry becomes an implementation fact rather than a promise:
+  when the dashboard later changes the default builder, the next
+  `mcuhome device build` uses it.
+- The CLI bindings (flag spellings, scope flags) live in cli ADR 0003;
+  this draft owns the semantics.
+
+## Open points
+
+- The workbench module's name (`mcuhome.workbench.project` is the
+  working title) and whether it later becomes its own distribution for
+  third-party tools.
+- Merge/list semantics for structured values other than builders
+  (builders are defined in ADR 0023); scalars are simply
+  nearest-wins.
+- The system/user layer file name `configuration.yaml` (the project
+  layer is `mcuhome.yaml`) completes the naming beyond the decision
+  round — flagged for product-owner confirmation.
+- The per-user signing key (draft ADR 0015 §8:
+  `$XDG_CONFIG_HOME/mcuhome/signing.key`) predates the
+  everything-in-`secrets/` rule; whether it moves under a user-level
+  `secrets/` directory is open — flagged for product-owner decision.

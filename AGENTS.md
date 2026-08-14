@@ -177,7 +177,7 @@ pip install -e './packaging/workbench[remote]' -e ../build-server
 # Check one device configuration with the builder
 mcuhome validate docs/design/examples/00-bmp180-two-endpoints.yaml
 
-# The machine-readable surface (cli ADR 0003): --json on
+# The machine-readable surface (cli ADR 0003/0004; --json retires for -o there): --json on
 # validate/build, the registry and the main.yaml JSON Schema as data, and
 # a scaffold for a new device. `mcuhome.workbench.api` is the same thing in process.
 mcuhome validate <device> --json
