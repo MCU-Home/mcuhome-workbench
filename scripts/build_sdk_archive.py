@@ -47,7 +47,7 @@ below has a consumer that fails without it:
 ``bin/generate``                 the entry point itself — spawned as a child by
                                  absolute path, so its **exec bit** is archive
                                  content and not repository cosmetics
-``mcuhome/model``,               the program body: ``containers/builder/run``
+``mcuhome/model``,               the program body: ``containers/build-container/run``
 ``mcuhome/compiler``             refuses (exit 70) without
                                  ``mcuhome/compiler/abi.py``, whose import
                                  closure since ADR 0024 is the model and the

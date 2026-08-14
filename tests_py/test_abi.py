@@ -53,8 +53,8 @@ from mcuhome.model.errors import BuildError
 from mcuhome.workbench.contextdir import write_context_manifest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DOCKERFILE = REPO_ROOT / "containers" / "builder" / "Dockerfile"
-LAUNCHER = REPO_ROOT / "containers" / "builder" / "run"
+DOCKERFILE = REPO_ROOT / "containers" / "build-container" / "Dockerfile"
+LAUNCHER = REPO_ROOT / "containers" / "build-container" / "run"
 
 #: The fixed absolute path §2.2 gives the program. Restated here so that
 #: moving it has to be a deliberate edit in two places.
@@ -2284,7 +2284,7 @@ def test_the_trees_come_from_the_images_own_record(backend: Backend) -> None:
 
     Without it §6.2's writable views "cannot be arranged at all". The
     image writes ``/mcuhome/workspace.json`` at build time
-    (``containers/builder/workspace-record.py``) under the contract's own
+    (``containers/build-container/workspace-record.py``) under the contract's own
     layer names, so this is a lookup and not a translation.
 
     The ``mounted`` layer is reported **at the path the record names**,
@@ -2343,7 +2343,7 @@ def test_the_image_installs_the_program_at_the_fixed_absolute_path() -> None:
     invocation is resolved without a shell. So there is nothing to fall
     back on, and the ``COPY`` destination is the interface.
     """
-    assert f"COPY containers/builder/run {PROGRAM_PATH}" in _dockerfile()
+    assert f"COPY containers/build-container/run {PROGRAM_PATH}" in _dockerfile()
 
 
 def test_the_program_is_executable_by_every_user_the_backend_may_exec_as() -> None:
@@ -2367,7 +2367,7 @@ def test_the_program_is_copied_after_the_namespace_it_lives_in() -> None:
     """
     text = _dockerfile()
     assert text.index("COPY --from=workspace /mcuhome /mcuhome") < text.index(
-        f"COPY containers/builder/run {PROGRAM_PATH}"
+        f"COPY containers/build-container/run {PROGRAM_PATH}"
     )
 
 

@@ -149,7 +149,7 @@ SDK release is actually coupled to.
   `[a-z][a-z0-9]*(-[a-z0-9]+)*` and a dotted numeric version part after
   the final hyphen. MCUHome's own image builds with the Zephyr SDK, so
   its value is `zephyr-sdk-<version>` — `zephyr-sdk-1.0.1` for the
-  version the image pins (`containers/builder/Dockerfile:69`). A
+  version the image pins (`containers/build-container/Dockerfile:69`). A
   third-party image using a vendor toolchain names it in the same shape.
 
 The identity part is **opaque and compared only for equality**; it is

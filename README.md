@@ -57,7 +57,7 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
 | `tests_py/` | pytest suite of the three Python packages |
-| `containers/builder/` | The build-container image — the contract's reference implementation (ADR 0007) |
+| `containers/build-container/` | The build-container image — the contract's reference implementation (ADR 0007) |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |
 
@@ -80,7 +80,7 @@ the MCUHome builder image
 versioned in lockstep with the pinned Zephyr release:
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r7
+docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8
 ```
 
 Then build a device from its YAML description. The `mcuhome` command is
@@ -108,7 +108,7 @@ verifies its firmware against it, so it is worth keeping (ADR 0015). `--generate
 generating half, which needs nothing but Python; `--method local-dev`
 compiles on a host toolchain instead, for people working on MCUHome itself. Details,
 including how to build the image yourself, are in
-[containers/builder/README.md](containers/builder/README.md).
+[containers/build-container/README.md](containers/build-container/README.md).
 
 Build parallelism is auto-detected from CPU count and available RAM (a
 Matter compile unit peaks around 1-1.5 GiB, so the formula budgets 2 GiB

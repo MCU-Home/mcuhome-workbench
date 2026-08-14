@@ -82,7 +82,7 @@ def test_the_package_directory_maps_onto_the_shared_tree() -> None:
 
     ``mcuhome/`` has to sit at the repository root because that root is
     also the SDK package: a build container puts it on ``PYTHONPATH``
-    (``containers/builder/run``) and ``bin/generate`` inserts it into
+    (``containers/build-container/run``) and ``bin/generate`` inserts it into
     ``sys.path``. So the project directories reach up into it instead of
     holding sources of their own.
     """
@@ -158,13 +158,13 @@ def test_the_sdk_entry_point_still_names_a_program_that_exists() -> None:
 
 
 def test_the_container_launcher_execs_the_module_that_holds_the_abi() -> None:
-    """``containers/builder/run`` is image content and names an import path.
+    """``containers/build-container/run`` is image content and names an import path.
 
     It is the one file outside Python that spells the ABI module, and
     getting it wrong is an exit 70 on a real backend rather than a test
     failure — which is why the revision was bumped for it (r6).
     """
-    launcher = (REPO_ROOT / "containers" / "builder" / "run").read_text(encoding="utf-8")
+    launcher = (REPO_ROOT / "containers" / "build-container" / "run").read_text(encoding="utf-8")
     assert "-m mcuhome.compiler.abi" in launcher
     assert "$SDK/mcuhome/compiler/abi.py" in launcher
 

@@ -118,7 +118,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="ghcr.io/mcu-home/builder:test",
+            image="ghcr.io/mcu-home/build-container:test",
         )
 
     monkeypatch.setattr(buildmethods, "compose_local_build", fake)
@@ -128,7 +128,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             out_dir=tmp_path,
             signing_pub="-----BEGIN PUBLIC KEY-----\n",
             sdk_sources=(tmp_path / "sdk",),
-            image="ghcr.io/mcu-home/builder:test",
+            image="ghcr.io/mcu-home/build-container:test",
             jobs=3,
         ),
         buildmethods.LOCAL,
@@ -139,7 +139,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
     assert outcome.artifacts == _artifacts()
     assert outcome.out_dir == tmp_path / "delivery"
     assert outcome.report == BUILD_REPORT_FILE
-    assert outcome.image == "ghcr.io/mcu-home/builder:test"
+    assert outcome.image == "ghcr.io/mcu-home/build-container:test"
     # The scratch area defaults under the build directory, and the public
     # key travelled — no private key is a field of the request at all.
     assert seen["work_root"] == tmp_path / ".mcuhome-local"

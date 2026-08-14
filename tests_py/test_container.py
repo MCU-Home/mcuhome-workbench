@@ -13,7 +13,7 @@ without a daemon and without a network.
 
 The end-to-end proof that the assembled command actually builds firmware
 is a manual step, not a test: it takes minutes and a few gigabytes of
-image (see containers/builder/README.md).
+image (see containers/build-container/README.md).
 """
 
 from __future__ import annotations
@@ -295,15 +295,20 @@ def test_a_stopped_daemon_is_not_a_missing_docker() -> None:
 
 def test_a_missing_image_says_how_to_get_one_both_ways() -> None:
     with pytest.raises(BuildError) as caught:
-        container.preflight("docker", "ghcr.io/mcu-home/builder:x", env={}, runner=_Runner(0, 1))
+        container.preflight(
+            "docker",
+            "ghcr.io/mcu-home/build-container:x",
+            env={},
+            runner=_Runner(0, 1),
+        )
     assert caught.value.message == (
-        "The MCUHome builder image ghcr.io/mcu-home/builder:x is not on this machine."
+        "The MCUHome builder image ghcr.io/mcu-home/build-container:x is not on this machine."
     )
     hint = caught.value.hint or ""
-    assert "docker pull ghcr.io/mcu-home/builder:x" in hint
+    assert "docker pull ghcr.io/mcu-home/build-container:x" in hint
     assert (
-        f"docker build -t ghcr.io/mcu-home/builder:x -f {container.DOCKERFILE_DIR}/Dockerfile ."
-        in hint
+        "docker build -t ghcr.io/mcu-home/build-container:x "
+        f"-f {container.DOCKERFILE_DIR}/Dockerfile ." in hint
     )
     assert container.IMAGE_VAR in hint
     assert "--method local-dev" in hint

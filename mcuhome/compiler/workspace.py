@@ -296,8 +296,8 @@ def require_topdir(*starts: Path) -> Path:
             "compiling needs Zephyr and the Matter SDK, which live in a west "
             "workspace next to the MCUHome sources. Either create one\n"
             "    mkdir mcuhome-workspace && cd mcuhome-workspace\n"
-            "    git clone https://github.com/mcu-home/mcuhome\n"
-            "    west init -l mcuhome && west update\n"
+            "    git clone https://github.com/mcu-home/mcuhome-sdk\n"
+            "    west init -l mcuhome-sdk && west update\n"
             "or stop after code generation and build the application yourself:\n"
             "    mcuhome build <device> --generate-only"
         ),

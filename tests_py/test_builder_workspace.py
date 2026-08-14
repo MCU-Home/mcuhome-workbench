@@ -29,8 +29,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DOCKERFILE = REPO_ROOT / "containers" / "builder" / "Dockerfile"
-RECORD_SCRIPT = REPO_ROOT / "containers" / "builder" / "workspace-record.py"
+DOCKERFILE = REPO_ROOT / "containers" / "build-container" / "Dockerfile"
+RECORD_SCRIPT = REPO_ROOT / "containers" / "build-container" / "workspace-record.py"
 
 #: Where the workspace lives inside the image. Restated here on purpose:
 #: this is the one place that says "and it must stay that", and several
@@ -154,7 +154,7 @@ def test_the_patches_are_applied_with_plain_git_apply() -> None:
 
 
 def test_everything_the_dockerfile_copies_is_in_the_context() -> None:
-    """The context widened from ``containers/builder/`` to the repository.
+    """The context widened from ``containers/build-container/`` to the repository.
 
     ``west.yml`` and ``patches/`` are image inputs now and live outside
     that directory. Every ``COPY`` source is therefore a repository-root

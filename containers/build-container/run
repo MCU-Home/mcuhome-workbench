@@ -21,7 +21,7 @@
 #
 # The invocation is resolved without a shell (§2.2), so nothing here may
 # depend on PATH. Both paths below are the image's own, fixed by
-# containers/builder/Dockerfile:
+# containers/build-container/Dockerfile:
 #
 #   /opt/venv                the image's Python environment
 #   /mcuhome/workspace/mcuhome
@@ -33,7 +33,7 @@
 set -eu
 
 INTERPRETER=/opt/venv/bin/python3
-SDK=/mcuhome/workspace/mcuhome
+SDK=/mcuhome/workspace/mcuhome-sdk
 
 # Exit 70 and not 1: exit 1 promises a result document (§5.3), and there
 # is no program here to write one. The contract leaves every code outside

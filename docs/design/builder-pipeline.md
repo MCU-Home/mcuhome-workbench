@@ -409,5 +409,5 @@ design. In process, the supported programmatic surface is
 | Build-server API details (auth, secrets transport) | Own design doc, pre-dashboard |
 | Flashing UX (CLI + browser) | Own design doc |
 | device-model.json schema versioning | **Closed.** `MODEL_VERSION` is 1 and is a published contract: the dashboard pins what it sends and what it can read (`versions.py`); the server-side range advertisement retired with the job protocol (dashboard ADR 0007 decision 4) |
-| Builder image layout/registry | Decided with the first image (`containers/builder/`): Debian 13 base, tools only, `ghcr.io/mcu-home/builder:zephyr-<line>-r<rev>` |
+| Builder image layout/registry | Decided with the first image (`containers/build-container/`): Debian 13 base, tools only, `ghcr.io/mcu-home/build-container:zephyr-<line>-r<rev>` |
 | `mcuhome migrate` (ESPHome import) | Later milestone (ADR 0009) |

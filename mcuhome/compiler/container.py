@@ -5,7 +5,7 @@
 ADR 0007 makes the builder image *the* build environment: the host needs
 git and docker, everything else — Zephyr SDK, west, gn, zap, ccache —
 lives in an image versioned in lockstep with the Zephyr pin
-(``containers/builder/``). :mod:`mcuhome.compiler.workspace` keeps the
+(``containers/build-container/``). :mod:`mcuhome.compiler.workspace` keeps the
 ``local-dev`` escape hatch for people who already have a west workspace
 with a toolchain in it, which is MCUHome's own contributors and nobody else.
 
@@ -73,7 +73,7 @@ ZEPHYR_RELEASE = "4.4.0"
 
 #: Rebuilds of the image for the same Zephyr release: a new tool version,
 #: a new Python dependency, a fix in the Dockerfile. Starts at 1 and is
-#: bumped by whoever changes ``containers/builder/``, in the same commit.
+#: bumped by whoever changes ``containers/build-container/``, in the same commit.
 #:
 #: r2 adds ``cryptography`` — MCUboot's imgtool imports it at module load,
 #: so r1 could not build the MCUboot image at all: sysbuild runs
@@ -94,7 +94,7 @@ ZEPHYR_RELEASE = "4.4.0"
 #: workspace — which is why r3 changes no build output.
 #:
 #: From r3 on, ``west.yml`` and ``patches/`` are image inputs too: a
-#: change to either needs a revision bump just as ``containers/builder/``
+#: change to either needs a revision bump just as ``containers/build-container/``
 #: does.
 #:
 #: r4 installs the program of the build-container contract at
@@ -132,12 +132,12 @@ ZEPHYR_RELEASE = "4.4.0"
 #: permitted character class. A constraint is evaluated against those
 #: values, and "a container that does not carry a named label does not
 #: qualify" — so this image satisfied no SDK release's constraint at all.
-IMAGE_REVISION = 7
+IMAGE_REVISION = 8
 
 #: GitHub Container Registry under the MCUHome organization. The package
 #: is private while the repositories are; ``docker pull`` then needs a
 #: ``docker login ghcr.io`` with a token that can read packages.
-IMAGE_REPOSITORY = "ghcr.io/mcu-home/builder"
+IMAGE_REPOSITORY = "ghcr.io/mcu-home/build-container"
 
 #: ``zephyr-<line>-r<revision>``, and never ``latest``: a build
 #: environment that changes under a stable name is not one. CI also
@@ -184,7 +184,7 @@ CONTAINER_HOME = "/tmp/mcuhome-home"
 
 #: Where the Dockerfile lives, relative to the repository root — quoted
 #: in the "you have no image" message, so it has to stay true.
-DOCKERFILE_DIR = "containers/builder"
+DOCKERFILE_DIR = "containers/build-container"
 
 
 def image_reference(env: dict[str, str], *, override: str | None = None) -> str:

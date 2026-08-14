@@ -1,4 +1,4 @@
-# containers/builder/
+# containers/build-container/
 
 The **MCUHome builder image** — the single build environment
 ([ADR 0007](../../docs/adr/0007-containerized-toolchain.md)). Developers,
@@ -6,7 +6,7 @@ CI and the Home Assistant add-on all compile in this image, which is what
 makes "works on my machine" and "passes in CI" the same statement.
 
 ```sh
-docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r7   # or build it, below
+docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8   # or build it, below
 mcuhome build <device>                                 # uses it by default
 ```
 
@@ -149,7 +149,7 @@ old value: it is the `ZEPHYR_TOOLCHAIN` build argument at the top of the
 
 ## Versioning
 
-`ghcr.io/mcu-home/builder:zephyr-<zephyr version>-r<image revision>`
+`ghcr.io/mcu-home/build-container:zephyr-<zephyr version>-r<image revision>`
 
 The Zephyr part is the `zephyr` revision pinned in
 [`west.yml`](../../west.yml); the revision counts rebuilds of the image
@@ -183,8 +183,8 @@ image (ADR 0020 decision 8).
 ```sh
 # from the repository ROOT — the context is the repository, not this
 # directory, because west.yml and patches/ are image inputs
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
-    -f containers/builder/Dockerfile .
+docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
+    -f containers/build-container/Dockerfile .
 ```
 
 Every tool is downloaded from its upstream and checksum-verified against
@@ -234,7 +234,7 @@ build with `--image`, or for a whole shell with
 Inspecting what a given image actually carries needs no build:
 
 ```sh
-docker run --rm ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
+docker run --rm ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
     cat /mcuhome/workspace.json
 ```
 
@@ -285,7 +285,7 @@ hash is safe.
 # what the cache is doing, with the same mount the builder uses
 docker run --rm --user "$(id -u):$(id -g)" \
     --volume ~/.cache/mcuhome/ccache:/ccache \
-    ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 ccache -s
+    ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 ccache -s
 ```
 
 ## Bumping Zephyr

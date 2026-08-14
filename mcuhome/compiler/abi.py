@@ -9,7 +9,7 @@
 and reads a JSON result document back from the path the request named.
 This module is that ABI: argv, the request document's five parsing rules
 (§5.2), the three exit codes (§5.3), and the atomic result document
-(§5.4). ``containers/builder/run`` is the thin launcher the image
+(§5.4). ``containers/build-container/run`` is the thin launcher the image
 installs at that fixed path; everything it does is call :func:`main`.
 
 **All three actions of contract v1 are implemented:** ``describe``
@@ -2377,7 +2377,7 @@ def main(
     what makes two of them answer each other's questions. A caller that
     states nothing gets children that run in exactly what §6.1 makes the
     program's own responsibility and nothing else — which is correct and
-    thin, and is why ``containers/builder/run`` will have to hand its
+    thin, and is why ``containers/build-container/run`` will have to hand its
     image's environment over before the first real compile happens inside
     the image (the other half of that, ``mcuhome-sdk.json``, is §6.1's and
     lives in the SDK package).

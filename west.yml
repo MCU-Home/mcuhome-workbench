@@ -72,4 +72,4 @@ manifest:
         - path: third_party/jsoncpp/repo
 
   self:
-    path: mcuhome
+    path: mcuhome-sdk

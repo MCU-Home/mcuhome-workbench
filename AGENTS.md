@@ -20,7 +20,7 @@ canonical device model), and `mcuhome build` goes all the way to a
 flashable image — stage 4 generates the per-device Zephyr application
 (tables, overlay, Kconfig fragment, CMakeLists) and stage 5 compiles it
 with `west build` inside the builder image (ADR 0007;
-`containers/builder/`), or on the host with `--method local-dev`. Note the
+`containers/build-container/`), or on the host with `--method local-dev`. Note the
 consequence of ADR 0014:
 `samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
 and the pytest suite compares it byte for byte — never hand-edit it,
@@ -47,7 +47,7 @@ decision.
 | `compat/` | Headers that bridge a version mismatch between two pinned upstreams (today: mbedTLS 4's moved legacy headers, for connectedhomeip). Each entry names its own deletion condition — see `compat/README.md` |
 | `tests/`, `samples/` | Twister suites and samples |
 | `tests_py/` | pytest suite of the three Python packages (kept apart from twister's `tests/`) |
-| `containers/builder/` | The build-container image (ADR 0007) — the contract's reference implementation |
+| `containers/build-container/` | The build-container image (ADR 0007) — the contract's reference implementation |
 | `scripts/` | Dev tooling, future custom west extension commands |
 | `docs/adr/` | Architecture decision records (MADR-style) — immutable finals at the top level, living drafts in `draft/`; lifecycle in `docs/adr/README.md` (ADR 0021) |
 
@@ -198,7 +198,7 @@ mcuhome build docs/design/examples/00-bmp180-two-endpoints.yaml \
 
 # Generate AND compile it (stages 4-5), from the workspace top directory.
 # Compiles in the builder image (ADR 0007) — pull it once:
-#   docker pull ghcr.io/mcu-home/builder:zephyr-4.4.0-r7
+#   docker pull ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8
 # Writes the application to build/<device>/app and the CMake tree to
 # build/<device>/build — one sub-directory per sysbuild image (ADR 0015:
 # mcuboot + the signed application) — and reports both with their
@@ -211,11 +211,11 @@ mcuhome build mcuhome/docs/design/examples/00-bmp180-two-endpoints.yaml \
 # The same, on the host toolchain instead of in the container
 mcuhome build … --method local-dev
 
-# Build the builder image from source (containers/builder/README.md).
-# The context is the repository root, not containers/builder/: since r3
+# Build the builder image from source (containers/build-container/README.md).
+# The context is the repository root, not containers/build-container/: since r3
 # the image bakes a west workspace, so west.yml and patches/ are inputs.
-docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
-  -f containers/builder/Dockerfile .
+docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
+  -f containers/build-container/Dockerfile .
 
 # Python lint/format
 ruff check --fix . && ruff format .
@@ -231,7 +231,7 @@ compiles inside the builder image, which carries the Zephyr SDK, west,
 `gn`, `zap` and ccache; the workspace is bind-mounted into it at its own
 absolute path, as the calling user, so nothing is left behind owned by
 root. `mcuhome validate` and `--generate-only` need even less — Python,
-and nothing else. See `containers/builder/README.md`.
+and nothing else. See `containers/build-container/README.md`.
 
 Since image revision r3 the image also **carries** a west workspace of
 its own at `/mcuhome/workspace` — Zephyr, the modules, MCUboot and the

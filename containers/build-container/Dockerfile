@@ -60,8 +60,8 @@
 #
 # Build (from the repository root — the context is the REPOSITORY, not
 # this directory, because west.yml and patches/ live outside it):
-#     docker build -t ghcr.io/mcu-home/builder:zephyr-4.4.0-r7 \
-#         -f containers/builder/Dockerfile .
+#     docker build -t ghcr.io/mcu-home/build-container:zephyr-4.4.0-r8 \
+#         -f containers/build-container/Dockerfile .
 #
 # Everything downloaded is checksum-verified. The checksums are the whole
 # point of the fetch stage: an image that silently absorbs a re-tagged
@@ -223,7 +223,7 @@ RUN apt-get update \
 # `mcuhome.workbench.api` at module level, and the workbench's one
 # third-party dependency is that parser. Same constraint file, so the
 # parser this stage imports and the one the image ships are one version.
-COPY containers/builder/requirements.txt /tmp/requirements.txt
+COPY containers/build-container/requirements.txt /tmp/requirements.txt
 RUN python3 -m venv /opt/west-venv \
  && /opt/west-venv/bin/pip install --no-cache-dir --disable-pip-version-check \
         --constraint /tmp/requirements.txt west ruamel.yaml
@@ -235,8 +235,8 @@ ENV PATH=/opt/west-venv/bin:/usr/local/bin:/usr/bin:/bin
 # west 1.5.0). That is what makes it possible to lay the workspace out
 # here from a bare copy of the manifest and mount the real SDK in later.
 WORKDIR /mcuhome/workspace
-COPY west.yml /mcuhome/workspace/mcuhome/west.yml
-RUN west init -l mcuhome
+COPY west.yml /mcuhome/workspace/mcuhome-sdk/west.yml
+RUN west init -l mcuhome-sdk
 
 # The same invocation the CI matter job runs, and deliberately WITHOUT a
 # group-filter: the `matter` group is wanted here — this is the image that
@@ -323,7 +323,7 @@ RUN git -C zephyr apply --verbose \
 # topdir would be shadowed the moment a backend bind-mounts a writable
 # view over it. /mcuhome/ is the namespace the build-container contract
 # already reserves for us (§2.2).
-COPY containers/builder/workspace-record.py /tmp/workspace-record.py
+COPY containers/build-container/workspace-record.py /tmp/workspace-record.py
 RUN python3 /tmp/workspace-record.py \
         --topdir /mcuhome/workspace \
         --output /mcuhome/workspace.json \
@@ -343,7 +343,7 @@ RUN python3 /tmp/workspace-record.py \
 # file not found: manifest file /mcuhome/workspace/mcuhome/west.yml",
 # which names the exact path nobody mounted. That is the right failure
 # and it needs no help from us.
-RUN rm -rf /mcuhome/workspace/mcuhome && mkdir /mcuhome/workspace/mcuhome
+RUN rm -rf /mcuhome/workspace/mcuhome-sdk && mkdir /mcuhome/workspace/mcuhome-sdk
 
 # What this image answers to `describe`, written by the program that
 # answers it (§2.2's optional static self-description, r7). The file has
@@ -382,7 +382,7 @@ ARG ZEPHYR_SDK_VERSION
 
 LABEL org.opencontainers.image.title="MCUHome builder" \
       org.opencontainers.image.description="Build environment for MCUHome firmware: Zephyr SDK, west, gn, zap, ccache." \
-      org.opencontainers.image.source="https://github.com/mcu-home/mcuhome" \
+      org.opencontainers.image.source="https://github.com/mcu-home/mcuhome-sdk" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -429,7 +429,7 @@ RUN apt-get update \
 # requirements.txt). A virtualenv rather than the system interpreter so
 # the image never fights Debian's PEP 668 marker, and so `python3` inside
 # a build means one thing.
-COPY containers/builder/requirements.txt /opt/requirements.txt
+COPY containers/build-container/requirements.txt /opt/requirements.txt
 RUN python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check --upgrade pip \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check -r /opt/requirements.txt
@@ -457,7 +457,7 @@ COPY --from=workspace /mcuhome /mcuhome
 # After the COPY above, not before: that one lands the whole /mcuhome
 # namespace, and this file has to survive it.
 #
-COPY containers/builder/run /mcuhome/run
+COPY containers/build-container/run /mcuhome/run
 RUN chmod 0755 /mcuhome/run
 
 # The labels of §2.1 — "pre-start scheduling data": they let a backend

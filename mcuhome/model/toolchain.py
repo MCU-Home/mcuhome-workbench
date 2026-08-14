@@ -148,7 +148,7 @@ def normalize_release(version: str) -> str:
     grammar carries: ``west list`` and a program's own ``describe``
     answer ``v4.4.0`` for what everywhere else — :func:`line_of`,
     :func:`satisfies_line`, the ``org.mcuhome.zephyr`` coupling label —
-    is spelled ``4.4.0`` (``containers/builder/README.md``'s r7 repair
+    is spelled ``4.4.0`` (``containers/build-container/README.md``'s r7 repair
     fixed the label to match for the same reason this exists: "a
     container that does not carry a named label does not qualify", and a
     label still spelled ``v4.4.0`` satisfied no release's constraint at

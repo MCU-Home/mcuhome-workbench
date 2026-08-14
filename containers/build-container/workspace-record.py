@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Write the builder image's record of the west workspace it carries.
 
-Runs once, inside the image build (``containers/builder/Dockerfile``),
+Runs once, inside the image build (``containers/build-container/Dockerfile``),
 after ``west update`` and after the patch set has been applied. It writes
 ``/mcuhome/workspace.json``: what the baked workspace is, which commit
 each layer actually resolved to, and which patches were applied on top.

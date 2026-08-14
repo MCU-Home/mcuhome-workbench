@@ -39,8 +39,8 @@ from mcuhome.workbench.contextdir import (
 
 DIGEST = "sha256:" + "1" * 64
 SDK_VERSION = "0.1.0"
-IMAGE = "ghcr.io/mcu-home/builder"
-TAG = "zephyr-4.4.0-r7"
+IMAGE = "ghcr.io/mcu-home/build-container"
+TAG = "zephyr-4.4.0-r8"
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 ZEPHYR = "4.4"
 CONTAINER_ID = "c" * 64
