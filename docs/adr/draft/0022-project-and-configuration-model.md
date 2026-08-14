@@ -21,17 +21,27 @@ no shared notion of "the configuration".
 
 ### 1. The project directory
 
-A user's work lives in a **project directory**: the folder holding
-`mcuhome.yaml`, which is both the **project marker** and the
-**project-level configuration file**. Resolution: start at the cwd and
-search **upward** (git-like) for `mcuhome.yaml`. An explicit
-`--project-dir PATH` or `MCUHOME_PROJECT_DIR` disables the search and
-is an error if the named directory carries no `mcuhome.yaml`.
+A user's work lives in a **project directory**: the folder holding the
+**project marker** `.mcuhome-project-root` (PO 2026-08-14) — a
+dedicated dotfile whose only content is a comment line saying what it
+is. The marker is deliberately not a configuration file: a
+`mcuhome.yaml` can plausibly lie around in folders that are no project
+root (a copied example, a config snippet), and only a file that exists
+for exactly one purpose can never mark one by accident. Marker =
+identity, `mcuhome.yaml` = project-level **configuration**, which is
+therefore *optional* — a project without one simply has an empty
+project layer.
+
+Resolution: start at the cwd and search **upward** (git-like) for the
+marker. An explicit `--project-dir PATH` (or `MCUHOME_PROJECT_DIR` as
+its environment fallback) disables the search and is an error if the
+named directory carries no marker.
 
 Project layout:
 
 ```
-mcuhome.yaml              # marker + project configuration
+.mcuhome-project-root     # the marker (one comment line, no config)
+mcuhome.yaml              # project configuration (optional)
 devices/<name>/main.yaml  # one folder per device
 secrets/                  # ALL secrets, no exceptions (mode 700)
   main.yaml               #   project-wide secrets (the former secrets.yaml)
@@ -42,10 +52,11 @@ build/                    # build output (disposable, created by builds)
 .gitignore                # contains secrets/
 ```
 
-`mcuhome init` creates the durable part of this — `mcuhome.yaml`,
-`devices/`, `secrets/` (mode 700) and the `.gitignore` — after
-checking the target directory: a non-empty directory draws a warning
-and a refusal, `--force` proceeds anyway (and may overwrite files).
+`mcuhome init` creates the durable part of this — the marker,
+`mcuhome.yaml`, `devices/`, `secrets/` (mode 700) and the
+`.gitignore` — after checking the target directory: a non-empty
+directory draws a warning and a refusal, `--force` proceeds anyway
+(and may overwrite files).
 
 ### 2. Five configuration layers, strict precedence
 
@@ -59,14 +70,18 @@ Ascending — later wins:
 | environment | `MCUHOME_*` variables | env |
 | command | the invocation's arguments | args |
 
-Two deliberate bootstrap exceptions: `--project-dir` and
-`MCUHOME_PROJECT_DIR` are evaluated **before** the project layer —
-they decide where that layer even is.
+Two deliberate bootstrap exceptions, and they run **first** (PO
+2026-08-14): `--project-dir` and, as its fallback,
+`MCUHOME_PROJECT_DIR` are evaluated before any layer is read — they
+decide where the project layer even is, so they stand outside the
+five-layer merge and can never themselves be set from a configuration
+file.
 
-The system/user files are deliberately **not** named `mcuhome.yaml`:
-only a project directory may look like a project directory — a config
-directory must never be mistaken for one by the upward search or by a
-user working inside it (PO 2026-08-14).
+The system/user files are deliberately **not** named `mcuhome.yaml`,
+and no directory outside a project carries the marker: only a project
+directory may look like a project directory — a config directory must
+never be mistaken for one by the upward search or by a user working
+inside it (PO 2026-08-14).
 
 ### 3. Schema-driven, with per-option channels
 
