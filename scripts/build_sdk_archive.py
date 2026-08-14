@@ -6,9 +6,9 @@
 ADR 0017 §2 makes this a third artifact of the one release: "The SDK is
 additionally published as its own CI-built, hash-pinned source package
 (the ``mcuhome-sdk-<version>`` archive a build fetches, ADR 0018) — same
-repository, same version, different artifact. Repo, lib package and SDK
-package are three names for one release." This script is the "CI-built"
-half; ADR 0019's amendment names the other half, and it is deliberately
+repository, same version, different artifact. Repo, Python packages and
+SDK package are names for one release." This script is the "CI-built"
+half; ADR 0019 names the other half, and it is deliberately
 small — "a directory holding that archive is the whole first
 implementation".
 

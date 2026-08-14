@@ -72,8 +72,10 @@ building it directly is refused with a message saying so.
   certifying the [Developer Certificate of Origin](https://developercertificate.org/).
   We use DCO instead of a CLA.
 - Keep PRs focused; one logical change per PR.
-- Non-trivial design decisions need an ADR in [docs/adr/](docs/adr/) —
-  propose it in the PR.
+- Non-trivial design decisions need an ADR draft in
+  [docs/adr/draft/](docs/adr/draft/) — propose it in the PR. Drafts are
+  living documents; the final ADR is written from the real result once
+  the component is done ([docs/adr/README.md](docs/adr/README.md)).
 
 ## Reporting issues
 

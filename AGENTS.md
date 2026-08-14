@@ -24,7 +24,9 @@ with `west build` inside the builder image (ADR 0007;
 consequence of ADR 0014:
 `samples/matter-node/src/mcuhome_config.{c,h}` **is generator output**
 and the pytest suite compares it byte for byte — never hand-edit it,
-regenerate it. Check `docs/adr/` before assuming any design decision.
+regenerate it. Check `docs/adr/` — immutable finals at the top level,
+living drafts in `draft/` (ADR 0021) — before assuming any design
+decision.
 
 ## Repository map
 
@@ -45,9 +47,9 @@ regenerate it. Check `docs/adr/` before assuming any design decision.
 | `compat/` | Headers that bridge a version mismatch between two pinned upstreams (today: mbedTLS 4's moved legacy headers, for connectedhomeip). Each entry names its own deletion condition — see `compat/README.md` |
 | `tests/`, `samples/` | Twister suites and samples |
 | `tests_py/` | pytest suite of the three Python packages (kept apart from twister's `tests/`) |
-| `containers/builder/` | The builder image (ADR 0007) — the one build environment |
+| `containers/builder/` | The build-container image (ADR 0007) — the contract's reference implementation |
 | `scripts/` | Dev tooling, future custom west extension commands |
-| `docs/adr/` | Architecture decision records (MADR-style) |
+| `docs/adr/` | Architecture decision records (MADR-style) — immutable finals at the top level, living drafts in `draft/`; lifecycle in `docs/adr/README.md` (ADR 0021) |
 
 ## Non-obvious invariants
 
@@ -110,7 +112,7 @@ application, every bootloader, every test firmware. It is never disabled,
 removed or reduced silently, not even to win flash or RAM back: space
 pressure is reported and resolved as an explicit joint decision with the
 product owner, never absorbed by dropping the log. The precedent is
-recorded in ADR 0015's RTT amendment — an OTA swap failure whose one
+recorded in draft ADR 0015 — an OTA swap failure whose one
 explanatory MCUboot log line was compiled out (`CONFIG_LOG=n`) turned a
 five-minute diagnosis into a day of source reading.
 
@@ -234,8 +236,8 @@ and nothing else. See `containers/builder/README.md`.
 Since image revision r3 the image also **carries** a west workspace of
 its own at `/mcuhome/workspace` — Zephyr, the modules, MCUboot and the
 Matter SDK at the revisions `west.yml` pins, patched, with the manifest
-repository's directory left empty for the SDK mount (ADR 0020 decision
-E5: `git describe` in the workspace decides `BUILD_VERSION` and therefore
+repository's directory left empty for the SDK mount (ADR 0007:
+`git describe` in the workspace decides `BUILD_VERSION` and therefore
 the firmware bytes, so baking it makes that state a property of the image
 digest). Nothing reads it yet: `mcuhome build` still mounts and builds
 out of the *host's* workspace, so the host requirement above is unchanged
@@ -310,5 +312,8 @@ workflow. `workflow_dispatch` runs it on demand.
   drive SemVer release automation.
 - Every commit is DCO-signed-off: `git commit -s`.
 - Default branch is `main`; short-lived `feat/…`, `fix/…` branches.
-- Non-trivial design decisions require an ADR in `docs/adr/` (numbered,
-  MADR-style: Context / Decision / Consequences).
+- Non-trivial design decisions require an ADR **draft** in
+  `docs/adr/draft/` (numbered, MADR-style: Context / Decision /
+  Consequences). While the component is being built the draft is a
+  living document; the final ADR is written from the real result once
+  the component is done. Lifecycle: `docs/adr/README.md` (ADR 0021).

@@ -3,7 +3,7 @@
 """The SDK package: the same bytes twice, the allowlist, and a real unpack.
 
 ``scripts/build_sdk_archive.py`` produces the third artifact of a release
-(ADR 0017 §2: "Repo, lib package and SDK package are three names for one
+(ADR 0017 §2: "Repo, Python packages and SDK package are names for one
 release"), and two of its properties are the kind that nothing notices
 until a build somewhere else fails:
 

@@ -57,7 +57,7 @@ the MCUHome workspace (T2 topology) *and* a reusable **Zephyr module**.
 | `include/mcuhome/`, `lib/` | Public runtime API and portable libraries |
 | `samples/`, `tests/` | Twister-driven samples and test suites |
 | `tests_py/` | pytest suite of the three Python packages |
-| `containers/builder/` | The builder image: the one build environment (ADR 0007) |
+| `containers/builder/` | The build-container image — the contract's reference implementation (ADR 0007) |
 | `scripts/` | Development tooling and future custom west extension commands |
 | `docs/adr/` | Architecture decision records |
 
@@ -133,7 +133,7 @@ by their own command, so that every build of a device is byte-identical
 ### Signing where the key is, building where the CPU is
 
 Every image is signed with your own key
-([ADR 0015](docs/adr/0015-update-and-partition-architecture.md) decision 8).
+([ADR 0015](docs/adr/draft/0015-update-and-partition-architecture.md) decision 8).
 Normally that happens during the build. When the machine that compiles
 is not the machine that owns the key — a build server, or the future
 dashboard's build App — the two are separated:
@@ -159,7 +159,7 @@ mcuhome validate <device> --json    # the resolved model, or the errors
 mcuhome build    <device> --json    # the build manifest (log on stderr)
 
 # A machine that only compiles takes the resolved model and nothing else:
-# no configuration tree, no secrets (dashboard ADR 0007 decision 4). The
+# no configuration tree, no secrets (dashboard ADR 0007 decision 1). The
 # generated tree is byte-identical to the one the direct route produces.
 mcuhome build --model device-model.json --build-dir build/<device>
 mcuhome schema                      # JSON Schema for main.yaml
@@ -170,7 +170,7 @@ mcuhome schema registry             # boards, drivers, clusters, device types
 
 `mcuhome.workbench.api` is the supported programmatic surface, and the
 only part of these packages covered by the SemVer promise of
-[ADR 0005](docs/adr/0005-semver-and-conventional-commits.md):
+[ADR 0005](docs/adr/draft/0005-semver-and-conventional-commits.md):
 
 ```python
 from mcuhome.workbench import api

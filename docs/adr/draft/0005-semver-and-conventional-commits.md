@@ -1,6 +1,6 @@
 # 0005 — SemVer 0.x with Conventional Commits
 
-- Status: accepted
+- Status: draft
 - Date: 2026-08-02
 
 ## Context

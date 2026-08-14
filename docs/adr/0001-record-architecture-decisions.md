@@ -1,6 +1,6 @@
 # 0001 — Record architecture decisions
 
-- Status: accepted
+- Status: superseded by [0021](0021-draft-first-adr-lifecycle.md)
 - Date: 2026-08-02
 
 ## Context

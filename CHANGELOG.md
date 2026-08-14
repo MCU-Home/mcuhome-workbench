@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-(0.x during incubation; see [ADR 0005](docs/adr/0005-semver-and-conventional-commits.md)).
+(0.x during incubation; see [ADR 0005](docs/adr/draft/0005-semver-and-conventional-commits.md)).
 
 ## [Unreleased]
 
@@ -439,6 +439,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ADRs are draft-first** (ADR 0021, supersedes 0001): a decision starts
+  as a living draft in `docs/adr/draft/` and becomes an immutable final
+  ADR — written from the real result — only once its component is
+  implemented and verified. In the one-time migration, still-churning
+  ADRs (0005, 0012, 0013, 0015, 0016) moved to `draft/`, and the
+  amendment-laden completed ones (0007, 0008, 0014, 0017, 0018, 0019)
+  were consolidated into clean text with a `Finalized:` header line;
+  amendment and erratum sections no longer exist. Older citations of
+  "ADR NNNN's amendment" mean the consolidated text; the layering is in
+  git history.
 - **`--native` is gone; `--method local-dev` is the only spelling** (E62).
   The flag predated the build-method names and was kept as an alias for
   them; it is removed rather than deprecated, because the project is not

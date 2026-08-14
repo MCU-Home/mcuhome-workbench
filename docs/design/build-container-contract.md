@@ -358,7 +358,7 @@ final file set:
 context: 2                          # context format version
 created: 2026-08-09T10:00:00Z       # informational — never hashed
 mcuhome:
-  constraint: ^2.3.6                # original intent — never hashed
+  constraint: ~=2.3.6               # original intent — never hashed
   version: 2.4.0                    # resolved exact pin
   package:                          # resolved SDK package
     url: https://…/mcuhome-sdk-2.4.0.tar.zst   # hint only — never hashed
@@ -471,7 +471,7 @@ For `context.yaml` it is a consequence of ADR 0018 §6, which excludes
 `context.yaml` as an ordinary file would readmit both through the back
 door: two byte-identical device configurations, created a second apart,
 would hash differently, and the same configuration built once under the
-constraint `^2.3.6` and once under `2.4.0` would produce two identities
+constraint `~=2.3.6` and once under `2.4.0` would produce two identities
 for one resolved pin. Nothing is lost by the exclusion, because
 everything build-relevant `context.yaml` carries is already hashed in
 its own right — `sdk.sha256` and `target.board` are two of the three

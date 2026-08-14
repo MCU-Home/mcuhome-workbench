@@ -1,6 +1,6 @@
 # 0012 — Device attestation (DAC) strategy for user-built devices
 
-- Status: accepted
+- Status: draft
 - Date: 2026-08-04
 
 ## Context
