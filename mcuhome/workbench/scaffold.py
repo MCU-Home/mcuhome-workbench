@@ -17,7 +17,7 @@ commented out because scaffolding a peripheral the user does not own is
 worse than scaffolding none: they would have to delete it before their
 first build, and deleting is a worse first task than uncommenting.
 
-**It does not draw commissioning credentials.** ``mcuhome init-pairing``
+**It does not draw commissioning credentials.** ``mcuhome device matter-pairing --new``
 does that, in its own command, because those are per-device secrets that
 are drawn once and then never again (yaml-schema.md §4.1) — a scaffold
 that produced them as a side effect would make ``new`` an operation with
@@ -130,7 +130,7 @@ def render_starter(name: str, *, board: str, friendly_name: str | None = None) -
         "# the one command that writes the commissioning credentials below.",
         "#",
         "# Next step:",
-        f"#   mcuhome device init-pairing {name}    # draw this device's commissioning codes",
+        f"#   mcuhome device matter-pairing --new {name}    # draw its commissioning codes",
         f"#   mcuhome device validate {name}        # see what it resolves to",
         f"#   mcuhome device build {name}           # compile it",
         "",
@@ -150,7 +150,7 @@ def render_starter(name: str, *, board: str, friendly_name: str | None = None) -
         "  matter:",
         "    enabled: true",
         "    # The three keys below are this device's commissioning identity, and",
-        "    # they are drawn once, by mcuhome init-pairing, so that every build of",
+        "    # they are drawn once, by mcuhome device matter-pairing --new, so every",
         "    # this device is byte-identical. Do not write them by hand.",
         "",
         "# The hardware this device has, and what it looks like to a controller.",

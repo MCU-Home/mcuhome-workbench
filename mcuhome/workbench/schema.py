@@ -683,6 +683,14 @@ def _parse_network(reader: MapReader) -> RawNetwork:
             salt=matter_reader.string("salt"),
             use_test_pairing=matter_reader.boolean("use_test_pairing"),
         )
+    elif reader.has("matter") and reader.data["matter"] is None:
+        # A bare `matter:` line. The block is the opt-in (PO 2026-08-15)
+        # and an empty block is still the block — so it becomes a present,
+        # empty RawMatter rather than vanishing into "no section", and
+        # every later stage (Matter on, credentials demanded, pairing
+        # written under it) sees the same answer. A `matter:` of the
+        # wrong *type* stays the type error the mapping reader recorded.
+        matter = RawMatter(loc=reader.key_loc("matter"), locs={})
 
     return RawNetwork(
         loc=reader.loc,

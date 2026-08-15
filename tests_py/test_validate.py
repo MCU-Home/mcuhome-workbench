@@ -340,6 +340,25 @@ def test_endpoints_without_matter(write_config) -> None:
     assert "CoAP is deferred" in (error.hint or "")
 
 
+def test_a_transport_alone_does_not_enable_matter(write_config) -> None:
+    """PO 2026-08-15: the matter: block is the opt-in — absence is off.
+
+    Deleting the block deactivates the device now, loudly, instead of
+    the day a second application protocol changes an implied default.
+    """
+    text = VALID_CONFIG.replace("  matter:\n    enabled: true\n    use_test_pairing: true\n", "")
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "Matter is off (there is no matter: section)")
+    assert "matter:" in (error.hint or "")
+
+
+def test_a_matter_block_without_an_enabled_line_is_on(write_config) -> None:
+    """A block that states credentials is unmistakably a Matter device."""
+    text = VALID_CONFIG.replace("    enabled: true\n", "")
+    model = resolve_file(write_config(text))
+    assert model.network.matter_enabled is True
+
+
 # --------------------------------------------------------------------------
 # network.matter: commissioning credentials
 # --------------------------------------------------------------------------
@@ -373,7 +392,7 @@ def test_a_matter_device_without_credentials_is_refused(write_config) -> None:
     error = find_error(errors, "no commissioning credentials")
     assert error.message == "This device has no commissioning credentials."
     assert error.location.line == line_of(text, "  matter:")
-    assert "mcuhome device init-pairing bench-node" in (error.hint or "")
+    assert "mcuhome device matter-pairing --new bench-node" in (error.hint or "")
     assert "use_test_pairing: true" in (error.hint or "")
 
 
@@ -383,7 +402,7 @@ def test_half_written_credentials_name_what_is_missing(write_config) -> None:
     error = find_error(errors, "incomplete")
     assert error.message == "The commissioning credentials are incomplete: salt: missing."
     assert error.location.line == line_of(text, "discriminator:")
-    assert "mcuhome device init-pairing bench-node --force" in (error.hint or "")
+    assert "mcuhome device matter-pairing --new bench-node --force" in (error.hint or "")
 
 
 def test_a_passcode_out_of_range_is_refused(write_config) -> None:
@@ -503,3 +522,15 @@ def test_the_version_reaches_the_kconfig_fragment(write_config) -> None:
     model = resolve_file(write_config(text))
     assert 'CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="1.2.3"' in model.build.kconfig
     assert "CONFIG_CHIP_DEVICE_SOFTWARE_VERSION=16909056" in model.build.kconfig
+
+
+def test_an_empty_matter_block_is_still_the_opt_in(write_config) -> None:
+    """`matter:` with nothing under it is the block, and the block is the
+    opt-in — every stage answers the same way (review 2026-08-15)."""
+    text = VALID_CONFIG.replace(
+        "  matter:\n    enabled: true\n    use_test_pairing: true\n", "  matter:\n"
+    )
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, "no commissioning credentials")
+    assert all("Matter is off" not in e.message for e in errors)
+    assert "matter-pairing" in (error.hint or "")

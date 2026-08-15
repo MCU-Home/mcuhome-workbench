@@ -48,7 +48,7 @@ pytest                           # the suite in ../tests_py/
 | `workbench/resolve.py` | 3 | defaults, device-type completion, endpoint numbering, unit conversion |
 | `workbench/configschema.py` | — | the `main.yaml` schema as data (JSON Schema) |
 | `workbench/scaffold.py` | — | `mcuhome new`: a starter device configuration |
-| `workbench/provision.py` | — | `init-pairing`: drawing a device's commissioning credentials |
+| `workbench/provision.py` | — | `matter-pairing`: drawing a device's commissioning credentials |
 | `workbench/contextdir.py` | — | build-context creation and locking (ADR 0018) |
 | `workbench/resolve_pins.py` | — | SDK pin resolution against an index or directory |
 | `workbench/buildmethods.py` | — | the three build methods behind `run_build` (E53/E64) |

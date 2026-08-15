@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome device init-pairing``: :mod:`mcuhome.workbench.provision`.
+"""``mcuhome device matter-pairing --new``: :mod:`mcuhome.workbench.provision`.
 
 The workbench half of the commissioning credentials. The math, the CHIP
 vectors and the atomic Kconfig group are :mod:`mcuhome.model.pairing` and
@@ -51,7 +51,7 @@ def test_init_pairing_writes_credentials_the_builder_then_accepts(write_config) 
 
     assert result.pairing == FIXED
     assert not result.replaced
-    assert result.secrets_file is None
+    assert result.secrets_file == path.parent / "secrets" / "devices" / "bench-node.yaml"
 
     model = resolve_file(path)
     assert model.network.pairing is not None
@@ -75,11 +75,13 @@ def test_init_pairing_only_adds_lines(write_config) -> None:
 
     added = [line for line in after if line not in before or after.count(line) > before.count(line)]
     assert [line for line in after if line not in added] == before
+    # References only — the values themselves are in the secrets file
+    # (PO 2026-08-15, security-relevant values never in the committable file).
     assert added == [
         *[f"    {line}" for line in provision.CREDENTIAL_COMMENT],
-        f"    discriminator: {FIXED.discriminator}",
-        f"    passcode: {FIXED.passcode}",
-        f'    salt: "{FIXED.salt}"',
+        "    discriminator: !secret matter_discriminator",
+        "    passcode: !secret matter_passcode",
+        "    salt: !secret matter_salt",
     ]
 
 
@@ -111,7 +113,9 @@ def test_force_replaces_the_credentials_without_stacking_up_comments(write_confi
     assert result.replaced
     assert twice.count(provision.CREDENTIAL_COMMENT[0]) == 1
     assert len(twice.splitlines()) == len(once.splitlines())
-    assert "passcode: 11223344" in twice
+    secrets_text = result.secrets_file.read_text(encoding="utf-8")
+    assert "matter_passcode: 11223344" in secrets_text
+    assert str(FIXED.passcode) not in secrets_text
     assert str(FIXED.passcode) not in twice
 
 
@@ -131,19 +135,22 @@ def test_force_also_clears_a_test_pairing_opt_in(write_config) -> None:
     )
 
 
-def test_secrets_mode_keeps_the_values_out_of_the_device_file(write_config) -> None:
+def test_the_values_stay_out_of_the_committable_file(write_config) -> None:
     path = write_config(WITHOUT_CREDENTIALS)
-    result = _init(path, use_secrets=True)
+    result = _init(path)
 
     device_text = path.read_text(encoding="utf-8")
-    assert "passcode: !secret bench_node_passcode" in device_text
+    assert "passcode: !secret matter_passcode" in device_text
     assert str(FIXED.passcode) not in device_text
     assert FIXED.salt not in device_text
 
-    assert result.secrets_file is not None
     secrets_text = result.secrets_file.read_text(encoding="utf-8")
-    assert f"bench_node_passcode: {FIXED.passcode}" in secrets_text
-    assert f'bench_node_salt: "{FIXED.salt}"' in secrets_text
+    assert f"matter_passcode: {FIXED.passcode}" in secrets_text
+    assert f'matter_salt: "{FIXED.salt}"' in secrets_text
+    assert (result.secrets_file.stat().st_mode & 0o777) == 0o600
+    # The directories the command created are owner-only too (ADR 0022 §5).
+    assert (result.secrets_file.parent.stat().st_mode & 0o777) == 0o700
+    assert (result.secrets_file.parent.parent.stat().st_mode & 0o777) == 0o700
 
     # And the two halves still add up to a device the builder accepts.
     model = resolve_file(path)
@@ -151,12 +158,16 @@ def test_secrets_mode_keeps_the_values_out_of_the_device_file(write_config) -> N
     assert model.network.pairing.passcode == FIXED.passcode
 
 
-def test_secrets_mode_keeps_what_the_secrets_file_already_had(write_config) -> None:
+def test_the_project_secrets_file_is_not_touched(write_config) -> None:
+    """The values go to the device's own file; main.yaml stays the user's."""
     path = write_config(WITHOUT_CREDENTIALS, secrets="wifi_password: hunter2\n")
-    _init(path, use_secrets=True)
-    text = (path.parent / "secrets" / "main.yaml").read_text(encoding="utf-8")
-    assert "wifi_password: hunter2" in text
-    assert "bench_node_discriminator: 2314" in text
+    result = _init(path)
+    main_text = (path.parent / "secrets" / "main.yaml").read_text(encoding="utf-8")
+    assert main_text == "wifi_password: hunter2\n"
+    assert result.secrets_file != path.parent / "secrets" / "main.yaml"
+    assert f"matter_discriminator: {FIXED.discriminator}" in result.secrets_file.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_a_device_without_a_transport_has_nothing_to_commission(write_config) -> None:
@@ -180,12 +191,16 @@ def test_a_matter_section_that_is_only_a_key_still_works(write_config) -> None:
     assert resolve_file(path).network.pairing is not None
 
 
-def test_a_configuration_without_a_matter_section_gets_one(write_config) -> None:
+def test_a_configuration_without_a_matter_section_is_refused(write_config) -> None:
+    """PO 2026-08-15: absence means off, and a credentials command must
+    not switch a protocol on behind the author's back."""
     path = write_config(WITHOUT_CREDENTIALS.replace("  matter:\n    enabled: true\n", ""))
-    _init(path)
-    text = path.read_text(encoding="utf-8")
-    assert "  matter:\n" in text
-    assert resolve_file(path).network.pairing is not None
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(ConfigError) as caught:
+        _init(path)
+    assert "there is no matter: section" in caught.value.message
+    assert "enabled: true" in (caught.value.hint or "")
+    assert path.read_text(encoding="utf-8") == before
 
 
 # --------------------------------------------------------------------------

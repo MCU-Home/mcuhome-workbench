@@ -163,3 +163,56 @@ def test_editing_yaml_writes_the_reference_back_never_the_content(tmp_path: Path
     assert "THE-SECRET-MATERIAL" not in text
     assert "# kept" in text
     assert "added: later" in text
+
+
+def test_the_device_secrets_file_answers_first(write_config) -> None:
+    """The ladder (ADR 0022, PO 2026-08-15): device value beats main.yaml."""
+    entry = write_config(CONFIG_WITH_SECRET, secrets="device_label: From Main\n")
+    device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
+    device_file.parent.mkdir(mode=0o700)
+    device_file.write_text("device_label: From Device\n", encoding="utf-8")
+    device_file.chmod(0o600)
+    data = load_config(entry, secrets_file=entry.parent / "secrets" / "main.yaml")
+    assert data["device"]["friendly_name"] == "From Device"
+
+
+def test_a_shared_secret_falls_through_to_the_project_file(write_config) -> None:
+    """A name the device file does not carry answers from main.yaml."""
+    entry = write_config(CONFIG_WITH_SECRET, secrets="device_label: Shared\n")
+    device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
+    device_file.parent.mkdir(mode=0o700)
+    device_file.write_text("matter_passcode: 1234\n", encoding="utf-8")
+    device_file.chmod(0o600)
+    data = load_config(entry, secrets_file=entry.parent / "secrets" / "main.yaml")
+    assert data["device"]["friendly_name"] == "Shared"
+
+
+def test_a_device_file_alone_is_enough(write_config) -> None:
+    """No main.yaml needed when the device's own file answers."""
+    entry = write_config(CONFIG_WITH_SECRET)
+    device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
+    device_file.parent.mkdir(parents=True, mode=0o700)
+    device_file.write_text("device_label: Own\n", encoding="utf-8")
+    device_file.chmod(0o600)
+    data = load_config(entry, secrets_file=entry.parent / "secrets" / "main.yaml")
+    assert data["device"]["friendly_name"] == "Own"
+
+
+def test_a_project_devices_secrets_file_is_keyed_by_its_folder(tmp_path) -> None:
+    """A config cannot claim another device's identity (review 2026-08-15).
+
+    device.name is the hostname, not the identity the project keys on —
+    a devices/device-b/main.yaml claiming `name: device-a` must not read
+    (or, through matter-pairing, overwrite) device-a's credentials.
+    """
+    entry = tmp_path / "devices" / "device-b" / "main.yaml"
+    entry.parent.mkdir(parents=True)
+    entry.write_text(CONFIG_WITH_SECRET.replace("name: bench-node", "name: device-a"), "utf-8")
+    secrets_main = tmp_path / "secrets" / "main.yaml"
+    for owner, value in (("device-a", "Stolen"), ("device-b", "Own")):
+        target = tmp_path / "secrets" / "devices" / f"{owner}.yaml"
+        target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        target.write_text(f"device_label: {value}\n", encoding="utf-8")
+        target.chmod(0o600)
+    data = load_config(entry, secrets_file=secrets_main)
+    assert data["device"]["friendly_name"] == "Own"

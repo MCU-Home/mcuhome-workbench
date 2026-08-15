@@ -141,7 +141,12 @@ def _resolve_network(config: RawConfig) -> NetworkModel:
     elif raw.wifi is not None:  # pragma: no cover - rejected in stage 2
         transport = "wifi"
 
-    matter_enabled = transport is not None
+    # Matter is on exactly when the configuration says so (PO
+    # 2026-08-15): the matter: block is the opt-in, enabled: false the
+    # explicit off switch. A transport alone no longer implies Matter —
+    # a silently-implied protocol would break loudly the day a second
+    # application protocol changes the implication.
+    matter_enabled = raw.matter is not None
     if raw.matter is not None and raw.matter.enabled is not None:
         matter_enabled = raw.matter.enabled
 
@@ -158,7 +163,7 @@ def _resolve_pairing(config: RawConfig, matter_enabled: bool) -> PairingModel | 
 
     Nothing is invented here — that is the whole design (yaml-schema.md
     §4.1). The credentials are random, but they are randomized *once*, by
-    ``mcuhome device init-pairing``, into the configuration file; from there on
+    ``mcuhome device matter-pairing --new``, into the configuration; from there on
     they are ordinary input and the builder stays byte-deterministic. The
     iteration count is the one derived value, and it is a constant of the
     builder rather than of the device.
@@ -190,7 +195,7 @@ def _resolve_pairing(config: RawConfig, matter_enabled: bool) -> PairingModel | 
             location=matter.loc if matter is not None else config.loc,
             hint=(
                 "run mcuhome device validate on it first; the credentials come from\n"
-                f"    mcuhome device init-pairing {config.device.name or '<device>'}"
+                f"    mcuhome device matter-pairing --new {config.device.name or '<device>'}"
             ),
         )
     return PairingModel(

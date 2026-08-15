@@ -103,7 +103,7 @@ def test_an_explicit_project_dir_that_is_not_there_is_a_refusal(tmp_path) -> Non
 def test_the_starter_names_the_next_step_rather_than_taking_it() -> None:
     """Credentials are drawn once, by their own command, on purpose."""
     text = scaffold.render_starter("bench-node", board=BOARD)
-    assert "mcuhome device init-pairing bench-node" in text
+    assert "mcuhome device matter-pairing --new bench-node" in text
     assert "discriminator:" not in text
     assert "passcode:" not in text
 
@@ -144,9 +144,9 @@ def test_new_then_init_pairing_then_validate(tmp_path) -> None:
     # writes them — which is what makes the scaffold's next step honest.
     result = validate_device(created.entry, project=project)
     assert not result.ok
-    assert any("init-pairing bench-node" in (error.hint or "") for error in result.errors)
+    assert any("matter-pairing --new bench-node" in (error.hint or "") for error in result.errors)
 
-    provision.init_pairing(created.entry, secrets_file=project.secrets_file, use_secrets=False)
+    provision.init_pairing(created.entry, secrets_file=project.secrets_file)
 
     model = load_model(created.entry, project=project)
     assert model.device.name == "bench-node"

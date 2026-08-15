@@ -51,6 +51,6 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_context_workbench.py` | context creation/locking, the frozen context-ID rule (ADR 0018 §6) |
 | `test_export_workbench.py` | registry data and the `main.yaml` JSON schema as data |
 | `test_ota_workbench.py` | the Matter OTA image wrap around a freshly signed image |
-| `test_pairing_workbench.py` | `init-pairing` plus the identity-symbol invariant (no workbench module spells `CONFIG_CHIP_DEVICE_SPAKE2_*`) |
+| `test_pairing_workbench.py` | `matter-pairing` plus the identity-symbol invariant (no workbench module spells `CONFIG_CHIP_DEVICE_SPAKE2_*`) |
 | `test_userpaths_workbench.py` | the process-boundary invariant: no module reads `$HOME`/`os.environ` outside the seam |
 | `test_packaging_workbench.py` | the root `pyproject.toml`: name, version source, dependency arrows, extras |

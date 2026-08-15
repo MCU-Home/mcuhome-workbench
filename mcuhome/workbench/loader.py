@@ -7,9 +7,11 @@ keeps line and column information on every mapping and sequence, and the
 whole validation layer is built around pointing at the offending line
 (yaml-schema.md §10, builder-pipeline.md §1.5).
 
-``!secret name`` reads ``name`` from the project's ``secrets/main.yaml``
-(yaml-schema.md §9, deliberately ESPHome-shaped UX; ADR 0022 moved the
-former tree-root ``secrets.yaml`` into the ``secrets/`` directory).
+``!secret name`` reads ``name`` from the device's own
+``secrets/devices/<name>.yaml`` first and the project-wide
+``secrets/main.yaml`` second (yaml-schema.md §9, deliberately
+ESPHome-shaped UX; the ladder is ADR 0022's layout, PO 2026-08-15 —
+commissioning identity per device, shared values project-wide).
 Resolution happens here, before validation, so no later stage ever sees
 a secret reference — and an unknown secret is reported with the line of
 the ``!secret`` tag, not of the file it should have been in. Reading the
@@ -41,11 +43,12 @@ from typing import Any
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML, YAMLError
 
-from mcuhome.workbench.project import check_secret_file
+from mcuhome.workbench.project import DEVICES_DIR, check_secret_file
 
 __all__ = [
     "FileRef",
     "SecretRef",
+    "device_secrets_file",
     "editing_yaml",
     "load_config",
     "load_yaml_file",
@@ -212,20 +215,35 @@ def load_yaml_file(path: Path) -> Any:
         ) from exc
 
 
-def _load_secrets(
+def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
+    """``secrets/devices/<name>.yaml``, next to the project's main secrets file.
+
+    The per-device secrets file of ADR 0022's layout (PO 2026-08-15) —
+    where ``mcuhome device matter-pairing`` puts a device's commissioning
+    values. For a device inside the project layout the name is the
+    device *folder's*, never the configuration's own ``device.name``
+    claim: the folder is the identity every project surface keys on, and
+    a ``device.name`` that disagrees must not let one device read — or
+    overwrite — another device's credentials (review 2026-08-15). Only a
+    bare file outside the layout answers with its ``device.name``
+    (folder name standing in); its stand-in root holds no second device
+    to collide with.
+    """
+    parent = entry.parent
+    if parent.parent == secrets_file.parent.parent / DEVICES_DIR:
+        return secrets_file.parent / "devices" / f"{parent.name}.yaml"
+    device = data.get("device") if isinstance(data, dict) else None
+    name = device.get("name") if isinstance(device, dict) else None
+    if not isinstance(name, str) or not name:
+        name = parent.name
+    return secrets_file.parent / "devices" / f"{name}.yaml"
+
+
+def _read_secret_file(
     secrets_file: Path,
     ref: SecretRef,
-    file: Path,
-    key: str | None,
     on_warning: Callable[[str], None] | None,
 ) -> dict[str, Any]:
-    if not secrets_file.is_file():
-        raise ConfigError(
-            f'This configuration uses the secret "{ref.name}", but there is no '
-            f"{secrets_file.name} to read it from.",
-            location=ref.location(file, key),
-            hint=(f"create {secrets_file} with a line like:\n    {ref.name}: your-value-here"),
-        )
     check_secret_file(secrets_file, key_material=False, on_warning=on_warning)
     data = load_yaml_file(secrets_file)
     if data is None:
@@ -237,6 +255,36 @@ def _load_secrets(
             hint=f"write one secret per line, for example:\n    {ref.name}: your-value-here",
         )
     return dict(data)
+
+
+def _load_secrets(
+    device_file: Path,
+    secrets_file: Path,
+    ref: SecretRef,
+    file: Path,
+    key: str | None,
+    on_warning: Callable[[str], None] | None,
+) -> dict[str, Any]:
+    """Every secret this configuration may name, device values winning.
+
+    The ladder (ADR 0022, PO 2026-08-15): the device's own
+    ``secrets/devices/<name>.yaml`` answers first — its commissioning
+    identity lives there — and the project-wide ``secrets/main.yaml``
+    answers for everything shared between devices (a WiFi password).
+    Lookup is per name, so one configuration can read from both.
+    """
+    sources = [source for source in (secrets_file, device_file) if source.is_file()]
+    if not sources:
+        raise ConfigError(
+            f'This configuration uses the secret "{ref.name}", but there is no '
+            f"{secrets_file.name} to read it from.",
+            location=ref.location(file, key),
+            hint=(f"create {secrets_file} with a line like:\n    {ref.name}: your-value-here"),
+        )
+    merged: dict[str, Any] = {}
+    for source in sources:  # main first, device last: the device file wins
+        merged.update(_read_secret_file(source, ref, on_warning))
+    return merged
 
 
 def resolve_secrets(
@@ -253,16 +301,22 @@ def resolve_secrets(
     runs exactly when the file's content is actually about to be used.
     """
     secrets: dict[str, Any] | None = None
+    device_file = device_secrets_file(secrets_file, data, entry=file)
 
     def walk(value: Any, key_path: str) -> Any:
         nonlocal secrets
         if isinstance(value, SecretRef):
             if secrets is None:
-                secrets = _load_secrets(secrets_file, value, file, key_path, on_warning)
+                secrets = _load_secrets(
+                    device_file, secrets_file, value, file, key_path, on_warning
+                )
             if value.name not in secrets:
                 known = ", ".join(sorted(secrets)) if secrets else "none"
+                looked = secrets_file.name
+                if device_file.is_file():
+                    looked = f"{device_file.parent.name}/{device_file.name} or {secrets_file.name}"
                 raise ConfigError(
-                    f'There is no secret called "{value.name}" in {secrets_file.name}.',
+                    f'There is no secret called "{value.name}" in {looked}.',
                     location=value.location(file, key_path),
                     hint=(
                         f"add it to {secrets_file}:\n"

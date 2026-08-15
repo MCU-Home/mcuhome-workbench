@@ -122,7 +122,7 @@
         },
         "matter": {
           "type": "object",
-          "description": "Commissioning identity. Written by mcuhome device init-pairing \u2014 drawn once, so that every build of this device is byte-identical.",
+          "description": "Commissioning identity. Written by mcuhome device matter-pairing \u2014 drawn once, so that every build of this device is byte-identical.",
           "additionalProperties": false,
           "properties": {
             "enabled": {

@@ -254,7 +254,7 @@ def config_json_schema() -> dict[str, Any]:
                     "matter": {
                         "type": "object",
                         "description": (
-                            "Commissioning identity. Written by mcuhome device init-pairing "
+                            "Commissioning identity. Written by mcuhome device matter-pairing "
                             "— drawn once, so that every build of this device is "
                             "byte-identical."
                         ),

@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome device init-pairing``: draw commissioning credentials, once.
+"""``mcuhome device matter-pairing --new``: draw commissioning credentials, once.
 
 This is the one place in the builder where randomness enters, and it
-enters *into the user's configuration file* rather than into a build.
-That is the whole design (yaml-schema.md §4.1):
+enters *into the user's configuration* rather than into a build. That is
+the whole design (yaml-schema.md §4.1):
 
 * the security goal is a passcode and a salt nobody else has — a shared
   passcode lets anyone commission the device, and a shared salt lets one
@@ -14,10 +14,18 @@ That is the whole design (yaml-schema.md §4.1):
 
 so the credentials are drawn once, written down, and are ordinary
 configuration input from then on. Nothing is stored anywhere else: no
-state directory, no cache, no log file. The configuration the user backs
-up *is* the record, and ``--secrets`` moves the values into the
-project's ``secrets/main.yaml`` for configurations that live in version
-control.
+state directory, no cache, no log file. The values are security-relevant
+and ``main.yaml`` is the file a project commits, so they never land
+there (PO 2026-08-15): ``main.yaml`` gets ``!secret`` references, the
+values themselves go to the device's own ``secrets/devices/<name>.yaml``
+— the per-device rung of the loader's secrets ladder.
+
+**Matter has to be on.** Under the explicit-opt-in default (PO
+2026-08-15, yaml-schema.md §4) an absent ``matter:`` block means Matter
+is off, and a command that silently switched a protocol on while writing
+credentials would decide something the configuration's author did not —
+so both the absent block and ``enabled: false`` are refusals that say
+what to write.
 
 **The file is edited, not rewritten.** A YAML round-trip that
 re-serializes the document reflows indentation and moves comments, which
@@ -40,7 +48,7 @@ from mcuhome.model import pairing
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML
 
-from mcuhome.workbench.loader import load_yaml_file
+from mcuhome.workbench.loader import device_secrets_file, load_yaml_file
 from mcuhome.workbench.validate import PAIRING_KEYS
 
 __all__ = ["CREDENTIAL_COMMENT", "InitResult", "init_pairing", "secret_names"]
@@ -49,28 +57,39 @@ __all__ = ["CREDENTIAL_COMMENT", "InitResult", "init_pairing", "secret_names"]
 #: replaces them so that repeated runs do not stack up comment blocks.
 #: Matched by exact text — a comment the user wrote is never touched.
 CREDENTIAL_COMMENT = (
-    "# Commissioning credentials, written by `mcuhome device init-pairing`.",
+    "# Commissioning credentials, written by `mcuhome device matter-pairing`.",
     "# They are this device's identity: replacing them means every controller",
     "# has to commission it again.",
 )
 
+#: Comment lines earlier versions of this command wrote, still recognized
+#: when replacing so that a pre-rename file does not stack comments up.
+_KNOWN_COMMENT_LINES = frozenset(CREDENTIAL_COMMENT) | {
+    "# Commissioning credentials, written by `mcuhome device init-pairing`.",
+}
+
 
 @dataclass(frozen=True)
 class InitResult:
-    """What ``init-pairing`` wrote, and where."""
+    """What ``matter-pairing --new`` wrote, and where."""
 
     entry: Path
-    #: Where the values themselves went, when ``--secrets`` was used.
-    secrets_file: Path | None
+    #: Where the values themselves went: the device's own secrets file.
+    secrets_file: Path
     pairing: pairing.Pairing
     #: True when credentials were already there and ``--force`` replaced them.
     replaced: bool
 
 
-def secret_names(device: str) -> dict[str, str]:
-    """The secrets-file key each credential gets for *device*."""
-    slug = "".join(character if character.isalnum() else "_" for character in device.lower())
-    return {key: f"{slug}_{key}" for key in PAIRING_KEYS}
+def secret_names() -> dict[str, str]:
+    """The secrets-file key each credential gets.
+
+    Plain, unprefixed names: the file is the device's own
+    (``secrets/devices/<name>.yaml``), so there is nothing to
+    disambiguate — the old per-device slug prefix retired with the
+    shared secrets file (PO 2026-08-15).
+    """
+    return {key: f"matter_{key}" for key in PAIRING_KEYS}
 
 
 # --------------------------------------------------------------------------
@@ -150,8 +169,6 @@ class _Anchor:
     after_line: int
     #: Column the credential keys are written at.
     indent: int
-    #: True when the ``matter:`` key itself has to be written too.
-    needs_matter_key: bool
     #: Lines that have to go first, by the key that occupies them.
     occupied: dict[str, int]
 
@@ -168,13 +185,15 @@ def _find_anchor(data: Any, text: _Text, entry: Path) -> _Anchor:
         )
 
     if "matter" not in network:
-        # No matter: section at all — write one at the end of network:.
-        network_line = _key_line(root, "network")
-        return _Anchor(
-            after_line=text.block_end(network_line, _key_column(root, "network")),
-            indent=_key_column(network, next(iter(network))),
-            needs_matter_key=True,
-            occupied={},
+        # Under the explicit-opt-in default (PO 2026-08-15) an absent
+        # block means Matter is off — writing one here would switch a
+        # protocol on behind the author's back.
+        raise _refuse(
+            "Matter is off for this device (there is no matter: section), so there "
+            "is nothing to draw commissioning credentials for.",
+            entry,
+            f"switch it on first — {_FLOW_MATTER_HINT}",
+            line=_key_line(root, "network"),
         )
 
     matter_line = _key_line(network, "matter")
@@ -186,7 +205,6 @@ def _find_anchor(data: Any, text: _Text, entry: Path) -> _Anchor:
         return _Anchor(
             after_line=matter_line,
             indent=matter_column + 2,
-            needs_matter_key=False,
             occupied={},
         )
     if not matter or _key_column(matter, next(iter(matter))) <= matter_column:
@@ -214,7 +232,6 @@ def _find_anchor(data: Any, text: _Text, entry: Path) -> _Anchor:
         # interruption of it.
         after_line=text.block_end(matter_line, matter_column),
         indent=_key_column(matter, next(iter(matter))),
-        needs_matter_key=False,
         occupied=occupied,
     )
 
@@ -227,7 +244,7 @@ def _lines_to_drop(text: _Text, occupied: dict[str, int]) -> set[int]:
         for number in range(line_number, text.block_end(line_number, column) + 1):
             drop.add(number)
     for number in range(min(occupied.values()) - 1, 0, -1):
-        if text.lines[number - 1].strip() not in CREDENTIAL_COMMENT:
+        if text.lines[number - 1].strip() not in _KNOWN_COMMENT_LINES:
             break
         drop.add(number)
     return drop
@@ -242,11 +259,17 @@ def init_pairing(
     entry: Path,
     *,
     secrets_file: Path,
-    use_secrets: bool = False,
     force: bool = False,
     draw: Callable[[], pairing.Pairing] = pairing.random_pairing,
 ) -> InitResult:
-    """Write fresh commissioning credentials into the configuration *entry*.
+    """Write fresh commissioning credentials for the configuration *entry*.
+
+    *secrets_file* is the project's **main** secrets file; the values
+    themselves go to the device's own file next to it
+    (:func:`~mcuhome.workbench.loader.device_secrets_file`), and the
+    configuration gets ``!secret`` references — the values are
+    security-relevant and never land in the committable file (PO
+    2026-08-15).
 
     *draw* is the source of randomness, injected so the tests can pin it.
     Everything else about this function is deterministic.
@@ -262,12 +285,13 @@ def init_pairing(
             entry,
             f"{names} would be replaced, and every controller that already knows this "
             "device would have to commission it again — so say it in so many words:\n"
-            "    mcuhome device init-pairing … --force",
+            "    mcuhome device matter-pairing --new … --force",
             line=min(anchor.occupied.values()),
         )
 
     credentials = draw()
-    names = secret_names(_device_name(data, entry))
+    names = secret_names()
+    device_file = device_secrets_file(secrets_file, data, entry=entry)
 
     after_line = anchor.after_line
     if anchor.occupied:
@@ -277,51 +301,25 @@ def init_pairing(
             line for number, line in enumerate(text.lines, start=1) if number not in dropped
         ]
 
-    text.lines[after_line:after_line] = _credential_lines(
-        anchor, credentials, names, use_secrets=use_secrets
-    )
+    # The secrets file first: if it refuses (a clash without --force),
+    # the configuration has not been touched yet.
+    _write_secrets(device_file, names, credentials, force=force)
+    text.lines[after_line:after_line] = _credential_lines(anchor, names)
     entry.write_text(text.render(), encoding="utf-8")
-
-    if use_secrets:
-        _write_secrets(secrets_file, names, credentials, force=force)
 
     return InitResult(
         entry=entry,
-        secrets_file=secrets_file if use_secrets else None,
+        secrets_file=device_file,
         pairing=credentials,
         replaced=bool(anchor.occupied),
     )
 
 
-def _credential_lines(
-    anchor: _Anchor,
-    credentials: pairing.Pairing,
-    names: dict[str, str],
-    *,
-    use_secrets: bool,
-) -> list[str]:
-    out: list[str] = []
+def _credential_lines(anchor: _Anchor, names: dict[str, str]) -> list[str]:
     pad = " " * anchor.indent
-    if anchor.needs_matter_key:
-        out.append(f"{pad}matter:")
-        pad = f"{pad}  "
-    out += [f"{pad}{line}" for line in CREDENTIAL_COMMENT]
-    if use_secrets:
-        out += [f"{pad}{key}: !secret {names[key]}" for key in PAIRING_KEYS]
-    else:
-        out += [
-            f"{pad}discriminator: {credentials.discriminator}",
-            f"{pad}passcode: {credentials.passcode}",
-            f'{pad}salt: "{credentials.salt}"',
-        ]
+    out = [f"{pad}{line}" for line in CREDENTIAL_COMMENT]
+    out += [f"{pad}{key}: !secret {names[key]}" for key in PAIRING_KEYS]
     return out
-
-
-def _device_name(data: Any, entry: Path) -> str:
-    root = _mapping(data)
-    device = _mapping(root.get("device")) if root else None
-    name = device.get("name") if device else None
-    return name if isinstance(name, str) and name else entry.parent.name
 
 
 def _write_secrets(
@@ -331,7 +329,7 @@ def _write_secrets(
     *,
     force: bool,
 ) -> None:
-    """Append the three values to the project's secrets file, replacing old ones.
+    """Append the three values to the device's secrets file, replacing old ones.
 
     Line editing again, and for the same reason: a secrets file is a file
     a person keeps, not a database this command owns.
@@ -351,15 +349,17 @@ def _write_secrets(
             raise _refuse(
                 f"{secrets_file.name} already has a secret called {clashing[0]}.",
                 secrets_file,
-                "two devices cannot share commissioning credentials — rename one of "
-                "them, or replace the values with --force",
+                "this device's secrets file already carries commissioning values — "
+                "replacing them means every controller that knows the device has to "
+                "commission it again, so say it with --force",
             )
         text.lines = [line for line in text.lines if line.split(":", 1)[0].strip() not in values]
     else:
         text = _Text.of("")
         text.lines = [
-            "# Secrets for this project: `!secret <name>` in a device",
-            "# configuration reads from here. Keep this file out of version control.",
+            "# Secrets for one device: `!secret <name>` in its configuration reads",
+            "# from here first, then from the project's secrets/main.yaml. Keep this",
+            "# file out of version control.",
         ]
     if text.lines and text.lines[-1].strip():
         text.lines.append("")
@@ -367,8 +367,8 @@ def _write_secrets(
     if created:
         # A fresh secrets file starts owner-only, and so does any missing
         # directory on the way to it (ADR 0022 §5) — exactly the missing
-        # ones: an existing directory's permissions are the user's, and
-        # `--secrets` may point anywhere. Rewriting an existing file goes
+        # ones (secrets/devices/ typically): an existing directory's
+        # permissions are the user's. Rewriting an existing file goes
         # through its inode and keeps whatever the user set.
         missing: list[Path] = []
         probe = secrets_file.parent

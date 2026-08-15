@@ -242,25 +242,37 @@ def _check_network(config: RawConfig, errors: ErrorCollector) -> None:
         )
 
     if _matter_enabled(config) is False and _endpoints(config):
+        off_by = (
+            "switched off" if network.matter is not None else "off (there is no matter: section)"
+        )
         errors.add(
-            "This configuration has endpoints, but Matter is switched off.",
+            f"This configuration has endpoints, but Matter is {off_by}.",
             location=(network.matter.loc_of("enabled") if network.matter else network.loc),
             hint=(
                 "without Matter nothing can read those endpoints yet (CoAP is deferred and "
-                "automations are not implemented) — set matter: enabled: true, or remove "
-                "the node: section"
+                "automations are not implemented) — say so under network::\n"
+                "    matter:\n      enabled: true\n"
+                "  or remove the node: section"
             ),
         )
 
 
 def _matter_enabled(config: RawConfig) -> bool:
-    """Matter is on whenever a transport exists, unless switched off."""
+    """Matter is on exactly when the configuration says so (PO 2026-08-15).
+
+    The ``matter:`` block is the opt-in — a block that states
+    credentials is unmistakably a Matter device, ``enabled:`` line or
+    not — and ``enabled: false`` is the explicit off switch. Absence is
+    off: a transport alone no longer implies Matter, so deleting the
+    block deactivates the device *now*, loudly, rather than the day a
+    second application protocol changes an implied default.
+    """
     network = config.network
     if network is None:
         return False
     if network.matter is not None and network.matter.enabled is not None:
         return network.matter.enabled
-    return network.thread is not None or network.wifi is not None
+    return network.matter is not None
 
 
 # --------------------------------------------------------------------------
@@ -333,7 +345,8 @@ def _check_pairing(config: RawConfig, errors: ErrorCollector) -> None:
             location=matter.loc_of(given[0]),
             hint=(
                 "discriminator, passcode and salt belong together — write the missing "
-                f"ones, or replace all three:\n    mcuhome device init-pairing {device} --force"
+                "ones, or replace all three:\n"
+                f"    mcuhome device matter-pairing --new {device} --force"
             ),
         )
         return
@@ -355,7 +368,8 @@ def _report_no_credentials(
         location=location_of.loc if location_of is not None else config.loc,
         hint=(
             "every Matter device needs a pairing code of its own — let the builder "
-            f"draw one and write it into this file:\n    mcuhome device init-pairing {device}\n"
+            "draw one and write it into this file:\n"
+            f"    mcuhome device matter-pairing --new {device}\n"
             "  (on a bench device you can instead add use_test_pairing: true under "
             "matter:, which uses the passcode published with the Matter SDK — never "
             "on a device that leaves your desk)"
@@ -389,7 +403,7 @@ def _check_passcode(
             hint=(
                 f"a passcode is a number from {pairing.PASSCODE_MIN} to "
                 f"{pairing.PASSCODE_MAX} — or let the builder pick one:\n"
-                f"    mcuhome device init-pairing {device} --force"
+                f"    mcuhome device matter-pairing --new {device} --force"
             ),
         )
         return
@@ -401,7 +415,7 @@ def _check_passcode(
                 "the specification rules out the twelve most guessable codes — eight "
                 "repeated digits, 12345678 and 87654321 — because they are the first "
                 f"thing anyone tries; pick another, or run:\n"
-                f"    mcuhome device init-pairing {device} --force"
+                f"    mcuhome device matter-pairing --new {device} --force"
             ),
         )
 
@@ -424,7 +438,7 @@ def _check_salt(value: str | None, matter: RawMatter, device: str, errors: Error
             f"the salt is {pairing.SALT_MIN_BYTES} to {pairing.SALT_MAX_BYTES} random "
             "bytes written in base64, and it is what stops one precomputed table from "
             f"unlocking every device — the builder makes one for you:\n"
-            f"    mcuhome device init-pairing {device} --force"
+            f"    mcuhome device matter-pairing --new {device} --force"
         ),
     )
 

@@ -45,7 +45,7 @@ mcuhome.yaml              # project configuration (optional)
 devices/<name>/main.yaml  # one folder per device
 secrets/                  # ALL secrets, no exceptions (mode 700)
   main.yaml               #   project-wide secrets (the former secrets.yaml)
-  devices/<name>.yaml     #   per-device secrets (future)
+  devices/<name>.yaml     #   per-device secrets (matter-pairing writes here)
   build-server/<name>.yaml #  per-builder credentials (ADR 0023)
   firmware/mcuboot.yaml   #   MCUboot signing key (`firmware_signing_key`, draft 0015 §8)
 build/                    # build output (disposable, created by builds)
@@ -172,6 +172,19 @@ protected whatever its directory says), runs in every reader — the
 `!secret` loader and the signing-key reader today — and warnings
 travel through a caller-supplied `on_warning` callback, because the
 workbench prints nothing.
+
+**The `!secret` ladder** (PO 2026-08-15, with the CLI's usability
+round): a `!secret name` answers from the device's own
+`secrets/devices/<name>.yaml` first and from the project-wide
+`secrets/main.yaml` second — lookup per *name*, so one configuration
+reads its commissioning identity from its own file and a shared WiFi
+password from the project's. The device file's name comes from the
+configuration's `device.name` (the entry's folder name standing in),
+the same for a project device and a bare file with a stand-in root.
+`mcuhome device matter-pairing --new` is the writer: values into the
+device file (600, missing directories 700), `!secret matter_*`
+references into `main.yaml` — the plain-values-in-`main.yaml` mode
+retired with it, because `main.yaml` is the file a project commits.
 
 **The `!file` tag** (second PO round 2026-08-14): any YAML the
 workbench loader reads may make a value out of an external file —
