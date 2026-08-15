@@ -170,11 +170,15 @@ def test_the_model_is_a_declared_dependency_and_not_a_neighbouring_directory() -
 
 
 def test_the_declared_dependencies_are_the_ones_the_package_needs() -> None:
-    """The runtime set: the model, a line-preserving YAML parser, PEP 440."""
+    """The runtime set: the model, a line-preserving YAML parser, PEP 440,
+    and MCUboot's signing tool — the workbench performs the host-side
+    signing step, so imgtool is a declared dependency rather than an
+    environment accident (PO 2026-08-15)."""
     assert _requirement_names(_project()["project"]["dependencies"]) == {
         "mcuhome-model",
         "ruamel.yaml",
         "packaging",
+        "imgtool",
     }
 
 

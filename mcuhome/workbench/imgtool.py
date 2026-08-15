@@ -32,21 +32,18 @@ signing the same bytes twice with the same key gives two different
 test suite asserts exactly that: same image, same digest, different
 signature, both verifying.
 
-**Where imgtool comes from.** In order: :data:`IMGTOOL_VAR`, then the
-west workspace's own MCUboot checkout — the same script the inline build
-used, which is what keeps the two paths on one tool version — then an
-``imgtool`` on ``PATH`` for a machine that has the package and no
-workspace, which is what a dashboard host looks like (ADR 0003: the
-dashboard never compiles). Signing does not run in the builder container:
-handing a private key to a container to save a pip install is the wrong
-trade, and this step needs no toolchain.
-
-**Which is why the workspace arrives as an argument.** Every entry point
-here takes *topdir* and none of them looks for one, so nothing in this
-module knows what a west workspace is or where this package is installed
-— the two facts that only hold on a developer's machine. It is the one
-signing step of ADR 0015 decision 8, and it has to run where none of
-them do.
+**Where imgtool comes from.** It is a **declared dependency** of
+``mcuhome-workbench`` — the package MCUboot publishes itself, pinned in
+``pyproject.toml`` to the release line of the MCUboot revision the SDK's
+west manifest carries. The lookup is: :data:`IMGTOOL_VAR` as the escape
+hatch, then the installed package's console script (next to the running
+interpreter first, then ``PATH``). Nothing here runs the west
+workspace's checkout script any more: that script's requirements
+(click, cryptography, …) belong to the Zephyr build environment, not to
+whatever venv the workbench happens to run in — an inherited-environment
+accident, not a contract (PO 2026-08-15). Signing does not run in the
+build container either: handing a private key to a container to save a
+dependency is the wrong trade, and this step needs no toolchain.
 """
 
 from __future__ import annotations
@@ -71,7 +68,6 @@ from mcuhome.workbench.project import Project
 __all__ = [
     "BUILD_REPORT_FILE",
     "IMGTOOL_VAR",
-    "MCUBOOT_IMGTOOL",
     "REPORT_FIRMWARE",
     "REPORT_VERSION",
     "Runner",
@@ -107,14 +103,10 @@ REPORT_VERSION = 1
 #: ``firmware``", so both are signed with the one set of arguments.
 REPORT_FIRMWARE = (("firmware.bin", "firmware.signed.bin"), ("firmware.hex", "firmware.signed.hex"))
 
-#: Overrides how imgtool is found: a path to ``imgtool.py``, or the name
-#: of a program. The escape hatch for a machine where neither of the two
-#: automatic answers is the right one.
+#: Overrides how imgtool is found: a path to an ``imgtool.py`` script,
+#: or the name of a program. The escape hatch for a machine where the
+#: installed package is not the right answer.
 IMGTOOL_VAR = "MCUHOME_IMGTOOL"
-
-#: Where west puts the MCUboot module, and imgtool inside it. The same
-#: file Zephyr's ``FindImgtool`` picks for the inline build.
-MCUBOOT_IMGTOOL = Path("bootloader") / "mcuboot" / "scripts" / "imgtool.py"
 
 #: Runs one imgtool invocation and answers with its exit status and
 #: whatever it printed. Injectable so the test suite can watch the
@@ -123,12 +115,11 @@ MCUBOOT_IMGTOOL = Path("bootloader") / "mcuboot" / "scripts" / "imgtool.py"
 Runner = Callable[[list[str]], tuple[int, str]]
 
 
-def find_imgtool(*, env: dict[str, str], topdir: Path | None = None) -> list[str] | None:
+def find_imgtool(*, env: dict[str, str]) -> list[str] | None:
     """The argv prefix that runs imgtool, or None if there is none.
 
-    A list rather than a path because the two answers have different
-    shapes: a script needs an interpreter in front of it, a program does
-    not.
+    A list rather than a path because an override may name a script that
+    needs an interpreter in front of it.
 
     *env* is stated, never read from the process: which imgtool runs is
     part of what a build is, and one process may serve several callers
@@ -140,29 +131,29 @@ def find_imgtool(*, env: dict[str, str], topdir: Path | None = None) -> list[str
         if candidate.suffix == ".py" or candidate.is_file():
             return [sys.executable, str(candidate)]
         return [override]
-    if topdir is not None:
-        script = topdir / MCUBOOT_IMGTOOL
-        if script.is_file():
-            return [sys.executable, str(script)]
+    # The declared dependency: pip puts the console script next to the
+    # interpreter it installed for — the venv this process runs in.
+    beside = Path(sys.executable).parent / "imgtool"
+    if beside.is_file():
+        return [str(beside)]
     found = shutil.which("imgtool", path=env.get("PATH"))
     if found:
         return [found]
     return None
 
 
-def require_imgtool(*, env: dict[str, str], topdir: Path | None = None) -> list[str]:
+def require_imgtool(*, env: dict[str, str]) -> list[str]:
     """:func:`find_imgtool`, or a refusal that says where to get one."""
-    program = find_imgtool(env=env, topdir=topdir)
+    program = find_imgtool(env=env)
     if program is not None:
         return program
     raise BuildError(
         "MCUHome cannot sign this image: imgtool is not available here.",
         hint=(
-            "imgtool is MCUboot's signing tool. Install it\n"
-            "    pip install imgtool\n"
-            "or run this where the west workspace is, which already has it in "
-            f"{MCUBOOT_IMGTOOL}.\n"
-            f"{IMGTOOL_VAR} points at a specific one."
+            "imgtool is MCUboot's signing tool and a declared dependency of "
+            "mcuhome-workbench, so this installation is incomplete. Reinstall\n"
+            "    pip install --force-reinstall mcuhome-workbench\n"
+            f"or point {IMGTOOL_VAR} at a specific imgtool."
         ),
     )
 
@@ -281,7 +272,6 @@ def plan_signing(
     *,
     key: Path,
     env: dict[str, str],
-    topdir: Path | None = None,
 ) -> SignPlan:
     """Read a build manifest and decide how to sign what it describes.
 
@@ -305,7 +295,7 @@ def plan_signing(
     inputs = block.get("inputs") or {}
     outputs = block.get("outputs") or {}
 
-    program = require_imgtool(env=env, topdir=topdir)
+    program = require_imgtool(env=env)
     commands: list[tuple[str, tuple[str, ...], Path]] = []
     for form in sorted(inputs):
         source_name = _contained_name(str(inputs[form]), role="input", manifest_path=manifest_path)
@@ -432,7 +422,6 @@ def plan_report_signing(
     *,
     key: Path,
     env: dict[str, str],
-    topdir: Path | None = None,
 ) -> SignPlan:
     """Read a §7.2.1 build report and decide how to sign the firmware beside it.
 
@@ -450,7 +439,7 @@ def plan_report_signing(
     report = read_build_report(report_path)
     parameters = SigningParameters.from_dict(report["signing"]["arguments"])
 
-    program = require_imgtool(env=env, topdir=topdir)
+    program = require_imgtool(env=env)
     commands: list[tuple[str, tuple[str, ...], Path]] = []
     for source_name, output_name in REPORT_FIRMWARE:
         source = out_dir / source_name
@@ -490,7 +479,6 @@ def sign_report(
     target: Path,
     *,
     env: dict[str, str],
-    topdir: Path | None = None,
     key: Path | str | None = None,
     project: Project | None = None,
     runner: Runner | None = None,
@@ -506,7 +494,7 @@ def sign_report(
     either way, and imgtool gets exactly that file.
     """
     resolved = signing.signing_key(key, env=env, project=project, create=False)
-    plan = plan_report_signing(target, key=resolved.path, env=env, topdir=topdir)
+    plan = plan_report_signing(target, key=resolved.path, env=env)
     run_signing(plan, runner=runner)
     return plan
 
@@ -557,7 +545,6 @@ def sign_build(
     target: Path,
     *,
     env: dict[str, str],
-    topdir: Path | None = None,
     key: Path | str | None = None,
     project: Project | None = None,
     runner: Runner | None = None,
@@ -570,18 +557,8 @@ def sign_build(
     first need here: a build directory that was produced elsewhere has to
     be signed with the key its device's bootloader carries, and inventing
     one at this point would produce firmware that nothing accepts.
-
-    *topdir* is a west workspace to take MCUboot's bundled ``imgtool``
-    from when there is none on ``PATH``; None says there is no workspace
-    here, which is the normal case for a machine that signs (ADR 0003:
-    the dashboard never compiles). **Finding one is the caller's job.**
-    Locating a workspace means knowing where this package is installed
-    and where the caller stands, and this module has to stay usable where
-    neither question has an answer — which is exactly where signing
-    happens (ADR 0020 decision 3). A caller that has a workspace passes
-    ``workspace.find_topdir(...)``.
     """
     resolved = signing.signing_key(key, env=env, project=project, create=False)
-    plan = plan_signing(target, key=resolved.path, env=env, topdir=topdir)
+    plan = plan_signing(target, key=resolved.path, env=env)
     run_signing(plan, runner=runner)
     return plan

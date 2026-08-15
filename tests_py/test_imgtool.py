@@ -31,7 +31,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from mcuhome.compiler import workspace
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
 from mcuhome.model.registry import SIGNATURE_TYPE
@@ -50,21 +49,18 @@ TEST_SCALAR = 0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEF0
 # --------------------------------------------------------------------------
 
 
-def test_the_workspaces_own_mcuboot_wins(tmp_path) -> None:
-    """The same script the inline build used, so both are one tool version."""
-    script = tmp_path / imgtool.MCUBOOT_IMGTOOL
-    script.parent.mkdir(parents=True)
-    script.write_text("", "utf-8")
-    assert imgtool.find_imgtool(env={}, topdir=tmp_path) == [sys.executable, str(script)]
+def test_the_installed_package_wins(tmp_path) -> None:
+    """imgtool is a declared dependency: its console script sits beside
+    this interpreter, and that is the one a plain environment gets."""
+    beside = Path(sys.executable).parent / "imgtool"
+    assert beside.is_file(), "imgtool is a dependency of mcuhome-workbench"
+    assert imgtool.find_imgtool(env={"PATH": str(tmp_path)}) == [str(beside)]
 
 
-def test_the_environment_variable_beats_everything(tmp_path) -> None:
-    script = tmp_path / imgtool.MCUBOOT_IMGTOOL
-    script.parent.mkdir(parents=True)
-    script.write_text("", "utf-8")
+def test_the_environment_variable_beats_the_installed_package(tmp_path) -> None:
     other = tmp_path / "other-imgtool.py"
     other.write_text("", "utf-8")
-    found = imgtool.find_imgtool(env={imgtool.IMGTOOL_VAR: str(other)}, topdir=tmp_path)
+    found = imgtool.find_imgtool(env={imgtool.IMGTOOL_VAR: str(other)})
     assert found == [sys.executable, str(other)]
 
 
@@ -72,10 +68,23 @@ def test_a_program_name_is_taken_as_a_program() -> None:
     assert imgtool.find_imgtool(env={imgtool.IMGTOOL_VAR: "imgtool"}) == ["imgtool"]
 
 
-def test_no_imgtool_anywhere_is_a_refusal_that_says_where_to_get_one(tmp_path) -> None:
+def test_path_answers_when_no_script_sits_beside_the_interpreter(tmp_path, monkeypatch) -> None:
+    """A system install may put the console script elsewhere on PATH."""
+    monkeypatch.setattr(imgtool.sys, "executable", str(tmp_path / "venv" / "bin" / "python"))
+    elsewhere = tmp_path / "bin"
+    elsewhere.mkdir()
+    program = elsewhere / "imgtool"
+    program.write_text("", "utf-8")
+    program.chmod(0o755)
+    assert imgtool.find_imgtool(env={"PATH": str(elsewhere)}) == [str(program)]
+
+
+def test_no_imgtool_anywhere_is_a_refusal_that_names_the_dependency(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(imgtool.sys, "executable", str(tmp_path / "venv" / "bin" / "python"))
     with pytest.raises(BuildError) as caught:
-        imgtool.require_imgtool(env={"PATH": str(tmp_path)}, topdir=tmp_path)
-    assert "pip install imgtool" in caught.value.hint
+        imgtool.require_imgtool(env={"PATH": str(tmp_path)})
+    assert "declared dependency" in caught.value.hint
+    assert "mcuhome-workbench" in caught.value.hint
     assert imgtool.IMGTOOL_VAR in caught.value.hint
 
 
@@ -230,40 +239,30 @@ def test_signing_never_generates_a_key(tmp_path, monkeypatch) -> None:
     """A build has to be signed with the key its bootloader already carries."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
     with pytest.raises(BuildError) as caught:
-        imgtool.sign_build(
-            _build_dir(tmp_path),
-            env=dict(os.environ),
-            topdir=workspace.find_topdir(workspace.installed_module_dir(), tmp_path),
-        )
+        imgtool.sign_build(_build_dir(tmp_path), env=dict(os.environ))
     assert "MCUHome has no firmware signing key" in caught.value.message
 
 
-def test_the_workspace_it_was_given_is_the_one_it_signs_with(tmp_path) -> None:
-    """*topdir* reaches :func:`find_imgtool`, or the tool version drifts.
+def test_the_installed_imgtool_is_the_one_it_signs_with(tmp_path) -> None:
+    """Signing runs the declared dependency, not an environment accident.
 
-    Dropping the forwarding is invisible: signing keeps working, out of
-    whatever ``imgtool`` is on ``PATH`` — a different version from the
-    one the build used, on an image whose header that version writes.
-    ``PATH`` is emptied here so the workspace is the only answer left,
-    and a fallback would show up as a refusal rather than as silence.
+    ``PATH`` is emptied so the console script beside this interpreter is
+    the only answer left — a fallback to anything else would show up as
+    a different argv, and a lost dependency as a refusal.
     """
     out_dir = _build_dir(tmp_path)
     key = _key(tmp_path)
-    topdir = tmp_path / "workspace"
-    script = topdir / imgtool.MCUBOOT_IMGTOOL
-    script.parent.mkdir(parents=True)
-    script.write_text("", "utf-8")
+    beside = Path(sys.executable).parent / "imgtool"
 
     ran: list[tuple[str, ...]] = []
     plan = imgtool.sign_build(
         out_dir,
         env={"PATH": str(tmp_path / "nothing-here")},
-        topdir=topdir,
         key=key,
         runner=lambda command: (ran.append(tuple(command)), (0, ""))[1],
     )
-    assert plan.commands[0][1][:2] == (sys.executable, str(script))
-    assert ran and ran[0][:2] == (sys.executable, str(script))
+    assert plan.commands[0][1][0] == str(beside)
+    assert ran and ran[0][0] == str(beside)
 
 
 # --------------------------------------------------------------------------
@@ -311,8 +310,7 @@ def _parse_image(data: bytes) -> dict:
 
 
 def _imgtool_or_skip() -> list[str]:
-    topdir = workspace.find_topdir(workspace.installed_module_dir())
-    program = imgtool.find_imgtool(env=dict(os.environ), topdir=topdir)
+    program = imgtool.find_imgtool(env=dict(os.environ))
     if program is None:  # pragma: no cover - depends on the machine
         pytest.skip("imgtool is not available here")
     probe = subprocess.run([*program, "sign", "--help"], capture_output=True, check=False)

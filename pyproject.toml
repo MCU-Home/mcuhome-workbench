@@ -44,6 +44,12 @@ dependencies = [
   "ruamel.yaml>=0.18",
   # PEP 440 constraint resolution for the SDK and container pins (E52).
   "packaging>=23",
+  # MCUboot's own signing tool. The workbench performs the one host-side
+  # signing step (ADR 0015 decision 8), so the tool is a declared
+  # dependency rather than an environment accident (PO 2026-08-15).
+  # Pinned to the release line of the MCUboot revision the SDK's west
+  # manifest resolves to — bump the two as a pair, like CHIP and Zephyr.
+  "imgtool~=2.4",
 ]
 
 [project.optional-dependencies]
