@@ -138,19 +138,19 @@ OPTIONS: tuple[Option, ...] = (
         kind="path",
         files=False,
         bootstrap=True,
-        help="the project directory; disables the upward marker search (ADR 0022 §2)",
+        help="the project directory; disables the upward marker search",
     ),
     Option(
         "sdk_sources",
         kind="paths",
         default=(),
-        help="directories holding hash-pinned MCUHome SDK packages (ADR 0018)",
+        help="directories holding hash-pinned MCUHome SDK packages",
     ),
     Option(
         "signing_key",
         kind="path",
         files=False,
-        help="a firmware signing key file to use instead of the project's (ADR 0015 §8)",
+        help="a firmware signing key file to use instead of the project's",
     ),
     Option(
         "jobs",
@@ -167,7 +167,7 @@ OPTIONS: tuple[Option, ...] = (
         default=(),
         environment=False,
         arguments=False,
-        help="named builders: where a build may run (ADR 0023)",
+        help="named builders: where a build may run",
     ),
     # Settable up to the environment; the *invocation* selects with
     # --builder, which is selection rather than configuration — so the
@@ -176,7 +176,7 @@ OPTIONS: tuple[Option, ...] = (
         "default_builder",
         kind="string",
         arguments=False,
-        help="the builder a plain `mcuhome device build` uses (ADR 0023)",
+        help="the builder a plain `mcuhome device build` uses",
     ),
 )
 
@@ -366,7 +366,7 @@ def _refuse_not_file_settable(opt: Option, location: Location | None) -> ConfigE
             location=location,
             hint=(
                 f"{opt.name!r} decides where the project layer *is*, so it runs "
-                f"before any configuration file is read (ADR 0022 §2). Set it per "
+                f"before any configuration file is read. Set it per "
                 f"invocation: {opt.flag} on the command line, or {opt.env_var} in "
                 "the environment."
             ),
@@ -674,7 +674,7 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
             location=location,
             hint=(
                 "edit the `builders:` list in the file directly — one entry per "
-                "builder with name:, type: and the type's options (ADR 0023)"
+                "builder with name:, type: and the type's options"
             ),
         )
     if opt.kind == "integer":

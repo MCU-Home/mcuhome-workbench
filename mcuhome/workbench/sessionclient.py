@@ -810,7 +810,7 @@ def _check_member(name: str, source: Path, caps: IngressCaps) -> None:
         raise PrivateKeyRefused(
             f'"{name}" holds private key material, and nothing was sent.',
             hint=(
-                "the private signing key never leaves this machine (ADR 0015 decision 8): "
+                "the private signing key never leaves this machine: "
                 "a build returns an unsigned image and the host signs it afterwards, so "
                 "the only key a context carries is keys/signing.pub — move the private "
                 "key out of the context directory"

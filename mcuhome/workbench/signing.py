@@ -355,7 +355,7 @@ def _refuse_unreadable(path: Path, reason: str) -> BuildError:
     return BuildError(
         f"MCUHome cannot read the firmware signing key {path}: {reason}.",
         hint=(
-            "every MCUHome image is signed with your own key (ADR 0015). Point "
+            "every MCUHome image is signed with your own key. Point "
             "--signing-key at the right file, or move the unreadable one aside "
             f"and let MCUHome generate a new one — but note that a device already "
             f"running firmware signed with the old key will refuse the new one "
@@ -369,7 +369,7 @@ def _refuse_not_a_key(path: Path) -> BuildError:
     return BuildError(
         f"{path} is not an ECDSA P-256 private key in PEM form.",
         hint=(
-            "MCUHome signs with ECDSA P-256 (ADR 0015 decision 8) and will not "
+            "MCUHome signs with ECDSA P-256 and will not "
             "overwrite a file it does not recognize. Either point --signing-key "
             "at the right file, or move this one aside so MCUHome can generate a "
             "key of its own.\n"
@@ -385,7 +385,7 @@ def _refuse_unwritable(path: Path, reason: str) -> BuildError:
         hint=(
             "the key has to live outside every repository and every build "
             "directory, so it survives a clean checkout and never reaches a "
-            f"build server (ADR 0015 decision 8). Pick a writable location with "
+            f"build server. Pick a writable location with "
             f"--signing-key, or set {KEY_VAR}."
         ),
     )
@@ -397,7 +397,7 @@ def _refuse_no_project() -> BuildError:
         "inside a project, and no key file is named.",
         hint=(
             "the project's key lives in secrets/firmware/mcuboot.yaml under "
-            f"{FIRMWARE_KEY} (ADR 0015 decision 8) and is generated on first need. "
+            f"{FIRMWARE_KEY} and is generated on first need. "
             "Run inside a project (or create one with `mcuhome init`), point "
             f"--signing-key at a PEM key file, or set {KEY_VAR}."
         ),
@@ -409,7 +409,7 @@ def _refuse_inline_key(file: Path) -> BuildError:
         f"The {FIRMWARE_KEY} entry in {file} must be a !file reference to the key file.",
         hint=(
             "the key material lives in its own file next to this one, and the "
-            "YAML only points at it (ADR 0015 decision 8):\n"
+            "YAML only points at it:\n"
             f"    {FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}\n"
             "If the entry currently holds the PEM itself, move that block into "
             f"{PRIVATE_KEY_FILE} (same directory, chmod 600) and replace it with "
@@ -555,7 +555,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
         else:
             _write_owner_only(
                 file,
-                "# MCUHome firmware signing key (ADR 0015 decision 8).\n"
+                "# MCUHome firmware signing key.\n"
                 f"# The private half of the project's MCUboot key pair lives next to\n"
                 f"# this file as {PRIVATE_KEY_FILE} and is referenced below. It never\n"
                 "# leaves this machine: never commit it, never copy it into a build\n"

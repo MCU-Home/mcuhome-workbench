@@ -91,7 +91,7 @@ def _check_scope_gates(config: RawConfig, errors: ErrorCollector) -> None:
                 '"coap:" is not implemented yet.',
                 location=network.coap,
                 hint=(
-                    "the CoAP maintenance channel is deferred (ADR 0010); Matter is the "
+                    "the CoAP maintenance channel is deferred; Matter is the "
                     "integration path today — remove the coap: section"
                 ),
             )

@@ -298,7 +298,7 @@ def plan_signing(
             f"The build manifest {manifest_path} describes a build that cannot be signed.",
             hint=(
                 "only images built for a board with an MCUboot update scheme "
-                "carry signing parameters (ADR 0015)."
+                "carry signing parameters."
             ),
         )
     parameters = SigningParameters.from_dict(block.get("arguments", {}))

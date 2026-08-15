@@ -133,6 +133,16 @@ pip install -e ../mcuhome-sdk/packaging/model \
             -e '.[remote]'
 pytest
 
+# Working on this repository ALONE (no sibling checkout): nothing is on
+# PyPI yet, so let pip pull the SDK-side distributions straight from
+# git — pip clones internally, you keep exactly one checkout.
+python3 -m venv .venv && . .venv/bin/activate
+pip install \
+  "mcuhome-model @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/model" \
+  "mcuhome-compiler @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/compiler" \
+  -e '.[remote]'
+pytest   # test_sessionclient.py skips itself without the build-server peer
+
 # The remote build method's own suite needs a live peer too (see above).
 git clone https://github.com/mcu-home/build-server ../build-server
 pip install -e ../build-server

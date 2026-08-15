@@ -64,12 +64,21 @@ def test_it_never_overwrites_a_device(tmp_path) -> None:
     assert (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY).read_text("utf-8") == before
 
 
-@pytest.mark.parametrize("name", ["Bench Node", "bench_node", "bench-", "-bench", "x" * 40])
+@pytest.mark.parametrize(
+    "name", ["Bench Node", "bench_node", "bench-", "-bench", "x" * 40, "1234", "1-2"]
+)
 def test_a_name_that_cannot_be_a_hostname_is_refused(tmp_path, name: str) -> None:
     init_project(tmp_path)
     with pytest.raises(ConfigError) as caught:
         scaffold.new_device(name, board=BOARD, cwd=tmp_path, env={})
     assert "usable device name" in caught.value.message
+
+
+def test_a_single_letter_name_is_allowed(tmp_path) -> None:
+    """The floor is non-empty plus one letter — no length minimum (PO 2026-08-15)."""
+    init_project(tmp_path)
+    scaffold.new_device("a", board=BOARD, cwd=tmp_path, env={})
+    assert (tmp_path / DEVICES_DIR / "a" / DEVICE_ENTRY).is_file()
 
 
 def test_an_unknown_board_lists_the_ones_that_exist(tmp_path) -> None:

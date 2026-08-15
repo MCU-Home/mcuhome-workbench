@@ -21,7 +21,7 @@
         "name": {
           "type": "string",
           "description": "Device name, lowercase letters, digits and dashes; it becomes the node's hostname.",
-          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "pattern": "^(?=[0-9-]*[a-z])[a-z0-9][a-z0-9-]*$",
           "maxLength": 32
         },
         "friendly_name": {
@@ -37,7 +37,7 @@
         },
         "version": {
           "type": "string",
-          "description": "Firmware version of this device, as SemVer. It becomes MCUboot's image version, the Matter SoftwareVersion a controller compares when deciding whether an update is newer, and the version in the .ota file. Defaults to 0.1.0; each field is at most 255 (ADR 0015 decision 9).",
+          "description": "Firmware version of this device, as SemVer. It becomes MCUboot's image version, the Matter SoftwareVersion a controller compares when deciding whether an update is newer, and the version in the .ota file. Defaults to 0.1.0; each field is at most 255.",
           "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"
         },
         "power": {
@@ -56,7 +56,7 @@
         },
         "blob_usage": {
           "type": "string",
-          "description": "Whether binary blobs may be integrated at all (ADR 0013).",
+          "description": "Whether binary blobs may be integrated at all.",
           "enum": [
             "auto",
             "none"
@@ -69,7 +69,7 @@
         },
         "blobs": {
           "type": "object",
-          "description": "Per-blob opt-in, by blob name (ADR 0013).",
+          "description": "Per-blob opt-in, by blob name.",
           "additionalProperties": {
             "enum": [
               "enabled",

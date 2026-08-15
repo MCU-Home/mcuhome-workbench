@@ -75,8 +75,9 @@ def _refuse_bad_name(name: str) -> ConfigError:
         f'"{name}" is not a usable device name.',
         hint=(
             f"use lowercase letters, digits and dashes, at most "
-            f"{schema.DEVICE_NAME_MAX} characters, not starting or ending with a "
-            "dash — the name becomes the device's folder and the node's hostname"
+            f"{schema.DEVICE_NAME_MAX} characters, at least one letter, not starting "
+            "or ending with a dash — the name becomes the device's folder and the "
+            "node's hostname"
         ),
     )
 

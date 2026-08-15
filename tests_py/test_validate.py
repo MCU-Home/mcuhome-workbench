@@ -37,7 +37,7 @@ def test_coap_is_gated(write_config) -> None:
     errors = expect_failure(write_config(text))
     error = find_error(errors, '"coap:" is not implemented yet')
     assert error.location.line == line_of(text, "coap:")
-    assert "deferred (ADR 0010)" in (error.hint or "")
+    assert "deferred" in (error.hint or "")
 
 
 def test_wifi_is_gated(write_config) -> None:
@@ -102,7 +102,7 @@ def test_enabling_a_blob_is_refused(write_config) -> None:
         'MCUHome cannot enable the "nordic-cc3xx" binary blob: no vendor blob is integrated yet.'
     )
     assert error.location.line == line_of(text, "nordic-cc3xx: enabled")
-    assert "ADR 0013" in (error.hint or "")
+    assert "blob support is still being evaluated" in (error.hint or "")
 
 
 def test_disabling_a_blob_is_accepted(write_config) -> None:

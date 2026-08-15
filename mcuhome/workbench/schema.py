@@ -65,7 +65,11 @@ def assign_endpoint_ids(node: RawNodeModel | None) -> dict[int, int]:
     }
 
 
-DEVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# The lookahead demands at least one letter: the name becomes the node's
+# bare hostname, and a digits-only name is indistinguishable from a
+# numeric IP address there ("http://1234/" addresses 0.0.4.210, not a
+# host called 1234).
+DEVICE_NAME_RE = re.compile(r"^(?=[0-9-]*[a-z])[a-z0-9][a-z0-9-]*$")
 DEVICE_NAME_MAX = 32
 
 _DURATION_UNITS = {
@@ -553,8 +557,8 @@ def _parse_device(reader: MapReader) -> RawDevice:
             location=reader.loc_of("name"),
             hint=(
                 f"use lowercase letters, digits and dashes, at most {DEVICE_NAME_MAX} "
-                "characters, not starting or ending with a dash — the name becomes the "
-                "node's hostname"
+                "characters, at least one letter, not starting or ending with a dash "
+                "— the name becomes the node's hostname"
             ),
         )
         name = None

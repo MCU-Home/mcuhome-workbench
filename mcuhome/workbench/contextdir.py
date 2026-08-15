@@ -276,7 +276,7 @@ def create_context(
             "The key given for the context is not an ECDSA P-256 public key in PEM form.",
             hint=(
                 "keys/signing.pub carries the public half of your MCUboot signing key "
-                "(ADR 0015 decision 8) — never the private half, which must never reach "
+                "— never the private half, which must never reach "
                 "a build. `mcuhome public-key` writes exactly this file."
             ),
         )

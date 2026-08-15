@@ -193,7 +193,7 @@ def config_json_schema() -> dict[str, Any]:
                         "controller compares when deciding whether an update is "
                         f"newer, and the version in the .ota file. Defaults to "
                         f"{ota.DEFAULT_VERSION}; each field is at most "
-                        f"{ota.VERSION_FIELD_MAX} (ADR 0015 decision 9).",
+                        f"{ota.VERSION_FIELD_MAX}.",
                         pattern=ota.VERSION_PATTERN,
                     ),
                     "power": {
@@ -208,7 +208,7 @@ def config_json_schema() -> dict[str, Any]:
                         },
                     },
                     "blob_usage": _string(
-                        "Whether binary blobs may be integrated at all (ADR 0013).",
+                        "Whether binary blobs may be integrated at all.",
                         enum=["auto", "none"],
                     ),
                     "zephyr_version": _string(
@@ -217,7 +217,7 @@ def config_json_schema() -> dict[str, Any]:
                     ),
                     "blobs": {
                         "type": "object",
-                        "description": "Per-blob opt-in, by blob name (ADR 0013).",
+                        "description": "Per-blob opt-in, by blob name.",
                         "additionalProperties": {"enum": ["enabled", "disabled", "auto"]},
                     },
                 },

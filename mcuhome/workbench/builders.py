@@ -164,7 +164,7 @@ def parse_builders(
                 location=location,
                 hint=(
                     "within one file every builder name is unique; two *files* may "
-                    "define the same name — the layer nearer the project wins (ADR 0023)"
+                    "define the same name — the layer nearer the project wins"
                 ),
             )
         seen[builder.name] = index
@@ -197,7 +197,7 @@ def _parse_entry(entry: dict, *, location: Location, origin: str, file: Path) ->
             hint=(
                 "the builder types are "
                 + ", ".join(BUILDER_TYPES)
-                + " (ADR 0023): local compiles in a build container on this machine, "
+                + ": local compiles in a build container on this machine, "
                 "local-dev in your own west workspace, and remote on a build server"
             ),
         )
@@ -222,7 +222,7 @@ def _typed(
                 f"a {builder.type} builder takes: "
                 + (", ".join((*required, *optional)) or "nothing beyond name and type")
                 + ". Credentials never go here — they live in "
-                f"secrets/build-server/{builder.name}.yaml (ADR 0023 §4)."
+                f"secrets/build-server/{builder.name}.yaml."
             ),
         )
     for key in required:
@@ -344,6 +344,6 @@ def _named(builders: Sequence[Builder], name: str, *, selector: str) -> Builder:
         hint=(
             f"builders configured on this machine: {known}. Define one under "
             "`builders:` in mcuhome.yaml (or your user/system configuration.yaml), "
-            "or build fully manually with --build-mode (ADR 0023)."
+            "or build fully manually with --build-mode."
         ),
     )

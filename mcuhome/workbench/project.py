@@ -86,7 +86,7 @@ MARKER_FILE = ".mcuhome-project-root"
 #: no configuration — see the module docstring for why the marker must
 #: never carry any.
 MARKER_CONTENT = (
-    "# This file marks the root of an MCUHome project (ADR 0022).\n"
+    "# This file marks the root of an MCUHome project.\n"
     "# Its presence is its meaning; configuration lives in mcuhome.yaml.\n"
 )
 
@@ -378,7 +378,7 @@ def check_secret_file(
                 f"a private key that others can read is compromised the moment it "
                 f"exists. Restrict it first:\n"
                 f"    chmod 600 {path}\n"
-                f"and keep the secrets directory itself at mode 700 (ADR 0022 §5)."
+                f"and keep the secrets directory itself at mode 700."
             ),
         )
     if on_warning is not None:
@@ -464,7 +464,7 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
     config = target / PROJECT_CONFIG_FILE
     if not config.is_file():
         config.write_text(
-            "# MCUHome project configuration (ADR 0022).\n"
+            "# MCUHome project configuration.\n"
             "# Options set here apply to this project and win over your user\n"
             "# and system configuration; the command line and MCUHOME_*\n"
             "# variables win over this file.\n",

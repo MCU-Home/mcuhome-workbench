@@ -570,7 +570,7 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         raise RemoteNotConfigured(
             "The remote build method needs the address of a build server, and none is set.",
             hint=(
-                "configure a builder once, or name the server outright (ADR 0023):\n"
+                "configure a builder once, or name the server outright:\n"
                 "    builders:                    # mcuhome.yaml, or your user/system\n"
                 "      - name: attic              # configuration.yaml\n"
                 "        type: remote\n"
@@ -592,15 +592,9 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
                 "The remote build method needs an SDK source to pin the build context "
                 "with, and none is configured.",
                 hint=(
-                    "the context states which MCUHome SDK package to build against — "
-                    "the version the build server resolves it by, and the sha256 it "
-                    "checks the bytes it found against (ADR 0018) — and that pin is "
-                    "resolved here, from your own source directories. Point at one "
-                    "with --sdk-sources <dir>, set MCUHOME_SDK_SOURCES, or put\n"
-                    "    sdk_sources:\n"
-                    "      - <dir>\n"
-                    "into your configuration (any layer, ADR 0022). An embedder that "
-                    "already holds a build context directory can pass it instead."
+                    "point at a directory holding an MCUHome SDK package:\n"
+                    "    mcuhome config set sdk_sources <dir> --user\n"
+                    "or pass --sdk-sources <dir> for a single build."
                 ),
             )
         # Off the event loop: this hashes nothing large, but it reads an

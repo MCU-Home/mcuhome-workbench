@@ -126,7 +126,7 @@ def resolve_version(
         raise BuildError(
             f'"{constraint}" is not a PEP 440 version constraint.',
             hint=(
-                "constraints are PEP 440 (ADR 0018): a compatible-release "
+                "constraints are PEP 440: a compatible-release "
                 '"~=2.3", a range ">=2.3.6,<3", or an exact pin "==2.3.6". '
                 "npm-style carets and tildes are not PEP 440."
             ),
@@ -305,17 +305,12 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
     """
     if not sources:
         raise BuildError(
-            "A build in a build container needs an SDK source, and none is configured.",
+            "The build needs the MCUHome SDK package, and no SDK source is configured.",
             hint=(
-                "MCUHome's own SDK travels into the build as a hash-pinned package "
-                "(ADR 0018), and the pin is resolved on this machine for every method "
-                "that uses a build container — the local one and a build server alike. "
-                "Point at a directory holding one with --sdk-sources <dir>, set\n"
-                "MCUHOME_SDK_SOURCES, or put\n"
-                "    sdk_sources:\n"
-                "      - <dir>\n"
-                "into your configuration (any layer, ADR 0022). A local-dev build "
-                "needs no SDK source."
+                "point at a directory holding one:\n"
+                "    mcuhome config set sdk_sources <dir> --user\n"
+                "or pass --sdk-sources <dir> for a single build. A local-dev build "
+                "(--build-mode local-dev) needs no SDK source."
             ),
         )
     searched: list[str] = []

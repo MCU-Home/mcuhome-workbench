@@ -295,12 +295,7 @@ def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> No
         )
     rendered = str(refusal.value)
     assert "--sdk-sources" in rendered
-    assert "MCUHOME_SDK_SOURCES" in rendered
-    assert "sdk_sources:" in rendered  # the configuration channel (ADR 0022)
-    # And it says what the pin is *for*, so the reader learns why a build
-    # server cannot supply it: the version resolves the package, the hash
-    # is what the bytes are checked against.
-    assert "sha256" in rendered
+    assert "sdk_sources" in rendered
 
 
 def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path, monkeypatch):
