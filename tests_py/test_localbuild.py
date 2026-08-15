@@ -391,7 +391,7 @@ def test_a_missing_image_refuses_before_a_container_starts(tmp_path, model, publ
             image=IMAGE,
             docker=Docker(runner=runner),
         )
-    assert "answers to" in caught.value.message
+    assert "is missing on this host" in caught.value.message
 
 
 def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
