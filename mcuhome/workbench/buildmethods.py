@@ -168,7 +168,7 @@ def resolve_method(name: str | None) -> str:
         hint=(
             "the build methods are "
             + ", ".join(METHODS)
-            + f" (ADR 0020 decision 6): {LOCAL} compiles in a build container on this "
+            + f": {LOCAL} compiles in a build container on this "
             f"machine, {LOCAL_DEV} in your own west workspace, and {REMOTE} on a build "
             "server"
         ),
@@ -203,6 +203,13 @@ class BuildRequest:
     mode: str = "clean"
     #: Where the build log goes, line by line, while it happens.
     on_line: LineSink | None = None
+    #: Called with a step key when the build enters a new step —
+    #: ``"context"`` when the build context is being created,
+    #: ``"compile"`` when the build environment starts compiling. The
+    #: honest-progress seam of cli ADR 0004: a caller renders steps it
+    #: was told about, never ones it guessed. Keys are append-only
+    #: vocabulary; consumers ignore keys they do not know.
+    on_step: Callable[[str], None] | None = None
     #: Scratch area a method may own. Defaults to a hidden directory
     #: under :attr:`out_dir`, which is what a command line wants: rebuilt
     #: every run, thrown away with the build directory.
@@ -384,6 +391,7 @@ def compose_local_build(
     mode: str = "clean",
     created: datetime | None = None,
     on_line: Any = None,
+    on_step: Any = None,
     docker: Any = None,
 ):
     """The ``local`` method's composition: resolve, create, lock, drive.
@@ -406,6 +414,8 @@ def compose_local_build(
     )
     work_root = Path(work_root)
     context_dir = work_root / "context"
+    if on_step is not None:
+        on_step("context")
     # The pin resolution and the context layout are the workbench's, and
     # deliberately the same call the `remote` method makes (E65): what a
     # context is does not depend on which build method sends it anywhere.
@@ -424,6 +434,8 @@ def compose_local_build(
         # a digest that looks as if they were.
         container=ContainerResolution.from_reference(resolved.reference, digest=resolved.digest),
     )
+    if on_step is not None:
+        on_step("compile")
     return localbuild.run_locked_build(
         context_dir,
         image=resolved.reference,
@@ -456,6 +468,7 @@ async def _run_local(request: BuildRequest) -> BuildOutcome:
         jobs=request.jobs,
         mode=request.mode,
         on_line=request.on_line,
+        on_step=request.on_step,
     )
     outcome = result.outcome
     return BuildOutcome(
@@ -490,6 +503,17 @@ async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
                 "the caller knows either of them"
             ),
         )
+
+    def announce_and_step(plan: Any) -> None:
+        # The plan callback fires after every pre-flight refusal and
+        # immediately before west runs — which makes it exactly the
+        # moment the build enters its compile step, so the method emits
+        # the step itself rather than leaving a caller to guess it.
+        if request.on_plan is not None:
+            request.on_plan(plan)
+        if request.on_step is not None:
+            request.on_step("compile")
+
     result = await asyncio.to_thread(
         devbuild.run_dev_build,
         request.model,
@@ -501,7 +525,7 @@ async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
         jobs=request.jobs,
         snippets=tuple(request.snippets),
         bootloader_snippets=tuple(request.bootloader_snippets),
-        on_plan=request.on_plan,
+        on_plan=announce_and_step,
         stream=request.stream,
     )
     return BuildOutcome(
@@ -597,6 +621,8 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
                     "or pass --sdk-sources <dir> for a single build."
                 ),
             )
+        if request.on_step is not None:
+            request.on_step("context")
         # Off the event loop: this hashes nothing large, but it reads an
         # index, writes the model and the key, and copies the patch set —
         # filesystem work with no await in it, in a method whose whole
@@ -605,6 +631,8 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
 
     from mcuhome.workbench import sessionclient
 
+    if request.on_step is not None:
+        request.on_step("compile")
     result = await sessionclient.run_remote_build(
         context_dir,
         url=request.server,

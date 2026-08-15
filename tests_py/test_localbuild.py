@@ -316,6 +316,28 @@ def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model
     assert {a.role for a in result.outcome.artifacts} == {"firmware", "report"}
 
 
+def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
+    """``context`` before one exists, ``compile`` before the drive.
+
+    The honest-progress seam of cli ADR 0004: a caller renders steps it
+    was told about, and these two are the ones this composition owns.
+    """
+    make_sdk_source(tmp_path / "src")
+    steps: list[str] = []
+    result = buildmethods.compose_local_build(
+        model,
+        signing_pub=public_pem,
+        sdk_sources=(tmp_path / "src",),
+        work_root=tmp_path / "wr",
+        env={},
+        image=IMAGE,
+        on_step=steps.append,
+        docker=Docker(runner=_seam()),
+    )
+    assert result.outcome.successful
+    assert steps == ["context", "compile"]
+
+
 # --------------------------------------------------------------------------
 # E55: the private key is never passed, never mounted, never in an argv
 # --------------------------------------------------------------------------
