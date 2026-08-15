@@ -58,14 +58,14 @@ def _refuse_unknown_board(board: str) -> ConfigError:
     if planned is not None:
         return ConfigError(
             f'MCUHome does not support the board "{board}" yet: {planned}.',
-            hint=f"boards MCUHome supports today: {known}",
+            hint=f"boards MCUHome supports today: {known} — mcuhome device boards lists them",
         )
     return ConfigError(
         f'"{board}" is not a board MCUHome knows.',
         hint=(
             f"use one of the boards MCUHome supports today: {known}\n"
-            "The board name is the Zephyr board target, verbatim, "
-            "qualifiers included."
+            "The board name is the Zephyr board target, verbatim, qualifiers "
+            "included; mcuhome device boards lists the supported and planned ones."
         ),
     )
 
@@ -193,11 +193,14 @@ def new_device(
 ) -> NewDevice:
     """Create ``devices/<name>/main.yaml``, or refuse and change nothing.
 
-    Refusals come first and cover the four ways this goes wrong: a name
-    that cannot become a folder and a hostname, a board nobody has
-    brought up, no project to create the device in, and a device that
+    Refusals come first and cover the four ways this goes wrong: no
+    project to create the device in, a name that cannot become a folder
+    and a hostname, a board nobody has brought up, and a device that
     already exists — the last one loudly, because overwriting somebody's
-    configuration is not a scaffold's business.
+    configuration is not a scaffold's business. The project is resolved
+    *first* (PO 2026-08-15): "where am I working" is answered before
+    the work itself is judged, so a user outside any project hears that
+    once, not after every corrected argument.
 
     The project comes from :func:`mcuhome.workbench.project.resolve_project`'s
     ladder, and outside any project that resolver's refusal already
@@ -210,14 +213,14 @@ def new_device(
     the reason :func:`mcuhome.workbench.project.resolve_project` gives —
     doubly so here, because this function creates directories.
     """
+    project = resolve_project(project_dir, env=env, cwd=cwd)
+
     if not schema.DEVICE_NAME_RE.match(name) or name.endswith("-"):
         raise _refuse_bad_name(name)
     if len(name) > schema.DEVICE_NAME_MAX:
         raise _refuse_bad_name(name)
     if board not in registry.BOARDS:
         raise _refuse_unknown_board(board)
-
-    project = resolve_project(project_dir, env=env, cwd=cwd)
 
     entry = project.device_entry(name)
     if entry.exists():

@@ -173,3 +173,14 @@ def test_new_device_writes_the_friendly_name_through(tmp_path) -> None:
         friendly_name="Workbench Node",
     )
     assert 'friendly_name: "Workbench Node"' in created.entry.read_text(encoding="utf-8")
+
+
+def test_outside_a_project_the_missing_project_is_the_first_refusal(tmp_path) -> None:
+    """PO 2026-08-15: "where am I working" is judged before the arguments.
+
+    Outside any project, a bad name or an unknown board must not talk
+    first — the user would fix the argument and only then hear that
+    there is no project here at all.
+    """
+    with pytest.raises(ConfigError, match="No MCUHome project found here"):
+        scaffold.new_device("UPPERCASE", board="nrf99dk", cwd=tmp_path, env={})

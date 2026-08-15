@@ -529,7 +529,7 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
 
 
 def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem):
-    """A ``--image localhost/…`` names no pinnable bytes; the build proceeds.
+    """A ``--container-image localhost/…`` names no pinnable bytes; the build proceeds.
 
     ``docker image inspect`` reports no ``RepoDigests``, and under context
     format 2 the manifest records exactly that — ``digest: null`` — rather
