@@ -570,6 +570,13 @@ later client work:
   and a document with no consumer is what the workspace hygiene rule
   forbids. The slot is recorded here in case freshness in hours is ever
   needed.
+- **The host's browsable page verifies nothing, and says so.** A page
+  served by a source's host can attest to nothing about that host: one
+  serving a modified package would serve a matching hash and that very
+  page, with the check removed. So the inspection view is labelled as
+  such, every download from it passes a warning, and its wording avoids
+  anything that reads as a promise — the trust anchor lives in the tool
+  precisely because a web page has nowhere to keep one.
 - **No compressed index sibling** (§2).
 - **No deletion of content, ever** — no package, no index entry, no
   superseded key set. Unreferenced superseded *part files* are the one
