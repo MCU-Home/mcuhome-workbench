@@ -74,7 +74,13 @@ Homepage = "https://github.com/mcu-home/mcuhome"
 Issues = "https://github.com/mcu-home/mcuhome/issues"
 
 [tool.setuptools]
-packages = ["mcuhome.workbench"]
+# Enumerated, not discovered: `mcuhome` is a PEP 420 namespace shared
+# with the SDK's distributions, and find_packages() there would claim
+# directories this distribution does not own. Every subpackage added
+# under mcuhome/workbench/ has to be listed here —
+# tests_py/test_packaging_workbench.py fails when one is missing, which
+# is cheaper than a wheel that installs without it.
+packages = ["mcuhome.workbench", "mcuhome.workbench.migrations"]
 
 [tool.ruff]
 line-length = 100

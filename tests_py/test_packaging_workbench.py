@@ -93,6 +93,28 @@ def test_the_project_file_is_the_root_one_and_there_is_no_packaging_directory() 
     )
 
 
+def test_every_subpackage_is_in_the_wheel() -> None:
+    """A directory that ships nowhere is worse than one that does not exist.
+
+    ``[tool.setuptools] packages`` is an explicit list, because ``mcuhome``
+    is a PEP 420 namespace shared with the SDK's distributions and
+    discovery there would claim directories this distribution does not
+    own. The cost of "explicit" is that a new subpackage can be forgotten
+    — and a wheel missing one installs cleanly and fails at import, on
+    somebody else's machine. This is that check, on ours.
+    """
+    declared = set(_project()["tool"]["setuptools"]["packages"])
+    present = {
+        f"{NAMESPACE}.workbench" + "".join(f".{part}" for part in path.relative_to(root).parts[:-1])
+        for root in [NAMESPACE_DIR / "workbench"]
+        for path in root.rglob("__init__.py")
+    }
+    assert present <= declared, f"not in the wheel: {sorted(present - declared)}"
+    assert declared <= present | {f"{NAMESPACE}.workbench"}, (
+        f"declared but not in the tree: {sorted(declared - present)}"
+    )
+
+
 def test_the_distribution_and_the_package_carry_one_version() -> None:
     """Two literals, and they have to agree.
 
@@ -120,15 +142,19 @@ def test_it_ships_exactly_the_workbench_subpackage() -> None:
     """The tree and the project file say the same one thing.
 
     Both halves are needed. A project file naming a second subpackage
-    would ship files this repository does not have; a second subpackage
-    appearing in the tree — a stray ``mcuhome/model/`` restored from a
-    stale checkout, say — would ship in no wheel *and* shadow the
-    installed distribution of that name, because a directory under a PEP
-    420 namespace is a portion of it whether or not anybody meant it to
-    be.
+    *of the namespace* would ship files this repository does not have; a
+    second subpackage appearing in the tree — a stray ``mcuhome/model/``
+    restored from a stale checkout, say — would ship in no wheel *and*
+    shadow the installed distribution of that name, because a directory
+    under a PEP 420 namespace is a portion of it whether or not anybody
+    meant it to be. Packages *inside* ``mcuhome.workbench`` are this
+    distribution's own business and are checked by
+    :func:`test_every_subpackage_is_in_the_wheel` instead.
     """
     packages = _project()["tool"]["setuptools"]["packages"]
-    assert packages == [PACKAGE]
+    assert {name.partition(".")[2].partition(".")[0] for name in packages} == {
+        PACKAGE.rpartition(".")[2]
+    }
     assert list(PACKAGES) == [PACKAGE]
     assert {path.name for path in NAMESPACE_DIR.iterdir() if path.is_dir()} - {"__pycache__"} == {
         PACKAGE.rpartition(".")[2]
