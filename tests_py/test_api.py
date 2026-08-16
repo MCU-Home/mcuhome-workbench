@@ -93,6 +93,47 @@ def test_the_build_methods_are_part_of_the_surface() -> None:
         assert getattr(api, name) is getattr(buildmethods, name), name
 
 
+def test_creating_a_device_is_part_of_the_surface() -> None:
+    """An embedder scaffolds through the API, not through a module.
+
+    The command line reaches into :mod:`mcuhome.workbench.scaffold` and
+    :mod:`mcuhome.workbench.provision` directly and is version-locked, so
+    it may; a second embedder — the dashboard's new-device wizard — would
+    be importing an implementation detail. Same objects, re-exported.
+    """
+    from mcuhome.workbench import provision, scaffold
+
+    for name in (
+        "new_device",
+        "render_starter",
+        "NewDevice",
+        "DeviceOutline",
+        "BusChoice",
+        "PeripheralChoice",
+        "ClusterChoice",
+        "EndpointChoice",
+    ):
+        assert name in api.__all__, name
+        assert getattr(api, name) is getattr(scaffold, name), name
+
+    for name in ("init_pairing", "PairingResult"):
+        assert name in api.__all__, name
+        assert getattr(api, name) is getattr(provision, name), name
+
+
+def test_the_two_init_results_are_not_the_same_thing() -> None:
+    """One name for one thing: starting a project, drawing credentials.
+
+    Both modules called their result ``InitResult`` while they were
+    apart, and both belong on one surface now. The pairing one is
+    ``PairingResult`` there — a caller reading ``InitResult`` in a
+    traceback should not have to work out which of two operations it
+    came from.
+    """
+    assert api.InitResult is not api.PairingResult
+    assert not hasattr(api.PairingResult, "created")
+
+
 def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG, "utf-8")

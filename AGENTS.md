@@ -71,7 +71,13 @@ the declared option registry), `load_model`/`read_model`
 (the same stages, returning **every** problem instead of raising on the
 first), `error_dicts` (those errors as plain dicts: message, file, line,
 column, key, hint, kind), `registry_data`/`config_json_schema` (hardware
-and Matter knowledge, and the `main.yaml` schema, as data), and
+and Matter knowledge, and the `main.yaml` schema, as data),
+`new_device`/`render_starter`/`DeviceOutline` (a device's first
+`main.yaml` — written, or returned as text so a caller can show it
+before anything exists; given an outline of buses, peripherals and
+endpoints it writes those as real sections instead of the commented
+example), `init_pairing`/`PairingResult` (draw a device's commissioning
+credentials, once), and
 `read_manifest`. `run_build`/`BuildRequest`/`BuildOutcome` are the three
 build methods behind one awaitable call (E64); `resolve_method` turns a
 name — a CLI `--method`, `MCUHOME_BUILD_METHOD`, or nothing — into one of

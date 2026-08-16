@@ -448,11 +448,28 @@ def _check_salt(value: str | None, matter: RawMatter, device: str, errors: Error
 # --------------------------------------------------------------------------
 
 
+def _example_controller(config: RawConfig) -> str:
+    """A node label from *this* board, for a hint that shows one.
+
+    The board's own row is the authority (``BoardBusDef``), so a hint
+    naming a controller names one the reader's board actually has. A
+    configuration whose board is missing or unknown has a different
+    error already; it gets the reference board's label rather than no
+    example at all.
+    """
+    board = None if config.device is None else registry.BOARDS.get(config.device.board or "")
+    buses = board.buses if board is not None else ()
+    if not buses:
+        buses = next((entry.buses for entry in registry.BOARDS.values() if entry.buses), ())
+    return buses[0].controller if buses else "arduino_i2c"
+
+
 def _check_hardware(config: RawConfig, errors: ErrorCollector) -> None:
     hardware = config.hardware
     if hardware is None:
         return
 
+    controller = _example_controller(config)
     for bus in hardware.buses.values():
         if bus.sda is not None or bus.scl is not None:
             errors.add(
@@ -461,14 +478,14 @@ def _check_hardware(config: RawConfig, errors: ErrorCollector) -> None:
                 hint=(
                     "MCUHome can use a bus the board already routes, but cannot re-assign "
                     "pins yet — name the board's bus node instead:\n"
-                    f"    {bus.id}:\n      controller: arduino_i2c"
+                    f"    {bus.id}:\n      controller: {controller}"
                 ),
             )
         elif bus.controller is None:
             errors.add(
                 f'The bus "{bus.id}" does not say which bus of the board it is.',
                 location=bus.loc,
-                hint=(f"name the board's bus node:\n    {bus.id}:\n      controller: arduino_i2c"),
+                hint=(f"name the board's bus node:\n    {bus.id}:\n      controller: {controller}"),
             )
 
     for peripheral in hardware.peripherals.values():

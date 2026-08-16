@@ -39,7 +39,7 @@ FIXED = pairing.Pairing(
 WITHOUT_CREDENTIALS = VALID_CONFIG.replace("    use_test_pairing: true\n", "")
 
 
-def _init(path: Path, **kwargs) -> provision.InitResult:
+def _init(path: Path, **kwargs) -> provision.PairingResult:
     return provision.init_pairing(
         path, secrets_file=path.parent / "secrets" / "main.yaml", draw=lambda: FIXED, **kwargs
     )

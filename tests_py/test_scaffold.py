@@ -184,6 +184,220 @@ def test_new_device_writes_the_friendly_name_through(tmp_path) -> None:
     assert 'friendly_name: "Workbench Node"' in created.entry.read_text(encoding="utf-8")
 
 
+# --------------------------------------------------------------------------
+# An outline: what a caller already knows
+# --------------------------------------------------------------------------
+
+
+def _outline() -> scaffold.DeviceOutline:
+    """The reference device, expressed as a caller's picks.
+
+    Built from the registry rather than from literals, so it describes
+    whatever MCUHome supports on the day it runs.
+    """
+    driver = next(iter(registry.DRIVERS.values()))
+    bus = next(entry for entry in registry.BOARDS[BOARD].buses if entry.kind == driver.bus)
+    clusters = [
+        (cluster, channel)
+        for cluster in registry.CLUSTERS.values()
+        for channel in driver.channels.values()
+        if channel.quantity == cluster.quantity
+    ]
+    endpoints = tuple(
+        scaffold.EndpointChoice(
+            device_type=next(
+                entry.name
+                for entry in registry.DEVICE_TYPES.values()
+                if entry.mandatory_clusters == (cluster.name,)
+            ),
+            clusters=(
+                scaffold.ClusterChoice(cluster=cluster.name, source=f"probe.{channel.name}"),
+            ),
+        )
+        for cluster, channel in clusters
+    )
+    return scaffold.DeviceOutline(
+        buses=(scaffold.BusChoice(id="i2c0", controller=bus.controller),),
+        peripherals=(scaffold.PeripheralChoice(id="probe", driver=driver.compatible, bus="i2c0"),),
+        endpoints=endpoints,
+    )
+
+
+def test_an_outline_is_written_as_configuration_and_not_as_an_example() -> None:
+    text = scaffold.render_starter("bench-node", board=BOARD, outline=_outline())
+    assert "hardware:" in text and "# hardware:" not in text
+    assert "node:" in text and "# node:" not in text
+    assert "  peripherals:" in text
+    assert "    - id: 1" in text
+
+
+def test_an_empty_outline_is_the_same_as_none() -> None:
+    """A caller that collected nothing gets the command line's file."""
+    plain = scaffold.render_starter("bench-node", board=BOARD)
+    empty = scaffold.render_starter("bench-node", board=BOARD, outline=scaffold.DeviceOutline())
+    assert empty == plain
+
+
+def test_a_device_scaffolded_from_an_outline_validates(tmp_path) -> None:
+    """The test that makes the outline worth having.
+
+    A wizard that writes something the next command rejects has helped
+    nobody, so this walks the whole way: pick, scaffold, draw
+    credentials, resolve. Nothing is edited in between.
+    """
+    init_project(tmp_path)
+    created = scaffold.new_device(
+        "bench-node", board=BOARD, cwd=tmp_path, env={}, outline=_outline()
+    )
+    provision.init_pairing(created.entry, secrets_file=created.project.secrets_file)
+
+    result = validate_device(created.entry, project=created.project)
+    assert result.ok, [error.message for error in result.errors]
+
+    model = load_model(created.entry, project=created.project)
+    assert [[entry.name for entry in endpoint.device_types] for endpoint in model.endpoints] == [
+        [endpoint.device_type] for endpoint in _outline().endpoints
+    ]
+    assert model.channels, "the peripheral's channels reached the model"
+
+
+def test_an_optional_value_is_written_only_when_it_was_chosen() -> None:
+    """An explicit copy of a default is a value nobody picked."""
+    driver = next(iter(registry.DRIVERS.values()))
+    bare = scaffold.render_starter(
+        "bench-node",
+        board=BOARD,
+        outline=scaffold.DeviceOutline(
+            peripherals=(scaffold.PeripheralChoice(id="probe", driver=driver.compatible),)
+        ),
+    )
+    assert "address:" not in bare
+    assert "bus:" not in bare
+    assert "sampling:" not in bare
+
+    chosen = scaffold.render_starter(
+        "bench-node",
+        board=BOARD,
+        outline=scaffold.DeviceOutline(
+            peripherals=(
+                scaffold.PeripheralChoice(id="probe", driver=driver.compatible, address=0x77),
+            )
+        ),
+    )
+    assert "      address: 0x77" in chosen
+
+
+def test_an_outline_naming_a_driver_nobody_supports_is_refused() -> None:
+    with pytest.raises(ConfigError) as caught:
+        scaffold.render_starter(
+            "bench-node",
+            board=BOARD,
+            outline=scaffold.DeviceOutline(
+                peripherals=(scaffold.PeripheralChoice(id="probe", driver="acme,nonesuch"),)
+            ),
+        )
+    assert "not a driver MCUHome knows" in caught.value.message
+    assert next(iter(registry.DRIVERS)) in (caught.value.hint or "")
+
+
+def test_a_planned_driver_says_why_it_is_not_there_yet() -> None:
+    name, reason = next(iter(registry.PLANNED_DRIVERS.items()))
+    with pytest.raises(ConfigError) as caught:
+        scaffold.render_starter(
+            "bench-node",
+            board=BOARD,
+            outline=scaffold.DeviceOutline(
+                peripherals=(scaffold.PeripheralChoice(id="probe", driver=name),)
+            ),
+        )
+    assert reason in caught.value.message
+
+
+def test_a_source_pointing_at_nothing_is_refused_before_a_file_exists(tmp_path) -> None:
+    """The check runs before the folder is touched, so a refusal leaves nothing."""
+    init_project(tmp_path)
+    driver = next(iter(registry.DRIVERS.values()))
+    cluster = next(iter(registry.CLUSTERS.values()))
+    device_type = next(
+        entry.name
+        for entry in registry.DEVICE_TYPES.values()
+        if cluster.name in entry.mandatory_clusters
+    )
+    with pytest.raises(ConfigError) as caught:
+        scaffold.new_device(
+            "bench-node",
+            board=BOARD,
+            cwd=tmp_path,
+            env={},
+            outline=scaffold.DeviceOutline(
+                peripherals=(scaffold.PeripheralChoice(id="probe", driver=driver.compatible),),
+                endpoints=(
+                    scaffold.EndpointChoice(
+                        device_type=device_type,
+                        clusters=(
+                            scaffold.ClusterChoice(cluster=cluster.name, source="typo.temperature"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    assert "no peripheral called" in caught.value.message
+    assert not (tmp_path / DEVICES_DIR / "bench-node").exists()
+
+
+def test_a_channel_the_part_does_not_have_is_refused() -> None:
+    driver = next(iter(registry.DRIVERS.values()))
+    cluster = next(iter(registry.CLUSTERS.values()))
+    device_type = next(
+        entry.name
+        for entry in registry.DEVICE_TYPES.values()
+        if cluster.name in entry.mandatory_clusters
+    )
+    with pytest.raises(ConfigError) as caught:
+        scaffold.render_starter(
+            "bench-node",
+            board=BOARD,
+            outline=scaffold.DeviceOutline(
+                peripherals=(scaffold.PeripheralChoice(id="probe", driver=driver.compatible),),
+                endpoints=(
+                    scaffold.EndpointChoice(
+                        device_type=device_type,
+                        clusters=(
+                            scaffold.ClusterChoice(cluster=cluster.name, source="probe.nonesuch"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    assert "no channel called" in caught.value.message
+    assert next(iter(driver.channels)) in (caught.value.hint or "")
+
+
+def test_a_peripheral_on_a_bus_the_outline_never_described_is_refused() -> None:
+    driver = next(iter(registry.DRIVERS.values()))
+    with pytest.raises(ConfigError) as caught:
+        scaffold.render_starter(
+            "bench-node",
+            board=BOARD,
+            outline=scaffold.DeviceOutline(
+                peripherals=(
+                    scaffold.PeripheralChoice(id="probe", driver=driver.compatible, bus="i2c0"),
+                )
+            ),
+        )
+    assert "which the outline does not describe" in caught.value.message
+
+
+def test_the_commented_example_names_a_bus_the_board_actually_has() -> None:
+    """The example is looked up, not typed — a renamed node label follows it."""
+    board = registry.BOARDS[BOARD]
+    driver = next(iter(registry.DRIVERS.values()))
+    bus = next(entry for entry in board.buses if entry.kind == driver.bus)
+    assert f"#       controller: {bus.controller}" in scaffold.render_starter(
+        "bench-node", board=BOARD
+    )
+
+
 def test_outside_a_project_the_missing_project_is_the_first_refusal(tmp_path) -> None:
     """PO 2026-08-15: "where am I working" is judged before the arguments.
 

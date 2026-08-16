@@ -51,7 +51,7 @@ from ruamel.yaml import YAML
 from mcuhome.workbench.loader import device_secrets_file, load_yaml_file
 from mcuhome.workbench.validate import PAIRING_KEYS
 
-__all__ = ["CREDENTIAL_COMMENT", "InitResult", "init_pairing", "secret_names"]
+__all__ = ["CREDENTIAL_COMMENT", "PairingResult", "init_pairing", "secret_names"]
 
 #: Written above the credentials, and recognized again when ``--force``
 #: replaces them so that repeated runs do not stack up comment blocks.
@@ -70,7 +70,7 @@ _KNOWN_COMMENT_LINES = frozenset(CREDENTIAL_COMMENT) | {
 
 
 @dataclass(frozen=True)
-class InitResult:
+class PairingResult:
     """What ``matter-pairing --new`` wrote, and where."""
 
     entry: Path
@@ -261,7 +261,7 @@ def init_pairing(
     secrets_file: Path,
     force: bool = False,
     draw: Callable[[], pairing.Pairing] = pairing.random_pairing,
-) -> InitResult:
+) -> PairingResult:
     """Write fresh commissioning credentials for the configuration *entry*.
 
     *secrets_file* is the project's **main** secrets file; the values
@@ -307,7 +307,7 @@ def init_pairing(
     text.lines[after_line:after_line] = _credential_lines(anchor, names)
     entry.write_text(text.render(), encoding="utf-8")
 
-    return InitResult(
+    return PairingResult(
         entry=entry,
         secrets_file=device_file,
         pairing=credentials,

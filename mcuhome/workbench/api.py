@@ -49,6 +49,20 @@ What is here, in the order a caller needs it:
     the configured ``default_builder``, or the built-in ``local``
     fallback — credentials from ``secrets/build-server/<name>.yaml``
     included.
+``new_device`` / ``render_starter`` / ``DeviceOutline``
+    A device's first ``main.yaml``. ``render_starter`` is pure — it
+    returns the text — so a caller can show it before anything is
+    written; ``new_device`` writes it, refusing rather than overwriting.
+    Given a ``DeviceOutline`` (buses, peripherals, endpoints) both write
+    those as real sections instead of the commented example, which is
+    what a form that walked somebody through ``registry_data`` has to
+    offer.
+``init_pairing`` / ``PairingResult``
+    Draw a device's commissioning credentials, once: ``!secret``
+    references into ``main.yaml``, the values into the device's own
+    secrets file. The one place randomness enters a configuration, and
+    the reason a build is reproducible — so it is a command a user
+    gives, never a step something else takes on the way past.
 ``load_model``
     Stages 1-3 on one device, raising on the first thing that is wrong.
 ``read_model``
@@ -187,7 +201,18 @@ from mcuhome.workbench.projectupgrade import (
     running_builds,
     upgrade_session,
 )
+from mcuhome.workbench.provision import PairingResult, init_pairing
 from mcuhome.workbench.resolve import resolve
+from mcuhome.workbench.scaffold import (
+    BusChoice,
+    ClusterChoice,
+    DeviceOutline,
+    EndpointChoice,
+    NewDevice,
+    PeripheralChoice,
+    new_device,
+    render_starter,
+)
 from mcuhome.workbench.schema import parse_config
 from mcuhome.workbench.validate import validate
 
@@ -216,10 +241,14 @@ __all__ = [
     "BuildDirectoryBusy",
     "BuildOutcome",
     "BuildRequest",
+    "BusChoice",
     "Builder",
     "ConfigError",
+    "ClusterChoice",
     "ConfigErrorGroup",
     "DeviceModel",
+    "DeviceOutline",
+    "EndpointChoice",
     "GenerationError",
     "InitResult",
     "Location",
@@ -227,7 +256,10 @@ __all__ = [
     "MethodUnavailable",
     "Migration",
     "MigrationFailed",
+    "NewDevice",
     "Option",
+    "PairingResult",
+    "PeripheralChoice",
     "Project",
     "ProjectFile",
     "ProjectFileError",
@@ -247,15 +279,18 @@ __all__ = [
     "config_json_schema",
     "error_dicts",
     "find_device",
+    "init_pairing",
     "find_project_root",
     "init_project",
     "is_project_root",
     "is_upgrading",
     "load_model",
+    "new_device",
     "project_at",
     "read_manifest",
     "read_model",
     "registry_data",
+    "render_starter",
     "resolve_builder",
     "resolve_method",
     "resolve_project",
