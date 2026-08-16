@@ -25,7 +25,22 @@ What is here, in the order a caller needs it:
 ``resolve_project`` / ``init_project`` / ``find_device``
     Where the user's work lives (the ``.mcuhome-project-root`` marker
     and its bootstrap ladder, ADR 0022), how a project comes into
-    being, and which file is a given device's.
+    being, and which file is a given device's. Resolution also enforces
+    the project's **layout version**: a project older than
+    ``PROJECT_VERSION`` is refused with ``ProjectUpgradeRequired``, a
+    newer one with ``ProjectVersionUnsupported``, and one whose file an
+    upgrade has renamed with ``UpgradeInProgress`` or
+    ``UpgradeInterrupted`` — the four states a caller renders
+    differently. ``resolve_project(..., require_version=False)`` is for
+    the one caller that exists to fix the first of them.
+``upgrade_session`` / ``UpgradeResult`` / ``Migration``
+    Upgrading a project to the current layout. The session renames the
+    project file for the whole run — so nothing else can start work on a
+    project being rewritten — answers which build directories are still
+    busy (``running_builds``), and applies the migrations of
+    ``mcuhome.workbench.migrations`` in order. A caller drives the three
+    apart on purpose: take the project, wait for what is still running,
+    *then* ask the user, then apply.
 ``resolve_settings``
     The five-layer configuration model over the declared option
     registry (``OPTIONS``), each value with the layer it came from.
@@ -135,19 +150,42 @@ from mcuhome.workbench.configuration import (
     unset_config_value,
 )
 from mcuhome.workbench.loader import load_config
+from mcuhome.workbench.migrations import Migration
+from mcuhome.workbench.migrations import plan_for as upgrade_plan
 from mcuhome.workbench.project import (
+    BUILD_DIR,
     DEVICE_ENTRY,
     DEVICES_DIR,
     MARKER_FILE,
     PROJECT_CONFIG_FILE,
     PROJECT_DIR_VAR,
+    PROJECT_VERSION,
     InitResult,
     Project,
     find_project_root,
     init_project,
     is_project_root,
+    is_upgrading,
+    project_at,
     resolve_device,
     resolve_project,
+)
+from mcuhome.workbench.projectfile import (
+    UPGRADE_FILE,
+    ProjectFile,
+    ProjectFileError,
+    ProjectUpgradeRequired,
+    ProjectVersionUnsupported,
+)
+from mcuhome.workbench.projectupgrade import (
+    MigrationFailed,
+    RunningBuild,
+    UpgradeInProgress,
+    UpgradeInterrupted,
+    UpgradeResult,
+    UpgradeSession,
+    running_builds,
+    upgrade_session,
 )
 from mcuhome.workbench.resolve import resolve
 from mcuhome.workbench.schema import parse_config
@@ -155,6 +193,7 @@ from mcuhome.workbench.validate import validate
 
 __all__ = [
     "BUILDER_TYPES",
+    "BUILD_DIR",
     "CONFIG_FILE",
     "CONFIG_SCOPES",
     "DEFAULT_METHOD",
@@ -169,7 +208,9 @@ __all__ = [
     "OPTIONS",
     "PROJECT_CONFIG_FILE",
     "PROJECT_DIR_VAR",
+    "PROJECT_VERSION",
     "REMOTE",
+    "UPGRADE_FILE",
     "VERSION",
     "BuildError",
     "BuildDirectoryBusy",
@@ -184,13 +225,24 @@ __all__ = [
     "Location",
     "MCUHomeError",
     "MethodUnavailable",
+    "Migration",
+    "MigrationFailed",
     "Option",
     "Project",
+    "ProjectFile",
+    "ProjectFileError",
+    "ProjectUpgradeRequired",
+    "ProjectVersionUnsupported",
     "RemoteNotConfigured",
+    "RunningBuild",
     "SelectedBuilder",
     "Setting",
     "Settings",
     "UnknownMethod",
+    "UpgradeInProgress",
+    "UpgradeInterrupted",
+    "UpgradeResult",
+    "UpgradeSession",
     "ValidationResult",
     "config_json_schema",
     "error_dicts",
@@ -198,7 +250,9 @@ __all__ = [
     "find_project_root",
     "init_project",
     "is_project_root",
+    "is_upgrading",
     "load_model",
+    "project_at",
     "read_manifest",
     "read_model",
     "registry_data",
@@ -208,9 +262,12 @@ __all__ = [
     "resolve_settings",
     "build_lock",
     "run_build",
+    "running_builds",
     "scope_config_file",
     "set_config_value",
     "unset_config_value",
+    "upgrade_plan",
+    "upgrade_session",
     "validate_device",
 ]
 

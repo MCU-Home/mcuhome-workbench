@@ -63,7 +63,7 @@ def test_no_project_and_no_override_is_a_refusal_in_words(tmp_path: Path) -> Non
     hint = caught.value.hint or ""
     assert "secrets/firmware/mcuboot.yaml" in hint
     assert FIRMWARE_KEY in hint
-    assert "mcuhome init" in hint
+    assert "mcuhome project init" in hint
     assert "--signing-key" in hint
     assert KEY_VAR in hint
 

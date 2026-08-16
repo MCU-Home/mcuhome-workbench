@@ -32,7 +32,7 @@ so a bare `pytest` from the repo root does the right thing.
 
 | File | Covers |
 |---|---|
-| `test_project.py` | the project marker and its bootstrap ladder, layout, `mcuhome init`, secrets hygiene, device resolution (name, folder, bare file) |
+| `test_project.py` | the project marker and its bootstrap ladder, layout, `mcuhome project init`, secrets hygiene, device resolution (name, folder, bare file) |
 | `test_configuration.py` | the five-layer option model: precedence, origins, per-option channels, `config print` data |
 | `test_builders.py` | named builders (ADR 0023): parsing, merge-by-name, selection, credentials |
 | `test_loader.py` | YAML parsing, `!secret` and `!file` resolution, including their error messages |

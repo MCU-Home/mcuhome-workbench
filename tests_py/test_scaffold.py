@@ -38,7 +38,7 @@ def test_without_a_project_it_refuses(tmp_path) -> None:
     with pytest.raises(ConfigError) as caught:
         scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
     assert "No MCUHome project found" in caught.value.message
-    assert "mcuhome init" in caught.value.hint
+    assert "mcuhome project init" in caught.value.hint
 
 
 def test_it_finds_the_project_above_the_working_directory(tmp_path) -> None:

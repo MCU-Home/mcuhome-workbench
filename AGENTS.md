@@ -61,7 +61,11 @@ workbench never learns that a dashboard exists.
 What is there, roughly front to back: `resolve_project`/`init_project`/
 `find_device` (where the user's work lives — the `.mcuhome-project-root`
 marker and its bootstrap ladder, ADR 0022 — and which file is a given
-device's), `resolve_settings` (the five-layer configuration model over
+device's), `upgrade_session`/`upgrade_plan` (the project's layout
+**version** and the migrations that raise it, ADR 0022 §1.1 — resolution
+refuses a project whose version these tools do not speak, and this is
+the one thing that fixes it), `resolve_settings` (the five-layer
+configuration model over
 the declared option registry), `load_model`/`read_model`
 (stages 1-3, or the canonical model back from JSON), `validate_device`
 (the same stages, returning **every** problem instead of raising on the

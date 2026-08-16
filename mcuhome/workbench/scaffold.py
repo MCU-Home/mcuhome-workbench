@@ -205,7 +205,7 @@ def new_device(
 
     The project comes from :func:`mcuhome.workbench.project.resolve_project`'s
     ladder, and outside any project that resolver's refusal already
-    points at ``mcuhome init``: creating a *project* is init's job (ADR
+    points at ``mcuhome project init``: creating a *project* is init's job (ADR
     0022 §1), a device scaffold only ever fills one in. The ``devices/``
     directory itself is created when missing — it is part of the layout
     the marker promises, not a decision.

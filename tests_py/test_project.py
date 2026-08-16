@@ -22,7 +22,6 @@ from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench.project import (
     GITIGNORE_LINES,
-    MARKER_CONTENT,
     MARKER_FILE,
     PROJECT_DIR_VAR,
     Project,
@@ -34,11 +33,21 @@ from mcuhome.workbench.project import (
     resolve_device,
     resolve_project,
 )
+from mcuhome.workbench.projectfile import (
+    PROJECT_VERSION,
+    ProjectFile,
+    new_project_id,
+    read_project_file,
+    write_project_file,
+)
 
 
 def make_project(root: Path, *, devices: tuple[str, ...] = ()) -> Project:
     root.mkdir(parents=True, exist_ok=True)
-    (root / MARKER_FILE).write_text(MARKER_CONTENT, encoding="utf-8")
+    write_project_file(
+        root / MARKER_FILE,
+        ProjectFile(root=root, version=PROJECT_VERSION, id=new_project_id()),
+    )
     for name in devices:
         folder = root / "devices" / name
         folder.mkdir(parents=True)
@@ -93,7 +102,7 @@ def test_no_project_anywhere_is_a_refusal_naming_the_ways_out(tmp_path: Path) ->
     hint = caught.value.hint or ""
     assert MARKER_FILE in hint
     assert "--project-dir" in hint
-    assert "mcuhome init" in hint
+    assert "mcuhome project init" in hint
 
 
 def test_an_explicit_project_dir_disables_the_search(tmp_path: Path) -> None:
@@ -111,7 +120,7 @@ def test_an_explicit_project_dir_without_marker_is_an_error(tmp_path: Path) -> N
         resolve_project(plain, env={}, cwd=tmp_path)
     assert f"has no {MARKER_FILE}" in caught.value.message
     assert "--project-dir" in (caught.value.hint or "")
-    assert "mcuhome init" in (caught.value.hint or "")
+    assert "mcuhome project init" in (caught.value.hint or "")
 
 
 def test_a_missing_explicit_project_dir_is_an_error(tmp_path: Path) -> None:
@@ -226,14 +235,16 @@ def test_missing_path_is_reported(tmp_path: Path) -> None:
     assert "No configuration found" in caught.value.message
 
 
-# --- mcuhome init (ADR 0022 §1) ---------------------------------------
+# --- mcuhome project init (ADR 0022 §1) ---------------------------------------
 
 
 def test_init_creates_the_durable_layout(tmp_path: Path) -> None:
     target = tmp_path / "fresh"
     result = init_project(target)
     assert is_project_root(target)
-    assert (target / MARKER_FILE).read_text(encoding="utf-8") == MARKER_CONTENT
+    written = read_project_file(target / MARKER_FILE)
+    assert written.version == PROJECT_VERSION
+    assert written.id is not None
     assert (target / "mcuhome.yaml").is_file()
     assert (target / "devices").is_dir()
     assert (target / "secrets").is_dir()

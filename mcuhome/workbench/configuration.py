@@ -624,7 +624,7 @@ def scope_config_file(
                 "There is no project here to configure.",
                 hint=(
                     "the project scope writes mcuhome.yaml in the project directory "
-                    "(the upward marker search found none). Run `mcuhome init` first, "
+                    "(the upward marker search found none). Run `mcuhome project init` first, "
                     "or write the user/system configuration instead."
                 ),
             )

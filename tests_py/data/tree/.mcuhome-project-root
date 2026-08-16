@@ -1,2 +1,8 @@
-# This file marks the root of an MCUHome project (ADR 0022).
-# Its presence is its meaning; configuration lives in mcuhome.yaml.
+# This file marks the root of an MCUHome project.
+#
+# DO NOT EDIT. MCUHome maintains this file itself, and changing it by
+# hand can break the whole project. Your own settings belong in
+# mcuhome.yaml next to it.
+
+version = 1
+id = "01a00a25-7006-7a6f-970c-6c29ff5e22ac"

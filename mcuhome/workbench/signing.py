@@ -398,7 +398,7 @@ def _refuse_no_project() -> BuildError:
         hint=(
             "the project's key lives in secrets/firmware/mcuboot.yaml under "
             f"{FIRMWARE_KEY} and is generated on first need. "
-            "Run inside a project (or create one with `mcuhome init`), point "
+            "Run inside a project (or create one with `mcuhome project init`), point "
             f"--signing-key at a PEM key file, or set {KEY_VAR}."
         ),
     )

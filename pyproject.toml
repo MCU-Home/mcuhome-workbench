@@ -44,6 +44,11 @@ dependencies = [
   "ruamel.yaml>=0.18",
   # PEP 440 constraint resolution for the SDK and container pins (E52).
   "packaging>=23",
+  # The project file is TOML: tomllib reads it (standard library since
+  # 3.11), and this writes it. A tested writer over one of our own,
+  # because the file it produces is the project's identity — a bug in a
+  # hand-rolled serializer would break projects, not just a build.
+  "tomli-w>=1.0",
   # MCUboot's own signing tool. The workbench performs the one host-side
   # signing step (ADR 0015 decision 8), so the tool is a declared
   # dependency rather than an environment accident (PO 2026-08-15).

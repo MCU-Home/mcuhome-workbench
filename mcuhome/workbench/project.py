@@ -4,17 +4,25 @@
 
 A user's work lives in a **project directory**: the folder that carries
 the **project marker** ``.mcuhome-project-root``. The marker is a
-dedicated dotfile whose only content is a comment line saying what it
-is — deliberately *not* a configuration file. A ``mcuhome.yaml`` can
-plausibly lie around in folders that are no project root (a copied
-example, a config snippet), and only a file that exists for exactly one
-purpose can never mark one by accident. Marker = identity;
-``mcuhome.yaml`` = project-level *configuration*, and therefore
-optional (:mod:`mcuhome.workbench.configuration`).
+dedicated dotfile that is not the user's to edit — deliberately *not* a
+configuration file. A ``mcuhome.yaml`` can plausibly lie around in
+folders that are no project root (a copied example, a config snippet),
+and only a file that exists for exactly one purpose can never mark one
+by accident. Marker = identity; ``mcuhome.yaml`` = project-level
+*configuration*, and therefore optional
+(:mod:`mcuhome.workbench.configuration`).
+
+What the marker says about itself — the project's layout **version** and
+its **id** — belongs to :mod:`mcuhome.workbench.projectfile`, and
+resolution here enforces it: a project whose version these tools do not
+speak is refused with the upgrade command rather than worked on, and a
+project whose file is renamed because an upgrade is running (or died) is
+refused with what actually happened
+(:mod:`mcuhome.workbench.projectupgrade`).
 
 The layout inside a project::
 
-    .mcuhome-project-root     # the marker (one comment line, no config)
+    .mcuhome-project-root     # the marker: project version and id
     mcuhome.yaml              # project configuration (optional)
     devices/<name>/main.yaml  # one folder per device
     secrets/                  # ALL secrets, no exceptions (mode 700)
@@ -42,7 +50,7 @@ stands" is the caller's to state, and a server handling two requests
 from two projects stands in neither.
 
 This module also owns the two duties that come with the layout:
-``mcuhome init`` (:func:`init_project` — the durable part of the layout,
+``mcuhome project init`` (:func:`init_project` — the durable part of the layout,
 created once, refusing a non-empty directory) and the secrets hygiene of
 ADR 0022 §5 (:func:`check_secret_file` — ``secrets/`` is created mode
 700 and its files 600; every reader checks, insecure permissions draw a
@@ -60,13 +68,27 @@ from pathlib import Path
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import expand
 
+from mcuhome.workbench.projectfile import (
+    MARKER_FILE,
+    PROJECT_VERSION,
+    UPGRADE_FILE,
+    ProjectFile,
+    new_project_id,
+    read_project_file,
+    require_current,
+    write_project_file,
+)
+from mcuhome.workbench.projectupgrade import BUILD_DIR, in_flight_error
+
 __all__ = [
+    "BUILD_DIR",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
     "GITIGNORE_LINES",
     "MARKER_FILE",
     "PROJECT_CONFIG_FILE",
     "PROJECT_DIR_VAR",
+    "PROJECT_VERSION",
     "SECRETS_DIR",
     "InitResult",
     "Project",
@@ -74,21 +96,10 @@ __all__ = [
     "find_project_root",
     "init_project",
     "is_project_root",
+    "is_upgrading",
     "resolve_device",
     "resolve_project",
 ]
-
-#: The project marker. Its presence — not its content — makes a
-#: directory a project root; the content is one comment line.
-MARKER_FILE = ".mcuhome-project-root"
-
-#: What :func:`init_project` writes into the marker. One comment line,
-#: no configuration — see the module docstring for why the marker must
-#: never carry any.
-MARKER_CONTENT = (
-    "# This file marks the root of an MCUHome project.\n"
-    "# Its presence is its meaning; configuration lives in mcuhome.yaml.\n"
-)
 
 #: Project-level configuration, in the project directory. Optional: a
 #: project without one simply has an empty project layer.
@@ -108,7 +119,7 @@ SECRETS_DIR = "secrets"
 #: Project-wide secrets inside ``secrets/`` — what ``!secret`` reads.
 MAIN_SECRETS_FILE = "main.yaml"
 
-#: What ``mcuhome init`` keeps out of git. ``secrets/`` is the point of
+#: What ``mcuhome project init`` keeps out of git. ``secrets/`` is the point of
 #: the file (ADR 0022 §5); ``build/`` is disposable output that would
 #: otherwise be the first accidental commit of every new project.
 GITIGNORE_LINES = ("secrets/", "build/")
@@ -123,10 +134,18 @@ class Project:
     #: "bare YAML file, no project around it" fallback of
     #: :func:`resolve_device`.
     discovered: bool
+    #: What the project file says — its version and its id. None exactly
+    #: for the stand-in root above, which has no project file to read.
+    file: ProjectFile | None = None
 
     @property
     def marker(self) -> Path:
         return self.root / MARKER_FILE
+
+    @property
+    def id(self) -> str | None:
+        """The project's unique id, or None for a stand-in root."""
+        return None if self.file is None else self.file.id
 
     @property
     def config_file(self) -> Path:
@@ -177,15 +196,40 @@ def is_project_root(path: Path) -> bool:
     return (path / MARKER_FILE).is_file()
 
 
+def is_upgrading(path: Path) -> bool:
+    """Whether *path* is a project whose file an upgrade has renamed."""
+    return (path / UPGRADE_FILE).is_file()
+
+
 def find_project_root(start: Path) -> Path | None:
-    """Walk *start* upwards and return the first directory carrying the marker."""
+    """Walk *start* upwards and return the first directory carrying the marker.
+
+    A directory that is *being upgraded* stops the walk too, with the
+    refusal that says so: its marker is renamed for the duration, and
+    walking past it would end in "no project found here" for a project
+    that is plainly there.
+    """
     current = start.resolve()
     if current.is_file():
         current = current.parent
     for candidate in [current, *current.parents]:
         if is_project_root(candidate):
             return candidate
+        if is_upgrading(candidate):
+            raise in_flight_error(candidate)
     return None
+
+
+def project_at(root: Path, *, require_version: bool = True) -> Project:
+    """The project in *root*, its file read and — by default — checked.
+
+    *require_version* is False for exactly one caller: the upgrade
+    itself, which exists to make an outdated project current again.
+    """
+    file = read_project_file(root / MARKER_FILE, root=root)
+    if require_version:
+        require_current(file)
+    return Project(root=root, discovered=True, file=file)
 
 
 def _refuse_no_marker(directory: Path, *, named_by: str) -> ConfigError:
@@ -194,7 +238,7 @@ def _refuse_no_marker(directory: Path, *, named_by: str) -> ConfigError:
         hint=(
             f"{named_by} must name the directory that carries the {MARKER_FILE} "
             "marker. Check the path, or create a project there first with:\n"
-            "    mcuhome init"
+            "    mcuhome project init"
         ),
     )
 
@@ -204,6 +248,7 @@ def resolve_project(
     *,
     env: Mapping[str, str],
     cwd: Path,
+    require_version: bool = True,
 ) -> Project:
     """Resolve the project directory: the bootstrap ladder of ADR 0022 §2.
 
@@ -211,6 +256,11 @@ def resolve_project(
     fallback; either disables the search and is an error when the named
     directory carries no marker. With neither set, the search walks
     *cwd* upward and takes the first directory carrying the marker.
+
+    Whichever way the directory was found, its project file is read and
+    its version checked — a project MCUHome does not speak is refused
+    here, once, rather than in each of the commands. *require_version*
+    turns only that last step off, for the upgrade that fixes it.
 
     Both *env* and *cwd* are stated, never read from the process — the
     module docstring says why.
@@ -227,11 +277,15 @@ def resolve_project(
         if not directory.is_dir():
             raise ConfigError(
                 f'The project directory "{value}" ({named_by}) does not exist.',
-                hint="check the path, or create the project first with:\n    mcuhome init",
+                hint=(
+                    "check the path, or create the project first with:\n    mcuhome project init"
+                ),
             )
         if not is_project_root(directory):
+            if is_upgrading(directory):
+                raise in_flight_error(directory)
             raise _refuse_no_marker(directory, named_by=named_by)
-        return Project(root=directory.resolve(), discovered=True)
+        return project_at(directory.resolve(), require_version=require_version)
 
     found = find_project_root(cwd)
     if found is None:
@@ -241,10 +295,10 @@ def resolve_project(
                 f"a project directory carries a {MARKER_FILE} marker, and none was "
                 f"found from {cwd.resolve()} upward. Run this inside a project, pass "
                 "--project-dir /path/to/project, or create one here with:\n"
-                "    mcuhome init"
+                "    mcuhome project init"
             ),
         )
-    return Project(root=found, discovered=True)
+    return project_at(found, require_version=require_version)
 
 
 def _looks_like_path(spec: str) -> bool:
@@ -325,7 +379,7 @@ def resolve_device(
         # stands in for one, which is what makes secrets/main.yaml next
         # to the file work.
         return Project(root=entry.parent, discovered=False), entry
-    return Project(root=root, discovered=True), entry
+    return project_at(root), entry
 
 
 # --------------------------------------------------------------------------
@@ -408,13 +462,13 @@ def ensure_secrets_dir(project_root: Path, *parts: str) -> Path:
 
 
 # --------------------------------------------------------------------------
-# mcuhome init
+# mcuhome project init
 # --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class InitResult:
-    """What ``mcuhome init`` created."""
+    """What ``mcuhome project init`` created."""
 
     project: Project
     #: Every path this call created or changed, in creation order — what
@@ -433,13 +487,21 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
     while the marker and the ``.gitignore`` are completed to what the
     layout requires (missing ignore lines are appended, never rewritten
     over a user's file).
+
+    The marker is written with the current project version and a project
+    id drawn once (:mod:`mcuhome.workbench.projectfile`). An **existing**
+    marker is left exactly as it is, whatever version it states: making
+    an old project current is the upgrade's job, and init must not do it
+    silently on a directory a user pointed ``--force`` at.
     """
     target = target.resolve()
     if target.exists() and not target.is_dir():
         raise ConfigError(
             f'"{target}" is not a directory.',
-            hint="mcuhome init creates a project in a directory; point it at one",
+            hint="mcuhome project init creates a project in a directory; point it at one",
         )
+    if target.is_dir() and is_upgrading(target):
+        raise in_flight_error(target)
     if target.is_dir() and not force:
         entries = sorted(entry.name for entry in target.iterdir())
         if entries:
@@ -447,7 +509,7 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
             raise ConfigError(
                 f'The directory "{target}" is not empty ({listing}).',
                 hint=(
-                    "mcuhome init expects an empty directory so it cannot damage "
+                    "mcuhome project init expects an empty directory so it cannot damage "
                     "existing work. Re-run with --force to create the project here "
                     "anyway (existing files may be overwritten)."
                 ),
@@ -458,7 +520,10 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
 
     marker = target / MARKER_FILE
     if not marker.is_file():
-        marker.write_text(MARKER_CONTENT, encoding="utf-8")
+        write_project_file(
+            marker,
+            ProjectFile(root=target, version=PROJECT_VERSION, id=new_project_id()),
+        )
         created.append(marker)
 
     config = target / PROJECT_CONFIG_FILE
@@ -497,4 +562,7 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
         gitignore.write_text("\n".join(GITIGNORE_LINES) + "\n", encoding="utf-8")
         created.append(gitignore)
 
-    return InitResult(project=Project(root=target, discovered=True), created=tuple(created))
+    return InitResult(
+        project=Project(root=target, discovered=True, file=read_project_file(marker, root=target)),
+        created=tuple(created),
+    )

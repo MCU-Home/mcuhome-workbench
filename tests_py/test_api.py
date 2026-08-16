@@ -27,7 +27,6 @@ from mcuhome.model.errors import (
 )
 
 from mcuhome.workbench import api
-from mcuhome.workbench.project import MARKER_CONTENT
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -103,7 +102,7 @@ def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
 
 
 def test_find_device_resolves_a_name_against_the_project(tmp_path) -> None:
-    (tmp_path / ".mcuhome-project-root").write_text(MARKER_CONTENT, "utf-8")
+    api.init_project(tmp_path, force=True)
     (tmp_path / "devices" / "bench-node").mkdir(parents=True)
     (tmp_path / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
     project, entry = api.find_device("bench-node", cwd=tmp_path, env={})

@@ -74,6 +74,7 @@ __all__ = [
     "BuildDirectoryBusy",
     "build_lock",
     "holder_of",
+    "is_busy",
 ]
 
 #: The lock file, inside the build directory it guards.
@@ -114,6 +115,33 @@ def holder_of(out_dir: Path) -> dict[str, str]:
     except (OSError, ValueError):
         return {}
     return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
+
+
+def is_busy(out_dir: Path) -> bool:
+    """Whether someone is working in *out_dir* right now — without taking it.
+
+    The question a caller asks when it wants to *wait* rather than
+    refuse: the project upgrade holds no build directory (it has already
+    made the project unfindable, so nothing new can start) and only needs
+    to know whether a run that started earlier is still going. Tests the
+    lock and drops it again immediately, and deliberately writes nothing
+    — probing must not overwrite the holder record that makes somebody
+    else's refusal readable.
+    """
+    path = Path(out_dir) / LOCK_FILE
+    if fcntl is None or not path.is_file():  # pragma: no cover - platform branch
+        return False
+    try:
+        handle = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    finally:
+        os.close(handle)
+    return False
 
 
 @contextmanager

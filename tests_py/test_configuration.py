@@ -417,7 +417,7 @@ def test_the_project_scope_needs_a_project(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as caught:
         configuration.scope_config_file("project", project=None, env={})
     assert "no project here" in caught.value.message
-    assert "mcuhome init" in (caught.value.hint or "")
+    assert "mcuhome project init" in (caught.value.hint or "")
 
 
 def test_an_unnameable_scope_directory_is_a_refusal_when_editing(project: Project) -> None:

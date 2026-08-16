@@ -23,11 +23,11 @@ no shared notion of "the configuration".
 
 A user's work lives in a **project directory**: the folder holding the
 **project marker** `.mcuhome-project-root` (PO 2026-08-14) — a
-dedicated dotfile whose only content is a comment line saying what it
-is. The marker is deliberately not a configuration file: a
-`mcuhome.yaml` can plausibly lie around in folders that are no project
-root (a copied example, a config snippet), and only a file that exists
-for exactly one purpose can never mark one by accident. Marker =
+dedicated dotfile that MCUHome maintains and the user never edits (§1.1
+says what is in it). The marker is deliberately not a configuration
+file: a `mcuhome.yaml` can plausibly lie around in folders that are no
+project root (a copied example, a config snippet), and only a file that
+exists for exactly one purpose can never mark one by accident. Marker =
 identity, `mcuhome.yaml` = project-level **configuration**, which is
 therefore *optional* — a project without one simply has an empty
 project layer.
@@ -40,7 +40,7 @@ named directory carries no marker.
 Project layout:
 
 ```
-.mcuhome-project-root     # the marker (one comment line, no config)
+.mcuhome-project-root     # the marker: project version + id (§1.1)
 mcuhome.yaml              # project configuration (optional)
 devices/<name>/main.yaml  # one folder per device
 secrets/                  # ALL secrets, no exceptions (mode 700)
@@ -52,7 +52,7 @@ build/                    # build output (disposable, created by builds)
 .gitignore                # contains secrets/
 ```
 
-`mcuhome init` creates the durable part of this — the marker,
+`mcuhome project init` creates the durable part of this — the marker,
 `mcuhome.yaml`, `devices/`, `secrets/` (mode 700) and the
 `.gitignore` — after checking the target directory: a non-empty
 directory draws a warning and a refusal, `--force` proceeds anyway
@@ -67,6 +67,78 @@ alone: `device new` refuses outside a project (the old zero-ceremony
 carried it), and a bare YAML file validated outside any project gets
 its own directory as a stand-in root, with `secrets/main.yaml` next to
 it.
+
+### 1.1 The project file: version, identity, upgrade (PO 2026-08-16)
+
+The marker grew content. It is still the marker — presence is identity,
+and `is_project_root` still asks nothing else — but it now answers two
+questions no other file can, in **TOML**:
+
+```toml
+# This file marks the root of an MCUHome project.
+#
+# DO NOT EDIT. MCUHome maintains this file itself, and changing it by
+# hand can break the whole project. Your own settings belong in
+# mcuhome.yaml next to it.
+
+version = 1
+id = "0198f5c2-9c41-7a3e-8b6d-2f7c14a9e005"
+```
+
+`version` is the **project layout** these tools speak. A project that
+states an older one is refused with the upgrade command; a *newer* one
+is refused with "update MCUHome" and never guessed at. A marker without
+a `version` key is **version 0** — every project created before this
+section. `id` is a UUIDv7 drawn once at creation and never again; it
+belongs to the project rather than to the machine, so the file is
+committed and a clone of a project is the same project. The **short id**
+is its last six hex characters (the only fully random part of a UUIDv7,
+the rest being timestamp and version/variant bits) — short enough to
+type, which is what the upgrade's confirmation needs.
+
+TOML, in a project that otherwise speaks YAML, is deliberate on both
+counts: the file is machine-owned, and a different format says so before
+the header comment does. `tomllib` reads it (standard library);
+`tomli-w` writes it — a tested writer rather than our own, because a
+serializer bug here breaks projects rather than a build.
+
+**The version gate lives in resolution.** `resolve_project` reads the
+file and checks it, so every command inherits the refusal from one
+place; `require_version=False` exists for the one caller whose job is to
+fix it.
+
+**Upgrading** is a sequence of **migrations**, one module per version
+step (`mcuhome.workbench.migrations`), listed explicitly rather than
+discovered — the order is then a fact in source, and a test asserts the
+chain runs 0 → 1 → … → `PROJECT_VERSION` without gaps. Each declares
+`FROM_VERSION`, `TO_VERSION`, a one-line `DESCRIPTION` for the plan a
+user approves, and a longer `DETAILS` — what changed and what to watch
+out for from now on — printed after the run and by `--dry-run`.
+
+**The upgrade renames the project file** to
+`.mcuhome-project-root.upgrade` for the whole run, and that single move
+is the entire concurrency design (PO 2026-08-16): while the marker is
+gone no command can resolve the project, so no build, flash or second
+upgrade can start; the rename is atomic, so of two upgraders exactly one
+finds a file to rename; and a run that is killed outright leaves the
+file renamed, which is what makes "this project was left mid-upgrade"
+sayable instead of "no project here". An `flock` held across the rename
+answers the one question the rename cannot — whether the process that
+renamed it is still alive — which is what separates *running* from
+*died* in the message. Builds that were already running are **waited
+for**, not locked out (they hold their own build-directory lock,
+`buildlock`); the version is written after each migration, because the
+clean stop below lands exactly there.
+
+**There is no resumption after a failure.** A migration that fails
+leaves the project renamed and refused, and the supported way out is the
+backup the upgrade insisted on. Repairing a partly applied migration
+would need every migration to be repeatable at every point inside
+itself; the machinery for that would carry its own bugs into exactly the
+situation that must not have any (PO 2026-08-16). The one exception is
+not a repair: a **clean stop** — the current migration runs to its end,
+the version reached is written, the file is renamed back, and the next
+upgrade continues from there.
 
 ### 2. Five configuration layers, strict precedence
 
@@ -164,7 +236,7 @@ module when its turn comes; until then this module is the contract.
 `secrets/` is created mode 700, files in it 600. Every reader checks
 permissions: insecure permissions draw a warning, and for key material
 (signing keys, future Matter/attestation keys) the tools **refuse**.
-`mcuhome init` writes the `.gitignore` line so a project can be
+`mcuhome project init` writes the `.gitignore` line so a project can be
 committed without ever committing its secrets.
 
 Pinned during implementation: the check is per file (a 600 file is
