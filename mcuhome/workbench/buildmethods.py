@@ -84,6 +84,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
 
+from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.contextdir import context_facts, create_build_context, lock_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
@@ -377,13 +378,21 @@ async def run_build(request: BuildRequest, *, method: str = DEFAULT_METHOD) -> B
     back with :attr:`BuildOutcome.successful` false and the method's own
     account in :attr:`BuildOutcome.detail`, because a failed compile is an
     answer and a caller usually wants to render it rather than catch it.
+
+    The build directory is held for the duration (:mod:`…buildlock`), so
+    a second build of it refuses in words instead of deleting this one's
+    work under it. Here rather than in a method, because every method
+    writes into the same directory and the collision does not care which
+    two were running — nor whether the other one is a command line or a
+    dashboard.
     """
     chosen = resolve_method(method)
-    if chosen == LOCAL:
-        return await _run_local(request)
-    if chosen == LOCAL_DEV:
-        return await _run_local_dev(request)
-    return await _run_remote(request)
+    with build_lock(request.out_dir, device=request.model.device.name):
+        if chosen == LOCAL:
+            return await _run_local(request)
+        if chosen == LOCAL_DEV:
+            return await _run_local_dev(request)
+        return await _run_remote(request)
 
 
 def compose_local_build(

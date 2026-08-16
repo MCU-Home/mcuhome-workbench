@@ -42,6 +42,7 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.manifest import MANIFEST_FILE
 
 from mcuhome.workbench import buildmethods, sessionclient
+from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
 
@@ -185,6 +186,42 @@ def test_the_local_dev_method_answers_in_the_same_shape(model, tmp_path, monkeyp
     assert outcome.report == MANIFEST_FILE
     assert seen["bootloader_key"] == tmp_path / "signing.pub"
     assert seen["snippets"] == ("debug-rtt",)
+
+
+def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkeypatch):
+    """Whichever method runs, the directory is taken for its duration.
+
+    The guard sits at the dispatch and not in a method because every
+    method writes into the same directory — and the two runs that
+    collide need not even be the same program: a command line, a
+    dashboard and a future ``device flash`` all reach the files through
+    a directory somebody else may be rewriting. What the lock keeps out
+    is another *process*, which is what this asserts; a caller that
+    already holds the directory (the CLI, across compile and signing)
+    nests without refusing itself, pinned in ``test_buildlock.py``.
+    """
+    seen: dict[str, object] = {}
+
+    def fake(device_model, **kwargs):
+        seen["holder"] = holder_of(tmp_path)
+        return devbuild.DevBuildResult(
+            plan=None, log="", images=[], merged=None, manifest_path=tmp_path / MANIFEST_FILE
+        )
+
+    monkeypatch.setattr(devbuild, "run_dev_build", fake)
+    request = buildmethods.BuildRequest(
+        model=model,
+        out_dir=tmp_path,
+        bootloader_key=tmp_path / "signing.pub",
+        module_dir=tmp_path / "module",
+        started_in=tmp_path,
+    )
+    assert _run(request, buildmethods.LOCAL_DEV).successful
+    holder = seen["holder"]
+    assert holder["device"] == model.device.name  # type: ignore[index]
+    assert holder["operation"] == "build"  # type: ignore[index]
+    # And released again: the next build of that directory just runs.
+    assert _run(request, buildmethods.LOCAL_DEV).successful
 
 
 def test_the_local_dev_method_refuses_without_the_three_things_only_a_caller_knows(model, tmp_path):

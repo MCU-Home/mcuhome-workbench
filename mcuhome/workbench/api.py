@@ -59,6 +59,15 @@ What is here, in the order a caller needs it:
     of ``LOCAL``, ``LOCAL_DEV``, ``REMOTE`` (``METHODS``,
     ``DEFAULT_METHOD``), and ``UnknownMethod``, ``MethodUnavailable`` and
     ``RemoteNotConfigured`` are the typed refusals a caller renders.
+``build_lock`` / ``BuildDirectoryBusy``
+    One build directory, one operation at a time. ``run_build`` takes
+    the lock itself, so an embedder gets the guard for free; a caller
+    that does more to the same directory — signing after the build,
+    flashing what it produced, deleting it — holds it around the whole
+    sequence instead, and the nested acquisition inside ``run_build``
+    then costs nothing. What it keeps out is a *second process* working
+    in that directory, which is how a build ends up overwriting the
+    image another run is signing or flashing.
 
 Synchrony is a property of each operation here, not of the whole
 supported surface. Stages 1-3 are synchronous and CPU-bound (YAML
@@ -96,6 +105,7 @@ from mcuhome.model.modelfile import read_model
 
 from mcuhome.workbench import __version__
 from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
+from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildmethods import (
     DEFAULT_METHOD,
     LOCAL,
@@ -162,6 +172,7 @@ __all__ = [
     "REMOTE",
     "VERSION",
     "BuildError",
+    "BuildDirectoryBusy",
     "BuildOutcome",
     "BuildRequest",
     "Builder",
@@ -195,6 +206,7 @@ __all__ = [
     "resolve_method",
     "resolve_project",
     "resolve_settings",
+    "build_lock",
     "run_build",
     "scope_config_file",
     "set_config_value",
