@@ -84,7 +84,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
 
-from mcuhome.workbench.contextdir import create_build_context, lock_context
+from mcuhome.workbench.contextdir import context_facts, create_build_context, lock_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
 __all__ = [
@@ -209,7 +209,14 @@ class BuildRequest:
     #: honest-progress seam of cli ADR 0004: a caller renders steps it
     #: was told about, never ones it guessed. Keys are append-only
     #: vocabulary; consumers ignore keys they do not know.
-    on_step: Callable[[str], None] | None = None
+    #:
+    #: A step may be reported a second time with keyword **facts** once
+    #: it knows something worth stating — which SDK the context pinned,
+    #: which image answered the Zephyr requirement. Facts are display
+    #: material and append-only in the same way: a consumer renders what
+    #: it recognizes and ignores the rest, and a build method that has
+    #: nothing to say states nothing rather than inventing it.
+    on_step: Callable[..., None] | None = None
     #: Scratch area a method may own. Defaults to a hidden directory
     #: under :attr:`out_dir`, which is what a command line wants: rebuilt
     #: every run, thrown away with the build directory.
@@ -435,7 +442,11 @@ def compose_local_build(
         container=ContainerResolution.from_reference(resolved.reference, digest=resolved.digest),
     )
     if on_step is not None:
-        on_step("compile")
+        # What the context turned out to be, read back off the locked
+        # directory: the step announced itself before any of this was
+        # decided, and the decisions are the interesting part.
+        on_step("context", **context_facts(context_dir))
+        on_step("compile", image=resolved.reference, digest=resolved.digest, jobs=jobs)
     return localbuild.run_locked_build(
         context_dir,
         image=resolved.reference,
@@ -628,11 +639,15 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         # filesystem work with no await in it, in a method whose whole
         # point is that a caller's loop keeps running while it waits.
         context_dir = await asyncio.to_thread(_remote_context, request, work_root)
+        if request.on_step is not None:
+            # No `id` among these: freezing the context is the server's
+            # act (E37), so a base context on its way out has none yet.
+            request.on_step("context", **context_facts(context_dir))
 
     from mcuhome.workbench import sessionclient
 
     if request.on_step is not None:
-        request.on_step("compile")
+        request.on_step("compile", server=request.server)
     result = await sessionclient.run_remote_build(
         context_dir,
         url=request.server,

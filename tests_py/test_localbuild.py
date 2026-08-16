@@ -321,9 +321,13 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
 
     The honest-progress seam of cli ADR 0004: a caller renders steps it
     was told about, and these two are the ones this composition owns.
+    The context reports itself twice — once on entry, once with what it
+    turned out to be (PO 2026-08-16) — and the facts are read back off
+    the locked directory rather than remembered here, so what a caller
+    renders is what the build environment receives.
     """
     make_sdk_source(tmp_path / "src")
-    steps: list[str] = []
+    steps: list[tuple[str, dict]] = []
     result = buildmethods.compose_local_build(
         model,
         signing_pub=public_pem,
@@ -331,11 +335,23 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
         work_root=tmp_path / "wr",
         env={},
         image=IMAGE,
-        on_step=steps.append,
+        on_step=lambda stage, **facts: steps.append((stage, facts)),
         docker=Docker(runner=_seam()),
     )
     assert result.outcome.successful
-    assert steps == ["context", "compile"]
+    assert [stage for stage, _facts in steps] == ["context", "context", "compile"]
+    assert steps[0][1] == {}
+    facts = steps[1][1]
+    assert facts["zephyr"] == model.toolchain.zephyr_line
+    assert facts["board"] == model.device.board
+    assert facts["patches"] == []
+    assert facts["files"] >= 2  # the model and the public key, at least
+    assert facts["id"].startswith("sha256:")
+    assert (
+        facts["sdk_sha256"]
+        == read_context_manifest(tmp_path / "wr" / "context" / "manifest.yaml").sdk.sha256
+    )
+    assert steps[2][1]["image"] == IMAGE
 
 
 # --------------------------------------------------------------------------

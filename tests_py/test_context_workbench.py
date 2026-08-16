@@ -38,6 +38,7 @@ from mcuhome.model.model import DeviceModel
 from ruamel.yaml import YAML
 
 from mcuhome.workbench.contextdir import (
+    context_facts,
     create_context,
     lock_context,
     read_context_manifest,
@@ -368,6 +369,40 @@ def test_patches_pass_through_as_ordinary_integrity_entries(model, tmp_path: Pat
     patch = next(entry for entry in manifest.files if entry.path.endswith("0001-fix-uart.patch"))
     assert patch.sha256 == hashlib.sha256(b"--- a\n+++ b\n").hexdigest()
     assert verify_context(out_dir).ok
+
+
+def test_the_facts_of_a_context_name_its_pins_and_its_patches(model, tmp_path: Path) -> None:
+    """What a build says about the context it just wrote (PO 2026-08-16).
+
+    Read back off the directory, so what a person is shown is what the
+    build environment receives — including *which* patches ride along,
+    the question a patched build environment actually raises.
+    """
+    out_dir = tmp_path / "context"
+    manifest = _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
+    facts = context_facts(out_dir)
+    assert facts["sdk"] == SDK.version
+    assert facts["sdk_sha256"] == SDK.sha256
+    assert facts["zephyr"] == model.toolchain.zephyr_line
+    assert facts["board"] == model.device.board
+    assert facts["files"] == len(manifest.files)
+    assert facts["id"] == manifest.id
+    assert facts["patches"] == [
+        "sdk/0001-tweak.patch",
+        "zephyr/0001-fix-uart.patch",
+        "zephyr/0002-fix-spi.patch",
+    ]
+
+
+def test_a_base_context_has_facts_but_no_identity_yet(model, tmp_path: Path) -> None:
+    """Freezing is the locking party's act, so an unlocked context has no ID."""
+    out_dir = tmp_path / "context"
+    _create(model, out_dir)
+    facts = context_facts(out_dir)
+    assert "id" not in facts
+    assert facts["sdk"] == SDK.version
+    assert facts["patches"] == []
+    assert facts["files"] == 2  # the model and the public signing key
 
 
 def test_patches_change_the_id_like_any_other_file(model, tmp_path: Path) -> None:

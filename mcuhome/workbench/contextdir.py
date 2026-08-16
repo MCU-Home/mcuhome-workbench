@@ -29,6 +29,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.context import (
     BACKEND_DIR,
@@ -59,6 +60,7 @@ __all__ = [
     "ContextFormatVersionError",
     "ContextVerification",
     "FileMismatch",
+    "context_facts",
     "create_build_context",
     "create_context",
     "lock_context",
@@ -115,8 +117,8 @@ class ContextFormatVersionError(BuildError):
 # file" means.
 
 
-def _context_files(root: Path) -> tuple[ContextFile, ...]:
-    """Every regular file under *root* that is context content, hashed.
+def _content_paths(root: Path) -> list[str]:
+    """Context-relative paths of everything under *root* that is content.
 
     Neither context document — ``manifest.yaml`` (the list itself) nor
     ``context.yaml`` (the request, whose never-hashed fields would leak
@@ -125,16 +127,23 @@ def _context_files(root: Path) -> tuple[ContextFile, ...]:
     (build-container-contract.md §3.2). So none of them is listed, and by
     way of that none of them can influence the ID.
     """
-    entries = []
+    paths = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         relative = path.relative_to(root).as_posix()
         if relative in (MANIFEST_FILE, CONTEXT_FILE) or relative.split("/", 1)[0] == BACKEND_DIR:
             continue
-        entries.append(ContextFile(path=relative, sha256=sha256_file(path)))
-    entries.sort(key=lambda entry: entry.path)
-    return tuple(entries)
+        paths.append(relative)
+    paths.sort()
+    return paths
+
+
+def _context_files(root: Path) -> tuple[ContextFile, ...]:
+    """Every regular file under *root* that is context content, hashed."""
+    return tuple(
+        ContextFile(path=name, sha256=sha256_file(root / name)) for name in _content_paths(root)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -602,6 +611,49 @@ def read_context_manifest(path: Path) -> ContextManifest:
         ) from error
     validate_manifest(manifest)
     return manifest
+
+
+def context_facts(root: Path) -> dict[str, Any]:
+    """What a person wants to know about the context at *root*.
+
+    Not a document and part of no protocol: a build that says "context"
+    has just decided which SDK the firmware is built from, which Zephyr
+    line the build environment must carry and whether anything patches
+    that environment — decisions worth one line on a terminal rather
+    than only in a file nobody opens. Read back off the directory
+    instead of remembered by the caller, so what is reported is what a
+    build environment will actually receive.
+
+    Every key is optional to a consumer and the set is append-only: this
+    is display material, and a caller that renders what it recognizes
+    must not break when a later version knows more. ``id`` is present
+    only once the context is locked — a base context on its way to a
+    build server has no identity yet, because computing it is that
+    server's act.
+    """
+    root = Path(root)
+    facts: dict[str, Any] = {}
+    manifest_path = root / MANIFEST_FILE
+    request_path = root / CONTEXT_FILE
+    if manifest_path.is_file():
+        manifest = read_context_manifest(manifest_path)
+        facts["id"] = manifest.id
+        pin, zephyr, board = manifest.sdk, manifest.zephyr, manifest.board
+    else:
+        request = read_context_request(request_path)
+        pin, zephyr, board = request.sdk, request.zephyr, request.board
+    paths = _content_paths(root)
+    facts.update(
+        sdk=pin.version,
+        sdk_sha256=pin.sha256,
+        zephyr=zephyr,
+        board=board,
+        files=len(paths),
+        patches=[
+            name[len(PATCHES_DIR) + 1 :] for name in paths if name.startswith(f"{PATCHES_DIR}/")
+        ],
+    )
+    return facts
 
 
 # --------------------------------------------------------------------------
