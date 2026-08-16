@@ -31,7 +31,13 @@ VERSION_PLACEHOLDER = "0.1.0.dev0"
 
 
 def _stable(text: str) -> str:
-    return text.replace(f'"{__version__}"', f'"{VERSION_PLACEHOLDER}"')
+    # The version appears both as a whole value and *inside* a prose
+    # description (`configschema` stamps "MCUHome builder <version>; …"),
+    # so the replacement cannot require the surrounding quotes. Matching
+    # only the quoted form is what let an SDK release turn this golden
+    # red for a reason that has nothing to do with the schema — exactly
+    # the regeneration habit the placeholder exists to prevent.
+    return text.replace(__version__, VERSION_PLACEHOLDER)
 
 
 # --------------------------------------------------------------------------
