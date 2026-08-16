@@ -98,6 +98,7 @@ __all__ = [
     "MethodUnavailable",
     "RemoteNotConfigured",
     "UnknownMethod",
+    "websocket_url",
     "resolve_method",
     "run_build",
 ]
@@ -137,6 +138,64 @@ class MethodUnavailable(BuildError):
     ``local`` and ``local-dev`` are implemented in ``mcuhome-compiler``,
     which a workbench that only validates configurations does not carry.
     """
+
+
+#: The port a build server listens on unless its operator moved it
+#: (``mcuhome-build-server --port``). An address without one means "the
+#: usual place", which is what makes `--build-server attic` a complete
+#: answer.
+DEFAULT_SERVER_PORT = 8100
+
+#: Where the session protocol lives on a build server. One endpoint, so
+#: an address never has to carry a path.
+SERVER_ENDPOINT = "/ws"
+
+
+def websocket_url(address: str) -> str:
+    """A build server's address, as the URL a client connects to.
+
+    A builder carries a "server address (IP/hostname[:port])" and that is
+    what a person types — but what the socket needs is a full WebSocket
+    URL, and nothing bridged the two: the address travelled verbatim into
+    the connect call, where ``attic:8137`` reads as a URL whose *scheme*
+    is ``attic`` and fails with a traceback instead of a refusal.
+
+    Accepted, because all four are things an operator will reasonably
+    write down: a bare host, ``host:port``, and either spelling with a
+    scheme (``ws``/``wss``, or ``http``/``https`` — which is what a
+    browser address bar hands you, and which differ from the first pair
+    in nothing but the name). Anything else is refused by name rather
+    than by traceback.
+    """
+    stated = (address or "").strip()
+    scheme, separator, rest = stated.partition("://")
+    if separator and not scheme:
+        scheme, rest = "ws", ""  # "://attic" — the host refusal below is the honest one
+    elif not separator:
+        # No scheme at all. Deliberately not decided by a URL parser:
+        # ``urlsplit("attic:8137")`` reads ``attic`` as the scheme,
+        # because a scheme is any word followed by a colon.
+        scheme, rest = "ws", stated
+    elif scheme in ("http", "https"):
+        scheme = "ws" if scheme == "http" else "wss"
+    elif scheme not in ("ws", "wss"):
+        raise RemoteNotConfigured(
+            f'"{stated}" is not a build server address: {scheme} is not one of the '
+            f"schemes a build server speaks.",
+            hint=(
+                "write the address as <host> or <host:port> — a scheme is optional, "
+                "and only ws://, wss://, http:// and https:// are understood"
+            ),
+        )
+    host, _, path = rest.partition("/")
+    if not host:
+        raise RemoteNotConfigured(
+            f'"{stated}" names no build server host.',
+            hint="write the address as <host> or <host:port>, for example attic:8100",
+        )
+    if ":" not in host.rpartition("]")[2]:  # a bare host, or a bracketed IPv6 one
+        host = f"{host}:{DEFAULT_SERVER_PORT}"
+    return f"{scheme}://{host}{SERVER_ENDPOINT if not path else '/' + path}"
 
 
 class RemoteNotConfigured(BuildError):
@@ -268,9 +327,11 @@ class BuildRequest:
     stream: TextIO | None = None
 
     # -- remote --------------------------------------------------------
-    #: The build server's WebSocket address, already resolved: builder
-    #: selection (a configured builder or the fully manual
-    #: ``--build-mode`` rung, ADR 0023) belongs to the caller —
+    #: The build server's address, as a person writes it: a host, a
+    #: ``host:port``, or either with a scheme. :func:`websocket_url` turns
+    #: it into the URL the socket needs. *Selecting* a server belongs to
+    #: the caller — a configured builder or the fully manual
+    #: ``--build-mode`` rung (ADR 0023);
     #: :func:`mcuhome.workbench.configuration.resolve_builder` is the
     #: configured path — and an address is what arrives here.
     server: str | None = None
@@ -629,12 +690,13 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
                 "    with its token in secrets/build-server/attic.yaml, selected via\n"
                 "    --builder attic or once via default_builder;\n"
                 "or fully manually:\n"
-                "    --build-mode remote --build-server <url> [--build-token <token>]\n"
+                "    --build-mode remote --build-server <host[:port]> [--build-token <token>]\n"
                 "A build server is not discovered and has no default: the build "
                 "context carries the device model, so the address is a decision "
                 "rather than a lookup."
             ),
         )
+    url = websocket_url(request.server)
     work_root = _work_root(request, ".mcuhome-remote")
     context_dir = Path(request.context_dir) if request.context_dir is not None else None
     if context_dir is None:
@@ -666,7 +728,7 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         request.on_step("compile", server=request.server)
     result = await sessionclient.run_remote_build(
         context_dir,
-        url=request.server,
+        url=url,
         token=request.token,
         work_root=work_root,
         mode=request.mode,

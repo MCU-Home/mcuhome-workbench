@@ -453,3 +453,47 @@ def test_importing_the_dispatch_does_not_drag_in_the_compiler() -> None:
         "edge is optional (ADR 0020 decision 3) and must stay resolved at "
         "call time"
     )
+
+
+# --------------------------------------------------------------------------
+# A build server's address, as a URL
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("address", "url"),
+    [
+        # What a builder configuration and --build-server document:
+        # "server address (IP/hostname[:port])".
+        ("attic", "ws://attic:8100/ws"),
+        ("attic:8137", "ws://attic:8137/ws"),
+        ("127.0.0.1:8137", "ws://127.0.0.1:8137/ws"),
+        ("[::1]:8137", "ws://[::1]:8137/ws"),
+        ("[::1]", "ws://[::1]:8100/ws"),
+        # Written out in full, which is what somebody who has read the
+        # server's log line will paste.
+        ("ws://attic:8137/ws", "ws://attic:8137/ws"),
+        ("wss://build.example:443/ws", "wss://build.example:443/ws"),
+        # From a browser's address bar, where the same server is http.
+        ("http://attic:8137/ws", "ws://attic:8137/ws"),
+        ("https://build.example/ws", "wss://build.example:8100/ws"),
+        ("  attic:8137  ", "ws://attic:8137/ws"),
+    ],
+)
+def test_a_server_address_becomes_a_websocket_url(address, url) -> None:
+    """``host:port`` is what people write and a URL is what sockets need.
+
+    Nothing bridged the two: the address went verbatim into the connect
+    call, where ``attic:8137`` reads as a URL whose scheme is ``attic``
+    and aiohttp raised — a traceback out of a documented input.
+    """
+    assert buildmethods.websocket_url(address) == url
+
+
+@pytest.mark.parametrize("address", ["", "   ", "://attic", "ftp://attic", "ssh://attic:22"])
+def test_an_address_that_is_not_one_is_refused_in_words(address) -> None:
+    """A refusal naming what is wrong, never a traceback from the socket."""
+    with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
+        buildmethods.websocket_url(address)
+    assert refusal.value.hint
+    assert "<host" in refusal.value.hint
