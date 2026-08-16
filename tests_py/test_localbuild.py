@@ -29,7 +29,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -38,6 +38,7 @@ from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.compiler import localbackend as lb
 from mcuhome.compiler import localbuild
 from mcuhome.compiler.localbackend import Docker
+from mcuhome.model import containerpaths
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
@@ -223,6 +224,31 @@ class Seam:
         self.calls: list[list[str]] = []
         self.exec_request: dict[str, Any] | None = None
         self.describe_invoked = False
+        #: ``container target -> host source``, from the mounts of the
+        #: ``docker run`` that created the container. Container paths are
+        #: the same for every session now, so this map is the only way
+        #: back to a host file — which is the container's own situation.
+        self.mounts: dict[PurePosixPath, Path] = {}
+
+    def _host(self, path: str) -> Path:
+        """*path* as the host spells it, or unchanged if nothing mounts it."""
+        inside = PurePosixPath(path)
+        for target, source in self.mounts.items():
+            if inside == target:
+                return source
+            if target in inside.parents:
+                return source / inside.relative_to(target)
+        return Path(path)
+
+    def _host_view(self, value):
+        """The request document with every path mapped through the mounts."""
+        if isinstance(value, dict):
+            return {key: self._host_view(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._host_view(item) for item in value]
+        if isinstance(value, str) and value.startswith("/"):
+            return str(self._host(value))
+        return value
 
     def __call__(self, argv, on_line=None) -> lb.Completed:
         argv = list(argv)
@@ -240,11 +266,14 @@ class Seam:
             Path(request["result"]).write_text(describe_result_document(), "utf-8")
             return lb.Completed(0, "")
         if verb == "run" and "--detach" in argv:
+            for volume in [argv[i + 1] for i, item in enumerate(argv) if item == "--volume"]:
+                source, target = volume.removesuffix(":ro").split(":")
+                self.mounts[PurePosixPath(target)] = Path(source)
             return lb.Completed(self.start_status, self.container_id + "\n")
         if verb == "exec":
-            request = json.loads(Path(argv[-1]).read_text("utf-8"))
+            request = json.loads(self._host(argv[-1]).read_text("utf-8"))
             self.exec_request = request
-            self.build(request)
+            self.build(self._host_view(request))
             return lb.Completed(self.exec_status, "compiling...\n")
         if verb == "rm":
             return lb.Completed(0, "")
@@ -403,7 +432,7 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
     # be written back by the container.
     start = next(argv for argv in seam.calls if "--detach" in argv)
     mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
-    assert f"{result.context_dir}:{result.context_dir}:ro" in mounts
+    assert f"{result.context_dir}:{containerpaths.CONTEXT}:ro" in mounts
 
 
 # --------------------------------------------------------------------------
@@ -656,3 +685,49 @@ def _image_ok():
 
 def _missing_image():
     return lb.Completed(1, "No such image")
+
+
+def test_the_local_method_mounts_the_users_compiler_cache(tmp_path, model) -> None:
+    """Both cache roles, from this user's cache directory into the container.
+
+    The wiring crosses a repository boundary — the workbench composes,
+    the compiler's backend mounts — and it is the whole difference
+    between a build that recompiles Zephyr every time and one that does
+    not, so it is pinned where the composition happens.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam = _seam()
+    buildmethods.compose_local_build(
+        model,
+        signing_pub=public_key_pem(generate_key_pem(TEST_SCALAR)),
+        sdk_sources=(tmp_path / "src",),
+        work_root=tmp_path / "wr",
+        env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
+        image=IMAGE,
+        docker=Docker(runner=seam),
+    )
+    start = next(argv for argv in seam.calls if "--detach" in argv)
+    mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
+    cache = tmp_path / "xdg" / "mcuhome" / "ccache"
+    assert f"{cache / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in mounts
+    assert f"{cache / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro" in mounts
+
+
+def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> None:
+    """`ccache_dir` resolves through the configuration layers, so the
+    caller states it and this composition passes it on unchanged."""
+    make_sdk_source(tmp_path / "src")
+    seam = _seam()
+    buildmethods.compose_local_build(
+        model,
+        signing_pub=public_key_pem(generate_key_pem(TEST_SCALAR)),
+        sdk_sources=(tmp_path / "src",),
+        work_root=tmp_path / "wr",
+        env={"HOME": str(tmp_path / "home")},
+        image=IMAGE,
+        ccache_dir=tmp_path / "fast-disk",
+        docker=Docker(runner=seam),
+    )
+    start = next(argv for argv in seam.calls if "--detach" in argv)
+    mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
+    assert f"{tmp_path / 'fast-disk' / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in mounts

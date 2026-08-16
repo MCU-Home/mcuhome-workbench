@@ -158,6 +158,16 @@ OPTIONS: tuple[Option, ...] = (
         default=1,
         help="parallel compile jobs a build may use",
     ),
+    # One cache for everything this user builds — its entries are content
+    # addresses, so two projects share one exactly when the compilation
+    # is the same compilation. Left unset it lands under the user's cache
+    # directory; setting it moves the cache to a faster disk, or off a
+    # network home directory.
+    Option(
+        "ccache_dir",
+        kind="path",
+        help="where the compiler cache lives; unset means the user cache directory",
+    ),
     # ADR 0023: builders are deployment configuration and live in files
     # only — the fully manual rung (--build-mode plus its flags) is the
     # per-invocation channel and bypasses the list entirely.

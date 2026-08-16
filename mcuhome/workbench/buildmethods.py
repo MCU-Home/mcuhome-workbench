@@ -242,6 +242,10 @@ class BuildRequest:
     # -- local ---------------------------------------------------------
     #: Build-container reference to compile in; ``None`` takes the default.
     image: str | None = None
+    #: Where the compiler cache lives on this machine. ``None`` takes the
+    #: user's cache directory, which is what every build does unless
+    #: somebody moved it — one cache per user, shared by every project.
+    ccache_dir: Path | None = None
 
     # -- local-dev -----------------------------------------------------
     #: The **public** key file ``west`` compiles into the bootloader.
@@ -405,6 +409,7 @@ def compose_local_build(
     image: str | None = None,
     jobs: int = 1,
     mode: str = "clean",
+    ccache_dir: Path | None = None,
     created: datetime | None = None,
     on_line: Any = None,
     on_step: Any = None,
@@ -464,6 +469,7 @@ def compose_local_build(
         env=dict(env),
         jobs=jobs,
         mode=mode,
+        ccache_dir=ccache_dir,
         on_line=on_line,
         docker=docker,
     )
@@ -487,6 +493,7 @@ async def _run_local(request: BuildRequest) -> BuildOutcome:
         image=request.image,
         jobs=request.jobs,
         mode=request.mode,
+        ccache_dir=request.ccache_dir,
         on_line=request.on_line,
         on_step=request.on_step,
     )

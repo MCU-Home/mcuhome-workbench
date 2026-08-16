@@ -65,6 +65,7 @@ dashboard-specific decisions live in
 | [0023](draft/0023-builder-configuration.md) | Builder configuration |
 | [0024](draft/0024-sdk-and-tools-repositories.md) | The SDK repository and the tools repository (public from here on) |
 | [0025](draft/0025-package-distribution.md) | Package distribution: host layout, signing and mirrors |
+| [0026](draft/0026-container-paths-and-the-compiler-cache.md) | Where a build sits in its container, and where its cache lives |
 
 ## Elsewhere in the sequence
 

@@ -41,7 +41,7 @@ import json
 import tarfile
 import time
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
@@ -200,6 +200,10 @@ class FakeDocker:
     run_program: Any = None
     containers: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
+    #: ``container target -> host source``, from the mounts of the
+    #: ``docker run`` that created the session's container. The request
+    #: document names container paths, and this is the only way back.
+    mounts: dict[PurePosixPath, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         inspected = {
@@ -243,18 +247,41 @@ class FakeDocker:
         if rest[:1] == ["run"]:
             identity = f"{len(self.containers):064x}"
             self.containers.append(identity)
+            for volume in [rest[i + 1] for i, item in enumerate(rest) if item == "--volume"]:
+                source, target = volume.removesuffix(":ro").split(":")
+                self.mounts[PurePosixPath(target)] = Path(source)
             return bs_container.Completed(status=0, output=identity + "\n")
         if rest[:1] == ["rm"]:
             self.removed.append(rest[-1])
             return bs_container.Completed(status=0, output="")
         raise AssertionError(f"the fake docker was asked something unexpected: {argv}")
 
+    def host(self, path: str) -> Path:
+        """A container path as the host spells it, through the mounts."""
+        inside = PurePosixPath(path)
+        for target, source in self.mounts.items():
+            if inside == target:
+                return source
+            if target in inside.parents:
+                return source / inside.relative_to(target)
+        return Path(path)
+
+    def host_view(self, value):
+        """The request document with every path mapped through the mounts."""
+        if isinstance(value, dict):
+            return {key: self.host_view(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self.host_view(item) for item in value]
+        if isinstance(value, str) and value.startswith("/"):
+            return str(self.host(value))
+        return value
+
     async def spawn(self, argv, *, on_line):
         self.calls.append(list(argv))
-        action, request_path = argv[-2], Path(argv[-1])
+        action, request_path = argv[-2], self.host(argv[-1])
         request = json.loads(request_path.read_text())
         self.invocations.append(Invocation(action=action, argv=list(argv), request=request))
-        return self.run_program(action, request, on_line)
+        return self.run_program(action, self.host_view(request), on_line)
 
     def _describe(self, rest: list[str]) -> Any:
         request = Path(rest[-1])
