@@ -89,6 +89,7 @@ from mcuhome.workbench.contextdir import context_facts, create_build_context, lo
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
 __all__ = [
+    "DEFAULT_MAX_WAIT_SECONDS",
     "LOCAL",
     "LOCAL_DEV",
     "METHODS",
@@ -116,6 +117,15 @@ LOCAL_DEV = "local-dev"
 
 #: The same as ``local``, through a build server (ADR 0019).
 REMOTE = "remote"
+
+#: How long a build waits for a turn on a busy build server before it
+#: stops. Six hours, and it is not a fairness rule: waiting is bounded so
+#: that a build left waiting by something that will never resolve ends on
+#: its own. ``0`` removes the bound, which is what a private server
+#: wants. It lives here rather than in the session client because it is
+#: what a caller sets on :class:`BuildRequest`, and because reading it
+#: must not cost the ``remote`` extra.
+DEFAULT_MAX_WAIT_SECONDS = 21600.0
 
 #: Every method name, in the order a refusal lists them.
 METHODS = (LOCAL, LOCAL_DEV, REMOTE)
@@ -349,6 +359,21 @@ class BuildRequest:
     #: travels: freezing it is the server's act, and the client checks the
     #: identity it answers with (E37).
     context_dir: Path | None = None
+    #: Wait when the build server has no room. A busy server hands out a
+    #: turn instead of a session, and waiting for it is what a person
+    #: starting a build almost always wants; ``False`` is the caller that
+    #: would rather be told now.
+    wait_for_turn: bool = True
+    #: How long that wait may last in total, in seconds. ``0`` removes
+    #: the bound.
+    max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
+    #: Called with a
+    #: :class:`~mcuhome.workbench.sessionclient.SeatWait` each time a
+    #: turn is refused, so a caller can say something true while nothing
+    #: is happening. Deliberately **not** a step: the build has not
+    #: started and may never start, and a step bar claiming otherwise
+    #: would be showing progress that does not exist.
+    on_wait: Callable[[Any], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -733,6 +758,9 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
         work_root=work_root,
         mode=request.mode,
         on_line=request.on_line,
+        on_wait=request.on_wait,
+        wait=request.wait_for_turn,
+        max_wait=request.max_wait_seconds,
     )
     return BuildOutcome(
         method=REMOTE,

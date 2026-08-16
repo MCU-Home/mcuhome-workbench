@@ -136,6 +136,7 @@ from mcuhome.workbench import __version__
 from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildmethods import (
+    DEFAULT_MAX_WAIT_SECONDS,
     DEFAULT_METHOD,
     LOCAL,
     LOCAL_DEV,
@@ -221,6 +222,7 @@ __all__ = [
     "BUILD_DIR",
     "CONFIG_FILE",
     "CONFIG_SCOPES",
+    "DEFAULT_MAX_WAIT_SECONDS",
     "DEFAULT_METHOD",
     "DEVICES_DIR",
     "DEVICE_ENTRY",

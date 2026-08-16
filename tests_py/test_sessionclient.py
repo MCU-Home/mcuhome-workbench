@@ -2661,3 +2661,186 @@ def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path)
         assert SDK_VERSION in rendered or "ab" * 32 in rendered
 
     run(scenario())
+
+
+# --------------------------------------------------------------------------
+# Waiting for a turn
+# --------------------------------------------------------------------------
+
+
+async def _admit(harness: Harness, tmp_path: Path, **waiting: Any) -> sc.SessionClient:
+    """One trip through the admission loop, against the real server."""
+    return await sc._wait_for_admission(
+        lambda: client_for(harness, tmp_path),
+        profile="oneshot",
+        wait=waiting.pop("wait", True),
+        max_wait=waiting.pop("max_wait", sc.DEFAULT_MAX_WAIT_SECONDS),
+        on_wait=waiting.pop("on_wait", None),
+    )
+
+
+def test_a_busy_server_hands_out_a_turn_and_this_client_presents_it(tmp_path: Path) -> None:
+    """The seat makes the round trip, driven by the client that owns it.
+
+    The server's own coverage of the queue is the server's; what is
+    asserted here is that this client reads the offer out of a refusal it
+    did not invent, sends the token back, and is admitted on it.
+    """
+
+    async def scenario() -> None:
+        async with (
+            real_server(tmp_path, max_sessions=1) as harness,
+            client_for(harness, tmp_path) as sitting,
+        ):
+            await sitting.capabilities()
+            await sitting.open_session()
+
+            async with client_for(harness, tmp_path) as waiting:
+                await waiting.capabilities()
+                with pytest.raises(sc.ServerRefusal) as refusal:
+                    await waiting.open_session()
+            offer = sc.seat_offer(refusal.value)
+            assert offer is not None
+            assert offer.token.startswith("seat-")
+            assert offer.retry_after > 0
+
+            await sitting.close_session()
+
+            async with client_for(harness, tmp_path) as returning:
+                await returning.capabilities()
+                admitted = await returning.open_session(seat=offer.token)
+            assert admitted["session"]["id"]
+
+    run(scenario())
+
+
+def test_this_client_waits_for_its_turn_and_then_takes_it(tmp_path: Path) -> None:
+    """The loop, end to end: refused, waits the time it was given, gets in.
+
+    The socket does not survive the wait — each attempt is a whole
+    connection — which is the point of the token: a client that held its
+    connection open would spend one of the server's connection slots for
+    the length of somebody else's build.
+    """
+
+    async def scenario() -> None:
+        async with real_server(tmp_path, max_sessions=1, seat_retry_seconds=1) as harness:
+            sitting = client_for(harness, tmp_path)
+            await sitting.connect()
+            await sitting.capabilities()
+            await sitting.open_session()
+
+            seen: list[sc.SeatWait] = []
+
+            async def leave_after_one_refusal() -> None:
+                while not seen:
+                    await asyncio.sleep(0.05)
+                await sitting.close_session()
+                await sitting.close()
+
+            leaving = asyncio.create_task(leave_after_one_refusal())
+            admitted = await _admit(harness, tmp_path, on_wait=seen.append)
+            await leaving
+            try:
+                assert admitted.session_id is not None
+            finally:
+                await admitted.close()
+
+        assert [wait.attempt for wait in seen] == [1]
+        assert seen[0].retry_after == 1
+        assert seen[0].waited == 0
+
+    run(scenario())
+
+
+def test_a_refusal_that_promises_nothing_is_raised_as_it_stands(tmp_path: Path) -> None:
+    """No turn was issued, so there is nothing to come back with.
+
+    Retrying anyway would be the retry storm the seat exists to prevent,
+    and the difference between the two refusals is exactly that promise.
+    """
+
+    async def scenario() -> None:
+        async with (
+            real_server(tmp_path, max_sessions=1, max_seats=1) as harness,
+            client_for(harness, tmp_path) as sitting,
+        ):
+            await sitting.capabilities()
+            await sitting.open_session()
+            # The one seat this server holds goes to the first waiter.
+            async with client_for(harness, tmp_path) as first:
+                await first.capabilities()
+                with pytest.raises(sc.ServerRefusal):
+                    await first.open_session()
+
+            with pytest.raises(sc.ServerRefusal) as refusal:
+                await _admit(harness, tmp_path)
+        assert refusal.value.code == "session.no-seat"
+        assert sc.seat_offer(refusal.value) is None
+
+    run(scenario())
+
+
+def test_the_wait_bound_is_the_callers_and_stops_before_it_sleeps_past_it(
+    tmp_path: Path,
+) -> None:
+    """A bound a sleep would cross is a bound already reached.
+
+    Sleeping to a moment at which this gives up anyway would spend a
+    person's patience on an answer already known.
+    """
+
+    async def scenario() -> None:
+        async with (
+            real_server(tmp_path, max_sessions=1, seat_retry_seconds=30) as harness,
+            client_for(harness, tmp_path) as sitting,
+        ):
+            await sitting.capabilities()
+            await sitting.open_session()
+            started = time.monotonic()
+            with pytest.raises(sc.WaitedTooLong) as gave_up:
+                await _admit(harness, tmp_path, max_wait=5.0)
+        assert time.monotonic() - started < 5.0
+        assert gave_up.value.attempts == 1
+
+    run(scenario())
+
+
+def test_not_waiting_is_one_attempt_and_the_refusal(tmp_path: Path) -> None:
+    """The caller that would rather be told now."""
+
+    async def scenario() -> None:
+        async with (
+            real_server(tmp_path, max_sessions=1) as harness,
+            client_for(harness, tmp_path) as sitting,
+        ):
+            await sitting.capabilities()
+            await sitting.open_session()
+            with pytest.raises(sc.ServerRefusal) as refusal:
+                await _admit(harness, tmp_path, wait=False)
+        assert refusal.value.code == "session.limit-exceeded"
+
+    run(scenario())
+
+
+def test_a_seat_offer_is_read_defensively(tmp_path: Path) -> None:
+    """The details are another process's output, not this one's.
+
+    A token that is not a string or a wait that is not a number is no
+    offer rather than a crash in a client that was only asking.
+    """
+    del tmp_path
+
+    def refusal(details: dict[str, Any]) -> sc.ServerRefusal:
+        return sc.ServerRefusal(
+            {"code": "session.limit-exceeded", "retryable": True, "details": details},
+            verb="open-session",
+        )
+
+    assert sc.seat_offer(refusal({})) is None
+    assert sc.seat_offer(refusal({"seat": "seat-x"})) is None
+    assert sc.seat_offer(refusal({"seat": 7, "retry_after_seconds": 5})) is None
+    assert sc.seat_offer(refusal({"seat": "seat-x", "retry_after_seconds": "5"})) is None
+    assert sc.seat_offer(refusal({"seat": "seat-x", "retry_after_seconds": True})) is None
+    offer = sc.seat_offer(refusal({"seat": "seat-x", "retry_after_seconds": 5}))
+    assert offer == sc.SeatOffer(token="seat-x", retry_after=5.0)

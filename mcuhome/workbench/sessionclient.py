@@ -114,11 +114,13 @@ from mcuhome.model.context import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
+from mcuhome.workbench.buildmethods import DEFAULT_MAX_WAIT_SECONDS
 from mcuhome.workbench.contextdir import read_context_request
 
 __all__ = [
     "DEFAULT_CALL_TIMEOUT",
     "DEFAULT_CHUNK_BYTES",
+    "DEFAULT_MAX_WAIT_SECONDS",
     "E44_CAPS",
     "MAX_ARTIFACT_ARCHIVE_BYTES",
     "MAX_ARTIFACT_BYTES",
@@ -139,11 +141,15 @@ __all__ = [
     "RemoteDependencyMissing",
     "RemoteError",
     "RemoteTransportError",
+    "SeatOffer",
+    "SeatWait",
     "ServerRefusal",
     "SessionClient",
     "SessionPoisoned",
+    "WaitedTooLong",
     "pack_context",
     "run_remote_build",
+    "seat_offer",
 ]
 
 #: Where a caller's own callback is reported when it raises. A sink is a
@@ -276,6 +282,84 @@ class SessionPoisoned(ServerRefusal):
     wants the logs. Every *working* command from here on is refused, so
     this client marks the session terminal and does not retry into it.
     """
+
+
+@dataclass(frozen=True)
+class SeatOffer:
+    """The turn a busy build server held for this client.
+
+    A refusal that carries one is an undertaking to serve this client in
+    its turn; a refusal without one is not, which is the whole difference
+    between ``session.limit-exceeded`` and ``session.no-seat``.
+
+    There is no position in here, and that is deliberate on the server's
+    side rather than an omission on this one: the order is the server's
+    business and a later version may admit a paying client ahead of a
+    free one, so what a client is told — and all it can act on — is when
+    to come back.
+    """
+
+    #: The opaque token, presented in the next ``open-session``.
+    token: str
+    #: Seconds to wait first. Relative rather than a timestamp, because
+    #: over a wait of minutes the least reliable clock is this one.
+    retry_after: float
+
+
+@dataclass(frozen=True)
+class SeatWait:
+    """One wait, reported to a caller that wants to show it.
+
+    Handed to ``on_wait`` each time a turn is refused, so a caller can
+    say something true while nothing happens. It is not a build step: the
+    build has not started and may never start, and a step bar that
+    claimed otherwise would be showing progress that does not exist.
+    """
+
+    #: Seconds until the next attempt — what the server just asked for.
+    retry_after: float
+    #: Seconds spent waiting so far, across every attempt.
+    waited: float
+    #: How many times this client has been refused, starting at 1.
+    attempt: int
+
+
+class WaitedTooLong(RemoteError):
+    """The wait bound ran out before a turn came free."""
+
+    def __init__(self, *, waited: float, attempts: int) -> None:
+        super().__init__(
+            f"The build server was still busy after {int(waited)} seconds and "
+            f"{attempts} attempts, so this build gave up rather than wait longer.",
+            hint=(
+                "the wait bound is the caller's, not the server's — raise it, remove it, "
+                "or build somewhere else"
+            ),
+        )
+        self.waited = waited
+        self.attempts = attempts
+
+
+def seat_offer(refusal: ServerRefusal) -> SeatOffer | None:
+    """The turn *refusal* held, or ``None`` if it held none.
+
+    ``None`` covers every refusal that is not this one, an older server
+    that has no seats to give, and the typed refusal that says outright
+    that no turn was issued (``session.no-seat``) — all of which mean the
+    same thing to a caller: there is nothing here to come back with.
+
+    The details are read defensively because they are another process's
+    output: a token that is not a string, or a wait that is not a number,
+    is no offer rather than a crash in a client that was only asking.
+    """
+    details = refusal.details if isinstance(refusal.details, dict) else {}
+    token = details.get("seat")
+    if not isinstance(token, str) or not token:
+        return None
+    retry_after = details.get("retry_after_seconds")
+    if not isinstance(retry_after, int | float) or isinstance(retry_after, bool):
+        return None
+    return SeatOffer(token=token, retry_after=max(0.0, float(retry_after)))
 
 
 class ContextIdMismatch(RemoteError):
@@ -1552,7 +1636,11 @@ class SessionClient:
         return self.capabilities_payload
 
     async def open_session(
-        self, *, profile: str = "oneshot", context_format: int = CONTEXT_VERSION
+        self,
+        *,
+        profile: str = "oneshot",
+        context_format: int = CONTEXT_VERSION,
+        seat: str | None = None,
     ) -> dict[str, Any]:
         """``open-session`` — admission, and nothing about the context.
 
@@ -1560,6 +1648,12 @@ class SessionClient:
         context-format version and the profile. The pins arrive later, in
         ``context.yaml``, because a session is admitted on no context at
         all.
+
+        *seat* is not an operand and negotiates nothing: it is the token a
+        busy server handed out with an earlier refusal, and presenting it
+        asks for the turn it stands for. It is sent only when there is one
+        — a client never invents a token, so a server that has no seats
+        never sees the field.
         """
         payload = await self._call(
             "open-session",
@@ -1567,6 +1661,7 @@ class SessionClient:
                 "profile": profile,
                 "protocol_version": SESSION_PROTOCOL_VERSION,
                 "context_format": context_format,
+                **({"seat": seat} if seat else {}),
             },
         )
         session = payload.get("session") or {}
@@ -2150,6 +2245,68 @@ class RemoteBuildResult:
     invocation_id: str = ""
 
 
+async def _wait_for_admission(
+    make_client: Callable[[], SessionClient],
+    *,
+    profile: str,
+    wait: bool,
+    max_wait: float,
+    on_wait: Callable[[SeatWait], None] | None,
+) -> SessionClient:
+    """Connect, ask for a session, and keep the turn a busy server gave.
+
+    **The socket does not survive the wait.** A client that held its
+    connection open would spend one of the server's connection slots and
+    one of its inflight budgets for the whole wait, and both are caps
+    that server announces; the seat token is what makes that unnecessary
+    — it costs the server about forty bytes and outlives this process's
+    socket, its network and, if a caller wants, this process.
+
+    So each attempt is a whole connection: dial, ``capabilities`` (which
+    sizes the upload), ``open-session``. Refused with a turn in hand, the
+    connection is closed again before the sleep — which is also what
+    makes ``Ctrl+C`` clean here, because the only thing outstanding
+    during the wait is one cancellable sleep.
+
+    A refusal carrying no turn is raised as it stands: nothing was
+    promised, so there is nothing to come back with, and a client that
+    retried anyway would be the retry storm the seat exists to prevent.
+    """
+    seat: str | None = None
+    waited = 0.0
+    attempt = 0
+    while True:
+        client = make_client()
+        await client.connect()
+        try:
+            await client.capabilities()
+            await client.open_session(profile=profile, seat=seat)
+        except ServerRefusal as refusal:
+            offer = seat_offer(refusal)
+            if offer is None or not wait:
+                await client.close()
+                raise
+            attempt += 1
+            # A bound that would be crossed *by this sleep* is a bound
+            # already reached: sleeping to a moment at which this gives
+            # up anyway would be an hour of a person's patience spent on
+            # an answer already known.
+            if max_wait > 0 and waited + offer.retry_after > max_wait:
+                await client.close()
+                raise WaitedTooLong(waited=waited, attempts=attempt) from refusal
+            seat = offer.token
+            await client.close()
+            if on_wait is not None:
+                on_wait(SeatWait(retry_after=offer.retry_after, waited=waited, attempt=attempt))
+            await asyncio.sleep(offer.retry_after)
+            waited += offer.retry_after
+            continue
+        except BaseException:
+            await client.close()
+            raise
+        return client
+
+
 async def run_remote_build(
     context_dir: Path,
     *,
@@ -2161,6 +2318,9 @@ async def run_remote_build(
     profile: str = "oneshot",
     on_line: LineSink | None = None,
     on_event: EventSink | None = None,
+    on_wait: Callable[[SeatWait], None] | None = None,
+    wait: bool = True,
+    max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
     timeout: float | None = None,
 ) -> RemoteBuildResult:
     """Drive one invocation through a build server and take the artifacts back.
@@ -2179,6 +2339,12 @@ async def run_remote_build(
     a line sink. Signing is the shared host-side step afterwards (E55,
     E56) and no key is a parameter of this function, of the client it
     drives, or of any frame either of them sends.
+
+    A server with no room hands out a turn instead of a session, and this
+    waits for it: *wait* turns that off — one attempt, then the refusal —
+    and *max_wait* bounds it (``0`` removes the bound). ``on_wait`` is
+    told about each wait, so a caller can say something true while
+    nothing is happening.
     """
     if action not in ("build", "verify"):
         raise RemoteError(
@@ -2192,11 +2358,20 @@ async def run_remote_build(
     # signer scanning this directory afterwards finds.
     out = Path(work_root) / "out"
     await asyncio.to_thread(shutil.rmtree, out, ignore_errors=True)
-    async with SessionClient(
-        url, token=token, on_line=on_line, on_event=on_event, spool_dir=Path(work_root) / "spool"
-    ) as client:
-        await client.capabilities()
-        await client.open_session(profile=profile)
+    client = await _wait_for_admission(
+        lambda: SessionClient(
+            url,
+            token=token,
+            on_line=on_line,
+            on_event=on_event,
+            spool_dir=Path(work_root) / "spool",
+        ),
+        profile=profile,
+        wait=wait,
+        max_wait=max_wait,
+        on_wait=on_wait,
+    )
+    try:
         try:
             await client.send_context(Path(context_dir))
             identity = await client.lock_context()
@@ -2225,3 +2400,5 @@ async def run_remote_build(
         finally:
             with contextlib.suppress(Exception):
                 await client.close_session()
+    finally:
+        await client.close()
