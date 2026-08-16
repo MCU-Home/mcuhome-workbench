@@ -230,25 +230,54 @@ class Seam:
         #: back to a host file — which is the container's own situation.
         self.mounts: dict[PurePosixPath, Path] = {}
 
-    def _host(self, path: str) -> Path:
-        """*path* as the host spells it, or unchanged if nothing mounts it."""
+    #: The request-document fields that name a directory the program is
+    #: given (§5.2). Everything else that starts with a slash is not a
+    #: path: ``required`` holds JSON pointers, and a ``trees`` entry may
+    #: name a tree that lives in the image and is mounted by nobody.
+    PATH_FIELDS = ("result", "out", "work", "tmp", "context", "events", "cancel")
+
+    def _host(self, path: str, *, required: bool = True) -> Path:
+        """*path* as the host spells it, through this container's mounts.
+
+        A path no ``--volume`` reaches does not exist inside a real
+        container, so resolving it anyway would let the suite pass over
+        the one defect this layout is about: a backend naming a directory
+        the container cannot see.
+        """
         inside = PurePosixPath(path)
         for target, source in self.mounts.items():
             if inside == target:
                 return source
             if target in inside.parents:
                 return source / inside.relative_to(target)
+        if required:
+            raise AssertionError(
+                f"{path} is in the request document and no --volume of "
+                f"{sorted(map(str, self.mounts))} mounts it: inside a real container "
+                "that path does not exist"
+            )
         return Path(path)
 
-    def _host_view(self, value):
-        """The request document with every path mapped through the mounts."""
-        if isinstance(value, dict):
-            return {key: self._host_view(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._host_view(item) for item in value]
-        if isinstance(value, str) and value.startswith("/"):
-            return str(self._host(value))
-        return value
+    def _host_view(self, document):
+        """The request document as the host can act on it.
+
+        Every field of :data:`PATH_FIELDS` has to be reachable through a
+        mount; a ``trees`` entry and a shared cache need not be, and are
+        translated only when they are.
+        """
+        view = dict(document)
+        for key in self.PATH_FIELDS:
+            if key in view:
+                view[key] = str(self._host(view[key]))
+        if isinstance(view.get("trees"), dict):
+            view["trees"] = {
+                name: {**entry, "path": str(self._host(entry["path"], required=False))}
+                for name, entry in view["trees"].items()
+            }
+        if isinstance(view.get("ccache"), dict):
+            cache = view["ccache"]
+            view["ccache"] = {**cache, "path": str(self._host(cache["path"], required=False))}
+        return view
 
     def __call__(self, argv, on_line=None) -> lb.Completed:
         argv = list(argv)

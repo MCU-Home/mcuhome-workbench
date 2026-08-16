@@ -150,9 +150,10 @@ def render_starter(name: str, *, board: str, friendly_name: str | None = None) -
     lines += [
         "  matter:",
         "    enabled: true",
-        "    # The three keys below are this device's commissioning identity, and",
-        "    # they are drawn once, by mcuhome device matter-pairing --new, so every",
-        "    # this device is byte-identical. Do not write them by hand.",
+        "    # The three keys below are this device's commissioning identity.",
+        "    # They are drawn once, by mcuhome device matter-pairing --new, and",
+        "    # rebuilding never changes them — a device whose identity moved has",
+        "    # to be commissioned again. Do not write them by hand.",
         "",
         "# The hardware this device has, and what it looks like to a controller.",
         "# Both sections are commented out because MCUHome cannot guess what is",
