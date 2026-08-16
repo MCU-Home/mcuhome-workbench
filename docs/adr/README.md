@@ -64,6 +64,7 @@ dashboard-specific decisions live in
 | [0022](draft/0022-project-and-configuration-model.md) | The project directory and the configuration model |
 | [0023](draft/0023-builder-configuration.md) | Builder configuration |
 | [0024](draft/0024-sdk-and-tools-repositories.md) | The SDK repository and the tools repository (public from here on) |
+| [0025](draft/0025-package-distribution.md) | Package distribution: host layout, signing and mirrors |
 
 ## Elsewhere in the sequence
 
