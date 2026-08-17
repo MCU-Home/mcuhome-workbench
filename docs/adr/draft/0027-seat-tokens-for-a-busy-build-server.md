@@ -212,6 +212,60 @@ its own. Nothing is being built yet and may never be; a step bar
 claiming otherwise would show progress that does not exist. What the CLI
 does with it is cli ADR 0004's.
 
+### 9. A session nobody is attached to is handed to a client that waits
+
+Measured with `--max-sessions 1`, and it is the reason this decision
+exists: a client killed without closing its session holds the whole
+server for the full idle timeout — ten minutes by default — because
+**connection loss is never abandonment** (ADR 0019). That rule is what
+makes `attach-session` worth having and it is not being weakened. What
+it stops being is unconditional.
+
+Before admission refuses, it looks for a session that is
+**unattended**, has **nothing running**, and has been quiet for
+`--reconnect-grace-seconds` (default 60). Such a session is released —
+lease, build environment and directory — and the caller takes its slot.
+Each condition is a promise kept:
+
+- *Nothing running* is "work is not idleness", the same exemption the
+  idle timeout makes. A detached build survives a queue forming behind
+  it.
+- *Unattended* means no live connection has named this session. Any
+  command counts, not `attach-session` alone: a client that reconnects
+  and simply carries on — a five-minute upload on a fresh socket — is
+  driving its session and must not look abandoned while it does.
+  Attachment is bookkeeping, never permission; nothing is authorized by
+  it.
+- The grace runs from the *later* of the last command and the moment the
+  last socket went away, because a client that goes quiet and then loses
+  its connection has not been unattended for the length of its silence.
+  Sixty seconds is a reconnect, generously.
+
+**Only under scarcity.** With a free slot the server takes nothing:
+there is no client whose wait an idle session is costing, and a lease
+broken for nothing is just a broken lease. So a private server, where a
+queue is rare, never sees this at all.
+
+**No new wire surface, and deliberately no event.** ADR 0019 parks a
+"proactive session-scoped eviction event"; it is not needed here,
+because a session with nobody attached has nobody to send an event to.
+The client finds out the way it finds out about every session it no
+longer has: `session.expired` on its next command, with a sentence that
+says another client was waiting rather than that its lease ran out —
+different news, and a client may not have known this could happen at
+all.
+
+The freed slot then follows decision 5 unchanged: if anybody is queued
+it is held for the head, so a walk-in can release a session and still
+be turned away with a seat of its own. Admission only *marks* the
+session — removing a container is asynchronous and admission is not —
+and `open-session` drains that mark immediately, with the reaper's
+sweep as the backstop.
+
+There is no way to switch this off. "Never" is the behaviour it
+replaces; an operator who wants a longer leash raises the grace, which
+the idle timeout bounds from above anyway.
+
 ## Consequences
 
 - The `subprocess` profile serves one session at a time by
