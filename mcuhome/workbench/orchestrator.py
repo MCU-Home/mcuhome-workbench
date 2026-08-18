@@ -68,6 +68,12 @@ import zstandard
 # stays the name every caller already uses.
 from mcuhome.model import containerpaths
 from mcuhome.model.artifacts import Artifact
+
+# The label names are the *contract's* vocabulary and belong to neither
+# end of it: this repository reads them off an image, the repository that
+# builds the image writes them, and a build server checks them. They are
+# stated once, beside the image they describe.
+from mcuhome.model.buildimage import CONTRACT_LABEL, TOOLCHAIN_LABEL, ZEPHYR_LABEL
 from mcuhome.model.context import ContextManifest
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
@@ -82,9 +88,9 @@ from mcuhome.model.invocation import ACTIONS, CONTRACT_VERSION, REQUEST_VERSIONS
 # is the workbench's job (E65) and by the time a context exists its pin
 # is one version, not a range.
 from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME
-from mcuhome.model.toolchain import satisfies_line
 from packaging.version import InvalidVersion, Version
 
+from mcuhome.workbench.buildenv import local_address
 from mcuhome.workbench.contextdir import read_context_manifest
 
 __all__ = [
@@ -201,17 +207,6 @@ _CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}\Z")
 #: Every field §7.1.1 makes mandatory inside a ``program`` block, except
 #: ``trees``, which is mandatory only in a ``describe`` result.
 PROGRAM_FIELDS = ("id", "version", "contract", "request", "result", "actions")
-
-#: The three ``org.mcuhome.*`` image labels §2.1 gives a meaning. Only the
-#: first has a counterpart in the ``program`` block; the other two are the
-#: coupling labels §2.1.1 writes a compatibility constraint over, so what
-#: is checked about them is only that they are **present** — "absence is
-#: never read as compatible". Spelled here rather than imported: this
-#: package must not reach into the build server (ADR 0020 decision 4), and
-#: the label strings are the contract's, not either implementation's.
-CONTRACT_LABEL = "org.mcuhome.contract"
-ZEPHYR_LABEL = "org.mcuhome.zephyr"
-TOOLCHAIN_LABEL = "org.mcuhome.toolchain"
 
 #: A generous bound on what the SDK archive unpacks to. Not a policy
 #: anyone tunes — an operator who does not trust an SDK source should not
@@ -348,6 +343,12 @@ class ImageProfile:
     digest: str | None
     labels: dict[str, str]
     program: dict[str, Any]
+    #: The image's own content identity on this host — what docker calls
+    #: its ID. It is what pins an environment that was **built here and
+    #: never pushed**: such an image has no repository digest, because no
+    #: registry has ever named its bytes, and this is the only identity it
+    #: has. ``""`` when the inspect did not report one.
+    image_id: str = ""
 
     @property
     def identity(self) -> str:
@@ -409,11 +410,15 @@ class BackendConfig:
     ``sdk_sources`` are operator-configured local directories, searched in
     order (ADR 0019 §8, contract v1's first tier — E48). Everything else
     is the resource shape of the one container this backend starts.
+
+    **Which image is not here.** The context names it, pinned to a
+    digest, and a backend that could be told a different one would be a
+    way to build a context in an environment its identity does not
+    claim.
     """
 
     sdk_sources: tuple[Path, ...]
     jobs: int
-    image: str | None = None
     #: Root of the host's compiler cache — the parent of the two role
     #: directories, from :func:`mcuhome.workbench.buildenv.ccache_directory`.
     #: ``None`` mounts nothing, and the cache then lives in the container
@@ -607,6 +612,17 @@ class Docker:
         runner = _run_command if self._runner is None else self._runner
         return runner(list(argv), on_line)
 
+    def run(self, argv: Sequence[str], on_line: LineSink | None = None) -> Completed:
+        """Any docker command, through this seam.
+
+        Public because the seam is only worth having if it covers *all*
+        of docker: the checks that happen before a build — is the daemon
+        up, is the image here, fetch it — are docker commands too, and a
+        caller that stubbed this class but not those would be running a
+        real ``docker pull`` from inside its own test.
+        """
+        return self._invoke(argv, on_line)
+
     def inspect(self, reference: str) -> ImageProfile | None:
         """One image's facts as an :class:`ImageProfile`, or ``None`` when absent.
 
@@ -625,6 +641,7 @@ class Docker:
             digest=_repo_digest(facts),
             labels=_labels(facts),
             program={},
+            image_id=str(facts.get("Id") or ""),
         )
 
     def read_static_describe(self, image: str) -> dict[str, Any] | None:
@@ -1358,70 +1375,47 @@ class LocalBackend:
             self.docker.remove(container)
 
     def _resolve_image(self, manifest: ContextManifest) -> ImageProfile:
-        """The image the manifest records, resolved and cross-checked (§9.1).
+        """The image the context pins, found on this host and cross-checked.
 
-        The reference is resolved **by this backend's own** ``docker image
-        inspect`` (E51: the workbench runs its own inspect; there is no
-        capabilities verb, which is the remote method's). Two things are
-        then cross-checked against the image actually found, and they are
-        the two halves E61 separates:
+        The context names one environment, pinned to a digest, and that is
+        what runs — there is no reference for this backend to choose and
+        none for a caller to override. The image is addressed **by its
+        digest**, which is what makes the check below a formality rather
+        than a hope: docker resolves `repo@sha256:…` to those bytes or to
+        nothing.
 
-        * the **requirement** — ``manifest.zephyr``, what the context
-          asked for — against the image's ``org.mcuhome.zephyr`` label.
-          This is the check that matters: a context is built by a
-          container of the line its model was resolved against, or it is
-          not built.
-        * the **resolution** — ``manifest.container.digest``, what a
-          backend recorded when it locked this context — against the
-          digest the image reports now. A ``None`` on either side is
-          tolerated: an image built locally and never pushed names no
-          pinnable bytes, which is a fact about it rather than a
-          mismatch.
+        It is resolved by this backend's own ``docker image inspect``
+        (E51: the workbench runs its own inspect; there is no
+        capabilities verb, which is the remote method's), and what the
+        inspect answers is cross-checked against the pin. The check
+        catches the one thing addressing by digest cannot: an image that
+        is present under those bytes but reports a *repository* digest of
+        its own that differs — a locally built image tagged over a pulled
+        one, which is the ordinary way a developer ends up building
+        against something the manifest does not describe.
 
-        The second check is a weaker statement than contract v1's, and
-        deliberately so: under v2 the digest is this side's own record
-        rather than the client's demand, so what it catches is a manifest
-        that names one image while this backend is about to invoke
-        another — a build attributed to the wrong environment.
+        A ``None`` repo digest is tolerated, and only there: an image
+        built locally and never pushed is pinned by its own ID instead,
+        which :func:`local_address` is what recognizes.
         """
-        recorded = manifest.container
-        reference = self.config.image or recorded.reference()
-        facts = self.docker.inspect(reference)
+        pin = manifest.build_environment
+        reference, facts = local_address(self.docker.inspect, pin)
         if facts is None:
             raise BuildError(
-                f"No build container on this host answers to {reference}.",
+                f"No build container on this host answers to {pin.reference}.",
                 hint=(
-                    "the local build method resolves the recorded image against this "
-                    "host's images and pulls nothing — pull or build the image the "
-                    "manifest names, or point --container-image at it"
+                    "the context names the exact image it is built in; this host does "
+                    "not have it. It is fetched before a build starts, so this means "
+                    "the fetch was skipped or the image was removed since"
                 ),
             )
-        offered = facts.labels.get(ZEPHYR_LABEL) or ""
-        if not satisfies_line(offered, line=manifest.zephyr):
-            # An absent label and a wrong one are one refusal with two
-            # sentences: both mean "this image does not serve that line"
-            # (§2.1.1: absence is never read as compatible), and naming
-            # the label rather than an empty value is what tells the
-            # operator of an unlabelled image what to fix.
-            says = f"carries Zephyr {offered}" if offered else f"carries no {ZEPHYR_LABEL} label"
+        if facts.digest is not None and facts.digest != pin.digest and facts.image_id != pin.digest:
             raise BuildError(
-                f"The build container {reference} {says}, and this context needs the "
-                f"{manifest.zephyr} line.",
+                f"The image {reference} reports digest {facts.digest}, and this "
+                f"context is pinned to {pin.digest}.",
                 hint=(
-                    "a context states the Zephyr line its model was resolved against and "
-                    "the backend picks a container of that line (E61) — this image is not "
-                    "one. Point --container-image at a container of that line, or rebuild the "
-                    "context for a line this host serves."
-                ),
-            )
-        known = facts.digest is not None and recorded.digest is not None
-        if known and facts.digest != recorded.digest:
-            raise BuildError(
-                f"The image {reference} reports digest {facts.digest}, and this context's "
-                f"manifest records {recorded.digest}.",
-                hint=(
-                    "the manifest records which container a backend resolved this context "
-                    "to; this host answers that name with different bytes"
+                    "the context names which bytes its firmware is compiled from, and "
+                    "this host answers that name with different ones"
                 ),
             )
         static = self.docker.read_static_describe(reference)
@@ -1462,7 +1456,11 @@ class LocalBackend:
         if problem is not None:
             raise _image_unusable(reference, problem)
         return ImageProfile(
-            reference=reference, digest=facts.digest, labels=facts.labels, program=program
+            reference=reference,
+            digest=facts.digest,
+            labels=facts.labels,
+            program=program,
+            image_id=facts.image_id,
         )
 
     def _arrange_trees(
@@ -1861,7 +1859,7 @@ def _label_problem(program: dict[str, Any], labels: dict[str, str]) -> str | Non
     "A backend MUST verify them against ``describe`` and MUST NOT rely on a
     label ``describe`` contradicts", and §7.1.1 goes further for the one
     label with a counterpart in the block: ``program.contract`` "MUST equal
-    the ``org.mcuhome.contract`` label; where the two disagree, ``describe``
+    the ``org.mcuhome.build-environment.contract`` label; where the two disagree, ``describe``
     is authoritative and the disagreement is a contract violation against
     the image".
 

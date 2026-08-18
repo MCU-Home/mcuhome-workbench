@@ -48,22 +48,24 @@ class _Runner:
 # --------------------------------------------------------------------------
 
 
-def test_the_default_image_is_the_pinned_one() -> None:
-    assert container.image_reference({}) == container.IMAGE
+def test_the_default_environment_is_the_pinned_one() -> None:
+    assert container.environment_reference({}) == container.DEFAULT_ENVIRONMENT
 
 
-def test_the_environment_can_name_another_image() -> None:
-    env = {container.IMAGE_VAR: "localhost/builder:wip"}
-    assert container.image_reference(env) == "localhost/builder:wip"
+def test_the_environment_can_name_another_repository() -> None:
+    env = {container.IMAGE_VAR: "localhost/builder"}
+    assert container.environment_reference(env) == "localhost/builder"
 
 
 def test_an_explicit_image_beats_the_environment() -> None:
-    env = {container.IMAGE_VAR: "localhost/builder:wip"}
-    assert container.image_reference(env, override="other:tag") == "other:tag"
+    env = {container.IMAGE_VAR: "localhost/builder"}
+    assert container.environment_reference(env, override="other:registry") == "other:registry"
 
 
-def test_an_empty_variable_is_not_an_image() -> None:
-    assert container.image_reference({container.IMAGE_VAR: ""}) == container.IMAGE
+def test_an_empty_variable_is_not_a_repository() -> None:
+    assert (
+        container.environment_reference({container.IMAGE_VAR: ""}) == container.DEFAULT_ENVIRONMENT
+    )
 
 
 def test_the_container_program_can_be_swapped() -> None:
@@ -104,7 +106,7 @@ def test_a_tilde_in_the_cache_path_is_a_home_directory(tmp_path) -> None:
 def test_no_docker_at_all_says_what_to_install() -> None:
     runner = _Runner(None)
     with pytest.raises(BuildError) as caught:
-        container.preflight("docker", "img:tag", env={}, runner=runner)
+        container.preflight("docker", env={}, runner=runner)
     assert "cannot find docker on your PATH" in caught.value.message
     hint = caught.value.hint or ""
     assert "docs.docker.com" in hint
@@ -117,44 +119,16 @@ def test_no_docker_at_all_says_what_to_install() -> None:
 
 def test_a_stopped_daemon_is_not_a_missing_docker() -> None:
     with pytest.raises(BuildError) as caught:
-        container.preflight("docker", "img:tag", env={}, runner=_Runner(1))
+        container.preflight("docker", env={}, runner=_Runner(1))
     assert "cannot talk to the Docker daemon" in caught.value.message
     assert "systemctl start docker" in (caught.value.hint or "")
 
 
-def test_a_missing_image_leads_with_the_pull_command() -> None:
-    """PO 2026-08-15: the pull is the fix for almost everyone, so it is
-    the whole hint apart from one pointer at the build command's help;
-    building the image from source stays in the container README."""
-    with pytest.raises(BuildError) as caught:
-        container.preflight(
-            "docker",
-            "ghcr.io/mcu-home/build-container:x",
-            env={},
-            runner=_Runner(0, 1),
-        )
-    assert caught.value.message == (
-        "The build container ghcr.io/mcu-home/build-container:x is missing on this host."
-    )
-    hint = caught.value.hint or ""
-    assert "docker pull ghcr.io/mcu-home/build-container:x" in hint.splitlines()[1].strip()
-    assert "mcuhome device build --help" in hint
-    assert "docker build" not in hint
-
-
-def test_the_default_image_missing_says_default() -> None:
-    """The everyday case reads as the everyday case, not as a reference."""
-    refusal = container.missing_image_refusal("docker", container.IMAGE)
-    assert refusal.message == "The default build container is missing on this host."
-    assert f"docker pull {container.IMAGE}" in (refusal.hint or "")
-
-
-def test_a_working_docker_with_the_image_says_nothing() -> None:
-    runner = _Runner(0, 0)
-    container.preflight("docker", "img:tag", env={}, runner=runner)
+def test_a_working_docker_says_nothing() -> None:
+    runner = _Runner(0)
+    container.preflight("docker", env={}, runner=runner)
     assert runner.commands == [
         ["docker", "version", "--format", "{{.Server.Version}}"],
-        ["docker", "image", "inspect", "img:tag"],
     ]
 
 
@@ -172,11 +146,11 @@ def test_the_process_runner_is_resolved_at_call_time(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(container, "_run_quiet", fake)
-    container.preflight("docker", "img:tag", env={})
-    assert [command[1] for command in calls] == ["version", "image"]
+    container.preflight("docker", env={})
+    assert [command[1] for command in calls] == ["version"]
 
 
 def test_the_swapped_program_is_the_one_that_gets_asked() -> None:
-    runner = _Runner(0, 0)
-    container.preflight("podman", "img:tag", env={}, runner=runner)
+    runner = _Runner(0)
+    container.preflight("podman", env={}, runner=runner)
     assert all(command[0] == "podman" for command in runner.commands)

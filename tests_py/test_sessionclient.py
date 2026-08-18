@@ -46,14 +46,17 @@ from typing import Any
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
+from mcuhome.model import buildimage
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.context import ContextRequest, SdkPin
+from mcuhome.model.context import ContextRequest, EnvironmentPin, SdkPin
+from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
 from mcuhome.workbench import buildmethods, imgtool, resolve_pins, signing
 from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.orchestrator import LocalOutcome
+from mcuhome.workbench.resolve_env import ResolvedEnvironment
 
 #: What this file needs beyond the repository's own dev dependencies, and
 #: the one command that installs each. The gate below is a **single**
@@ -92,22 +95,23 @@ bs_sessions = importlib.import_module("mcuhome_buildserver.sessions")
 
 TOKEN = "test-token-000000000000000000000000"
 
-#: The image the server below selects, and the §2.1 labels a conforming
+#: The image every context here pins, and the §2.1 labels a conforming
 #: one carries. Same values as the build server's own suite, because they
-#: are what its stubbed docker answers with. The contexts pin no image:
-#: they require a Zephyr line (:data:`ZEPHYR_LINE`) and the server answers
-#: it out of this inventory (E61).
+#: are what its stubbed docker answers with — and the pin has to name
+#: those exact bytes, because that is now how the server finds the image
+#: rather than choosing one.
 IMAGE = "ghcr.io/mcu-home/build-container"
 IMAGE_DIGEST = "sha256:" + "b" * 64
+IMAGE_TAG = "zephyr-4.4.0-r10"
 IMAGE_REFERENCE = f"{IMAGE}@{IMAGE_DIGEST}"
+ENVIRONMENT_PIN = f"{IMAGE}:{IMAGE_TAG}@{IMAGE_DIGEST}"
 IMAGE_LABELS = {
-    "org.mcuhome.contract": "1",
-    "org.mcuhome.zephyr": "4.4.0",
-    "org.mcuhome.toolchain": "zephyr-sdk-1.0.1",
+    buildimage.CONTRACT_LABEL: "1",
+    buildimage.ZEPHYR_LABEL: "4.4.0",
+    buildimage.TOOLCHAIN_LABEL: "zephyr-sdk-1.0.1",
 }
 
-#: The Zephyr line every context here requires — satisfied by the image
-#: above, whose label says 4.4.0.
+#: The Zephyr line the pinned image carries, by its own label.
 ZEPHYR_LINE = "4.4"
 
 #: A conforming ``describe`` ``program`` block — every field §7.1.1 makes
@@ -208,13 +212,13 @@ class FakeDocker:
     def __post_init__(self) -> None:
         inspected = {
             "Id": "sha256:" + "c" * 64,
-            "RepoTags": [f"{IMAGE}:zephyr-4.4.0-r7"],
+            "RepoTags": [f"{IMAGE}:{IMAGE_TAG}"],
             "RepoDigests": [IMAGE_REFERENCE],
             "Config": {"Labels": dict(IMAGE_LABELS)},
         }
         self.images.setdefault(IMAGE_REFERENCE, inspected)
-        self.images.setdefault(f"{IMAGE}:zephyr-4.4.0-r7", inspected)
-        self.listed = self.listed or [f"{IMAGE}:zephyr-4.4.0-r7"]
+        self.images.setdefault(f"{IMAGE}:{IMAGE_TAG}", inspected)
+        self.listed = self.listed or [f"{IMAGE}:{IMAGE_TAG}"]
         if self.program is None:
             self.program = json.loads(json.dumps(PROGRAM))
         if self.run_program is None:
@@ -607,13 +611,33 @@ def make_context(root: Path, *, sdk_sha256: str, patches: dict[str, bytes] | Non
                 url="https://example.invalid/mcuhome-sdk.tar.zst",
                 sha256=sdk_sha256,
             ),
-            zephyr=ZEPHYR_LINE,
+            build_environment=EnvironmentPin(reference=ENVIRONMENT_PIN),
             board="nrf7002dk/nrf5340/cpuapp",
             created="2026-08-10T09:00:00Z",
         ),
         out_dir=root,
     )
     return private_pem
+
+
+@pytest.fixture
+def pinned_environment(monkeypatch):
+    """The remote method's environment resolution, answered without a registry.
+
+    A remote build resolves its environment exactly as a local one does —
+    over HTTPS, before a context exists — and the tests below are about
+    what happens on the *socket* after that. So the resolution answers
+    the pin this file's fake server serves, and nothing here reaches a
+    registry.
+    """
+    resolved = ResolvedEnvironment(
+        reference=parse_reference(ENVIRONMENT_PIN, default_registry=DOCKER_HUB),
+        zephyr="4.4.0",
+        toolchain="zephyr-sdk-1.0.1",
+        found_under=IMAGE_TAG,
+    )
+    monkeypatch.setattr(buildmethods, "resolve_environment", lambda *a, **k: resolved)
+    return resolved
 
 
 # --------------------------------------------------------------------------
@@ -2518,7 +2542,9 @@ def _remote_request(tmp_path: Path, sources: Path, harness: Harness, **overrides
     )
 
 
-def test_the_remote_method_builds_from_a_model_against_the_real_server(tmp_path: Path) -> None:
+def test_the_remote_method_builds_from_a_model_against_the_real_server(
+    tmp_path: Path, pinned_environment
+) -> None:
     """Model in, unsigned image out — no context written by the caller.
 
     The whole of E65 in one path: the SDK pin is resolved from a local
@@ -2576,7 +2602,7 @@ def test_the_remote_method_builds_from_a_model_against_the_real_server(tmp_path:
 
 
 def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
-    tmp_path: Path,
+    tmp_path: Path, pinned_environment
 ) -> None:
     """The pin in ``context.yaml`` is exactly what the resolver answered.
 
@@ -2624,12 +2650,15 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
         found.package.version,
         real_sha256,
     )
-    # The other half of the context's own statements, from the model.
-    assert written.zephyr == ZEPHYR_LINE
+    # The other half of the context's own statements: the environment the
+    # client pinned before the session existed, and the board.
+    assert written.build_environment == pinned_environment.pin
     assert written.board == _model().device.board
 
 
-def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path) -> None:
+def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(
+    tmp_path: Path, pinned_environment
+) -> None:
     """E65's guarantee, end to end: the hash decides, not the version.
 
     The index this client resolves from declares a hash the archive next

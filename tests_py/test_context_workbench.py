@@ -27,11 +27,10 @@ from mcuhome.model.context import (
     MANIFEST_FILE,
     MODEL_FILE,
     SIGNING_KEY_FILE,
-    ContainerResolution,
     ContextManifest,
     ContextRequest,
+    EnvironmentPin,
     SdkPin,
-    validate_manifest,
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
@@ -66,12 +65,11 @@ SDK = SdkPin(
     url="https://example.invalid/mcuhome-sdk-0.1.0.tar.zst",
     sha256=SDK_SHA,
 )
-#: What a backend resolved the context's Zephyr requirement to. Written
-#: at the lock, recorded in ``manifest.yaml``, and part of no identity —
-#: which is why every test below that changes it expects the ID to stay.
-CONTAINER = ContainerResolution(
-    image="ghcr.io/mcu-home/builder", tag="zephyr-4.4.0-r1", digest=DIGEST
-)
+#: The pinned build environment for the context. Written at the lock,
+#: recorded in ``manifest.yaml``, and part of the identity — hashing the
+#: digest alone, not the reference, so the same image fetched from a
+#: mirror is the same build.
+ENVIRONMENT = EnvironmentPin(reference="ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@" + DIGEST)
 
 #: The request timestamp, an explicit argument so two creations of the
 #: same inputs are byte-identical (ADR 0018: created is the one field
@@ -93,6 +91,7 @@ def model() -> DeviceModel:
 def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextRequest:
     arguments = {
         "sdk": SDK,
+        "build_environment": ENVIRONMENT,
         "signing_pub": SIGNING_PUB,
         "created": CREATED,
     }
@@ -107,9 +106,8 @@ def _lock(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
     ID exist only once the context is locked, so every test that needs a
     ``manifest.yaml`` goes through here rather than through create alone.
     """
-    container = overrides.pop("container", CONTAINER)
     _create(model, out_dir, **overrides)
-    return lock_context(out_dir, container=container)
+    return lock_context(out_dir)
 
 
 def _patches_source(tmp_path: Path) -> Path:
@@ -135,41 +133,26 @@ def _rewrite_manifest(out_dir: Path, **overrides) -> ContextManifest:
 
 
 @pytest.mark.parametrize(
-    "digest",
+    "reference",
     [
-        "ab" * 32,  # no algorithm prefix
-        "sha256:" + "AB" * 32,  # uppercase: a second spelling of the same hash
-        "sha256:" + "ab" * 16,  # wrong length
-        "sha512:" + "ab" * 32,  # not the version-1 algorithm
+        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1",  # missing digest
+        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@ab" + "ab" * 31,  # no algorithm prefix
+        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@sha256:" + "AB" * 32,  # uppercase
+        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@sha256:" + "ab" * 16,  # wrong length
+        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@sha512:" + "ab" * 32,  # not sha256
     ],
 )
-def test_a_malformed_container_digest_is_refused(model, tmp_path: Path, digest: str) -> None:
-    """The digest is out of the hash and still has exactly one spelling.
+def test_a_malformed_build_environment_reference_is_refused(
+    model, tmp_path: Path, reference: str
+) -> None:
+    """The reference must carry a valid sha256 digest for the context ID.
 
-    Under format 2 it is the backend's record rather than a hashed input,
-    so ``context_id`` never sees it and the check moved to the manifest
-    validator. It is still a check: ``manifest.yaml`` is read by build
-    containers this project does not write, and §3.3.1 has them refuse a
-    digest rendered any other way rather than repair it.
+    Format 3 hashes the digest, so the pin must have exactly one spelling.
     """
-    manifest = _lock(model, tmp_path / "context")
+    pin = EnvironmentPin(reference=reference)
     with pytest.raises(BuildError):
-        validate_manifest(replace(manifest, container=replace(CONTAINER, digest=digest)))
-
-
-def test_a_resolution_without_a_digest_is_accepted(model, tmp_path: Path) -> None:
-    """An image built here and never pushed names no bytes, and says so.
-
-    ``None`` rather than a fabricated digest: the digest is no longer a
-    hashed input, so there is nothing left that needs a value to exist,
-    and inventing one would claim bytes nobody can fetch.
-    """
-    manifest = _lock(model, tmp_path / "context", container=replace(CONTAINER, digest=None))
-    validate_manifest(manifest)
-    assert manifest.container.digest is None
-    assert manifest.id == manifest.compute_id()
-    read_back = read_context_manifest(tmp_path / "context" / MANIFEST_FILE)
-    assert read_back.container.digest is None
+        # The digest property checks the reference strictly
+        _ = pin.digest
 
 
 # --------------------------------------------------------------------------
@@ -178,24 +161,13 @@ def test_a_resolution_without_a_digest_is_accepted(model, tmp_path: Path) -> Non
 
 
 def test_the_informational_fields_do_not_influence_the_id(model, tmp_path: Path) -> None:
-    """created, constraint, version, url, zephyr, the whole resolution."""
+    """created, constraint, version, url are informational."""
     manifest = _lock(model, tmp_path / "context")
     variants = [
         replace(manifest, sdk=replace(SDK, constraint="~9.9.9")),
         # The version and the URL are names for bytes the sha256 pins.
         replace(manifest, sdk=replace(SDK, version="9.9.9")),
         replace(manifest, sdk=replace(SDK, url="file:///srv/mirror/sdk.tar.zst")),
-        # The whole container block is the backend's answer, not the
-        # client's statement: two servers answering one requirement with
-        # two different images still identify one context (E61).
-        replace(manifest, container=replace(CONTAINER, image="mirror.example/builder")),
-        replace(manifest, container=replace(CONTAINER, tag="latest")),
-        replace(manifest, container=replace(CONTAINER, digest="sha256:" + "ba" * 32)),
-        replace(manifest, container=replace(CONTAINER, digest=None)),
-        # And the requirement itself, which is redundancy rather than
-        # identity: it is inside the SDK pin and inside the model file,
-        # both of which the ID already hashes.
-        replace(manifest, zephyr="9.9"),
     ]
     assert {variant.compute_id() for variant in variants} == {manifest.id}
 
@@ -226,9 +198,7 @@ def test_yaml_formatting_is_irrelevant_to_the_id(model, tmp_path: Path) -> None:
         f"target: {{board: {manifest.board}}}\n"
         "files:\n"
         + "".join(f"- {{sha256: {entry.sha256}, path: {entry.path}}}\n" for entry in manifest.files)
-        + f"container: {{digest: {CONTAINER.digest}, tag: {CONTAINER.tag}, "
-        f"image: {CONTAINER.image}}}\n"
-        f"zephyr: '{manifest.zephyr}'\n"
+        + f"build_environment: {manifest.build_environment.reference}\n"
         "mcuhome:\n"
         f"  package: {{sha256: {SDK.sha256}, url: {SDK.url}}}\n"
         f"  version: {SDK.version}\n"
@@ -318,10 +288,9 @@ def test_the_request_carries_pins_and_created_but_no_files_or_id(model, tmp_path
     assert document["mcuhome"]["constraint"] == SDK.constraint
     assert document["mcuhome"]["version"] == SDK.version
     assert document["mcuhome"]["package"] == {"url": SDK.url, "sha256": SDK.sha256}
-    # The requirement, read off the model rather than taken as an
-    # argument — and no container: choosing one is the backend's (E61).
-    assert document["zephyr"] == model.toolchain.zephyr_line
-    assert "container" not in document
+    # The pinned build environment, resolved by the client before the
+    # request (E61, Format 3: the client resolves the environment).
+    assert document["build_environment"] == ENVIRONMENT.reference
     assert document["target"] == {"board": model.device.board}
     # The freeze's outputs cannot exist yet: no integrity list, no identity.
     assert "files" not in document
@@ -383,7 +352,7 @@ def test_the_facts_of_a_context_name_its_pins_and_its_patches(model, tmp_path: P
     facts = context_facts(out_dir)
     assert facts["sdk"] == SDK.version
     assert facts["sdk_sha256"] == SDK.sha256
-    assert facts["zephyr"] == model.toolchain.zephyr_line
+    assert facts["build_environment"] == ENVIRONMENT.reference
     assert facts["board"] == model.device.board
     assert facts["files"] == len(manifest.files)
     assert facts["id"] == manifest.id
@@ -586,47 +555,16 @@ def test_a_manifest_with_a_spoofable_hash_spelling_is_a_refusal(model, tmp_path:
 # --------------------------------------------------------------------------
 
 
-def test_the_manifest_carries_the_requirement_beside_the_resolution(model, tmp_path: Path) -> None:
-    """What was asked for and what answered, side by side (ADR 0018 decision 3).
+def test_the_manifest_carries_the_pinned_environment(model, tmp_path: Path) -> None:
+    """The client pins the environment; the manifest records the pin (Format 3).
 
-    The requirement travels from ``context.yaml`` unchanged — the lock
-    restates it and never re-derives it — and the resolution comes from
-    the party that locked, which is the only party that knows what it
-    has.
+    The request carries the client's resolution; the manifest restates it.
     """
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir)
-    assert manifest.zephyr == model.toolchain.zephyr_line
-    assert manifest.container == CONTAINER
+    assert manifest.build_environment == ENVIRONMENT
     document = YAML(typ="safe").load((out_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
-    assert document["zephyr"] == model.toolchain.zephyr_line
-    assert document["container"] == {
-        "image": CONTAINER.image,
-        "tag": CONTAINER.tag,
-        "digest": CONTAINER.digest,
-    }
-
-
-def test_two_backends_answering_one_requirement_agree_on_the_identity(
-    model, tmp_path: Path
-) -> None:
-    """The whole point of taking the container out of the hash (E61).
-
-    One context, two build servers, two different images of the same
-    Zephyr line — one identity. Under the digest-pinned format these were
-    two contexts, which made "built from *this*" a statement about a
-    machine rather than about the bytes.
-    """
-    here = _lock(model, tmp_path / "here")
-    there = _lock(
-        model,
-        tmp_path / "there",
-        container=ContainerResolution(
-            image="registry.example/other-builder", tag="zephyr-4.4.2-r1", digest=None
-        ),
-    )
-    assert here.id == there.id
-    assert here.container != there.container
+    assert document["build_environment"] == ENVIRONMENT.reference
 
 
 def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Path) -> None:
@@ -642,7 +580,7 @@ def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Pa
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir)
     text = (out_dir / MANIFEST_FILE).read_text(encoding="utf-8")
-    assert f"digest: {CONTAINER.digest}" in text
+    assert f"build_environment: {ENVIRONMENT.reference}" in text
     assert f"id: {manifest.id}" in text
     assert f"sha256: {SDK.sha256}" in text
     for entry in manifest.files:

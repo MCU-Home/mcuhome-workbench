@@ -1,5 +1,5 @@
 {
-  "model_version": 1,
+  "model_version": 2,
   "device": {
     "name": "bmp180-node",
     "friendly_name": "BMP180 Two-Endpoint Node",
@@ -25,8 +25,13 @@
   },
   "toolchain": {
     "zephyr_line": "4.4",
+    "zephyr_constraint": "~=4.4.0",
     "blob_usage": "auto",
     "blobs": {}
+  },
+  "sources": {
+    "sdk": "sdk/mcuhome-sdk",
+    "build_environment": "ghcr.io/mcu-home/build-container"
   },
   "hardware": {
     "buses": [

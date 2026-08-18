@@ -5,8 +5,8 @@
 :mod:`mcuhome.workbench.orchestrator` speaks the build-container contract
 — given a *locked context directory* it drives one invocation through the
 ABI. This module is the thin surface above it:
-:func:`resolve_checked_image` answers "which container, and does it carry
-the line the device needs" out of what this host has, and
+:func:`prepare_environment` turns what a device *says* about its build
+environment into one image sitting on this host, and
 :func:`run_locked_build` drives one ``build`` invocation over a context
 somebody else created and locked.
 
@@ -25,11 +25,15 @@ sees of the key pair. The backend delivers an *unsigned* image plus the
 §7.2.1 build report; the signature happens on the host afterwards, where
 the private key already is (:mod:`mcuhome.workbench.imgtool`).
 
-**Local, never networked.** The image is resolved against this host's
-images and pulled by nobody; the SDK package is acquired from the
-operator's own source directories (contract v1's first tier, §9.1). A
-missing image and a missing package are typed refusals, not tracebacks
-ten minutes into a build.
+**One network call, and it is the registry's.** Choosing an environment
+asks a registry which image it recommends
+(:mod:`mcuhome.workbench.resolve_env`) and then fetches those exact
+bytes if this host does not have them; everything after that is local.
+The SDK package is still acquired from the operator's own source
+directories and from nowhere else (contract v1's first tier, §9.1). A
+registry that cannot be reached, a repository offering nothing that
+fits, and a missing SDK package are typed refusals, not tracebacks ten
+minutes into a build.
 """
 
 from __future__ import annotations
@@ -38,17 +42,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcuhome.model.errors import BuildError, ConfigError
-from mcuhome.model.toolchain import satisfies_line
+from mcuhome.model.context import MANIFEST_FILE, EnvironmentPin
+from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import buildenv as container
 from mcuhome.workbench import orchestrator as lb
+from mcuhome.workbench.contextdir import read_context_manifest
+from mcuhome.workbench.ociregistry import Registry
+from mcuhome.workbench.resolve_env import ResolvedEnvironment, resolve_environment
 
 __all__ = [
     "LocalBuildResult",
-    "ResolvedImage",
-    "image_zephyr_version",
-    "resolve_checked_image",
+    "fetch_environment",
+    "prepare_environment",
     "run_locked_build",
 ]
 
@@ -72,96 +78,98 @@ class LocalBuildResult:
     image: str
 
 
-@dataclass(frozen=True)
-class ResolvedImage:
-    """One image this host answered with: the reference, and its profile.
+def prepare_environment(
+    stated: str,
+    *,
+    constraint: str,
+    env: dict[str, str],
+    override: str | None = None,
+    registry: Registry | None = None,
+    docker_seam: lb.Docker | None = None,
+    on_line: lb.LineSink | None = None,
+) -> tuple[ResolvedEnvironment, bool]:
+    """From "which environment" to "these bytes, here" — before anything is created.
 
-    :attr:`profile` is what ``docker image inspect`` stated — labels and
-    repo digest. :attr:`digest` is ``None`` for an image that was never
-    pushed, which says "these bytes are not fetchable anywhere" rather
-    than inventing a digest that looks as if they were.
+    Three steps, in the order that makes each refusal cheap. Is there a
+    container runtime at all (two refusals with two different fixes).
+    Which image does the repository recommend for the Zephyr this device
+    needs, and does that image's own declaration agree (a registry
+    question, answered without pulling anything). And finally: is it on
+    this host, or does it have to be fetched.
+
+    Answers the resolution and whether it had to fetch, so a caller can
+    say the second out loud — a gigabyte-scale download deserves a line
+    of its own rather than a silence in the middle of a build.
+
+    *stated* is what the device model says, *override* the
+    ``--container-image`` that beats it; both may be a bare repository, a
+    tag or a digest. *constraint* is the model's resolved Zephyr
+    requirement. *registry* is the seam a test replaces to answer
+    without a network.
     """
+    docker = container.docker_program(env)
+    seam = docker_seam if docker_seam is not None else lb.Docker(docker)
+    container.preflight(docker, env=env, runner=_asks(seam))
+    reference = container.environment_reference(env, stated=stated, override=override)
+    resolved = resolve_environment(
+        reference, constraint=constraint, registry=registry, local=seam.inspect
+    )
+    _, fetched = fetch_environment(resolved.pin, env=env, docker_seam=seam, on_line=on_line)
+    return resolved, fetched
 
-    reference: str
-    profile: lb.ImageProfile
 
-    @property
-    def digest(self) -> str | None:
-        return self.profile.digest
+def fetch_environment(
+    pin: EnvironmentPin,
+    *,
+    env: dict[str, str],
+    docker_seam: lb.Docker | None = None,
+    on_line: lb.LineSink | None = None,
+) -> tuple[str, bool]:
+    """Get an already-decided environment onto this host.
 
-
-def image_zephyr_version(profile: lb.ImageProfile) -> str:
-    """Which Zephyr release *profile* carries, by its own label (§2.1).
-
-    The image's own claim and nothing else: ``--container-image`` may point at any
-    image at all, and the whole point of the coupling label is that a
-    container states what it builds against. An image that carries no
-    ``org.mcuhome.zephyr`` label states nothing, and the empty string is
-    exactly that — :func:`~mcuhome.model.toolchain.satisfies_line` reads
-    it as satisfying no line, which is §2.1.1's rule verbatim: "a
-    container that does not carry a named label does not qualify —
-    absence is never read as compatible".
-
-    There is deliberately **no** fallback to this module's own pin
-    (:data:`~mcuhome.workbench.buildenv.ZEPHYR_RELEASE`). One existed and
-    was wrong twice over:
-    :meth:`~mcuhome.workbench.orchestrator.LocalBackend._resolve_image`
-    performs this same match a few steps later with no fallback, so an
-    unlabelled image was admitted here and refused there — after the
-    context directory, the SDK lookup and the lock had been paid for —
-    and a required line the invented value did not satisfy was refused
-    with "carries Zephyr 4.4.0", a claim the image never made.
+    The second half of :func:`prepare_environment` on its own, for the
+    caller that has nothing to resolve: a context it received already
+    names the image, pinned, and that pin is part of the context's
+    identity — so the only question left is whether those bytes are here.
     """
-    return profile.labels.get(lb.ZEPHYR_LABEL) or ""
-
-
-def _line_unsatisfied(reference: str, offered: str, line: str) -> BuildError:
-    """The image on this host does not carry the line the model requires.
-
-    An absent label and a wrong one are one refusal with two sentences,
-    worded as
-    :meth:`~mcuhome.workbench.orchestrator.LocalBackend._resolve_image`
-    words its twin: both mean "this image does not serve that line", and
-    naming the label rather than an empty value is what tells the
-    operator of an unlabelled image what to fix.
-    """
-    says = f"carries Zephyr {offered}" if offered else f"carries no {lb.ZEPHYR_LABEL} label"
-    return BuildError(
-        f"The build container {reference} {says}, and this device needs the {line} line.",
-        hint=(
-            "the context states the Zephyr line its model was resolved against "
-            "(zephyr_version, ADR 0013) and the build method picks a container of "
-            "that line — this host offers none. Pull or build a "
-            f"{line}.x builder image, point --container-image at one, or set zephyr_version "
-            "to a line this host can serve."
-        ),
+    docker = container.docker_program(env)
+    seam = docker_seam if docker_seam is not None else lb.Docker(docker)
+    container.preflight(docker, env=env, runner=_asks(seam))
+    return container.ensure_image(
+        docker,
+        pin,
+        env=env,
+        runner=_asks(seam),
+        puller=_streams(seam),
+        on_line=on_line,
     )
 
 
-def resolve_checked_image(
-    image: str | None,
-    *,
-    line: str,
-    env: dict[str, str],
-    docker: lb.Docker | None = None,
-) -> ResolvedImage:
-    """Resolve the image reference on this host and check its Zephyr line.
+def _asks(seam: lb.Docker) -> container.Runner:
+    """The yes/no docker call, answered through the backend's own seam.
 
-    Refuses — before anything is created anywhere — when no image on this
-    host answers to the reference, and when the image it finds does not
-    carry the line the device needs (E61's requirement, answered by the
-    half that has the images). A refusal here costs no context directory
-    and no SDK lookup, which is the composition's promise.
+    Everything before a build starts is a docker command — is the daemon
+    up, is the image here — and a caller that replaced the seam replaced
+    docker. Routing these through it too is what makes that true, rather
+    than leaving a test that stubbed the build running a real
+    ``docker version`` beside it.
     """
-    reference = image or container.image_reference(env)
-    seam = docker if docker is not None else lb.Docker(container.docker_program(env))
-    profile = seam.inspect(reference)
-    if profile is None:
-        raise container.missing_image_refusal(container.docker_program(env), reference)
-    offered = image_zephyr_version(profile)
-    if not satisfies_line(offered, line=line):
-        raise _line_unsatisfied(reference, offered, line)
-    return ResolvedImage(reference=reference, profile=profile)
+
+    def asks(command, env):
+        del env  # the seam was constructed with the program and the environment
+        return seam.run(list(command)).status
+
+    return asks
+
+
+def _streams(seam: lb.Docker) -> container.Puller:
+    """The same, for the one call whose output is worth watching."""
+
+    def streams(command, env, on_line):
+        del env
+        return seam.run(list(command), on_line).status
+
+    return streams
 
 
 def _cache_root(env: dict[str, str], stated: Path | None) -> Path | None:
@@ -191,7 +199,6 @@ def _cache_root(env: dict[str, str], stated: Path | None) -> Path | None:
 def run_locked_build(
     context_dir: Path,
     *,
-    image: str,
     sdk_sources: Sequence[Path],
     work_root: Path,
     env: dict[str, str],
@@ -204,11 +211,15 @@ def run_locked_build(
     """Drive one ``build`` invocation over a locked context directory.
 
     The backend role and nothing else: *context_dir* was created and
-    locked by the workbench (its manifest already records the image the
-    caller resolved via :func:`resolve_checked_image`), *sdk_sources* are
-    the operator's local package directories the backend acquires the
-    pinned SDK from (§9.1 — a backend duty, the hash decides), and
-    *work_root* is the backend's own scratch area.
+    locked by the workbench, *sdk_sources* are the operator's local
+    package directories the backend acquires the pinned SDK from (§9.1 —
+    a backend duty, the hash decides), and *work_root* is the backend's
+    own scratch area.
+
+    **Which image is not a parameter.** The locked context names it,
+    pinned to a digest, and it is the only thing that may: a build
+    driven into a different environment than the one its identity claims
+    is exactly what the pin exists to prevent.
 
     *docker* is the one seam — left ``None`` it drives real docker; a
     caller (or a test) injects a scripted
@@ -217,12 +228,15 @@ def run_locked_build(
     """
     context_dir = Path(context_dir)
     work_root = Path(work_root)
+    # Read back rather than taken as an argument, for the reason above:
+    # the manifest is where the environment is decided, so the reference
+    # this reports is the one that ran by construction.
+    pinned = read_context_manifest(context_dir / MANIFEST_FILE).build_environment.reference
     seam = docker if docker is not None else lb.Docker(container.docker_program(env))
     backend = lb.LocalBackend(
         lb.BackendConfig(
             sdk_sources=tuple(Path(source) for source in sdk_sources),
             jobs=jobs,
-            image=image,
             ccache_dir=_cache_root(env, ccache_dir),
         ),
         docker=seam,
@@ -235,4 +249,9 @@ def run_locked_build(
         on_line=on_line,
     )
     out_dir = outcome.out if outcome.out is not None else work_root / "inv" / "out"
-    return LocalBuildResult(outcome=outcome, out_dir=out_dir, context_dir=context_dir, image=image)
+    return LocalBuildResult(
+        outcome=outcome,
+        out_dir=out_dir,
+        context_dir=context_dir,
+        image=pinned,
+    )

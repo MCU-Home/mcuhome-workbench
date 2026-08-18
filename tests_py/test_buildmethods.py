@@ -440,6 +440,10 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
         ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler")
     )
     monkeypatch.setattr(importlib, "import_module", refuse)
+    # A docker that answers, badly: the daemon is not running. It stops
+    # the build at the first thing it genuinely needs, which is the
+    # point — what is asserted below is which refusal it is *not*.
+    monkeypatch.setattr(lb, "_run_command", lambda argv, on_line=None: lb.Completed(1, ""))
     with pytest.raises(BuildError) as refusal:
         _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
     assert not isinstance(refusal.value, buildmethods.MethodUnavailable)

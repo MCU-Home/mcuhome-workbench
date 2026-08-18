@@ -39,14 +39,14 @@ from mcuhome.model.context import (
     MODEL_FILE,
     PATCHES_DIR,
     SIGNING_KEY_FILE,
-    ContainerResolution,
     ContextFile,
     ContextManifest,
     ContextRequest,
+    EnvironmentPin,
     SdkPin,
     context_id,
+    environment_digest,
     validate_manifest,
-    validate_zephyr_line,
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
@@ -224,6 +224,7 @@ def create_context(
     *,
     out_dir: Path,
     sdk: SdkPin,
+    build_environment: EnvironmentPin,
     signing_pub: str,
     created: datetime,
     patches_dir: Path | None = None,
@@ -242,22 +243,17 @@ def create_context(
     - the patches under *patches_dir*, laid out as ``<layer>/NNNN-name.patch``;
     - ``context.yaml`` — the pins and the intent, written last.
 
-    It writes **no** ``manifest.yaml``: the ``files`` integrity list, the
-    backend's container resolution and the context ``id`` do not exist
-    until the file set is final and a backend has been chosen, and the
-    party that locks the context supplies and computes them
-    (``lock_context``). *sdk* arrives already resolved to an exact pin —
-    resolving a constraint to it (``mcuhome.workbench.resolve_pins``) is a
-    separate step, deliberately not this one.
+    It writes **no** ``manifest.yaml``: the ``files`` integrity list and
+    the context ``id`` do not exist until the file set is final, and the
+    party that locks the context computes them (``lock_context``).
 
-    The **Zephyr requirement is read off the model** (``toolchain.
-    zephyr_line``, ADR 0013) rather than taken as an argument, for the
-    same reason the board is: the model already decided it, and a
-    parameter that could disagree with the model in the same directory
-    would be a way to write a context whose two halves ask for different
-    Zephyr releases. What the context states is a requirement and not a
-    choice — which container answers it is the backend's decision and
-    lands in ``manifest.yaml`` at the lock (E61).
+    Both pins arrive **already resolved**, and for the same reason: this
+    function writes a document, it does not decide what goes in it.
+    Resolving the SDK constraint is
+    :mod:`mcuhome.workbench.resolve_pins`, resolving the build
+    environment is :mod:`mcuhome.workbench.resolve_env`, and both happen
+    before a context directory exists — a refusal from either costs
+    nothing then.
 
     *out_dir* has to be new or empty: a context is created from scratch so
     that its later integrity list covers everything in it, which it cannot
@@ -303,7 +299,7 @@ def create_context(
 
     request = ContextRequest(
         sdk=sdk,
-        zephyr=model.toolchain.zephyr_line,
+        build_environment=build_environment,
         board=model.device.board,
         created=_format_created(created),
     )
@@ -316,6 +312,7 @@ def create_build_context(
     *,
     out_dir: Path,
     sdk_sources: Sequence[Path],
+    build_environment: EnvironmentPin,
     signing_pub: str,
     created: datetime | None = None,
     constraint: str = SDK_ANY,
@@ -357,6 +354,7 @@ def create_build_context(
     return create_context(
         model,
         out_dir=out_dir,
+        build_environment=build_environment,
         sdk=SdkPin(
             constraint=found.intent,
             version=found.package.version,
@@ -368,27 +366,24 @@ def create_build_context(
     )
 
 
-def lock_context(out_dir: Path, *, container: ContainerResolution) -> ContextManifest:
+def lock_context(out_dir: Path) -> ContextManifest:
     """Freeze a created context: hash its files and write ``manifest.yaml``.
 
     The write-side counterpart of :func:`create_context`. Creating writes
-    the request (``context.yaml``); locking turns that request, the
-    now-final file set and the backend's chosen container into the
-    integrity *record* — the ``files`` list, the ``container`` resolution
+    the request (``context.yaml``); locking turns that request and the
+    now-final file set into the integrity *record* — the ``files`` list
     and the context ``id`` (ADR 0018 amendment,
     build-container-contract.md §3.2). It reads the request back out of
     ``context.yaml`` rather than taking it again, so the manifest can
     only ever restate what the request already committed the session to.
 
-    *container* is the one thing that does **not** come from the request,
-    and cannot: it is the answer to the request's ``zephyr``
-    requirement, and only a backend knows which containers it serves
-    (E61). Its caller is therefore always a backend — the local build
-    method passes the image it resolved on this host, the build server
-    passes the one it selected out of its inventory — and this function
-    only records the answer, never chooses it. It is outside the ID, so
-    two backends answering one requirement with two different images
-    still produce one context identity.
+    **It takes nothing but the directory**, which is the shape the
+    client-side pin bought: everything the manifest states is either in
+    the request or derivable from the files, so whoever locks a context
+    adds no information to it and cannot. The previous format needed the
+    locking party to supply the container it had chosen, and that made
+    two backends able to produce two different manifests from one
+    request.
 
     A remote build server does this from the bytes it received off a
     socket; a local build method does it over the directory the workbench
@@ -403,12 +398,12 @@ def lock_context(out_dir: Path, *, container: ContainerResolution) -> ContextMan
     files = _context_files(out_dir)
     manifest = ContextManifest(
         sdk=request.sdk,
-        zephyr=request.zephyr,
-        container=container,
+        build_environment=request.build_environment,
         board=request.board,
         files=files,
         id=context_id(
             sdk_sha256=request.sdk.sha256,
+            environment_digest=request.build_environment.digest,
             board=request.board,
             files=files,
         ),
@@ -506,12 +501,11 @@ def read_context_request(path: Path) -> ContextRequest:
                 "context."
             ),
         ) from error
-    # The one field of the request that a reader can get *wrong* rather
-    # than miss: it is a string in a document full of them, and YAML
-    # reads an unquoted 4.4 as a float. Checked here so the request
-    # reader is as strict as read_context_manifest, which gets the same
-    # check through validate_manifest.
-    validate_zephyr_line(request.zephyr)
+    # The one field of the request a reader can get *wrong* rather than
+    # miss, and the one an identity is computed over: checked here so the
+    # request reader is as strict as read_context_manifest, which gets
+    # the same check through validate_manifest.
+    environment_digest(request.build_environment.reference)
     return request
 
 
@@ -617,10 +611,10 @@ def context_facts(root: Path) -> dict[str, Any]:
     """What a person wants to know about the context at *root*.
 
     Not a document and part of no protocol: a build that says "context"
-    has just decided which SDK the firmware is built from, which Zephyr
-    line the build environment must carry and whether anything patches
-    that environment — decisions worth one line on a terminal rather
-    than only in a file nobody opens. Read back off the directory
+    has just decided which SDK the firmware is built from, which build
+    environment compiles it and whether anything patches that
+    environment — decisions worth one line on a terminal rather than
+    only in a file nobody opens. Read back off the directory
     instead of remembered by the caller, so what is reported is what a
     build environment will actually receive.
 
@@ -638,15 +632,15 @@ def context_facts(root: Path) -> dict[str, Any]:
     if manifest_path.is_file():
         manifest = read_context_manifest(manifest_path)
         facts["id"] = manifest.id
-        pin, zephyr, board = manifest.sdk, manifest.zephyr, manifest.board
+        pin, environment, board = manifest.sdk, manifest.build_environment, manifest.board
     else:
         request = read_context_request(request_path)
-        pin, zephyr, board = request.sdk, request.zephyr, request.board
+        pin, environment, board = request.sdk, request.build_environment, request.board
     paths = _content_paths(root)
     facts.update(
         sdk=pin.version,
         sdk_sha256=pin.sha256,
-        zephyr=zephyr,
+        build_environment=environment.reference,
         board=board,
         files=len(paths),
         patches=[
@@ -746,6 +740,7 @@ def verify_context(root: Path) -> ContextVerification:
         manifest=manifest,
         actual_id=context_id(
             sdk_sha256=manifest.sdk.sha256,
+            environment_digest=manifest.build_environment.digest,
             board=manifest.board,
             files=present,
         ),

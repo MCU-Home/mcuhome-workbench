@@ -98,11 +98,12 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.context import ContainerResolution
+from mcuhome.model.context import CONTEXT_FILE
 from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
 
+from mcuhome.workbench import buildenv as container
 from mcuhome.workbench import containerbuild
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
@@ -114,8 +115,14 @@ from mcuhome.workbench.buildtarget import (
     RemoteBuild,
     WorkspaceExecution,
 )
-from mcuhome.workbench.contextdir import context_facts, create_build_context, lock_context
+from mcuhome.workbench.contextdir import (
+    context_facts,
+    create_build_context,
+    lock_context,
+    read_context_request,
+)
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.resolve_env import resolve_environment
 
 __all__ = [
     "DEFAULT_MAX_WAIT_SECONDS",
@@ -605,37 +612,71 @@ def compose_local_build(
     on_line: Any = None,
     on_step: Any = None,
     docker: Any = None,
+    registry: Any = None,
 ):
-    """The container execution's composition: resolve, create, lock, drive.
+    """The container execution's composition: pin, create, lock, drive.
 
-    The two roles E61 separates, composed where the client half lives:
-    the workbench states the requirement — it creates and locks the
-    context, recording the image the compiler half answered with — and
-    the compiler's backend half does the answering
-    (:func:`~mcuhome.workbench.containerbuild.resolve_checked_image`) and the
-    driving (:func:`~mcuhome.workbench.containerbuild.run_locked_build`).
-    Order is the composition's promise: the image refusals cost no
-    context directory and no SDK lookup. Synchronous — ``build_firmware``
-    offloads it; *docker* is the test seam, threaded through to both
-    halves.
+    Three steps and they are announced in that order, because that is the
+    order a person experiences them in. **environment** resolves what the
+    model says about its build environment to one image and gets it onto
+    this machine
+    (:func:`~mcuhome.workbench.containerbuild.prepare_environment`) —
+    which is where a registry is talked to and where a gigabyte may be
+    fetched. **context** writes the directory the build is attributed to,
+    pin included. **compile** hands the locked context to the container
+    (:func:`~mcuhome.workbench.containerbuild.run_locked_build`).
+
+    Order is the composition's promise: every environment refusal costs
+    no context directory and no SDK lookup. Synchronous —
+    ``build_firmware`` offloads it; *docker* and *registry* are the test
+    seams.
 
     *context_dir* is the caller that already holds a **base** context and
     wants this one built — an embedder that assembled one elsewhere, a
     build server that received one over a socket. It is used as it is:
     nothing is resolved, nothing is written into it but the lock, and no
     context step is announced, because this composition did not create
-    one. Left ``None``, which is the ordinary case, the context is
-    created at ``<work root>/context`` — the same call the ``remote``
-    method makes (E65), because what a context is does not depend on
-    where it is built.
+    one. **Its own pin then decides the environment**, not this model's,
+    which is what makes a received context a complete statement rather
+    than half of one.
     """
     sources = tuple(Path(source) for source in sdk_sources)
-    resolved = containerbuild.resolve_checked_image(
-        image, line=model.toolchain.zephyr_line, env=dict(env), docker=docker
-    )
     work_root = Path(work_root)
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
+
+    if on_step is not None:
+        on_step("environment")
+    if supplied:
+        # Nothing is resolved: the context already decided, and its pin is
+        # part of its identity. What is left is getting those bytes here,
+        # which is the same call the other branch ends with — through the
+        # same seam, so a caller that replaced docker replaced all of it.
+        pinned = read_context_request(context_dir / CONTEXT_FILE).build_environment
+        resolved = None
+        _, fetched = containerbuild.fetch_environment(
+            pinned, env=dict(env), docker_seam=docker, on_line=on_line
+        )
+    else:
+        resolved, fetched = containerbuild.prepare_environment(
+            model.sources.build_environment,
+            constraint=model.toolchain.zephyr_constraint,
+            env=dict(env),
+            override=image,
+            registry=registry,
+            docker_seam=docker,
+            on_line=on_line,
+        )
+        pinned = resolved.pin
+    if on_step is not None:
+        on_step(
+            "environment",
+            build_environment=pinned.reference,
+            zephyr=resolved.zephyr if resolved is not None else "",
+            found_under=resolved.found_under if resolved is not None else "",
+            fetched=fetched,
+        )
+
     if not supplied:
         if on_step is not None:
             on_step("context")
@@ -643,27 +684,20 @@ def compose_local_build(
             model,
             out_dir=context_dir,
             sdk_sources=sources,
+            build_environment=pinned,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
         )
-    lock_context(
-        context_dir,
-        # The backend half's answer, recorded verbatim — including a
-        # `None` digest for an image that was never pushed, which says
-        # "these bytes are not fetchable anywhere" rather than inventing
-        # a digest that looks as if they were.
-        container=ContainerResolution.from_reference(resolved.reference, digest=resolved.digest),
-    )
+    lock_context(context_dir)
     if on_step is not None:
         if not supplied:
             # What the context turned out to be, read back off the locked
             # directory: the step announced itself before any of this was
             # decided, and the decisions are the interesting part.
             on_step("context", **context_facts(context_dir))
-        on_step("compile", image=resolved.reference, digest=resolved.digest, jobs=jobs)
+        on_step("compile", image=pinned.reference, jobs=jobs)
     return containerbuild.run_locked_build(
         context_dir,
-        image=resolved.reference,
         sdk_sources=sources,
         work_root=work_root / "backend",
         env=dict(env),
@@ -778,12 +812,38 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     Placed exactly where the ``local`` method places its own and written
     by the same function, so the two methods differ in where the context
     goes and in nothing about what it is.
+
+    **The build environment is resolved here too, and by the same code**
+    — which is the point of pinning on the client. It needs a registry
+    and nothing else: no container runtime, no image on this machine, and
+    no round trip to the build server. A laptop with no docker at all can
+    therefore state which container its firmware must be compiled in, and
+    the server's part shrinks to running it.
     """
     context_dir = Path(work_root) / "context"
+    if request.on_step is not None:
+        request.on_step("environment")
+    resolved = resolve_environment(
+        container.environment_reference(
+            dict(request.env),
+            stated=request.model.sources.build_environment,
+            override=request.image,
+        ),
+        constraint=request.model.toolchain.zephyr_constraint,
+    )
+    if request.on_step is not None:
+        request.on_step(
+            "environment",
+            build_environment=resolved.pin.reference,
+            zephyr=resolved.zephyr,
+            found_under=resolved.found_under,
+            fetched=False,
+        )
     create_build_context(
         request.model,
         out_dir=context_dir,
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        build_environment=resolved.pin,
         signing_pub=request.signing_pub,
     )
     return context_dir

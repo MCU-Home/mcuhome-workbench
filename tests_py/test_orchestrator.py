@@ -26,8 +26,8 @@ from typing import Any
 
 import pytest
 import zstandard
-from mcuhome.model import containerpaths
-from mcuhome.model.context import ContainerResolution, ContextRequest, SdkPin
+from mcuhome.model import buildimage, containerpaths
+from mcuhome.model.context import ContextRequest, EnvironmentPin, SdkPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
@@ -127,30 +127,26 @@ def make_context(
 ) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     (root / "model").mkdir()
-    (root / "model" / "device-model.json").write_text('{"model_version": 1}\n', "utf-8")
+    (root / "model" / "device-model.json").write_text('{"model_version": 2}\n', "utf-8")
     (root / "keys").mkdir()
     (root / "keys" / "signing.pub").write_text("-----BEGIN PUBLIC KEY-----\n", "utf-8")
     for layer, name in (patches or {}).items():
         layer_dir = root / "patches" / layer
         layer_dir.mkdir(parents=True)
         (layer_dir / name).write_text("--- a\n+++ b\n", "utf-8")
+    # Build the environment reference with digest
+    env_ref = f"{IMAGE}:{TAG}@{digest}" if digest else f"{IMAGE}:{TAG}"
     request = ContextRequest(
         sdk=SdkPin(constraint=f"=={SDK_VERSION}", version=SDK_VERSION, url="", sha256=sdk_sha),
-        zephyr=zephyr,
+        build_environment=EnvironmentPin(reference=env_ref),
         board=BOARD,
         created="2026-01-01T00:00:00Z",
     )
     write_context_request(request, out_dir=root)
-    # The backend half's own answer, as the local build method supplies
-    # it: a context states a line and the party that locks records what
-    # it resolved that to (E61).
-    # Locked by the workbench's own function rather than by a helper:
-    # this suite now lives beside it, and reading the request back out
-    # of the directory is what a real lock does.
-    lock_context(
-        root,
-        container=ContainerResolution(image=IMAGE, tag=TAG, digest=digest),
-    )
+    # Format 3: the request carries the pinned environment, written by the
+    # client. The lock reads it back and includes it in the manifest
+    # unchanged (ADR 0018 amendment).
+    lock_context(root)
     return root
 
 
@@ -170,9 +166,9 @@ def image_facts(*, digest: str | None = DIGEST, labels: dict[str, str] | None = 
         "Config": {
             "Labels": labels
             or {
-                "org.mcuhome.contract": "1",
-                "org.mcuhome.zephyr": "4.4.0",
-                "org.mcuhome.toolchain": "zephyr-0.16.8",
+                "org.mcuhome.build-environment.contract": "1",
+                "org.mcuhome.build-environment.zephyr.version": "4.4.0",
+                "org.mcuhome.build-environment.toolchain": "zephyr-0.16.8",
             }
         },
     }
@@ -885,54 +881,18 @@ def test_the_recorded_digest_is_cross_checked_against_the_resolved_one(tmp_path)
     )
     with pytest.raises(BuildError) as caught:
         backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
-    assert "records" in caught.value.message
+    assert "pinned to" in caught.value.message
     assert not any("--detach" in c for c in seam.calls)  # no container started
 
 
-def test_an_image_of_another_zephyr_line_is_refused(tmp_path) -> None:
-    """E61's requirement, checked on the backend's side of the boundary.
-
-    The context asks for a line; the image on this host answers with its
-    own ``org.mcuhome.zephyr`` label. A build in a container of another
-    line is the failure mode the whole requirement exists to prevent, and
-    it is refused before a container starts rather than as a compiler
-    error ten minutes in.
-    """
-    backend, context, seam = scenario(
-        tmp_path,
-        build=conforming,
-        describe_static=describe_result_document(),
-        facts=image_facts(
-            labels={
-                "org.mcuhome.contract": "1",
-                "org.mcuhome.zephyr": "4.5.0",
-                "org.mcuhome.toolchain": "zephyr-0.16.8",
-            }
-        ),
-    )
-    with pytest.raises(BuildError) as caught:
-        backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
-    assert "4.5.0" in caught.value.message
-    assert f"{ZEPHYR} line" in caught.value.message
-    assert not any("--detach" in c for c in seam.calls)
-
-
-def test_a_patch_release_of_the_required_line_serves_it(tmp_path) -> None:
-    """ADR 0013: "a line, never a frozen point release"."""
-    backend, context, _ = scenario(
-        tmp_path,
-        build=conforming,
-        describe_static=describe_result_document(),
-        facts=image_facts(
-            labels={
-                "org.mcuhome.contract": "1",
-                "org.mcuhome.zephyr": "4.4.12",
-                "org.mcuhome.toolchain": "zephyr-0.16.8",
-            }
-        ),
-    )
-    outcome = backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
-    assert outcome.successful
+# Two tests lived here and are gone with what they checked: an image of
+# another Zephyr line, and a patch release of the required one. Matching
+# a release against a requirement is not this side's question any more —
+# a context names one image, pinned to a digest, and what this module
+# checks is that the bytes on this host are those bytes
+# (`test_the_recorded_digest_is_cross_checked_against_the_resolved_one`).
+# Which image satisfies which constraint is decided before a context
+# exists, against a registry, and is tested in `test_resolve_env.py`.
 
 
 def test_a_missing_image_refuses_before_a_container_starts(tmp_path) -> None:
@@ -1059,9 +1019,9 @@ def test_derive_patch_layers_reads_the_paths_not_a_declared_list(tmp_path) -> No
 
 def _labels(**overrides: str) -> dict[str, str]:
     base = {
-        "org.mcuhome.contract": "1",
-        "org.mcuhome.zephyr": "4.4.0",
-        "org.mcuhome.toolchain": "zephyr-0.16.8",
+        buildimage.CONTRACT_LABEL: "1",
+        buildimage.ZEPHYR_LABEL: "4.4.0",
+        buildimage.TOOLCHAIN_LABEL: "zephyr-0.16.8",
     }
     base.update(overrides)
     return base
@@ -1111,11 +1071,11 @@ def test_a_contract_label_that_contradicts_describe_is_refused(tmp_path) -> None
         tmp_path,
         build=conforming,
         describe_static=describe_result_document(),  # program.contract == 1
-        facts=image_facts(labels=_labels(**{"org.mcuhome.contract": "9"})),
+        facts=image_facts(labels=_labels(**{buildimage.CONTRACT_LABEL: "9"})),
     )
     with pytest.raises(BuildError) as caught:
         backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
-    assert "org.mcuhome.contract" in caught.value.message
+    assert buildimage.CONTRACT_LABEL in caught.value.message
     assert not any("--detach" in c for c in seam.calls)
 
 
@@ -1126,11 +1086,11 @@ def test_an_image_missing_a_coupling_label_is_refused(tmp_path) -> None:
         tmp_path,
         build=conforming,
         describe_static=describe_result_document(),
-        facts=image_facts(labels={"org.mcuhome.contract": "1"}),  # no zephyr, no toolchain
+        facts=image_facts(labels={buildimage.CONTRACT_LABEL: "1"}),  # no zephyr, no toolchain
     )
     with pytest.raises(BuildError) as caught:
         backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
-    assert "org.mcuhome.zephyr" in caught.value.message
+    assert buildimage.ZEPHYR_LABEL in caught.value.message
     assert "label" in caught.value.message
     assert not any("--detach" in c for c in seam.calls)
 
@@ -1143,12 +1103,12 @@ def test_the_invoked_describe_path_is_gated_too(tmp_path) -> None:
         tmp_path,
         build=conforming,
         describe_static=None,  # forces the invoked describe path
-        facts=image_facts(labels=_labels(**{"org.mcuhome.contract": "9"})),
+        facts=image_facts(labels=_labels(**{buildimage.CONTRACT_LABEL: "9"})),
     )
     with pytest.raises(BuildError) as caught:
         backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
     assert seam.describe_invoked  # the fallback ran
-    assert "org.mcuhome.contract" in caught.value.message
+    assert buildimage.CONTRACT_LABEL in caught.value.message
     assert not any("--detach" in c for c in seam.calls)
 
 
@@ -1426,9 +1386,11 @@ def test_the_build_method_hands_the_backend_the_users_own_cache(tmp_path, monkey
             return SimpleNamespace(out=None)
 
     monkeypatch.setattr(lb, "LocalBackend", Stub)
+    # `run_locked_build` reads the manifest for the image it reports, so
+    # the directory has to be a real locked context rather than a name.
+    make_context(tmp_path / "ctx", sdk_sha="ab" * 32)
     containerbuild.run_locked_build(
         tmp_path / "ctx",
-        image="img:tag",
         sdk_sources=(),
         work_root=tmp_path / "work",
         env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
@@ -1459,9 +1421,11 @@ def test_a_caller_whose_environment_names_no_home_still_builds(tmp_path, monkeyp
             return SimpleNamespace(out=None)
 
     monkeypatch.setattr(lb, "LocalBackend", Stub)
+    # `run_locked_build` reads the manifest for the image it reports, so
+    # the directory has to be a real locked context rather than a name.
+    make_context(tmp_path / "ctx", sdk_sha="ab" * 32)
     containerbuild.run_locked_build(
         tmp_path / "ctx",
-        image="img:tag",
         sdk_sources=(),
         work_root=tmp_path / "work",
         env={},

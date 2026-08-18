@@ -220,6 +220,7 @@ def _resolve_toolchain(config: RawConfig) -> ToolchainModel:
     )
     return ToolchainModel(
         zephyr_line=resolved.zephyr_line,
+        zephyr_constraint=resolved.zephyr_constraint,
         blob_usage=resolved.blob_usage,
         blobs=resolved.blobs,
     )

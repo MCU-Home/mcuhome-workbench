@@ -1891,14 +1891,15 @@ class SessionClient:
         if self._pins is None:
             raise RemoteError(
                 "This client has sent no context, so there is no identity to compute.",
-                hint="send-context carries context.yaml, and its pins are two of the "
-                "three inputs of the context ID",
+                hint="send-context carries context.yaml, and its pins are three of "
+                "the four inputs of the context ID",
             )
         files = tuple(
             ContextFile(path=path, sha256=digest) for path, digest in sorted(self._files.items())
         )
         return context_id(
             sdk_sha256=self._pins.sdk.sha256,
+            environment_digest=self._pins.build_environment.digest,
             board=self._pins.board,
             files=files,
         )

@@ -6,11 +6,16 @@ ADR 0007 makes the build container *the* build environment: the host
 needs git and docker, everything else — Zephyr SDK, west, gn, zap,
 ccache — lives in an image versioned in lockstep with the Zephyr pin.
 This module is the small half of that which is decided **outside** a
-build: which image to run (:func:`image_reference` over the default
-:mod:`mcuhome.model.buildimage` states), which container program to
-drive, whether that program and its daemon are there at all
-(:func:`preflight`, three refusals with three different fixes), and where
-this user's compiler cache lives (:func:`ccache_directory`).
+build: which environment a build *states* it wants
+(:func:`environment_reference`), which container program to drive,
+whether that program and its daemon are there at all (:func:`preflight`,
+two refusals with two different fixes), getting the pinned image onto
+this host when it is not there yet (:func:`ensure_image`), and where this
+user's compiler cache lives (:func:`ccache_directory`).
+
+Choosing *which* image satisfies that statement is not a lookup on this
+host — it is a question for a registry — and lives in
+:mod:`mcuhome.workbench.resolve_env`.
 
 Everything here is a **lookup on this host**, and that is the line
 between this module and the two around it. What the image *is* — its
@@ -32,10 +37,12 @@ import os
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.buildimage import (
     CCACHE_DIR_VAR,
     CONTAINER_HOME,
+    DEFAULT_ENVIRONMENT,
     DOCKER_VAR,
     IMAGE,
     IMAGE_REPOSITORY,
@@ -44,12 +51,14 @@ from mcuhome.model.buildimage import (
     IMAGE_VAR,
     ZEPHYR_RELEASE,
 )
+from mcuhome.model.context import EnvironmentPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand, home
 
 __all__ = [
     "CCACHE_DIR_VAR",
     "CONTAINER_HOME",
+    "DEFAULT_ENVIRONMENT",
     "DOCKER_VAR",
     "IMAGE",
     "IMAGE_REPOSITORY",
@@ -59,8 +68,9 @@ __all__ = [
     "ZEPHYR_RELEASE",
     "ccache_directory",
     "docker_program",
-    "image_reference",
-    "missing_image_refusal",
+    "ensure_image",
+    "environment_reference",
+    "local_address",
     "preflight",
 ]
 
@@ -71,11 +81,25 @@ __all__ = [
 # asking this module about the image keeps getting an answer.
 
 
-def image_reference(env: dict[str, str], *, override: str | None = None) -> str:
-    """Which image to build in: ``--container-image``, then the variable, then the pin."""
+def environment_reference(
+    env: dict[str, str],
+    *,
+    stated: str = "",
+    override: str | None = None,
+) -> str:
+    """Which build environment a build *asks for*, most specific first.
+
+    ``--container-image`` beats the variable, the variable beats what the
+    device model states, and a model that states nothing falls back to
+    the environment this MCUHome ships with. The answer is a reference,
+    not an image: resolving it to one image is
+    :func:`~mcuhome.workbench.resolve_env.resolve_environment`'s, and
+    every rung above may be a bare repository just as the model's own
+    value is.
+    """
     if override:
         return override
-    return env.get(IMAGE_VAR) or IMAGE
+    return env.get(IMAGE_VAR) or stated or DEFAULT_ENVIRONMENT
 
 
 def docker_program(env: dict[str, str]) -> str:
@@ -130,6 +154,50 @@ def ccache_directory(env: dict[str, str]) -> Path:
 #: this module, injectable so the test suite never needs docker.
 Runner = Callable[[Sequence[str], dict[str, str]], int | None]
 
+#: Asks this host about one image by name; anything falsy means "not
+#: here". Structural so that a caller with a full ``docker image
+#: inspect`` and a caller that only needs a yes or no can use the same
+#: rule for *which name* to ask about.
+Lookup = Callable[[str], Any]
+
+#: Where a fetched image's progress goes, line by line — the build log.
+LineSink = Callable[[str], None]
+
+#: Runs a command and forwards its output line by line, answering with
+#: the exit status (``None`` when the program does not exist). The second
+#: impure thing, and separate from :data:`Runner` because the two differ
+#: in exactly what a test wants to control: whether output is seen.
+Puller = Callable[[Sequence[str], dict[str, str], "LineSink | None"], int | None]
+
+
+def _pull_streaming(
+    command: Sequence[str], env: dict[str, str], on_line: LineSink | None
+) -> int | None:
+    """Run *command*, forwarding every line it writes, and answer with its status.
+
+    Both streams into one, because docker writes pull progress to stderr
+    and the point is to show the user what is happening rather than to
+    tell the two apart.
+    """
+    try:
+        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            list(command),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            bufsize=1,
+        )
+    except OSError:
+        return None
+    with process:
+        assert process.stdout is not None
+        for line in process.stdout:
+            if on_line is not None:
+                on_line(line.rstrip("\n"))
+    return process.returncode
+
 
 def _run_quiet(command: Sequence[str], env: dict[str, str]) -> int | None:
     try:
@@ -171,42 +239,18 @@ def _refuse_no_daemon(docker: str) -> BuildError:
     )
 
 
-def missing_image_refusal(docker: str, reference: str) -> BuildError:
-    """The one missing-image refusal, wherever the absence is noticed.
-
-    PO-worded (2026-08-15): what is missing, the pull command as the
-    fix, and one pointer at the build command's help for choosing a
-    different image or another build mode — nothing else. Both the
-    docker preflight and the image-resolution seam raise exactly this,
-    so the user reads one text however the build got there.
-    """
-    if reference == IMAGE:
-        message = "The default build container is missing on this host."
-    else:
-        message = f"The build container {reference} is missing on this host."
-    return BuildError(
-        message,
-        hint=(
-            "pull the image, then rerun the build:\n"
-            f"    {docker} pull {reference}\n"
-            "mcuhome device build --help shows how to select a different "
-            "container image or how to choose another build mode."
-        ),
-    )
-
-
 def preflight(
     docker: str,
-    reference: str,
     *,
     env: dict[str, str],
     runner: Runner | None = None,
 ) -> None:
     """Refuse before the build starts, naming the one thing that is wrong.
 
-    Three failures with three different fixes — no docker, no daemon, no
-    image — and a build that dies ten seconds in with somebody else's
-    error text does not tell them apart.
+    Two failures with two different fixes — no docker, no daemon — and a
+    build that dies ten seconds in with somebody else's error text does
+    not tell them apart. A missing *image* is no longer one of them: it
+    is fetched (:func:`ensure_image`) rather than complained about.
 
     *runner* defaults to :func:`_run_quiet`, resolved here rather than in
     the signature: a default bound at definition time cannot be replaced
@@ -219,5 +263,93 @@ def preflight(
         raise _refuse_no_docker(docker)
     if status != 0:
         raise _refuse_no_daemon(docker)
-    if runner([docker, "image", "inspect", reference], env) != 0:
-        raise missing_image_refusal(docker, reference)
+
+
+def ensure_image(
+    docker: str,
+    pin: EnvironmentPin,
+    *,
+    env: dict[str, str],
+    runner: Runner | None = None,
+    puller: Puller | None = None,
+    on_line: LineSink | None = None,
+) -> tuple[str, bool]:
+    """Have the pinned image on this host, fetching it if it is not here.
+
+    Answers the address this host knows it by (:func:`local_address`) and
+    whether it had to fetch, so a caller can say the second out loud — a
+    1.3 GB download is not something to do silently behind a progress bar
+    that claims to be compiling.
+
+    **A missing image stopped being a refusal here.** The reference is
+    pinned to a digest by the time anything reaches this function, which
+    is what makes fetching safe: there is exactly one set of bytes that
+    answers to it, and either they arrive or the pull fails. Asking the
+    user to type a pull command for a name MCUHome resolved itself was
+    only ever right while the name came from a constant they could have
+    chosen differently.
+
+    The pull's own output is the progress report — docker writes layer
+    counts and percentages, and forwarding them beats inventing a
+    spinner over a five-minute silence.
+    """
+    runner = _run_quiet if runner is None else runner
+    address, present = local_address(
+        lambda name: runner([docker, "image", "inspect", name], env) == 0 or None, pin
+    )
+    if present:
+        return address, False
+    puller = _pull_streaming if puller is None else puller
+    status = puller([docker, "pull", pin.reference], env, on_line)
+    if status is None:
+        raise _refuse_no_docker(docker)
+    if status != 0:
+        raise _refuse_pull_failed(docker, pin.reference)
+    return pin.reference, True
+
+
+def _refuse_pull_failed(docker: str, reference: str) -> BuildError:
+    """The image could not be fetched, and the build cannot start without it."""
+    return BuildError(
+        f"MCUHome could not fetch the build container {reference}.",
+        hint=(
+            "the pull is above this message with the reason. The usual ones are no "
+            "network, a registry that needs a login, and a private repository:\n"
+            f"    {docker} login <registry>\n"
+            "mcuhome device build --help shows how to select a different container "
+            "image or how to choose another build mode."
+        ),
+    )
+
+
+def local_address(inspect: Lookup, pin: EnvironmentPin) -> tuple[str, Any]:
+    """How **this host** names the pinned environment, and what it knows about it.
+
+    A pin is one string, and there are two kinds of host it has to work
+    on. Where the image came from a registry, its full reference —
+    ``repo:tag@sha256:…`` — is what docker resolves and what belongs in
+    a log, so that is the address. Where it was **built here and never
+    pushed**, no registry ever named those bytes: the pin then carries
+    the image's own ID, docker has no manifest digest to match it
+    against, and the address is the digest by itself, which is docker's
+    ordinary "run this image by ID".
+
+    Returned together with whatever the lookup answered, so the caller
+    pays for one inspect rather than two and "not here at all" is one
+    answer (``(address, None)``) rather than a second call to find out.
+
+    *inspect* is structural: the backend hands it a real ``docker image
+    inspect`` that returns image facts, the preparation hands it one that
+    only answers whether the name exists. Both are asking the same
+    question and the answer's shape is the caller's business.
+
+    Written once and used from both sides — the preparation that fetches
+    the image and the backend that runs it — because two spellings of
+    "which name does this host know it by" is how one of them starts
+    running an image the other could not find.
+    """
+    facts = inspect(pin.reference)
+    if facts is not None:
+        return pin.reference, facts
+    digest = pin.digest
+    return digest, inspect(digest)

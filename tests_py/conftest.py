@@ -24,10 +24,12 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from mcuhome.model import buildimage
 from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenv as container
+from mcuhome.workbench import ociregistry, orchestrator
 from mcuhome.workbench.api import load_model
 from mcuhome.workbench.project import Project, find_project_root
 
@@ -171,7 +173,95 @@ def _no_docker(monkeypatch):
             f"a test tried to run {command[0]!r}: stage 5 must be stubbed, see tests_py/README.md"
         )
 
+    def refuse_argv(argv, on_line=None):
+        del on_line
+        raise AssertionError(
+            f"a test tried to run {argv[0]!r}: stage 5 must be stubbed, see tests_py/README.md"
+        )
+
     monkeypatch.setattr(container, "_run_quiet", refuse)
+    # Both halves, because a container build reaches docker through both:
+    # the yes/no lookups go through the first, and everything the
+    # orchestrator drives — including the preflight and the fetch, which
+    # are routed through its seam so that stubbing it stubs all of docker
+    # — through the second.
+    monkeypatch.setattr(orchestrator, "_run_command", refuse_argv)
+
+
+#: The environment every scripted registry below answers with, and the
+#: one the fixture tree's model resolves against.
+ENVIRONMENT_DIGEST = "sha256:" + "ab" * 32
+ENVIRONMENT_TAG = "zephyr-4.4.0-r10"
+ENVIRONMENT_REPOSITORY = "ghcr.io/mcu-home/build-container"
+ENVIRONMENT_PIN = f"{ENVIRONMENT_REPOSITORY}:{ENVIRONMENT_TAG}@{ENVIRONMENT_DIGEST}"
+
+
+class ScriptedRegistry:
+    """A registry that answers one environment, and counts the asking.
+
+    Passed as ``registry=`` wherever a build resolves one. It is not a
+    convenience: choosing an environment is the one step that talks to
+    the network, and a suite whose promise is one second may not.
+    """
+
+    def __init__(
+        self,
+        *,
+        digest: str = ENVIRONMENT_DIGEST,
+        tag: str = "zephyr-4.4.0-latest",
+        zephyr: str = "4.4.0",
+        toolchain: str = "zephyr-sdk-1.0.1",
+        contract: str = "1",
+    ) -> None:
+        self.digest = digest
+        self.tag = tag
+        self.labels_ = {
+            buildimage.CONTRACT_LABEL: contract,
+            buildimage.ZEPHYR_LABEL: zephyr,
+            buildimage.TOOLCHAIN_LABEL: toolchain,
+        }
+        self.asked: list[str] = []
+
+    def tags(self, reference):
+        """One moving tag, so the fallback has something to find."""
+        del reference
+        return (self.tag,)
+
+    def digest_of(self, reference):
+        """Every tag resolves, so a test moves the *labels* to move the answer.
+
+        Which tag a resolution lands on is
+        :mod:`~mcuhome.workbench.resolve_env`'s own business and is tested
+        there; here the point is what a build does with the environment it
+        got.
+        """
+        self.asked.append(reference.tag or "")
+        return self.digest
+
+    def labels(self, reference):
+        del reference
+        return {name: value for name, value in self.labels_.items() if value}
+
+
+@pytest.fixture(autouse=True)
+def _no_registry(monkeypatch):
+    """Nothing in this suite is allowed to reach a container registry.
+
+    The same safety net as :func:`_no_docker` and for the same reason:
+    resolving a build environment is now part of an ordinary build, it
+    goes over HTTPS, and a test that forgot to pass a scripted registry
+    would otherwise quietly depend on ghcr.io being up and on what is
+    published there today. Tests that want a registry pass one.
+    """
+
+    def refuse(self, url, headers, timeout):
+        del headers, timeout
+        raise AssertionError(
+            f"a test tried to reach {url}: pass registry=ScriptedRegistry() "
+            "wherever a build environment is resolved"
+        )
+
+    monkeypatch.setattr(ociregistry.Registry, "_urlopen", refuse)
 
 
 # --- resolving a configuration (stages 1-3) --------------------------

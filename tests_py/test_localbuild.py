@@ -34,8 +34,15 @@ from typing import Any
 
 import pytest
 import zstandard
-from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.model import containerpaths
+from conftest import (
+    ENVIRONMENT_DIGEST,
+    ENVIRONMENT_PIN,
+    EXAMPLES_DIR,
+    ScriptedRegistry,
+    resolve_file,
+)
+from mcuhome.model import buildimage, containerpaths
+from mcuhome.model.context import EnvironmentPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
@@ -54,7 +61,10 @@ from mcuhome.workbench.signing import (
 #: A P-256 key with a known scalar, so this module never draws one.
 TEST_SCALAR = 0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEF0
 
-DIGEST = "sha256:" + "1" * 64
+#: The digest the scripted registry pins and the fake image reports —
+#: one value, because the backend cross-checks the two and a test where
+#: they differed would be testing the cross-check by accident.
+DIGEST = ENVIRONMENT_DIGEST
 SDK_VERSION = "0.1.0"
 IMAGE = "ghcr.io/mcu-home/build-container"
 CONTAINER_ID = "c" * 64
@@ -132,9 +142,9 @@ def image_facts(*, digest: str | None = DIGEST, labels: dict[str, str] | None = 
         "Config": {
             "Labels": labels
             or {
-                "org.mcuhome.contract": "1",
-                "org.mcuhome.zephyr": "4.4.0",
-                "org.mcuhome.toolchain": "zephyr-0.16.8",
+                buildimage.CONTRACT_LABEL: "1",
+                buildimage.ZEPHYR_LABEL: "4.4.0",
+                buildimage.TOOLCHAIN_LABEL: "zephyr-0.16.8",
             }
         },
     }
@@ -282,6 +292,8 @@ class Seam:
         argv = list(argv)
         self.calls.append(argv)
         verb = argv[1] if len(argv) > 1 else ""
+        if verb == "version":
+            return lb.Completed(0, "20.10.0\n")
         if argv[1:3] == ["image", "inspect"]:
             return lb.Completed(0, self.facts)
         if verb == "run" and "cat" in argv:
@@ -359,10 +371,14 @@ def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model
         env={},
         image=IMAGE,
         jobs=2,
+        registry=ScriptedRegistry(),
         docker=Docker(runner=seam),
     )
     assert result.outcome.successful, result.outcome.problems
-    assert result.image == IMAGE
+    # The pin, not the repository: what a build reports is the image it
+    # resolved to, digest included.
+    assert result.image.startswith(f"{IMAGE}:")
+    assert result.image.endswith(f"@{ENVIRONMENT_DIGEST}")
     # A locked context was created from the model, with the pins the pin
     # resolution produced.
     manifest = read_context_manifest(result.context_dir / "manifest.yaml")
@@ -393,13 +409,25 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
         env={},
         image=IMAGE,
         on_step=lambda stage, **facts: steps.append((stage, facts)),
+        registry=ScriptedRegistry(),
         docker=Docker(runner=_seam()),
     )
     assert result.outcome.successful
-    assert [stage for stage, _facts in steps] == ["context", "context", "compile"]
+    assert [stage for stage, _facts in steps] == [
+        "environment",
+        "environment",
+        "context",
+        "context",
+        "compile",
+    ]
     assert steps[0][1] == {}
-    facts = steps[1][1]
-    assert facts["zephyr"] == model.toolchain.zephyr_line
+    # The environment step, once it knows: which image, and what it says.
+    chosen = steps[1][1]
+    assert chosen["build_environment"].endswith(f"@{ENVIRONMENT_DIGEST}")
+    assert chosen["zephyr"] == "4.4.0"
+    assert steps[2][1] == {}
+    facts = steps[3][1]
+    assert facts["build_environment"] == chosen["build_environment"]
     assert facts["board"] == model.device.board
     assert facts["patches"] == []
     assert facts["files"] >= 2  # the model and the public key, at least
@@ -408,7 +436,7 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
         facts["sdk_sha256"]
         == read_context_manifest(tmp_path / "wr" / "context" / "manifest.yaml").sdk.sha256
     )
-    assert steps[2][1]["image"] == IMAGE
+    assert steps[4][1]["image"] == steps[1][1]["build_environment"]
 
 
 # --------------------------------------------------------------------------
@@ -440,6 +468,7 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
         work_root=tmp_path / "wr",
         env={},
         image=IMAGE,
+        registry=ScriptedRegistry(),
         docker=Docker(runner=seam),
     )
     assert result.outcome.successful
@@ -468,55 +497,29 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
 # --------------------------------------------------------------------------
 
 
-def test_a_missing_image_refuses_before_a_container_starts(tmp_path, model, public_pem):
-    make_sdk_source(tmp_path / "src")
-
-    def runner(argv, on_line=None):
-        if argv[1:3] == ["image", "inspect"]:
-            return _missing_image()
-        raise AssertionError(f"nothing else is asked once the image is missing: {argv}")
-
-    with pytest.raises(BuildError) as caught:
-        buildmethods.compose_local_build(
-            model,
-            signing_pub=public_pem,
-            sdk_sources=(tmp_path / "src",),
-            work_root=tmp_path / "wr",
-            env={},
-            image=IMAGE,
-            docker=Docker(runner=runner),
-        )
-    assert "is missing on this host" in caught.value.message
-
-
-def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
+def test_an_image_that_cannot_be_fetched_refuses_before_a_container_starts(
     tmp_path, model, public_pem
 ):
-    """E61's requirement, checked by the half that states it.
+    """A missing image stopped being a refusal and became a fetch.
 
-    The composition plays both roles: it writes the requirement into
-    ``context.yaml`` and it answers that requirement out of this host's
-    images. So the mismatch is caught here, before the context directory
-    or the SDK lookup exist — a refusal that costs nothing and names both
-    the line the device needs and the line the image carries.
+    The reference is pinned to a digest by then, so there is exactly one
+    set of bytes that answers to it — and either they arrive or the pull
+    fails, which is this. Asking the user to type a pull command for a
+    name MCUHome resolved itself was only ever right while the name came
+    from a constant they could have chosen differently.
     """
     make_sdk_source(tmp_path / "src")
     seen: list[list[str]] = []
 
     def runner(argv, on_line=None):
         seen.append(argv)
+        if argv[1] == "version":
+            return lb.Completed(0, "28.0.0")
         if argv[1:3] == ["image", "inspect"]:
-            return lb.Completed(
-                0,
-                image_facts(
-                    labels={
-                        "org.mcuhome.contract": "1",
-                        "org.mcuhome.zephyr": "4.5.0",
-                        "org.mcuhome.toolchain": "zephyr-0.16.8",
-                    }
-                ),
-            )
-        raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
+            return _missing_image()
+        if argv[1] == "pull":
+            return lb.Completed(1, "Error response from daemon: manifest unknown")
+        raise AssertionError(f"nothing else is asked once the fetch failed: {argv}")
 
     with pytest.raises(BuildError) as caught:
         buildmethods.compose_local_build(
@@ -526,37 +529,30 @@ def test_an_image_of_another_zephyr_line_refuses_before_anything_is_written(
             work_root=tmp_path / "wr",
             env={},
             image=IMAGE,
+            registry=ScriptedRegistry(),
             docker=Docker(runner=runner),
         )
-    assert "4.5.0" in caught.value.message
-    assert model.toolchain.zephyr_line in caught.value.message
+    assert "could not fetch" in caught.value.message
+    assert any(argv[1] == "pull" for argv in seen), "it tried"
     assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
 
 
-def test_an_image_with_no_zephyr_label_refuses_before_anything_is_written(
+def test_an_environment_of_another_zephyr_release_refuses_before_anything_is_written(
     tmp_path, model, public_pem
 ):
-    """ "Absence is never read as compatible" (§2.1.1) — here too.
+    """The requirement is checked where the environment is chosen.
 
-    An image carrying no ``org.mcuhome.zephyr`` label states nothing
-    about what it builds against, and there used to be a fallback here
-    that read the workbench's own pin into that silence. It was wrong
-    twice over. ``LocalBackend._resolve_image`` performs this identical
-    match a few steps later with no fallback, so the image was admitted
-    here and refused there — after the context directory, the SDK lookup
-    and the manifest lock had been paid for, which is precisely what the
-    comment above this check promises will not happen. And when the
-    required line was one the invented value did not satisfy, the refusal
-    said "carries Zephyr 4.4.0" about an image that had said nothing.
-
-    So: refused here, and named for what is actually wrong with it.
+    It is checked against what the *image says about itself*, which is
+    read out of a registry before anything is fetched — so the mismatch
+    costs no context directory, no SDK lookup and no download, and the
+    refusal names both what the device needs and what the image carries.
     """
     make_sdk_source(tmp_path / "src")
 
     def runner(argv, on_line=None):
-        if argv[1:3] == ["image", "inspect"]:
-            return lb.Completed(0, image_facts(labels={"org.mcuhome.contract": "1"}))
-        raise AssertionError(f"nothing else is asked once the line does not match: {argv}")
+        if argv[1] == "version":
+            return lb.Completed(0, "28.0.0")
+        raise AssertionError(f"nothing is asked of docker once the release is wrong: {argv}")
 
     with pytest.raises(BuildError) as caught:
         buildmethods.compose_local_build(
@@ -565,11 +561,47 @@ def test_an_image_with_no_zephyr_label_refuses_before_anything_is_written(
             sdk_sources=(tmp_path / "src",),
             work_root=tmp_path / "wr",
             env={},
-            image=IMAGE,
+            image=f"{IMAGE}:zephyr-4.5.0-r1",
+            registry=ScriptedRegistry(tag="zephyr-4.5.0-r1", zephyr="4.5.0"),
             docker=Docker(runner=runner),
         )
-    assert "carries no org.mcuhome.zephyr label" in caught.value.message
-    assert model.toolchain.zephyr_line in caught.value.message
+    assert "4.5.0" in caught.value.message
+    assert model.toolchain.zephyr_constraint in caught.value.message
+    assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
+
+
+def test_an_environment_with_no_zephyr_label_refuses_before_anything_is_written(
+    tmp_path, model, public_pem
+):
+    """ "Absence is never read as compatible" (§2.1.1) — here too.
+
+    An image that carries no Zephyr label states nothing about what it
+    builds against, and there used to be a fallback that read the
+    workbench's own pin into that silence — which invented a claim the
+    image had never made and put it in a refusal. There is nothing to
+    invent from any more: what the label says is the whole of what is
+    known about an image nobody has fetched.
+    """
+    make_sdk_source(tmp_path / "src")
+
+    def runner(argv, on_line=None):
+        if argv[1] == "version":
+            return lb.Completed(0, "28.0.0")
+        raise AssertionError(f"nothing is asked of docker once the image says nothing: {argv}")
+
+    with pytest.raises(BuildError) as caught:
+        buildmethods.compose_local_build(
+            model,
+            signing_pub=public_pem,
+            sdk_sources=(tmp_path / "src",),
+            work_root=tmp_path / "wr",
+            env={},
+            image=f"{IMAGE}:silent",
+            registry=ScriptedRegistry(tag="silent", zephyr=""),
+            docker=Docker(runner=runner),
+        )
+    assert "does not say which Zephyr it carries" in caught.value.message
+    assert model.toolchain.zephyr_constraint in str(caught.value)
     assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
 
 
@@ -578,6 +610,8 @@ def test_no_sdk_source_configured_is_a_typed_refusal(tmp_path, model, public_pem
 
     def runner(argv, on_line=None):
         calls.append(argv)
+        if argv[1] == "version":
+            return lb.Completed(0, "28.0.0")
         if argv[1:3] == ["image", "inspect"]:
             return _image_ok()
         raise AssertionError(f"no container should start with no SDK: {argv}")
@@ -590,6 +624,7 @@ def test_no_sdk_source_configured_is_a_typed_refusal(tmp_path, model, public_pem
             work_root=tmp_path / "wr",
             env={},
             image=IMAGE,
+            registry=ScriptedRegistry(),
             docker=Docker(runner=runner),
         )
     assert "SDK source" in caught.value.message
@@ -601,6 +636,8 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
     empty.mkdir()
 
     def runner(argv, on_line=None):
+        if argv[1] == "version":
+            return lb.Completed(0, "28.0.0")
         if argv[1:3] == ["image", "inspect"]:
             return _image_ok()
         raise AssertionError(f"no container should start: {argv}")
@@ -613,6 +650,7 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
             work_root=tmp_path / "wr",
             env={},
             image=IMAGE,
+            registry=ScriptedRegistry(),
             docker=Docker(runner=runner),
         )
     assert containerbuild.lb.SDK_PACKAGE_NAME in caught.value.message
@@ -642,7 +680,11 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     make_sdk_source(tmp_path / "src")
     context = tmp_path / "held"
     create_build_context(
-        model, out_dir=context, sdk_sources=(tmp_path / "src",), signing_pub=public_pem
+        model,
+        out_dir=context,
+        sdk_sources=(tmp_path / "src",),
+        build_environment=EnvironmentPin(reference=ENVIRONMENT_PIN),
+        signing_pub=public_pem,
     )
     before = sorted(path.name for path in context.iterdir())
     steps: list[str] = []
@@ -669,8 +711,15 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     assert not (tmp_path / "wr" / "context").exists()
     assert sorted(path.name for path in context.iterdir()) == sorted([*before, "manifest.yaml"])
     # No context step: this composition did not create one, and a step
-    # bar that claimed otherwise would be showing work nobody did.
-    assert steps == ["compile"]
+    # bar that claimed otherwise would be showing work nobody did. The
+    # environment step is still there — the image the supplied context
+    # pins still has to be here, and getting it here is work.
+    assert steps == ["environment", "environment", "compile"]
+    # And it is the *supplied* context's pin that decided the image, not
+    # the model's: no registry was needed at all.
+    assert read_context_manifest(context / "manifest.yaml").build_environment.reference == (
+        ENVIRONMENT_PIN
+    )
 
 
 # --------------------------------------------------------------------------
@@ -678,18 +727,26 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
 # --------------------------------------------------------------------------
 
 
-def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem):
-    """A ``--container-image localhost/…`` names no pinnable bytes; the build proceeds.
+def test_an_image_built_here_is_pinned_by_its_own_id_and_still_builds(tmp_path, model, public_pem):
+    """``--container-image localhost/…`` names bytes no registry has.
 
-    ``docker image inspect`` reports no ``RepoDigests``, and under context
-    format 2 the manifest records exactly that — ``digest: null`` — rather
-    than the placeholder the digest-pinned format needed because a hashed
-    field could not be absent. Nothing depends on the value: it is this
-    backend's record of what it chose, and the record is honest about an
-    image whose bytes nobody can fetch.
+    The registry has no such tag — nobody published it — so the image is
+    found on this host and pinned by the only identity it has, docker's
+    own image ID. The pin is honest rather than portable: a build server
+    handed this context will say it does not have the image, which is
+    true.
     """
     make_sdk_source(tmp_path / "src")
+    identity = "sha256:" + "f" * 64
     seam = _seam(facts=image_facts(digest=None))
+
+    class NoSuchTag(ScriptedRegistry):
+        def digest_of(self, reference):
+            return None
+
+        def tags(self, reference):
+            return ()
+
     result = buildmethods.compose_local_build(
         model,
         signing_pub=public_pem,
@@ -697,13 +754,13 @@ def test_a_local_image_without_a_digest_still_builds(tmp_path, model, public_pem
         work_root=tmp_path / "wr",
         env={},
         image="localhost/builder:wip",
+        registry=NoSuchTag(),
         docker=Docker(runner=seam),
     )
     assert result.outcome.successful, result.outcome.problems
     manifest = read_context_manifest(result.context_dir / "manifest.yaml")
-    assert manifest.container.digest is None
-    assert manifest.container.image == "localhost/builder"
-    assert manifest.container.tag == "wip"
+    assert manifest.build_environment.reference == f"localhost/builder:wip@{identity}"
+    assert manifest.build_environment.digest == identity
 
 
 # --------------------------------------------------------------------------
@@ -787,6 +844,7 @@ def test_the_local_method_mounts_the_users_compiler_cache(tmp_path, model) -> No
         work_root=tmp_path / "wr",
         env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
         image=IMAGE,
+        registry=ScriptedRegistry(),
         docker=Docker(runner=seam),
     )
     start = next(argv for argv in seam.calls if "--detach" in argv)
@@ -809,6 +867,7 @@ def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> No
         env={"HOME": str(tmp_path / "home")},
         image=IMAGE,
         ccache_dir=tmp_path / "fast-disk",
+        registry=ScriptedRegistry(),
         docker=Docker(runner=seam),
     )
     start = next(argv for argv in seam.calls if "--detach" in argv)
