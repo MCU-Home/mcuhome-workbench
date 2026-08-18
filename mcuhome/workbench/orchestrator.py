@@ -45,6 +45,7 @@ the container can see.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -53,11 +54,13 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Protocol
 
 import zstandard
 
@@ -90,6 +93,7 @@ from mcuhome.model.invocation import ACTIONS, CONTRACT_VERSION, REQUEST_VERSIONS
 from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME
 from packaging.version import InvalidVersion, Version
 
+from mcuhome.workbench import programevents
 from mcuhome.workbench.buildenv import local_address
 from mcuhome.workbench.contextdir import read_context_manifest
 
@@ -104,12 +108,15 @@ __all__ = [
     "Artifact",
     "BackendConfig",
     "BuildEnvironment",
+    "Liveness",
     "Completed",
     "Docker",
     "ImageProfile",
     "LineSink",
     "LocalBackend",
     "LocalOutcome",
+    "Running",
+    "Spawner",
     "Mount",
     "ResourceLimits",
     "SdkPackage",
@@ -490,6 +497,203 @@ def _run_command(argv: Sequence[str], on_line: LineSink | None = None) -> Comple
     return Completed(status=process.returncode, output="\n".join(lines))
 
 
+#: How often the supervisor looks at the world while an invocation runs:
+#: the cancel sentinel, the deadline, and whatever the program has
+#: appended to its event file. Half a second is short enough that a
+#: cancelled build feels cancelled and long enough that a poll costs
+#: nothing next to a compile.
+_POLL_SECONDS = 0.5
+
+#: How long a terminated invocation has before it is killed. Not
+#: configurable: it is not a policy but the width of the window between
+#: "the signal was delivered" and "it was ignored".
+_KILL_AFTER_SECONDS = 10.0
+
+
+class Running(Protocol):
+    """A started invocation, still addressable while it runs."""
+
+    def poll(self) -> int | None:
+        """Its exit status, or ``None`` while it is still running."""
+
+    def wait(self) -> int | None:
+        """Block until it ends and answer its exit status."""
+
+    def terminate(self) -> None:
+        """SIGTERM. Signalling something that already exited is not news."""
+
+    def kill(self) -> None:
+        """SIGKILL. Same."""
+
+
+#: How an invocation is started: composed argv and a log sink in, a
+#: handle out. Separate from :data:`Runner` because an invocation is the
+#: one command here that is neither short nor bounded — its output is the
+#: build log and has to arrive while the build runs, and it has to stay
+#: addressable so that liveness policy can reach it.
+Spawner = Callable[[Sequence[str], "LineSink | None"], Running]
+
+
+class _Child:
+    """A real child process, with its log pumped by a thread.
+
+    The pump is a thread rather than the calling loop because the caller
+    has a second job while the build runs: watching the cancel sentinel
+    and the deadline. Reading a pipe to its end and watching a clock
+    cannot both be the thing a single thread is blocked on.
+    """
+
+    def __init__(self, process: subprocess.Popen[bytes], on_line: LineSink | None) -> None:
+        self._process = process
+        self._lines: list[str] = []
+        self._pump = threading.Thread(
+            target=self._drain, args=(on_line,), name="mcuhome-build-log", daemon=True
+        )
+        self._pump.start()
+
+    def _drain(self, on_line: LineSink | None) -> None:
+        stream = self._process.stdout
+        if stream is None:
+            return
+        for raw in stream:
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            self._lines.append(line)
+            if on_line is not None:
+                on_line(line)
+
+    @property
+    def output(self) -> str:
+        return "\n".join(self._lines)
+
+    def poll(self) -> int | None:
+        return self._process.poll()
+
+    def wait(self) -> int | None:
+        status = self._process.wait()
+        # Joined so that the last lines of a build are delivered before
+        # its status is: a caller that renders the log and then the
+        # verdict must not get them the other way round.
+        self._pump.join(timeout=_POLL_SECONDS * 4)
+        return status
+
+    def terminate(self) -> None:
+        with contextlib.suppress(OSError):
+            self._process.terminate()
+
+    def kill(self) -> None:
+        with contextlib.suppress(OSError):
+            self._process.kill()
+
+
+def _spawn_command(argv: Sequence[str], on_line: LineSink | None = None) -> Running:
+    """Start *argv* and hand back a handle that streams its merged output.
+
+    Merged because §8 says the two streams **are** one stream: "standard
+    output and standard error together are one raw, opaque log stream".
+    """
+    try:
+        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            list(argv),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError:
+        return _Absent()
+    return _Child(process, on_line)
+
+
+class _Absent:
+    """No container runtime at all: the one failure a spawn has of its own."""
+
+    output = ""
+
+    def poll(self) -> int | None:
+        return None
+
+    def wait(self) -> int | None:
+        return None
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+
+@dataclass(frozen=True)
+class Liveness:
+    """The backend's half of §8: a sentinel, a deadline, and the hard path.
+
+    The ladder, in order and with the reason for each rung:
+
+    1. **The cancel sentinel.** Its *existence* means stop. It is first
+       because it is the only rung that lets the program write a result
+       document — ``status: "cancelled"``, with ``reason`` and ``error``
+       both null, because nothing was diagnosed. It is also the only one
+       that works identically wherever the program runs, which is why
+       the contract has it: "killing a ``docker exec`` client does not
+       kill the process inside the container".
+    2. **SIGTERM at** :attr:`cancel_grace_seconds`, to the client this
+       side started. In a container that is the ``docker exec`` client
+       and *not* the build inside — so what the rung buys back is this
+       process's own file descriptors and its ability to answer, rather
+       than the build. What actually stops the build is reaping the
+       container, which is :meth:`BuildEnvironment.close`.
+    3. **SIGKILL**, ten seconds later, for a client that ignored it.
+
+    The deadline enters at the top of the same ladder rather than beside
+    it: ``limits.deadline_seconds`` is advisory to the program and
+    enforced here, and a program that honours it stops itself and says
+    ``error.deadline.exceeded``.
+    """
+
+    cancel: Path
+    deadline_seconds: int
+    cancel_grace_seconds: int
+
+    def supervise(self, child: Running, *, on_poll: Callable[[], None] | None = None) -> int | None:
+        """Wait for *child*, walking the ladder, and answer its status.
+
+        *on_poll* is called on every tick, which is where an event file
+        is drained: it is the same clock, and a second one would be a
+        second thing to get wrong.
+        """
+        deadline = time.monotonic() + self.deadline_seconds
+        stopping_at: float | None = None
+        terminated_at: float | None = None
+        while child.poll() is None:
+            time.sleep(_POLL_SECONDS)
+            if on_poll is not None:
+                on_poll()
+            now = time.monotonic()
+            if stopping_at is None and self.cancel.exists():
+                stopping_at = now
+            if stopping_at is None and now >= deadline:
+                # Suppressed because the directory may be gone already:
+                # a caller may be tearing the environment down around a
+                # deadline that fired into the race, and the next rung
+                # reaches the process either way.
+                with contextlib.suppress(OSError):
+                    self.cancel.touch()
+                stopping_at = now
+            if (
+                terminated_at is None
+                and stopping_at is not None
+                and now >= stopping_at + self.cancel_grace_seconds
+            ):
+                child.terminate()
+                terminated_at = now
+            if terminated_at is not None and now >= terminated_at + _KILL_AFTER_SECONDS:
+                child.kill()
+        status = child.wait()
+        # One last drain, because the program's own `invocation.finished`
+        # is written immediately before the result document and can land
+        # between the final poll and the exit.
+        if on_poll is not None:
+            on_poll()
+        return status
+
+
 def inspect_command(docker: str, reference: str) -> list[str]:
     """``docker image inspect``, one JSON object per image (§9.1 cross-check)."""
     return [docker, "image", "inspect", "--format", "{{json .}}", reference]
@@ -605,9 +809,16 @@ class Docker:
     knows about contexts, the SDK or the ABI.
     """
 
-    def __init__(self, program: str = "docker", *, runner: Runner | None = None) -> None:
+    def __init__(
+        self,
+        program: str = "docker",
+        *,
+        runner: Runner | None = None,
+        spawner: Spawner | None = None,
+    ) -> None:
         self.program = program
         self._runner = runner
+        self._spawner = spawner
 
     def _invoke(self, argv: Sequence[str], on_line: LineSink | None = None) -> Completed:
         runner = _run_command if self._runner is None else self._runner
@@ -716,14 +927,29 @@ class Docker:
         request: Path,
         user: str | None,
         on_line: LineSink | None,
+        liveness: Liveness | None = None,
+        on_poll: Callable[[], None] | None = None,
     ) -> Completed:
-        """``docker exec`` the program, streaming its log to *on_line*."""
-        return self._invoke(
-            exec_command(
-                docker=self.program, container=container, action=action, request=request, user=user
-            ),
-            on_line,
+        """``docker exec`` the program, streaming its log to *on_line*.
+
+        Spawned rather than run: an invocation is the one command here
+        that is neither short nor bounded, and while it runs somebody has
+        to watch the cancel sentinel, the deadline and the program's
+        event file. Without a *liveness* it is simply waited for, which
+        is the local build that has nobody to cancel it.
+        """
+        argv = exec_command(
+            docker=self.program, container=container, action=action, request=request, user=user
         )
+        spawner = _spawn_command if self._spawner is None else self._spawner
+        child = spawner(argv, on_line)
+        if liveness is None:
+            status = child.wait()
+            if on_poll is not None:
+                on_poll()
+        else:
+            status = liveness.supervise(child, on_poll=on_poll)
+        return Completed(status=status, output=getattr(child, "output", ""))
 
     def remove(self, container: str) -> None:
         """Reap the container. Never raises: teardown must not become the news."""
@@ -749,6 +975,8 @@ def request_document(
     cancel_grace_seconds: int,
     params: dict[str, Any] | None = None,
     required: tuple[str, ...] = (),
+    events: Inside | None = None,
+    cancel: Inside | None = None,
 ) -> dict[str, Any]:
     """The document one working invocation is described by (§5.2).
 
@@ -795,6 +1023,13 @@ def request_document(
         document["params"] = dict(params)
     if required:
         document["required"] = list(required)
+    # Both optional in §5.2 and omitted rather than written null: "absent
+    # ⇒ no events", and a `cancel` nobody will ever touch would promise a
+    # stop signal that does not exist.
+    if events is not None:
+        document["events"] = str(events)
+    if cancel is not None:
+        document["cancel"] = str(cancel)
     return document
 
 
@@ -1531,6 +1766,116 @@ class LocalBackend:
         return mounts
 
 
+#: One parsed program event, handed on verbatim (§8: "unknown names are
+#: relayed opaquely … never rewrites it").
+EventSink = Callable[[dict[str, Any]], None]
+
+
+@dataclass
+class Invocation:
+    """One prepared action of a :class:`BuildEnvironment`, ready to run.
+
+    It exists as a value rather than as a step inside :meth:`run`
+    because two things about an invocation are needed *before* it
+    finishes: the cancel sentinel, whose existence means stop, and the
+    event file, which a consumer may want to replay from. A handle that
+    only came back at the end could offer neither.
+    """
+
+    environment: BuildEnvironment
+    identifier: str
+    action: str
+    #: This invocation's directory on this host.
+    directory: Path
+    #: The same directory as the container spells it.
+    inside: PurePosixPath
+    out: Path
+    events: Path
+
+    @property
+    def cancel(self) -> Path:
+        """The sentinel. Touching it means stop (§8), from anywhere."""
+        return self.directory / "cancel"
+
+    @property
+    def result(self) -> Path:
+        return self.directory / "result.json"
+
+    def stop(self) -> None:
+        """Ask the program to stop, and never raise for having asked twice.
+
+        Cooperative on purpose, and the contract's own reason is worth
+        repeating: killing a ``docker exec`` client does not kill the
+        process inside the container, so a signal would stop the wrong
+        process. What follows if the program ignores it is
+        :class:`Liveness`'s ladder and, in the end,
+        :meth:`BuildEnvironment.close`.
+        """
+        with contextlib.suppress(OSError):
+            self.cancel.touch()
+
+    def run(
+        self, *, on_line: LineSink | None = None, on_event: EventSink | None = None
+    ) -> LocalOutcome:
+        """Exec the program, relay what it says, and judge what came back."""
+        environment = self.environment
+        reader = programevents.EventReader(path=self.events)
+
+        def drain() -> None:
+            for event in reader.read():
+                on_event(event)
+
+        completed = environment.docker.invoke(
+            container=environment.container,
+            action=self.action,
+            request=self.inside / "request.json",
+            user=environment.user,
+            on_line=on_line,
+            liveness=Liveness(
+                cancel=self.cancel,
+                deadline_seconds=environment.config.deadline_seconds,
+                cancel_grace_seconds=environment.config.cancel_grace_seconds,
+            ),
+            on_poll=None if on_event is None else drain,
+        )
+        return self._collect(completed.status)
+
+    def _collect(self, exit_code: int | None) -> LocalOutcome:
+        """Read the result, harden egress, and decide what it was worth.
+
+        §5.3's seventh condition and §9.3's re-hashing meet here: the
+        document is judged by :func:`judge_result` and the artifacts by
+        :func:`verify_artifacts`, and an invocation is successful only if
+        both had nothing to say. A declared entry that is malformed, one
+        whose bytes do not survive re-hashing, and §7.2's delivery rule
+        (a successful build delivers one ``firmware`` and exactly one
+        ``report``) all fail the invocation.
+        """
+        environment = self.environment
+        outcome = judge_result(
+            self.result,
+            action=self.action,
+            exit_code=exit_code,
+            session=environment.session,
+            context_id=environment.context_id,
+            patched_layers=environment.patched,
+        )
+        outcome.out = self.out
+        if outcome.result is not None:
+            declared, malformed = declared_artifacts(outcome.result)
+            verified, problems = verify_artifacts(self.out, declared)
+            outcome.artifacts = verified
+            problems = (
+                malformed
+                + problems
+                + _delivery_problems(self.action, outcome.result, outcome.status, verified)
+            )
+            if problems:
+                outcome.problems = outcome.problems + problems
+                outcome.successful = False
+        return outcome
+
+
 @dataclass
 class BuildEnvironment:
     """One materialized build environment, and the invocations run in it.
@@ -1570,12 +1915,69 @@ class BuildEnvironment:
     def __exit__(self, *_exception: object) -> None:
         self.close()
 
+    def prepare(self, action: str, *, mode: str | None = None) -> Invocation:
+        """Everything one invocation needs on disk, before it is started.
+
+        Separate from running it because a caller that may want to
+        **cancel** needs the sentinel's path before the call that blocks
+        — the sentinel is a file whose existence means stop (§8), so
+        cancelling is touching it, and a handle that only came back at
+        the end could never be touched in time.
+        """
+        if self._closed:
+            raise RuntimeError("this build environment has been closed")
+        if action not in self.profile.actions:
+            raise _image_unusable(
+                self.profile.reference,
+                f'it does not implement "{action}"; it announced {sorted(self.profile.actions)}',
+            )
+        self._counter += 1
+        identifier = f"inv-{self._counter}"
+        directory = self.invocations / identifier
+        out = directory / "out"
+        tmp = directory / "tmp"
+        out.mkdir(parents=True)
+        tmp.mkdir(parents=True)
+        # §8: the events file is created empty by the backend, because a
+        # reader that had to tell "not created yet" from "no events yet"
+        # would be guessing at exactly the moment somebody is watching.
+        events = directory / "events.ndjson"
+        events.touch()
+        # The container's own view of the same directory. It is the same
+        # for every build on every machine — see
+        # :mod:`mcuhome.model.containerpaths` for why — and from here on
+        # every path has two spellings: this side reads results through
+        # the host one and states the container one in the request
+        # document.
+        inside = containerpaths.invocation(identifier)
+        request = directory / "request.json"
+        document = self._document(
+            action=action,
+            result=inside / "result.json",
+            out=inside / "out",
+            tmp=inside / "tmp",
+            events=inside / "events.ndjson",
+            cancel=inside / "cancel",
+            mode=mode,
+        )
+        write_request(document, request)
+        return Invocation(
+            environment=self,
+            identifier=identifier,
+            action=action,
+            directory=directory,
+            inside=inside,
+            out=out,
+            events=events,
+        )
+
     def invoke(
         self,
         action: str,
         *,
         mode: str | None = None,
         on_line: LineSink | None = None,
+        on_event: EventSink | None = None,
     ) -> LocalOutcome:
         """Run one action to its end and judge what came back.
 
@@ -1592,45 +1994,7 @@ class BuildEnvironment:
         let a later non-conforming build slip through, and a stale
         ``result.json`` would be judged as this run's answer.
         """
-        if self._closed:
-            raise RuntimeError("this build environment has been closed")
-        if action not in self.profile.actions:
-            raise _image_unusable(
-                self.profile.reference,
-                f'it does not implement "{action}"; it announced {sorted(self.profile.actions)}',
-            )
-        self._counter += 1
-        identifier = f"inv-{self._counter}"
-        directory = self.invocations / identifier
-        out = directory / "out"
-        tmp = directory / "tmp"
-        out.mkdir(parents=True)
-        tmp.mkdir(parents=True)
-        # The container's own view of the same directory. It is the same
-        # for every build on every machine — see
-        # :mod:`mcuhome.model.containerpaths` for why — and from here on
-        # every path has two spellings: this side reads results through
-        # the host one and states the container one in the request
-        # document.
-        inside = containerpaths.invocation(identifier)
-        request = directory / "request.json"
-        result = directory / "result.json"
-        document = self._document(
-            action=action,
-            result=inside / "result.json",
-            out=inside / "out",
-            tmp=inside / "tmp",
-            mode=mode,
-        )
-        write_request(document, request)
-        completed = self.docker.invoke(
-            container=self.container,
-            action=action,
-            request=inside / "request.json",
-            user=self.user,
-            on_line=on_line,
-        )
-        return self._collect(result, out=out, action=action, exit_code=completed.status)
+        return self.prepare(action, mode=mode).run(on_line=on_line, on_event=on_event)
 
     def close(self) -> None:
         """Reap the container. Idempotent, and never the reason a build fails."""
@@ -1646,6 +2010,8 @@ class BuildEnvironment:
         result: Inside,
         out: Inside,
         tmp: Inside,
+        events: Inside,
+        cancel: Inside,
         mode: str | None,
     ) -> dict[str, Any]:
         """The request document for one invocation (§5.2).
@@ -1678,43 +2044,9 @@ class BuildEnvironment:
             cancel_grace_seconds=self.config.cancel_grace_seconds,
             params=params,
             required=tuple(required),
+            events=events,
+            cancel=cancel,
         )
-
-    def _collect(
-        self, result: Path, *, out: Path, action: str, exit_code: int | None
-    ) -> LocalOutcome:
-        """Read the result, harden egress, and decide what it was worth.
-
-        §5.3's seventh condition and §9.3's re-hashing meet here: the
-        document is judged by :func:`judge_result` and the artifacts by
-        :func:`verify_artifacts`, and an invocation is successful only if
-        both had nothing to say. A declared entry that is malformed, one
-        whose bytes do not survive re-hashing, and §7.2's delivery rule
-        (a successful build delivers one ``firmware`` and exactly one
-        ``report``) all fail the invocation.
-        """
-        outcome = judge_result(
-            result,
-            action=action,
-            exit_code=exit_code,
-            session=self.session,
-            context_id=self.context_id,
-            patched_layers=self.patched,
-        )
-        outcome.out = out
-        if outcome.result is not None:
-            declared, malformed = declared_artifacts(outcome.result)
-            verified, problems = verify_artifacts(out, declared)
-            outcome.artifacts = verified
-            problems = (
-                malformed
-                + problems
-                + _delivery_problems(action, outcome.result, outcome.status, verified)
-            )
-            if problems:
-                outcome.problems = outcome.problems + problems
-                outcome.successful = False
-        return outcome
 
 
 def derive_patch_layers(context_dir: Path) -> tuple[str, ...]:

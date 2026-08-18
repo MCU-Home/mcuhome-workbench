@@ -310,14 +310,47 @@ class Seam:
                 source, target = volume.removesuffix(":ro").split(":")
                 self.mounts[PurePosixPath(target)] = Path(source)
             return lb.Completed(self.start_status, self.container_id + "\n")
-        if verb == "exec":
-            request = json.loads(self._host(argv[-1]).read_text("utf-8"))
-            self.exec_request = request
-            self.build(self._host_view(request))
-            return lb.Completed(self.exec_status, "compiling...\n")
         if verb == "rm":
             return lb.Completed(0, "")
         raise AssertionError(f"unexpected docker call: {argv}")
+
+    def spawn(self, argv, on_line=None):
+        """The invocation, which is spawned rather than run.
+
+        It plays the scripted program synchronously and answers with a
+        handle that has already finished — the shape a supervisor walks
+        over without a rung ever firing.
+        """
+        argv = list(argv)
+        self.calls.append(argv)
+        assert argv[1] == "exec", f"only an invocation is spawned: {argv}"
+        request = json.loads(self._host(argv[-1]).read_text("utf-8"))
+        self.exec_request = request
+        self.build(self._host_view(request))
+        if on_line is not None:
+            on_line("compiling...")
+        return _Finished(self.exec_status)
+
+
+class _Finished:
+    """A spawned invocation that is already over."""
+
+    output = "compiling..."
+
+    def __init__(self, status: int | None) -> None:
+        self.status = status
+
+    def poll(self) -> int | None:
+        return self.status
+
+    def wait(self) -> int | None:
+        return self.status
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
 
 
 @pytest.fixture
@@ -340,6 +373,22 @@ def _conforming(request) -> None:
     """
     manifest = read_context_manifest(Path(request["context"]) / "manifest.yaml")
     build_result(request, context=manifest.compute_id())
+
+
+def _docker(seam) -> Docker:
+    """A docker seam driven by *seam* for both of its two roles.
+
+    Short commands go through the runner and the invocation through the
+    spawner, which is the split the real one has: an invocation is
+    neither short nor bounded, and something has to watch the clock
+    while it runs.
+    """
+    return Docker(runner=seam, spawner=getattr(seam, "spawn", _never_spawned))
+
+
+def _never_spawned(argv, on_line=None):
+    """For the seams of tests that refuse before an invocation exists."""
+    raise AssertionError(f"nothing should have been invoked: {list(argv)}")
 
 
 def _seam(**overrides) -> Seam:
@@ -372,7 +421,7 @@ def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model
         image=IMAGE,
         jobs=2,
         registry=ScriptedRegistry(),
-        docker=Docker(runner=seam),
+        docker=_docker(seam),
     )
     assert result.outcome.successful, result.outcome.problems
     # The pin, not the repository: what a build reports is the image it
@@ -410,7 +459,7 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
         image=IMAGE,
         on_step=lambda stage, **facts: steps.append((stage, facts)),
         registry=ScriptedRegistry(),
-        docker=Docker(runner=_seam()),
+        docker=_docker(_seam()),
     )
     assert result.outcome.successful
     assert [stage for stage, _facts in steps] == [
@@ -469,7 +518,7 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
         env={},
         image=IMAGE,
         registry=ScriptedRegistry(),
-        docker=Docker(runner=seam),
+        docker=_docker(seam),
     )
     assert result.outcome.successful
 
@@ -530,7 +579,7 @@ def test_an_image_that_cannot_be_fetched_refuses_before_a_container_starts(
             env={},
             image=IMAGE,
             registry=ScriptedRegistry(),
-            docker=Docker(runner=runner),
+            docker=_docker(runner),
         )
     assert "could not fetch" in caught.value.message
     assert any(argv[1] == "pull" for argv in seen), "it tried"
@@ -563,7 +612,7 @@ def test_an_environment_of_another_zephyr_release_refuses_before_anything_is_wri
             env={},
             image=f"{IMAGE}:zephyr-4.5.0-r1",
             registry=ScriptedRegistry(tag="zephyr-4.5.0-r1", zephyr="4.5.0"),
-            docker=Docker(runner=runner),
+            docker=_docker(runner),
         )
     assert "4.5.0" in caught.value.message
     assert model.toolchain.zephyr_constraint in caught.value.message
@@ -598,7 +647,7 @@ def test_an_environment_with_no_zephyr_label_refuses_before_anything_is_written(
             env={},
             image=f"{IMAGE}:silent",
             registry=ScriptedRegistry(tag="silent", zephyr=""),
-            docker=Docker(runner=runner),
+            docker=_docker(runner),
         )
     assert "does not say which Zephyr it carries" in caught.value.message
     assert model.toolchain.zephyr_constraint in str(caught.value)
@@ -625,7 +674,7 @@ def test_no_sdk_source_configured_is_a_typed_refusal(tmp_path, model, public_pem
             env={},
             image=IMAGE,
             registry=ScriptedRegistry(),
-            docker=Docker(runner=runner),
+            docker=_docker(runner),
         )
     assert "SDK source" in caught.value.message
     assert not any("--detach" in argv for argv in calls)
@@ -651,7 +700,7 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
             env={},
             image=IMAGE,
             registry=ScriptedRegistry(),
-            docker=Docker(runner=runner),
+            docker=_docker(runner),
         )
     assert containerbuild.lb.SDK_PACKAGE_NAME in caught.value.message
 
@@ -702,7 +751,7 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
         image=IMAGE,
         context_dir=context,
         on_step=lambda stage, **facts: steps.append(stage),
-        docker=Docker(runner=seam),
+        docker=_docker(seam),
     )
     assert result.outcome.successful, result.outcome.problems
     assert result.context_dir == context
@@ -755,7 +804,7 @@ def test_an_image_built_here_is_pinned_by_its_own_id_and_still_builds(tmp_path, 
         env={},
         image="localhost/builder:wip",
         registry=NoSuchTag(),
-        docker=Docker(runner=seam),
+        docker=_docker(seam),
     )
     assert result.outcome.successful, result.outcome.problems
     manifest = read_context_manifest(result.context_dir / "manifest.yaml")
@@ -845,7 +894,7 @@ def test_the_local_method_mounts_the_users_compiler_cache(tmp_path, model) -> No
         env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
         image=IMAGE,
         registry=ScriptedRegistry(),
-        docker=Docker(runner=seam),
+        docker=_docker(seam),
     )
     start = next(argv for argv in seam.calls if "--detach" in argv)
     mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
@@ -868,7 +917,7 @@ def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> No
         image=IMAGE,
         ccache_dir=tmp_path / "fast-disk",
         registry=ScriptedRegistry(),
-        docker=Docker(runner=seam),
+        docker=_docker(seam),
     )
     start = next(argv for argv in seam.calls if "--detach" in argv)
     mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]

@@ -339,14 +339,102 @@ class Seam:
                 source, target = volume.removesuffix(":ro").split(":")
                 self.mounts[PurePosixPath(target)] = Path(source)
             return lb.Completed(self.start_status, self.container_id + "\n")
-        if verb == "exec":
-            request = json.loads(self._host(argv[-1]).read_text("utf-8"))
-            self.exec_request = request
-            self.build(self._host_view(request))
-            return lb.Completed(self.exec_status, "compiling...\n")
         if verb == "rm":
             return lb.Completed(0, "")
         raise AssertionError(f"unexpected docker call: {argv}")
+
+    def spawn(self, argv, on_line=None) -> Scripted:
+        """The invocation, which is spawned rather than run.
+
+        It plays the program synchronously and hands back a handle that
+        has already finished, which is what a scripted program is: the
+        supervisor's ladder then walks over a process that is done, and
+        the tests that are about the ladder script one that is not
+        (:class:`Hanging`).
+        """
+        argv = list(argv)
+        self.calls.append(argv)
+        assert argv[1] == "exec", f"only an invocation is spawned: {argv}"
+        request = json.loads(self._host(argv[-1]).read_text("utf-8"))
+        self.exec_request = request
+        self.build(self._host_view(request))
+        if on_line is not None:
+            on_line("compiling...")
+        return Scripted(self.exec_status)
+
+
+class Scripted:
+    """An invocation that has already finished."""
+
+    def __init__(self, status: int | None) -> None:
+        self.status = status
+        self.terminated = False
+        self.killed = False
+        self.output = "compiling..."
+
+    def poll(self) -> int | None:
+        return self.status
+
+    def wait(self) -> int | None:
+        return self.status
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class Ends(Scripted):
+    """One that finishes on its own, after *after* polls."""
+
+    def __init__(self, *, after: int, status: int = 0) -> None:
+        super().__init__(None)
+        self._after = after
+        self._status = status
+        self.polls = 0
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        self.polls += 1
+        if self.polls > self._after:
+            self.status = self._status
+        return self.status
+
+    def wait(self) -> int | None:
+        return self._status
+
+
+class Hanging(Scripted):
+    """One that does not, until a rung of the ladder reaches it.
+
+    ``stops_at`` is which rung: ``"terminate"`` for a program that goes
+    away when asked, ``"kill"`` for one that has to be made to, and
+    ``None`` for one that never does — which is the case the caller has
+    to survive rather than fix.
+    """
+
+    def __init__(self, *, stops_at: str | None = "terminate", status: int = 143) -> None:
+        super().__init__(None)
+        self._stops_at = stops_at
+        self._status = status
+
+    def poll(self) -> int | None:
+        return self.status
+
+    def wait(self) -> int | None:
+        return self.status
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if self._stops_at == "terminate":
+            self.status = self._status
+
+    def kill(self) -> None:
+        self.killed = True
+        if self._stops_at in ("terminate", "kill"):
+            self.status = self._status
 
 
 def scenario(
@@ -377,7 +465,7 @@ def scenario(
     )
     backend = lb.LocalBackend(
         lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=4, ccache_dir=ccache_dir),
-        docker=lb.Docker(runner=seam),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
     )
     return backend, context, seam
 
@@ -1574,3 +1662,237 @@ def test_an_action_the_image_does_not_announce_is_refused_before_it_is_invoked(t
     ):
         environment.invoke("verify")
     assert not [call for call in seam.calls if call[1:2] == ["exec"]]
+
+
+# --------------------------------------------------------------------------
+# §8: the event stream, and the ladder that stops an invocation
+# --------------------------------------------------------------------------
+
+
+def emit(request: dict[str, Any], *events: dict[str, Any]) -> None:
+    """Append *events* to the file the request document named."""
+    with Path(request["events"]).open("a", encoding="utf-8") as handle:
+        for event in events:
+            handle.write(json.dumps(event) + "\n")
+            handle.flush()
+
+
+def test_the_request_document_offers_an_event_file_and_a_cancel_sentinel(tmp_path) -> None:
+    """Both are §5.2 optional and both are offered, for opposite reasons.
+
+    Without ``events`` a program has nowhere to report its phases and
+    ``describe``'s registry is decoration; without ``cancel`` there is no
+    stop signal at all, because "killing a ``docker exec`` client does
+    not kill the process inside the container".
+    """
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    document = seam.exec_request
+    assert document is not None
+    inv = PurePosixPath(document["out"]).parent
+    assert document["events"] == str(inv / "events.ndjson")
+    assert document["cancel"] == str(inv / "cancel")
+
+
+def test_the_event_file_exists_before_the_program_is_invoked(tmp_path) -> None:
+    """§8: created empty by the backend.
+
+    A reader that had to tell "not created yet" from "no events yet"
+    would be guessing at exactly the moment somebody is watching.
+    """
+    existed = []
+    backend, context, _seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: (
+            existed.append(Path(request["events"]).is_file()),
+            build_result(request, context=context_id_of(ctx)),
+        )[-1],
+        describe_static=describe_result_document(),
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert existed == [True]
+
+
+def test_every_event_the_program_writes_is_relayed_verbatim(tmp_path) -> None:
+    """§8: "unknown names are relayed opaquely … never rewrites it".
+
+    The third one carries a name no registry has, which is exactly the
+    case that makes a third-party program's phases readable through a
+    backend that never heard of them.
+    """
+    seen: list[dict[str, Any]] = []
+    backend, context, _seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: (
+            emit(
+                request,
+                {"event": "invocation.started", "seq": 1, "action": "build"},
+                {
+                    "event": "build.image.started",
+                    "seq": 2,
+                    "image": "app",
+                    "current": 1,
+                    "total": 2,
+                },
+                {"event": "x-vendor.thing", "seq": 3, "whatever": [1, 2, 3]},
+            ),
+            build_result(request, context=context_id_of(ctx)),
+        )[-1],
+        describe_static=describe_result_document(),
+    )
+    with backend.open(context_dir=context, work_root=tmp_path / "work") as environment:
+        environment.invoke("build", on_event=seen.append)
+
+    assert [event["event"] for event in seen] == [
+        "invocation.started",
+        "build.image.started",
+        "x-vendor.thing",
+    ]
+    assert seen[2]["whatever"] == [1, 2, 3]
+
+
+def test_rubbish_in_the_event_stream_is_dropped_and_not_an_abort(tmp_path) -> None:
+    """§8: discarded and counted, "never treated as an abort".
+
+    A program that writes nonsense into its own event stream has not
+    failed its build.
+    """
+    seen: list[dict[str, Any]] = []
+
+    def program(request, ctx) -> None:
+        Path(request["events"]).write_text(
+            "not json\n"
+            + json.dumps([1, 2])
+            + "\n"
+            + json.dumps({"no": "name"})
+            + "\n"
+            + json.dumps({"event": "invocation.finished", "seq": 9, "status": "success"})
+            + "\n",
+            encoding="utf-8",
+        )
+        build_result(request, context=context_id_of(ctx))
+
+    backend, context, _seam = scenario(
+        tmp_path, build=program, describe_static=describe_result_document()
+    )
+    with backend.open(context_dir=context, work_root=tmp_path / "work") as environment:
+        outcome = environment.invoke("build", on_event=seen.append)
+
+    assert outcome.successful
+    assert [event["event"] for event in seen] == ["invocation.finished"]
+
+
+def test_a_caller_that_wants_no_events_is_offered_none(tmp_path) -> None:
+    """No sink, no reading: the file is still there, and nobody drains it."""
+    backend, context, _seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: (
+            emit(request, {"event": "invocation.started", "seq": 1, "action": "build"}),
+            build_result(request, context=context_id_of(ctx)),
+        )[-1],
+        describe_static=describe_result_document(),
+    )
+    outcome = backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert outcome.successful
+
+
+def test_touching_the_sentinel_is_how_an_invocation_is_stopped(tmp_path) -> None:
+    """§8: the *existence* of the file means stop, and that is the whole signal.
+
+    A caller holds the prepared invocation, so it has the path before
+    the call that blocks — which is why ``prepare`` is a step of its own.
+    """
+    backend, context, _seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    with backend.open(context_dir=context, work_root=tmp_path / "work") as environment:
+        invocation = environment.prepare("build")
+        assert not invocation.cancel.exists()
+        invocation.stop()
+        assert invocation.cancel.exists()
+        invocation.stop()  # asking twice is not an error
+
+
+@pytest.fixture
+def brisk(monkeypatch):
+    """The ladder, with its two waits taken out.
+
+    Both are widths of a window rather than policy — how long a program
+    has to notice and how long it has to obey — so a test that wanted to
+    see the next rung would otherwise be a test that waits.
+    """
+    monkeypatch.setattr(lb, "_POLL_SECONDS", 0.001)
+    monkeypatch.setattr(lb, "_KILL_AFTER_SECONDS", 0.0)
+
+
+def test_the_ladder_asks_before_it_signals(tmp_path, brisk) -> None:
+    """The sentinel is rung one, and it is the only one that lets a program answer.
+
+    A program that stops itself writes ``status: "cancelled"``; one that
+    was killed writes nothing at all. So nothing is signalled until the
+    grace period has run out.
+    """
+    cancel = tmp_path / "cancel"
+    cancel.touch()
+    obedient = Ends(after=3)
+    liveness = lb.Liveness(cancel=cancel, deadline_seconds=3600, cancel_grace_seconds=3600)
+    assert liveness.supervise(obedient) == 0
+    assert not obedient.terminated
+    assert not obedient.killed
+
+
+def test_a_program_that_ignores_the_sentinel_is_signalled(tmp_path, brisk) -> None:
+    """Rung two, and in a container what it reaches is the exec client.
+
+    Not the build inside it — killing an exec client never has been —
+    so what this buys back is this side's own ability to answer. What
+    stops the build is reaping the container.
+    """
+    child = Hanging(stops_at="terminate")
+    cancel = tmp_path / "cancel"
+    cancel.touch()
+    liveness = lb.Liveness(cancel=cancel, deadline_seconds=3600, cancel_grace_seconds=0)
+    assert liveness.supervise(child) == 143
+    assert child.terminated
+
+
+def test_a_program_that_ignores_the_signal_is_killed(tmp_path, brisk) -> None:
+    child = Hanging(stops_at="kill")
+    cancel = tmp_path / "cancel"
+    cancel.touch()
+    liveness = lb.Liveness(cancel=cancel, deadline_seconds=3600, cancel_grace_seconds=0)
+    assert liveness.supervise(child) == 143
+    assert child.terminated and child.killed
+
+
+def test_the_deadline_enters_at_the_top_of_the_ladder(tmp_path, brisk) -> None:
+    """``limits.deadline_seconds`` is advisory to the program and enforced here.
+
+    Enforced by touching the same sentinel rather than by signalling, so
+    a program that honours it stops itself and says
+    ``error.deadline.exceeded`` — which a killed one could never say.
+    """
+    cancel = tmp_path / "cancel"
+    child = Ends(after=2)
+    liveness = lb.Liveness(cancel=cancel, deadline_seconds=0, cancel_grace_seconds=3600)
+    assert liveness.supervise(child) == 0
+    assert cancel.exists(), "the deadline asked before anything else did"
+    assert not child.terminated, "and the grace period was still running"
+
+
+def test_events_are_drained_while_the_invocation_runs(tmp_path, brisk) -> None:
+    """The same clock as the ladder, because a second one is a second thing to get wrong.
+
+    And one last drain after it ends: the program's own
+    ``invocation.finished`` is written immediately before the result
+    document and lands between the final poll and the exit.
+    """
+    drained = []
+    child = Ends(after=2)
+    liveness = lb.Liveness(
+        cancel=tmp_path / "cancel", deadline_seconds=3600, cancel_grace_seconds=3600
+    )
+    liveness.supervise(child, on_poll=lambda: drained.append(child.polls))
+    assert len(drained) >= 3, drained
