@@ -1825,6 +1825,7 @@ def brisk(monkeypatch):
     """
     monkeypatch.setattr(lb, "_POLL_SECONDS", 0.001)
     monkeypatch.setattr(lb, "_KILL_AFTER_SECONDS", 0.0)
+    monkeypatch.setattr(lb, "_GIVE_UP_AFTER_SECONDS", 0.05)
 
 
 def test_the_ladder_asks_before_it_signals(tmp_path, brisk) -> None:
@@ -1932,3 +1933,169 @@ def test_nothing_is_labelled_when_nobody_asked(tmp_path) -> None:
     )
     backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
     assert "--label" not in next(call for call in seam.calls if "--detach" in call)
+
+
+def test_a_shared_store_is_offered_read_only_and_keyed_by_program_id(tmp_path) -> None:
+    """§10's recommendation, for the backend that has the problem it solves.
+
+    "One subdirectory per implementation, named from ``describe``'s
+    ``program.id``, so that two foreign images cannot corrupt each
+    other's store" — which is the situation of a backend offering a
+    shared cache to images it did not choose.
+    """
+    store = tmp_path / "store" / PROGRAM_BLOCK["id"]
+    store.mkdir(parents=True)
+    real = make_sdk_source(tmp_path / "src")
+    context = make_context(tmp_path / "ctx", sdk_sha=real)
+    seam = Seam(
+        facts=image_facts(),
+        build=lambda request: conforming(request, context),
+        describe_static=describe_result_document(),
+    )
+    backend = lb.LocalBackend(
+        lb.BackendConfig(
+            sdk_sources=(tmp_path / "src",), jobs=1, shared_ccache_dir=tmp_path / "store"
+        ),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    volumes = mounts_of(next(call for call in seam.calls if "--detach" in call))
+    assert f"{store}:{containerpaths.CCACHE_SHARED}:ro" in volumes
+    assert not any(str(containerpaths.CCACHE_LOCAL) in volume for volume in volumes)
+
+
+def test_a_store_this_program_has_no_subdirectory_in_is_no_cache(tmp_path) -> None:
+    """Nothing is created: an operator fills a shared store deliberately."""
+    (tmp_path / "store").mkdir()
+    real = make_sdk_source(tmp_path / "src")
+    context = make_context(tmp_path / "ctx", sdk_sha=real)
+    seam = Seam(
+        facts=image_facts(),
+        build=lambda request: conforming(request, context),
+        describe_static=describe_result_document(),
+    )
+    backend = lb.LocalBackend(
+        lb.BackendConfig(
+            sdk_sources=(tmp_path / "src",), jobs=1, shared_ccache_dir=tmp_path / "store"
+        ),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    volumes = mounts_of(next(call for call in seam.calls if "--detach" in call))
+    assert not any("/ccache/" in volume for volume in volumes)
+
+
+def test_a_program_id_that_is_not_a_path_segment_gets_no_cache(tmp_path) -> None:
+    """A third-party program may call itself anything.
+
+    Sanitizing the name would be inventing an identity the program did
+    not claim, which is worse than a cold build.
+    """
+    program = json.loads(json.dumps(PROGRAM_BLOCK))
+    program["id"] = "../escape"
+    real = make_sdk_source(tmp_path / "src")
+    context = make_context(tmp_path / "ctx", sdk_sha=real)
+    seam = Seam(
+        facts=image_facts(),
+        build=lambda request: conforming(request, context),
+        describe_static=describe_result_document(program),
+    )
+    backend = lb.LocalBackend(
+        lb.BackendConfig(
+            sdk_sources=(tmp_path / "src",), jobs=1, shared_ccache_dir=tmp_path / "store"
+        ),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    volumes = mounts_of(next(call for call in seam.calls if "--detach" in call))
+    assert not any("/ccache/" in volume for volume in volumes)
+
+
+def test_the_ladder_stops_waiting_on_something_that_survives_sigkill(tmp_path, brisk) -> None:
+    """A stuck build must not become a stuck backend.
+
+    The backend is what tears the container down, and the container is
+    what actually stops a build — so a supervisor that waited forever
+    on an unkillable client would keep the one thing that can end it
+    from running. ``None`` is the honest status: nobody knows what that
+    process did.
+    """
+    child = Hanging(stops_at=None)
+    cancel = tmp_path / "cancel"
+    cancel.touch()
+    liveness = lb.Liveness(cancel=cancel, deadline_seconds=3600, cancel_grace_seconds=0)
+    assert liveness.supervise(child) is None
+    assert child.terminated and child.killed
+
+
+def test_a_nested_mount_comes_after_the_parent_it_sits_inside() -> None:
+    """Docker applies bind mounts in the order it is given them.
+
+    A mount inside another has to come *after* it, or the outer one
+    buries it — and for a read-only tree under a writable parent that is
+    §9.1's kernel-enforced write protection silently not happening. The
+    backend no longer relies on the nesting, but a mount set that *does*
+    nest must not depend on the caller's list order to be correct.
+    """
+    argv = lb.start_command(
+        docker="docker",
+        image="img:tag",
+        mounts=[
+            lb.Mount(Path("/host/sdk"), PurePosixPath("/mcuhome/work/sdk"), read_only=True),
+            lb.Mount(Path("/host/work"), PurePosixPath("/mcuhome/work")),
+        ],
+        user=None,
+        limits=None,
+    )
+    volumes = mounts_of(argv)
+    assert volumes.index("/host/work:/mcuhome/work") < volumes.index(
+        "/host/sdk:/mcuhome/work/sdk:ro"
+    )
+
+
+def test_an_unset_resource_limit_is_not_a_flag_with_no_value() -> None:
+    """An operator who removed a ceiling removed it, rather than passing an empty one."""
+    argv = lb.start_command(
+        docker="docker",
+        image="img:tag",
+        mounts=[],
+        user=None,
+        limits=lb.ResourceLimits(memory=None, cpus=None, pids=None),
+    )
+    assert "--memory" not in argv
+    assert "--cpus" not in argv
+    assert "--pids-limit" not in argv
+
+
+def test_a_container_that_does_not_start_is_a_typed_refusal(tmp_path) -> None:
+    """The runtime answered and the container is not there: a refusal, not a crash."""
+    real = make_sdk_source(tmp_path / "src")
+    context = make_context(tmp_path / "ctx", sdk_sha=real)
+    seam = Seam(
+        facts=image_facts(),
+        build=lambda request: conforming(request, context),
+        describe_static=describe_result_document(),
+        start_status=1,
+    )
+    backend = lb.LocalBackend(
+        lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=1),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
+    )
+    with pytest.raises(BuildError) as caught:
+        backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert "could not start" in caught.value.message
+
+
+def test_removing_a_container_never_raises() -> None:
+    """Teardown must not become the news.
+
+    Whatever went wrong, the interesting failure is the build's; a
+    reaper that raised would replace it with its own.
+    """
+
+    def refusing(argv, on_line=None):
+        raise OSError("no docker here")
+
+    with pytest.raises(OSError):
+        refusing(["docker", "rm"])
+    lb.Docker(runner=lambda argv, on_line=None: lb.Completed(1, "no such container")).remove("x")

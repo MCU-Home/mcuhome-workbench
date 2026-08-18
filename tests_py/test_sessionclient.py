@@ -51,7 +51,7 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextRequest, EnvironmentPin, SdkPin
 from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
-from mcuhome.workbench import buildmethods, imgtool, resolve_pins, signing
+from mcuhome.workbench import buildmethods, imgtool, orchestrator, resolve_pins, signing
 from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
@@ -175,6 +175,41 @@ class FakeProcess:
         self._hang = False
         self._code = -9
 
+    # -- the orchestrator's synchronous face ------------------------
+    #
+    # A container is driven from a worker thread, so the handle it hands
+    # back is polled and waited on synchronously. The scripted behaviour
+    # is stated once, here, and both faces read it.
+
+    def poll_sync(self) -> int | None:
+        return None if self._hang else self._code
+
+    def wait_sync(self) -> int:
+        while self._hang:
+            time.sleep(0.005)
+        return self._code
+
+
+class _Driven:
+    """A scripted program, as the orchestrator's synchronous seam answers one."""
+
+    output = ""
+
+    def __init__(self, process: FakeProcess) -> None:
+        self._process = process
+
+    def poll(self) -> int | None:
+        return self._process.poll_sync()
+
+    def wait(self) -> int | None:
+        return self._process.wait_sync()
+
+    def terminate(self) -> None:
+        self._process.terminate()
+
+    def kill(self) -> None:
+        self._process.kill()
+
 
 @dataclass
 class Invocation:
@@ -208,6 +243,9 @@ class FakeDocker:
     #: ``docker run`` that created the session's container. The request
     #: document names container paths, and this is the only way back.
     mounts: dict[PurePosixPath, Path] = field(default_factory=dict)
+    #: Scripted programs running in a container, so that removing it can
+    #: end them.
+    running: list[Any] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         inspected = {
@@ -218,6 +256,7 @@ class FakeDocker:
         }
         self.images.setdefault(IMAGE_REFERENCE, inspected)
         self.images.setdefault(f"{IMAGE}:{IMAGE_TAG}", inspected)
+        self.images.setdefault(f"{IMAGE}:{IMAGE_TAG}@{IMAGE_DIGEST}", inspected)
         self.listed = self.listed or [f"{IMAGE}:{IMAGE_TAG}"]
         if self.program is None:
             self.program = json.loads(json.dumps(PROGRAM))
@@ -225,6 +264,18 @@ class FakeDocker:
             self.run_program = conforming_program
 
     async def run(self, argv):
+        """The build server's own discovery seam: asked on its event loop."""
+        return self.answer(argv)
+
+    def answer(self, argv, on_line=None):
+        """The same docker, answered synchronously.
+
+        The orchestrator drives a container from a worker thread and its
+        seam is therefore synchronous, while a build server's own
+        discovery happens on its event loop and its seam is not. One
+        fake serves both, because they are one docker.
+        """
+        del on_line
         self.calls.append(list(argv))
         rest = list(argv[1:])
         if self.version_status is None:
@@ -257,8 +308,26 @@ class FakeDocker:
             return bs_container.Completed(status=0, output=identity + "\n")
         if rest[:1] == ["rm"]:
             self.removed.append(rest[-1])
+            # Removing a container ends what was running in it: the
+            # ladder's last rung is a teardown and not a signal, because
+            # killing a `docker exec` client never reached the process
+            # inside.
+            for process in self.running:
+                process.kill()
+            self.running.clear()
             return bs_container.Completed(status=0, output="")
         raise AssertionError(f"the fake docker was asked something unexpected: {argv}")
+
+    def drive(self, argv, on_line=None):
+        """The orchestrator's spawn seam: an invocation, already finished."""
+        argv = list(argv)
+        self.calls.append(argv)
+        assert argv[1] == "exec", f"only an invocation is spawned: {argv}"
+        request = json.loads(self.host(argv[-1]).read_text("utf-8"))
+        self.invocations.append(Invocation(action=argv[-2], argv=argv, request=request))
+        process = self.run_program(argv[-2], self.host_view(request), on_line or (lambda _: None))
+        self.running.append(process)
+        return _Driven(process)
 
     #: The request-document fields that name a directory the program is
     #: given (§5.2). Everything else that starts with a slash is not a
@@ -454,6 +523,27 @@ class GatedProcess(FakeProcess):
     async def wait(self) -> int:
         while not self._gate.exists():
             await asyncio.sleep(0.01)
+        return self._finish()
+
+    def poll_sync(self) -> int | None:
+        """``None`` until the gate appears — the invocation is still running."""
+        if self.killed or self.terminated:
+            return self._code
+        if not self._gate.exists():
+            return None
+        self._finish()
+        return 0
+
+    def wait_sync(self) -> int:
+        while not self._gate.exists():
+            if self.killed or self.terminated:
+                return self._code
+            time.sleep(0.005)
+        return self._finish()
+
+    def _finish(self) -> int:
+        if self._gate.with_suffix(".done").exists():
+            return 0
         _finish_program(self._action, self._request, self._on_line, identity=self._identity)
         # The receipt the test waits on: the events file and the result
         # document are complete from here, so a reattaching client has
@@ -703,9 +793,21 @@ class Harness:
 async def real_server(tmp_path: Path, *, docker: FakeDocker | None = None, **overrides: Any):
     """One real build server on a real socket, with docker stubbed out."""
     fake = docker if docker is not None else FakeDocker()
-    saved = (bs_container.run_docker, bs_container.spawn_docker)
+    # Four seams, because two different things drive one docker: the
+    # server's own discovery, on its event loop, and the orchestrator's
+    # driving of a container, in a worker thread. The autouse guard in
+    # conftest refuses the orchestrator's, so this replaces it for the
+    # tests that script a whole build — and restores it afterwards.
+    saved = (
+        bs_container.run_docker,
+        bs_container.spawn_docker,
+        orchestrator._run_command,
+        orchestrator._spawn_command,
+    )
     bs_container.run_docker = fake.run
     bs_container.spawn_docker = fake.spawn
+    orchestrator._run_command = fake.answer
+    orchestrator._spawn_command = fake.drive
     config = bs_config.Config(
         host="127.0.0.1",
         port=0,
@@ -722,7 +824,12 @@ async def real_server(tmp_path: Path, *, docker: FakeDocker | None = None, **ove
         yield Harness(url=str(server.make_url("/ws")), state=state, docker=fake, config=config)
     finally:
         await server.close()
-        bs_container.run_docker, bs_container.spawn_docker = saved
+        (
+            bs_container.run_docker,
+            bs_container.spawn_docker,
+            orchestrator._run_command,
+            orchestrator._spawn_command,
+        ) = saved
 
 
 def client_for(harness: Harness, tmp_path: Path, **kwargs: Any) -> RecordingClient:

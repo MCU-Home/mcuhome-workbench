@@ -203,8 +203,11 @@ from mcuhome.workbench.orchestrator import (
     BackendConfig,
     BuildEnvironment,
     Docker,
+    EnvironmentUnavailable,
+    EnvironmentUnusable,
     Invocation,
     LocalOutcome,
+    SdkUnavailable,
     open_environment,
 )
 from mcuhome.workbench.project import (
@@ -283,6 +286,8 @@ __all__ = [
     "DeviceOutline",
     "Docker",
     "EndpointChoice",
+    "EnvironmentUnavailable",
+    "EnvironmentUnusable",
     "Execution",
     "GenerationError",
     "InitResult",
@@ -317,6 +322,7 @@ __all__ = [
     "RemoteBuild",
     "RemoteNotConfigured",
     "RunningBuild",
+    "SdkUnavailable",
     "SelectedBuilder",
     "Setting",
     "Settings",

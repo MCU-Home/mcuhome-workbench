@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -114,7 +115,10 @@ __all__ = [
     "ImageProfile",
     "LineSink",
     "LocalBackend",
+    "EnvironmentUnavailable",
+    "EnvironmentUnusable",
     "LocalOutcome",
+    "SdkUnavailable",
     "Running",
     "Spawner",
     "Mount",
@@ -201,6 +205,8 @@ ROOT_OUT = "out"
 #: ``artifacts[].path`` segments, §5.4 / §9.2. The same shape §9.2
 #: forbids the program to leave ``out``, which is what makes egress a
 #: check rather than a repair.
+logger = logging.getLogger(__name__)
+
 _PATH_SEGMENT = re.compile(r"[A-Za-z0-9._-]+\Z")
 
 #: A bare hash in the one legal spelling of §3.3.1 — 64 lowercase hex
@@ -433,6 +439,14 @@ class BackendConfig:
     #: ``None`` mounts nothing, and the cache then lives in the container
     #: and dies with it, which is a slow build rather than a broken one.
     ccache_dir: Path | None = None
+    #: A cache to start warm from, offered **read-only** and with no
+    #: writable half at all. Contract §10: "shared backends MUST offer a
+    #: shared cache read-only for untrusted work" — which is the whole
+    #: difference between a backend building its operator's own projects
+    #: and one building whatever a stranger sent. Mutually exclusive with
+    #: :attr:`ccache_dir`, which is the two-role layout of a machine
+    #: whose builds are all its own.
+    shared_ccache_dir: Path | None = None
     #: Container labels for every container this backend starts. Backend
     #: policy rather than contract, and how a long-running caller finds
     #: the containers of a process that was killed outright.
@@ -513,6 +527,14 @@ _POLL_SECONDS = 0.5
 #: configurable: it is not a policy but the width of the window between
 #: "the signal was delivered" and "it was ignored".
 _KILL_AFTER_SECONDS = 10.0
+
+#: How long a **killed** one has before the supervisor stops waiting. A
+#: process that survives SIGKILL is not one this process can reach — it
+#: is a stuck kernel state or a client whose parent is gone — and waiting
+#: on it forever would trade a stuck build for a stuck backend, which is
+#: worse: the backend is what tears the container down, and the container
+#: is what actually stops the build.
+_GIVE_UP_AFTER_SECONDS = 30.0
 
 
 class Running(Protocol):
@@ -666,6 +688,7 @@ class Liveness:
         deadline = time.monotonic() + self.deadline_seconds
         stopping_at: float | None = None
         terminated_at: float | None = None
+        killed_at: float | None = None
         while child.poll() is None:
             time.sleep(_POLL_SECONDS)
             if on_poll is not None:
@@ -690,6 +713,13 @@ class Liveness:
                 terminated_at = now
             if terminated_at is not None and now >= terminated_at + _KILL_AFTER_SECONDS:
                 child.kill()
+                killed_at = killed_at or now
+            if killed_at is not None and now >= killed_at + _GIVE_UP_AFTER_SECONDS:
+                # The ladder has a last rung, and this is where it
+                # ends. `None` is the honest status: nobody knows what
+                # that process did, and a number would be an invention.
+                logger.warning("gave up waiting for an invocation that survived SIGKILL")
+                return None
         status = child.wait()
         # One last drain, because the program's own `invocation.finished`
         # is written immediately before the result document and can land
@@ -1334,50 +1364,73 @@ def acquire_sdk(*, version: str, sha256: str, sources: Sequence[Path], into: Pat
     that is not there. The unpack is the safe extraction of §9.1: regular
     files and directories only, and the executable bit preserved so
     ``bin/generate`` can be spawned (§6.1).
+
+    A directory with **no index** is searched by the conventional
+    filename, ``mcuhome-sdk-<version>.tar.zst``. That is not a weaker
+    rule: what makes a candidate the pinned package is that its bytes
+    hash to the pin, and the index only ever made it findable. An
+    operator who drops one archive in a directory has said everything
+    that has to be said, and requiring them to hand-write a manifest
+    beside it would be a ceremony with nothing behind it.
     """
     searched = [str(directory) for directory in sources]
     for directory in sources:
-        index_path = directory / INDEX_FILE
-        if not index_path.is_file():
+        found = _sdk_candidate(directory, version=version, sha256=sha256, searched=searched)
+        if found is None:
             continue
-        try:
-            index = json.loads(index_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        resolved = _exact_index_entry(index, version)
-        if resolved is None:
-            continue
-        resolved_file, resolved_sha256 = resolved
-        candidate = directory / resolved_file
-        if not candidate.is_file():
-            continue
-        if resolved_sha256 != sha256:
-            raise _sdk_unavailable(
-                version,
-                sha256,
-                searched,
-                f"{index_path} lists {resolved_file} with sha256 {resolved_sha256}, and the "
-                f"context pins {sha256}",
-            )
-        measured = sha256_file(candidate)
+        measured = sha256_file(found)
         if measured != sha256:
             raise _sdk_unavailable(
                 version,
                 sha256,
                 searched,
-                f"{candidate} is named for this version and hashes to {measured}",
+                f"{found} is named for this version and hashes to {measured}",
             )
         into.mkdir(parents=True, exist_ok=True)
         spool = into.parent / f"{into.name}.tar"
         try:
-            _decompress(candidate, spool, limit=SDK_MAX_BYTES)
+            _decompress(found, spool, limit=SDK_MAX_BYTES)
             _safe_extract(spool, into=into, quota_bytes=SDK_MAX_BYTES)
         finally:
             spool.unlink(missing_ok=True)
-        return SdkPackage(version=version, sha256=sha256, source=candidate, tree=into)
+        return SdkPackage(version=version, sha256=sha256, source=found, tree=into)
     raise _sdk_unavailable(
         version, sha256, searched, f"no source directory holds {SDK_PACKAGE_NAME} {version}"
     )
+
+
+def _sdk_candidate(
+    directory: Path, *, version: str, sha256: str, searched: Sequence[str]
+) -> Path | None:
+    """The file in *directory* that claims to be this version, or ``None``.
+
+    The index is consulted first because it can say something a
+    filename cannot: that this source holds the version and holds it
+    with *other bytes*, which is a different situation from not having
+    it and is worth a different refusal.
+    """
+    index_path = directory / INDEX_FILE
+    if index_path.is_file():
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            index = None
+        resolved = None if index is None else _exact_index_entry(index, version)
+        if resolved is not None:
+            resolved_file, resolved_sha256 = resolved
+            if resolved_sha256 != sha256:
+                raise _sdk_unavailable(
+                    version,
+                    sha256,
+                    list(searched),
+                    f"{index_path} lists {resolved_file} with sha256 {resolved_sha256}, "
+                    f"and the context pins {sha256}",
+                )
+            candidate = directory / resolved_file
+            if candidate.is_file():
+                return candidate
+    named = directory / f"{SDK_PACKAGE_NAME}-{version}.tar.zst"
+    return named if named.is_file() else None
 
 
 def _decompress(archive: Path, spool: Path, *, limit: int) -> None:
@@ -1530,7 +1583,9 @@ class LocalBackend:
         with self.open(context_dir=context_dir, work_root=work_root) as environment:
             return environment.invoke(action, mode=mode, on_line=on_line)
 
-    def open(self, *, context_dir: Path, work_root: Path) -> BuildEnvironment:
+    def open(
+        self, *, context_dir: Path, work_root: Path, session: str | None = None
+    ) -> BuildEnvironment:
         """Materialize the environment this context is built in.
 
         Everything expensive happens here and once: the pins are read,
@@ -1582,15 +1637,15 @@ class LocalBackend:
         invocations = work_root / "inv"
         if work.exists():
             shutil.rmtree(work)
-        work.mkdir(parents=True)
+        work.mkdir(mode=0o700, parents=True)
         if invocations.exists():
             shutil.rmtree(invocations)
-        invocations.mkdir(parents=True)
+        invocations.mkdir(mode=0o700, parents=True)
 
         trees, mounts = self._arrange_trees(
             profile, package, patched, context=context_dir, work=work, invocations=invocations
         )
-        mounts += self._cache_mounts()
+        mounts += self._cache_mounts(profile)
         container = self.docker.start(
             image=profile.reference,
             mounts=mounts,
@@ -1612,8 +1667,11 @@ class LocalBackend:
             # One session id, drawn once, for every invocation in this
             # environment — §6.3's marker in `work` is what makes that
             # load-bearing: a fresh id per invocation would make the
-            # second one find the first one's `work` foreign.
-            session=f"local-{uuid.uuid4().hex[:12]}",
+            # second one find the first one's `work` foreign. A caller
+            # that already has a name for this session states it, so that
+            # the marker, its logs and its wire agree; one that does not
+            # gets a drawn one.
+            session=session or f"local-{uuid.uuid4().hex[:12]}",
         )
 
     def _resolve_image(self, manifest: ContextManifest) -> ImageProfile:
@@ -1643,7 +1701,7 @@ class LocalBackend:
         pin = manifest.build_environment
         reference, facts = local_address(self.docker.inspect, pin)
         if facts is None:
-            raise BuildError(
+            raise EnvironmentUnavailable(
                 f"No build container on this host answers to {pin.reference}.",
                 hint=(
                     "the context names the exact image it is built in; this host does "
@@ -1652,7 +1710,7 @@ class LocalBackend:
                 ),
             )
         if facts.digest is not None and facts.digest != pin.digest and facts.image_id != pin.digest:
-            raise BuildError(
+            raise EnvironmentUnavailable(
                 f"The image {reference} reports digest {facts.digest}, and this "
                 f"context is pinned to {pin.digest}.",
                 hint=(
@@ -1757,7 +1815,34 @@ class LocalBackend:
             trees[layer] = TreeEntry(path=declared, writable=True)
         return trees, mounts
 
-    def _cache_mounts(self) -> list[Mount]:
+    @staticmethod
+    def _shared_store(root: Path, profile: ImageProfile) -> Path | None:
+        """One subdirectory of *root* per implementation, or nothing.
+
+        §10's own recommendation, and the reason is the shape this
+        parameter exists for: "one subdirectory per implementation, named
+        from ``describe``'s ``program.id``, so that two foreign images
+        cannot corrupt each other's store". A backend that offers a
+        shared store to images it did not choose has exactly that
+        problem.
+
+        An identity that is not a usable path segment gets no cache at
+        all. A third-party program may call itself anything, and
+        sanitizing the name would be inventing an identity the program
+        did not claim — which is worse than a cold build.
+
+        Nothing is created: an operator fills a shared store
+        deliberately, and a backend that made the directory would be
+        offering a cache nobody warmed.
+        """
+        identity = str(profile.program.get("id", ""))
+        if _PATH_SEGMENT.fullmatch(identity) is None:
+            logger.warning("no shared cache for program id %r: not a path segment", identity)
+            return None
+        store = root / identity
+        return store if store.is_dir() else None
+
+    def _cache_mounts(self, profile: ImageProfile) -> list[Mount]:
         """The compiler cache, in both of ccache's roles, or neither.
 
         The image configures ccache itself — where the writable cache is
@@ -1772,6 +1857,12 @@ class LocalBackend:
         Both are created here rather than left to docker, which would
         create a missing bind-mount source itself and own it as root.
         """
+        shared = self.config.shared_ccache_dir
+        if shared is not None:
+            store = self._shared_store(shared, profile)
+            if store is None:
+                return []
+            return [Mount(source=store, target=containerpaths.CCACHE_SHARED, read_only=True)]
         root = self.config.ccache_dir
         if root is None:
             return []
@@ -1959,13 +2050,18 @@ class BuildEnvironment:
         directory = self.invocations / identifier
         out = directory / "out"
         tmp = directory / "tmp"
-        out.mkdir(parents=True)
-        tmp.mkdir(parents=True)
+        # Not world-readable, and neither is the directory above them: a
+        # build's own files are the caller's business and nobody else's
+        # on a shared host, and a mode set here is a mode the container
+        # inherits — the program runs as this process's own user.
+        directory.mkdir(mode=0o700, parents=True)
+        out.mkdir(mode=0o700)
+        tmp.mkdir(mode=0o700)
         # §8: the events file is created empty by the backend, because a
         # reader that had to tell "not created yet" from "no events yet"
         # would be guessing at exactly the moment somebody is watching.
         events = directory / "events.ndjson"
-        events.touch()
+        events.touch(mode=0o600)
         # The container's own view of the same directory. It is the same
         # for every build on every machine — see
         # :mod:`mcuhome.model.containerpaths` for why — and from here on
@@ -2078,6 +2174,7 @@ def open_environment(
     work_root: Path,
     config: BackendConfig,
     docker: Docker | None = None,
+    session: str | None = None,
 ) -> BuildEnvironment:
     """Materialize the environment *context_dir* pins, for a caller that owns sessions.
 
@@ -2092,7 +2189,7 @@ def open_environment(
     what the pin exists to prevent.
     """
     backend = LocalBackend(config, docker=docker)
-    return backend.open(context_dir=context_dir, work_root=work_root)
+    return backend.open(context_dir=context_dir, work_root=work_root, session=session)
 
 
 def derive_patch_layers(context_dir: Path) -> tuple[str, ...]:
@@ -2419,14 +2516,59 @@ def _first_line(output: str) -> str:
     return "no output"
 
 
-def _image_unusable(reference: str, problem: str) -> BuildError:
+class SdkUnavailable(BuildError):
+    """The SDK package this context pins is not in any configured source.
+
+    A typed refusal rather than a message to match on: the same
+    condition is a command line printing a fix and a build server
+    answering ``sdk.unavailable`` over a socket, and neither should have
+    to recognize it by its wording. The pin and the directories that
+    were searched travel on the exception for the same reason — a
+    caller that has to put them in a structured frame should not be
+    parsing them back out of a sentence.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        hint: str = "",
+        version: str = "",
+        sha256: str = "",
+        searched: Sequence[str] = (),
+    ) -> None:
+        super().__init__(message, hint=hint)
+        self.version = version
+        self.sha256 = sha256
+        self.searched = tuple(searched)
+
+
+class EnvironmentUnavailable(BuildError):
+    """The build environment this context pins is not on this host.
+
+    Distinct from :class:`EnvironmentUnusable` because the two have
+    different fixes: this one is fetched or placed, that one is not
+    going to work however often it is tried.
+    """
+
+
+class EnvironmentUnusable(BuildError):
+    """The environment is here and cannot be trusted with a build.
+
+    ``describe`` did not answer, answered non-conformingly, or claimed
+    something this side does not implement — §7.1.1's pre-invocation
+    gate.
+    """
+
+
+def _image_unusable(reference: str, problem: str) -> EnvironmentUnusable:
     """An image that cannot be trusted with a build, and why.
 
     ``describe`` is authoritative about what a build container can do and
     doubles as the first conformance test, so an image that cannot answer
     it conformingly is not one a build is invoked on.
     """
-    return BuildError(
+    return EnvironmentUnusable(
         f"The image {reference} cannot serve a local build: {problem}.",
         hint="describe is the first conformance test — a build container must answer it",
     )
@@ -2434,7 +2576,7 @@ def _image_unusable(reference: str, problem: str) -> BuildError:
 
 def _sdk_unavailable(
     version: str, sha256: str, searched: Sequence[str], problem: str
-) -> BuildError:
+) -> SdkUnavailable:
     """The SDK pin names a package this host has not — the ``sdk.unavailable`` spirit.
 
     Not retryable in spirit: contract v1's first source tier is local
@@ -2443,8 +2585,11 @@ def _sdk_unavailable(
     the answer is an operator putting the package where the backend looks.
     """
     listed = ", ".join(searched) or "none"
-    return BuildError(
+    return SdkUnavailable(
         f"MCUHome cannot supply the SDK package this context pins ({problem}).",
+        version=version,
+        sha256=sha256,
+        searched=tuple(searched),
         hint=(
             f"the local build method reads the SDK from configured source directories only "
             f"and never from the url in the context — add {SDK_PACKAGE_NAME} {version} "
