@@ -43,7 +43,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import buildmethods
-from mcuhome.workbench.contextdir import read_context_manifest
+from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 from mcuhome.workbench.signing import (
     generate_key_pem,
@@ -617,6 +617,61 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
             docker=Docker(runner=runner),
         )
     assert localbuild.lb.SDK_PACKAGE_NAME in caught.value.message
+
+
+# --------------------------------------------------------------------------
+# A context the caller already holds
+# --------------------------------------------------------------------------
+
+
+def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
+    """The other half of the seam: what to build can arrive already made.
+
+    The ordinary caller hands a device model over and this composition
+    creates the context; a caller that already holds one — an embedder
+    that assembled it elsewhere, a build server that received it over a
+    socket — hands the directory over instead, and then nothing is
+    resolved and nothing is written into it but the lock. That is what
+    makes "create a context" and "build a context" two calls rather than
+    one, and it is the seam a build server enters at.
+
+    The context here comes from ``create_build_context``, the real
+    creator, and not from this test: what is asserted is that the
+    composition builds the directory it was given, which a hand-written
+    context would say nothing about.
+    """
+    make_sdk_source(tmp_path / "src")
+    context = tmp_path / "held"
+    create_build_context(
+        model, out_dir=context, sdk_sources=(tmp_path / "src",), signing_pub=public_pem
+    )
+    before = sorted(path.name for path in context.iterdir())
+    steps: list[str] = []
+    seam = _seam()
+    result = buildmethods.compose_local_build(
+        model,
+        signing_pub=public_pem,
+        # Still needed, and for the other of the two things a source is
+        # for: the pin is already in the supplied context and is not
+        # resolved again, but the bytes it pins still have to be found
+        # and mounted.
+        sdk_sources=(tmp_path / "src",),
+        work_root=tmp_path / "wr",
+        env={},
+        image=IMAGE,
+        context_dir=context,
+        on_step=lambda stage, **facts: steps.append(stage),
+        docker=Docker(runner=seam),
+    )
+    assert result.outcome.successful, result.outcome.problems
+    assert result.context_dir == context
+    # The directory it was given, locked in place — not a copy, and not a
+    # second context somewhere under the work root.
+    assert not (tmp_path / "wr" / "context").exists()
+    assert sorted(path.name for path in context.iterdir()) == sorted([*before, "manifest.yaml"])
+    # No context step: this composition did not create one, and a step
+    # bar that claimed otherwise would be showing work nobody did.
+    assert steps == ["compile"]
 
 
 # --------------------------------------------------------------------------

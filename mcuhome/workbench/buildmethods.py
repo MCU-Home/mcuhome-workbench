@@ -11,16 +11,29 @@ every one of them delivers an **unsigned** image plus a build report, and
 the signature is a separate host-side step afterwards (E55, E56). That is
 what makes one interface possible rather than merely tidy.
 
-So this module is small on purpose. :func:`run_build` takes a resolved
-device model plus the inputs a method needs, runs the method named, and
-answers with one :class:`BuildOutcome` whose meaning does not depend on
-which one ran: *did it succeed*, *where are the unsigned artifacts and
-the report*, and *which report shape is it* — enough for the shared
-signing step, and enough for a caller that only wants to know whether to
-carry on. What is genuinely method-specific — a west plan and its log, a
-container reference, an invocation id — travels in
+So this module is small on purpose. :func:`build_firmware` takes a
+resolved device model plus the inputs a build needs, runs the one the
+target names, and answers with one :class:`BuildOutcome` whose meaning
+does not depend on which ran: *did it succeed*, *where are the unsigned
+artifacts and the report*, and *which report shape is it* — enough for
+the shared signing step, and enough for a caller that only wants to know
+whether to carry on. What is genuinely composition-specific — a west plan
+and its log, a container reference, an invocation id — travels in
 :attr:`BuildOutcome.detail`, typed as itself, so a renderer can reach it
 without every consumer having to.
+
+**Two axes, and a name is one word for both.** Where a build runs and how
+the machine that runs it executes it are separate decisions and only the
+first belongs to a caller, which is what :mod:`…buildtarget` states:
+:class:`~mcuhome.workbench.buildtarget.LocalBuild` carries an
+:class:`~mcuhome.workbench.buildtarget.Execution`,
+:class:`~mcuhome.workbench.buildtarget.RemoteBuild` deliberately carries
+none. :func:`build_firmware` is the seam that takes one of those, and
+:func:`run_build` is the name-shaped entry point over it for a caller
+whose method arrived as a flag or a configuration value —
+:func:`target_for_method` is the whole of the translation, in one place,
+so that the method-specific fields of :class:`BuildRequest` have exactly
+one reader.
 
 **No key of any kind can be private here.** Two fields carry key
 material and both are public halves in the form their method needs:
@@ -85,6 +98,15 @@ from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench.buildlock import build_lock
+from mcuhome.workbench.buildtarget import (
+    DEFAULT_MAX_WAIT_SECONDS,
+    BuildTarget,
+    ContainerExecution,
+    Execution,
+    LocalBuild,
+    RemoteBuild,
+    WorkspaceExecution,
+)
 from mcuhome.workbench.contextdir import context_facts, create_build_context, lock_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
@@ -96,12 +118,20 @@ __all__ = [
     "REMOTE",
     "BuildOutcome",
     "BuildRequest",
+    "BuildTarget",
+    "ContainerExecution",
+    "Execution",
+    "LocalBuild",
     "MethodUnavailable",
+    "RemoteBuild",
     "RemoteNotConfigured",
     "UnknownMethod",
+    "WorkspaceExecution",
+    "build_firmware",
     "websocket_url",
     "resolve_method",
     "run_build",
+    "target_for_method",
 ]
 
 #: Drives a build container on this machine through the invocation ABI
@@ -117,15 +147,6 @@ LOCAL_DEV = "local-dev"
 
 #: The same as ``local``, through a build server (ADR 0019).
 REMOTE = "remote"
-
-#: How long a build waits for a turn on a busy build server before it
-#: stops. Six hours, and it is not a fairness rule: waiting is bounded so
-#: that a build left waiting by something that will never resolve ends on
-#: its own. ``0`` removes the bound, which is what a private server
-#: wants. It lives here rather than in the session client because it is
-#: what a caller sets on :class:`BuildRequest`, and because reading it
-#: must not cost the ``remote`` extra.
-DEFAULT_MAX_WAIT_SECONDS = 21600.0
 
 #: Every method name, in the order a refusal lists them.
 METHODS = (LOCAL, LOCAL_DEV, REMOTE)
@@ -255,6 +276,13 @@ class BuildRequest:
     named for the method it serves; a field a method does not use is
     ignored rather than refused, because a caller assembling one request
     for a method chosen at run time should not have to assemble three.
+
+    The fields marked for one method are the ones a build target states
+    instead (:mod:`mcuhome.workbench.buildtarget`), and while both exist
+    they are read in exactly one place — :func:`target_for_method`, which
+    is what :func:`run_build` turns a method name into. A caller that
+    builds a target itself and calls :func:`build_firmware` puts those
+    values on the target, and what it leaves here is ignored.
     """
 
     #: The canonical device model, stages 1-3 already run.
@@ -351,13 +379,14 @@ class BuildRequest:
     #: all, which this package permits because a third-party server may
     #: want none.
     token: str | None = None
-    #: A build context directory to send instead of creating one. For an
-    #: embedder that already holds one — a dashboard that assembled a
-    #: context elsewhere, a test driving a hand-written one. Left ``None``,
-    #: which is the ordinary case, the method creates its own from
-    #: :attr:`model` and :attr:`sdk_sources`. It is the *base* context that
-    #: travels: freezing it is the server's act, and the client checks the
-    #: identity it answers with (E37).
+    #: A build context directory to build instead of creating one. For a
+    #: caller that already holds one — an embedder that assembled a
+    #: context elsewhere, a build server that received one over a socket,
+    #: a test driving a hand-written one. Left ``None``, which is the
+    #: ordinary case, the build creates its own from :attr:`model` and
+    #: :attr:`sdk_sources`. Either way it is a *base* context: locking it
+    #: is the act of whoever builds it, and a client that sent one checks
+    #: the identity the server answers with (E37).
     context_dir: Path | None = None
     #: Wait when the build server has no room. A busy server hands out a
     #: turn instead of a session, and waiting for it is what a person
@@ -458,31 +487,99 @@ def _work_root(request: BuildRequest, name: str) -> Path:
     return Path(request.work_root) if request.work_root else Path(request.out_dir) / name
 
 
-async def run_build(request: BuildRequest, *, method: str = DEFAULT_METHOD) -> BuildOutcome:
-    """Run *method* over *request* and answer in the one outcome shape.
+def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
+    """The build target a method *name* and a request describe together.
 
-    Raises :class:`UnknownMethod` for a name that is not one of
-    :data:`METHODS`, and whatever typed refusal the method itself raises —
-    a missing build container, a missing SDK package, a build server that
+    The bridge between the two vocabularies while both exist: a name is
+    one word for two decisions, and a target states them apart
+    (:mod:`mcuhome.workbench.buildtarget`). Everything method-specific on
+    :class:`BuildRequest` is read **here and nowhere else**, so that the
+    day those fields move onto the targets there is one call site to
+    change rather than three build methods.
+
+    *method* goes through :func:`resolve_method` first, so ``None`` and
+    the empty string mean the default and an unknown name is the same
+    refusal a caller would have got from ``run_build``.
+    """
+    chosen = resolve_method(method)
+    if chosen == LOCAL:
+        return LocalBuild(
+            execution=ContainerExecution(image=request.image, ccache_dir=request.ccache_dir)
+        )
+    if chosen == LOCAL_DEV:
+        return LocalBuild(
+            execution=WorkspaceExecution(
+                bootloader_key=request.bootloader_key,
+                module_dir=request.module_dir,
+                started_in=request.started_in,
+                snippets=tuple(request.snippets),
+                bootloader_snippets=tuple(request.bootloader_snippets),
+                on_plan=request.on_plan,
+                stream=request.stream,
+            )
+        )
+    return RemoteBuild(
+        server=request.server,
+        token=request.token,
+        wait=request.wait_for_turn,
+        max_wait_seconds=request.max_wait_seconds,
+    )
+
+
+async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> BuildOutcome:
+    """Build *request* at *target*, and answer in the one outcome shape.
+
+    The seam. Above it a caller decides *what* to build (a device model,
+    or a build context already created from one) and *where*; below it
+    the three compositions differ in everything and agree on the answer.
+    It is also where a build server enters: what reaches it over a socket
+    is a context and a target of its own making, and from that point on
+    the work is the same work a local build does.
+
+    Raises whatever typed refusal the target's composition raises — a
+    missing build container, a missing SDK package, a build server that
     said no. A build that ran and *failed* is not an exception: it comes
-    back with :attr:`BuildOutcome.successful` false and the method's own
-    account in :attr:`BuildOutcome.detail`, because a failed compile is an
-    answer and a caller usually wants to render it rather than catch it.
+    back with :attr:`BuildOutcome.successful` false and the composition's
+    own account in :attr:`BuildOutcome.detail`, because a failed compile
+    is an answer and a caller usually wants to render it rather than
+    catch it. A target this package does not implement is a
+    :class:`TypeError` rather than a refusal: a name can be mistyped, an
+    object cannot.
 
     The build directory is held for the duration (:mod:`…buildlock`), so
     a second build of it refuses in words instead of deleting this one's
-    work under it. Here rather than in a method, because every method
-    writes into the same directory and the collision does not care which
-    two were running — nor whether the other one is a command line or a
-    dashboard.
+    work under it. Here rather than in a composition, because every one
+    of them writes into the same directory and the collision does not
+    care which two were running — nor whether the other one is a command
+    line or a dashboard.
     """
-    chosen = resolve_method(method)
     with build_lock(request.out_dir, device=request.model.device.name):
-        if chosen == LOCAL:
-            return await _run_local(request)
-        if chosen == LOCAL_DEV:
-            return await _run_local_dev(request)
-        return await _run_remote(request)
+        if isinstance(target, LocalBuild):
+            execution = target.execution
+            if isinstance(execution, ContainerExecution):
+                return await _run_local(request, execution)
+            if isinstance(execution, WorkspaceExecution):
+                return await _run_local_dev(request, execution)
+            raise TypeError(
+                f"{type(execution).__name__} is not a build execution this package runs"
+            )
+        if isinstance(target, RemoteBuild):
+            return await _run_remote(request, target)
+        raise TypeError(f"{type(target).__name__} is not a build target this package runs")
+
+
+async def run_build(request: BuildRequest, *, method: str = DEFAULT_METHOD) -> BuildOutcome:
+    """Run *method* over *request*: :func:`build_firmware` by method name.
+
+    The name-shaped entry point, kept for callers that select a build
+    method from a command-line flag or a configuration value and have
+    nothing to say about the two axes apart. It resolves the name to a
+    target (:func:`target_for_method`) and hands over; everything the
+    seam documents holds here unchanged, including
+    :class:`UnknownMethod` for a name that is not one of
+    :data:`METHODS`.
+    """
+    return await build_firmware(request, target=target_for_method(method, request))
 
 
 def compose_local_build(
@@ -497,11 +594,12 @@ def compose_local_build(
     mode: str = "clean",
     ccache_dir: Path | None = None,
     created: datetime | None = None,
+    context_dir: Path | None = None,
     on_line: Any = None,
     on_step: Any = None,
     docker: Any = None,
 ):
-    """The ``local`` method's composition: resolve, create, lock, drive.
+    """The container execution's composition: resolve, create, lock, drive.
 
     The two roles E61 separates, composed where the client half lives:
     the workbench states the requirement — it creates and locks the
@@ -510,9 +608,19 @@ def compose_local_build(
     (:func:`~mcuhome.compiler.localbuild.resolve_checked_image`) and the
     driving (:func:`~mcuhome.compiler.localbuild.run_locked_build`).
     Order is the composition's promise: the image refusals cost no
-    context directory and no SDK lookup. Synchronous — ``run_build``
+    context directory and no SDK lookup. Synchronous — ``build_firmware``
     offloads it; *docker* is the test seam, threaded through to both
     compiler halves.
+
+    *context_dir* is the caller that already holds a **base** context and
+    wants this one built — an embedder that assembled one elsewhere, a
+    build server that received one over a socket. It is used as it is:
+    nothing is resolved, nothing is written into it but the lock, and no
+    context step is announced, because this composition did not create
+    one. Left ``None``, which is the ordinary case, the context is
+    created at ``<work root>/context`` — the same call the ``remote``
+    method makes (E65), because what a context is does not depend on
+    where it is built.
     """
     localbuild = _compiler("localbuild", LOCAL)
     sources = tuple(Path(source) for source in sdk_sources)
@@ -520,19 +628,18 @@ def compose_local_build(
         image, line=model.toolchain.zephyr_line, env=dict(env), docker=docker
     )
     work_root = Path(work_root)
-    context_dir = work_root / "context"
-    if on_step is not None:
-        on_step("context")
-    # The pin resolution and the context layout are the workbench's, and
-    # deliberately the same call the `remote` method makes (E65): what a
-    # context is does not depend on which build method sends it anywhere.
-    create_build_context(
-        model,
-        out_dir=context_dir,
-        sdk_sources=sources,
-        signing_pub=signing_pub,
-        created=created or datetime.now(UTC),
-    )
+    supplied = context_dir is not None
+    context_dir = Path(context_dir) if supplied else work_root / "context"
+    if not supplied:
+        if on_step is not None:
+            on_step("context")
+        create_build_context(
+            model,
+            out_dir=context_dir,
+            sdk_sources=sources,
+            signing_pub=signing_pub,
+            created=created or datetime.now(UTC),
+        )
     lock_context(
         context_dir,
         # The backend half's answer, recorded verbatim — including a
@@ -542,10 +649,11 @@ def compose_local_build(
         container=ContainerResolution.from_reference(resolved.reference, digest=resolved.digest),
     )
     if on_step is not None:
-        # What the context turned out to be, read back off the locked
-        # directory: the step announced itself before any of this was
-        # decided, and the decisions are the interesting part.
-        on_step("context", **context_facts(context_dir))
+        if not supplied:
+            # What the context turned out to be, read back off the locked
+            # directory: the step announced itself before any of this was
+            # decided, and the decisions are the interesting part.
+            on_step("context", **context_facts(context_dir))
         on_step("compile", image=resolved.reference, digest=resolved.digest, jobs=jobs)
     return localbuild.run_locked_build(
         context_dir,
@@ -561,8 +669,8 @@ def compose_local_build(
     )
 
 
-async def _run_local(request: BuildRequest) -> BuildOutcome:
-    """The container method: :func:`compose_local_build`, offloaded.
+async def _run_local(request: BuildRequest, execution: ContainerExecution) -> BuildOutcome:
+    """Local, in a container: :func:`compose_local_build`, offloaded.
 
     Synchronous underneath — it drives ``docker`` with a subprocess per
     invocation — so it is offloaded rather than awaited. The composition
@@ -576,10 +684,11 @@ async def _run_local(request: BuildRequest) -> BuildOutcome:
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),
         work_root=_work_root(request, ".mcuhome-local"),
         env=dict(request.env),
-        image=request.image,
+        image=execution.image,
         jobs=request.jobs,
         mode=request.mode,
-        ccache_dir=request.ccache_dir,
+        ccache_dir=execution.ccache_dir,
+        context_dir=request.context_dir,
         on_line=request.on_line,
         on_step=request.on_step,
     )
@@ -597,8 +706,8 @@ async def _run_local(request: BuildRequest) -> BuildOutcome:
     )
 
 
-async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
-    """The host method: :func:`mcuhome.compiler.devbuild.run_dev_build`.
+async def _run_local_dev(request: BuildRequest, execution: WorkspaceExecution) -> BuildOutcome:
+    """Local, in the caller's workspace: :func:`…devbuild.run_dev_build`.
 
     Stage 4 has already run — the generated application is in *out_dir* —
     because a ``local-dev`` caller wants that tree whether or not it goes
@@ -606,7 +715,11 @@ async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
     stops there.
     """
     devbuild = _compiler("devbuild", LOCAL_DEV)
-    if request.bootloader_key is None or request.module_dir is None or request.started_in is None:
+    if (
+        execution.bootloader_key is None
+        or execution.module_dir is None
+        or execution.started_in is None
+    ):
         raise BuildError(
             f"The {LOCAL_DEV} build method needs a public key file, a module "
             "directory and a working directory, and this request names none.",
@@ -622,8 +735,8 @@ async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
         # immediately before west runs — which makes it exactly the
         # moment the build enters its compile step, so the method emits
         # the step itself rather than leaving a caller to guess it.
-        if request.on_plan is not None:
-            request.on_plan(plan)
+        if execution.on_plan is not None:
+            execution.on_plan(plan)
         if request.on_step is not None:
             request.on_step("compile")
 
@@ -631,15 +744,15 @@ async def _run_local_dev(request: BuildRequest) -> BuildOutcome:
         devbuild.run_dev_build,
         request.model,
         out_dir=Path(request.out_dir),
-        bootloader_key=Path(request.bootloader_key),
-        module_dir=Path(request.module_dir),
-        cwd=Path(request.started_in),
+        bootloader_key=Path(execution.bootloader_key),
+        module_dir=Path(execution.module_dir),
+        cwd=Path(execution.started_in),
         env=dict(request.env),
         jobs=request.jobs,
-        snippets=tuple(request.snippets),
-        bootloader_snippets=tuple(request.bootloader_snippets),
+        snippets=tuple(execution.snippets),
+        bootloader_snippets=tuple(execution.bootloader_snippets),
         on_plan=announce_and_step,
-        stream=request.stream,
+        stream=execution.stream,
     )
     return BuildOutcome(
         method=LOCAL_DEV,
@@ -670,7 +783,7 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     return context_dir
 
 
-async def _run_remote(request: BuildRequest) -> BuildOutcome:
+async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcome:
     """The build-server method: :func:`…sessionclient.run_remote_build`.
 
     The session client is imported here rather than at module level so
@@ -703,7 +816,7 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
     holds a context passes it as :attr:`BuildRequest.context_dir` and
     none of this runs.
     """
-    if not request.server:
+    if not target.server:
         raise RemoteNotConfigured(
             "The remote build method needs the address of a build server, and none is set.",
             hint=(
@@ -721,7 +834,7 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
                 "rather than a lookup."
             ),
         )
-    url = websocket_url(request.server)
+    url = websocket_url(target.server)
     work_root = _work_root(request, ".mcuhome-remote")
     context_dir = Path(request.context_dir) if request.context_dir is not None else None
     if context_dir is None:
@@ -750,17 +863,17 @@ async def _run_remote(request: BuildRequest) -> BuildOutcome:
     from mcuhome.workbench import sessionclient
 
     if request.on_step is not None:
-        request.on_step("compile", server=request.server)
+        request.on_step("compile", server=target.server)
     result = await sessionclient.run_remote_build(
         context_dir,
         url=url,
-        token=request.token,
+        token=target.token,
         work_root=work_root,
         mode=request.mode,
         on_line=request.on_line,
         on_wait=request.on_wait,
-        wait=request.wait_for_turn,
-        max_wait=request.max_wait_seconds,
+        wait=target.wait,
+        max_wait=target.max_wait_seconds,
     )
     return BuildOutcome(
         method=REMOTE,

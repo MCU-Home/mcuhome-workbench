@@ -82,12 +82,22 @@ What is here, in the order a caller needs it:
     ``main.yaml``, as data an editor or a picker can consume.
 ``read_manifest``
     ``build-manifest.json`` of a finished build.
-``run_build`` / ``BuildRequest`` / ``BuildOutcome``
-    The three build methods of ADR 0020 decision 6 behind one awaitable
-    call (E64). ``resolve_method`` turns a name — or nothing — into one
-    of ``LOCAL``, ``LOCAL_DEV``, ``REMOTE`` (``METHODS``,
-    ``DEFAULT_METHOD``), and ``UnknownMethod``, ``MethodUnavailable`` and
-    ``RemoteNotConfigured`` are the typed refusals a caller renders.
+``build_firmware`` / ``BuildRequest`` / ``BuildOutcome``
+    Build a device, at a stated target, behind one awaitable call. A
+    build has two placement questions in it and only the first belongs
+    to a caller: **where** it runs (``LocalBuild``, ``RemoteBuild``) and
+    **how** the machine that runs it executes the work
+    (``ContainerExecution``, ``WorkspaceExecution``) — which is why
+    ``LocalBuild`` carries an ``Execution`` and ``RemoteBuild`` does not.
+    ``MethodUnavailable`` and ``RemoteNotConfigured`` are the typed
+    refusals a caller renders.
+``run_build`` / ``resolve_method`` / ``target_for_method``
+    The same build, selected by method name — for a caller whose choice
+    arrived as a command-line flag or a configuration value.
+    ``resolve_method`` turns a name, or nothing, into one of ``LOCAL``,
+    ``LOCAL_DEV``, ``REMOTE`` (``METHODS``, ``DEFAULT_METHOD``) or raises
+    ``UnknownMethod``; ``target_for_method`` is the name and the request
+    read together as the target they describe.
 ``build_lock`` / ``BuildDirectoryBusy``
     One build directory, one operation at a time. ``run_build`` takes
     the lock itself, so an embedder gets the guard for free; a caller
@@ -147,8 +157,18 @@ from mcuhome.workbench.buildmethods import (
     MethodUnavailable,
     RemoteNotConfigured,
     UnknownMethod,
+    build_firmware,
     resolve_method,
     run_build,
+    target_for_method,
+)
+from mcuhome.workbench.buildtarget import (
+    BuildTarget,
+    ContainerExecution,
+    Execution,
+    LocalBuild,
+    RemoteBuild,
+    WorkspaceExecution,
 )
 from mcuhome.workbench.configschema import config_json_schema
 from mcuhome.workbench.configuration import (
@@ -243,16 +263,20 @@ __all__ = [
     "BuildDirectoryBusy",
     "BuildOutcome",
     "BuildRequest",
+    "BuildTarget",
     "BusChoice",
     "Builder",
     "ConfigError",
     "ClusterChoice",
     "ConfigErrorGroup",
+    "ContainerExecution",
     "DeviceModel",
     "DeviceOutline",
     "EndpointChoice",
+    "Execution",
     "GenerationError",
     "InitResult",
+    "LocalBuild",
     "Location",
     "MCUHomeError",
     "MethodUnavailable",
@@ -267,6 +291,7 @@ __all__ = [
     "ProjectFileError",
     "ProjectUpgradeRequired",
     "ProjectVersionUnsupported",
+    "RemoteBuild",
     "RemoteNotConfigured",
     "RunningBuild",
     "SelectedBuilder",
@@ -278,6 +303,8 @@ __all__ = [
     "UpgradeResult",
     "UpgradeSession",
     "ValidationResult",
+    "WorkspaceExecution",
+    "build_firmware",
     "config_json_schema",
     "error_dicts",
     "find_device",
@@ -300,6 +327,7 @@ __all__ = [
     "build_lock",
     "run_build",
     "running_builds",
+    "target_for_method",
     "scope_config_file",
     "set_config_value",
     "unset_config_value",
