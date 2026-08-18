@@ -57,7 +57,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
@@ -122,6 +122,7 @@ __all__ = [
     "SdkPackage",
     "TreeEntry",
     "acquire_sdk",
+    "open_environment",
     "current_user",
     "describe_run_command",
     "exec_command",
@@ -432,6 +433,10 @@ class BackendConfig:
     #: ``None`` mounts nothing, and the cache then lives in the container
     #: and dies with it, which is a slow build rather than a broken one.
     ccache_dir: Path | None = None
+    #: Container labels for every container this backend starts. Backend
+    #: policy rather than contract, and how a long-running caller finds
+    #: the containers of a process that was killed outright.
+    labels: Mapping[str, str] = field(default_factory=dict)
     memory: str | None = None
     cpus: str | None = None
     pids: int | None = None
@@ -716,6 +721,7 @@ def start_command(
     mounts: Sequence[Mount],
     user: str | None = None,
     limits: ResourceLimits | None = None,
+    labels: Mapping[str, str] | None = None,
 ) -> list[str]:
     """The ``docker run`` that gives the build its container.
 
@@ -731,10 +737,18 @@ def start_command(
     * ``--memory``/``--pids-limit``/optionally ``--cpus`` on the *run*
       that creates the container, because a limit on the exec bounds one
       process tree and a limit on the container bounds the build.
+    * ``--label`` for whatever the caller wants to find its containers
+      by later. **Container** labels, not image ones: §2.1 governs image
+      labels and this is backend policy, which §11 leaves free. A
+      long-running caller uses it so that an operator can find the
+      containers of a process that was killed outright; a command line
+      passes none, because it reaps its own before it exits.
     """
     argv = [docker, "run", "--detach", "--init", "--network=none"]
     if user is not None:
         argv += ["--user", user]
+    for name, value in sorted((labels or {}).items()):
+        argv += ["--label", f"{name}={value}"]
     argv += (limits or ResourceLimits()).to_arguments()
     for mount in _ordered(mounts):
         argv += ["--volume", mount.to_argument()]
@@ -905,10 +919,18 @@ class Docker:
         mounts: Sequence[Mount],
         user: str | None,
         limits: ResourceLimits | None,
+        labels: Mapping[str, str] | None = None,
     ) -> str:
         """Start the container and answer its id."""
         completed = self._invoke(
-            start_command(docker=self.program, image=image, mounts=mounts, user=user, limits=limits)
+            start_command(
+                docker=self.program,
+                image=image,
+                mounts=mounts,
+                user=user,
+                limits=limits,
+                labels=labels,
+            )
         )
         identity = (completed.output.strip().splitlines() or [""])[-1]
         if not completed.ok or _CONTAINER_ID.fullmatch(identity) is None:
@@ -1574,6 +1596,7 @@ class LocalBackend:
             mounts=mounts,
             user=user,
             limits=self.config.limits(),
+            labels=self.config.labels,
         )
         return BuildEnvironment(
             docker=self.docker,
@@ -2047,6 +2070,29 @@ class BuildEnvironment:
             events=events,
             cancel=cancel,
         )
+
+
+def open_environment(
+    context_dir: Path,
+    *,
+    work_root: Path,
+    config: BackendConfig,
+    docker: Docker | None = None,
+) -> BuildEnvironment:
+    """Materialize the environment *context_dir* pins, for a caller that owns sessions.
+
+    :meth:`LocalBackend.open` without the object in between. It is the
+    build-server-shaped entry point: a context that arrived from
+    somebody else, already locked, and a caller that will run its own
+    actions in the result and close it when its session ends.
+
+    **Which image is not a parameter**, here as everywhere: the locked
+    context names it, pinned to a digest, and a build driven into a
+    different environment than the one its identity claims is exactly
+    what the pin exists to prevent.
+    """
+    backend = LocalBackend(config, docker=docker)
+    return backend.open(context_dir=context_dir, work_root=work_root)
 
 
 def derive_patch_layers(context_dir: Path) -> tuple[str, ...]:

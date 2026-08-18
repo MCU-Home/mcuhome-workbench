@@ -1896,3 +1896,39 @@ def test_events_are_drained_while_the_invocation_runs(tmp_path, brisk) -> None:
     )
     liveness.supervise(child, on_poll=lambda: drained.append(child.polls))
     assert len(drained) >= 3, drained
+
+
+def test_a_caller_can_label_the_containers_it_starts(tmp_path) -> None:
+    """Backend policy, not contract: §2.1 governs image labels and this is a container one.
+
+    A long-running caller uses it so that an operator can find the
+    containers of a process that was killed outright; a command line
+    passes none, because it reaps its own before it exits.
+    """
+    real = make_sdk_source(tmp_path / "src")
+    context = make_context(tmp_path / "ctx", sdk_sha=real)
+    seam = Seam(
+        facts=image_facts(),
+        build=lambda request: conforming(request, context),
+        describe_static=describe_result_document(),
+    )
+    backend = lb.LocalBackend(
+        lb.BackendConfig(
+            sdk_sources=(tmp_path / "src",),
+            jobs=1,
+            labels={"org.mcuhome.build-server.session": "s-7"},
+        ),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    start = next(call for call in seam.calls if "--detach" in call)
+    assert "--label" in start
+    assert start[start.index("--label") + 1] == "org.mcuhome.build-server.session=s-7"
+
+
+def test_nothing_is_labelled_when_nobody_asked(tmp_path) -> None:
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert "--label" not in next(call for call in seam.calls if "--detach" in call)
