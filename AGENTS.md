@@ -84,6 +84,22 @@ name — a CLI `--method`, `MCUHOME_BUILD_METHOD`, or nothing — into one of
 `LOCAL`, `LOCAL_DEV`, `REMOTE` (default `local`; `--native` was removed
 per E62).
 
+## Choosing the build environment
+
+`resolve_env.py` turns what a device says about its build environment —
+a container reference, possibly a bare repository — into **one pinned
+image**, and `ociregistry.py` is how it asks: three questions to an OCI
+registry over stdlib HTTP, anonymously, without pulling anything. The
+rule is "the publisher recommends, we verify": a moving `-latest` tag
+narrows the field, the image's own labels decide. It happens **before a
+context exists**, on both container-shaped methods, and the digest it
+answers with is hashed into the context ID — which is what makes "built
+from *this* context" name one set of bytes rather than one machine.
+
+Neither module is on the supported surface, and neither is reachable
+without a network — so both test suites carry an autouse guard that
+fails any test which reaches a real registry.
+
 ## Build methods and the remote method's client
 
 `mcuhome.workbench.buildmethods` dispatches the three build methods
@@ -128,9 +144,10 @@ reason naming exactly what is missing (`pytest -rs` shows it).
 - **The orchestrator is this package's own.** `orchestrator.py` speaks
   the build-container contract from the outside, `containerbuild.py` is
   the thin surface over it, `buildenv.py` is the host-side lookup
-  (which container program, is a daemon running, where is this user's
-  cache). They moved out of `mcuhome-compiler`, which is also the
-  program that runs *inside* the container: one package playing both
+  (which container program, is a daemon running, is the pinned image
+  here, where is this user's cache). They moved out of
+  `mcuhome-compiler`, which is also the program that runs *inside* the
+  container: one package playing both
   roles could be replaced by neither half. `local` therefore needs no
   compiler distribution at all; `local-dev` still does, and the `local`
   extra serves that one until it goes.
