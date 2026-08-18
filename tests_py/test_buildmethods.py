@@ -431,8 +431,10 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
     even though nothing it ran came from the container's own package.
 
     Asserted by making *every* dynamic import fail and showing that the
-    build gets past it — it stops at the first thing it genuinely needs,
-    an SDK source, and names that instead.
+    build gets past it: what it stops at instead is one of the things it
+    genuinely needs — a container image on this host, an SDK source —
+    and which of those comes first depends on the machine, so what is
+    asserted is only that the compiler is not among them.
     """
     importlib, refuse = _failing_import(
         ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler")
@@ -441,7 +443,7 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
     with pytest.raises(BuildError) as refusal:
         _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
     assert not isinstance(refusal.value, buildmethods.MethodUnavailable)
-    assert "SDK source" in str(refusal.value)
+    assert "mcuhome-compiler" not in str(refusal.value)
 
 
 # --------------------------------------------------------------------------
