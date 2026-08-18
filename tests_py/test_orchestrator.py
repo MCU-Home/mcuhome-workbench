@@ -725,8 +725,12 @@ def test_the_mounts_are_piece_by_piece_and_never_wholesale(tmp_path) -> None:
     work_root = tmp_path / "work"
     assert f"{context}:{containerpaths.CONTEXT}:ro" in volumes  # context read-only
     assert f"{work_root / 'work'}:{containerpaths.WORK}" in volumes  # work writable
+    # The invocation directories' **parent**, not one of them: a mount
+    # cannot be added to a running container, and an environment may run
+    # more than one invocation in it.
     inv = PurePosixPath(document["out"]).parent
-    assert f"{work_root / 'inv'}:{inv}" in volumes  # the invocation directory
+    assert f"{work_root / 'inv'}:{containerpaths.INVOCATIONS}" in volumes
+    assert inv.parent == containerpaths.INVOCATIONS
     sdk = document["trees"]["sdk"]["path"]
     assert any(volume.endswith(f":{sdk}:ro") for volume in volumes)  # the SDK, read-only
     assert f"{work_root}:{work_root}" not in volumes  # no wholesale mount
@@ -1432,3 +1436,141 @@ def test_a_caller_whose_environment_names_no_home_still_builds(tmp_path, monkeyp
         docker=lb.Docker(runner=lambda argv, on_line=None: lb.Completed(0, "")),
     )
     assert captured["config"].ccache_dir is None
+
+
+# --------------------------------------------------------------------------
+# The environment: one container, more than one invocation
+# --------------------------------------------------------------------------
+
+
+def test_an_environment_runs_several_invocations_in_one_container(tmp_path) -> None:
+    """What ``open`` exists for, and what ``run`` hides.
+
+    A build server holds one environment per session and drives
+    ``verify`` and then ``build`` through it. Both statements the
+    contract makes about a *session* — patches applied once per session
+    (§6.2) and the session marker in ``work`` (§6.3) — are about
+    something that outlives one invocation, so an orchestrator that
+    started a container per action could honour neither.
+    """
+    # The action is an argv argument and not a request-document field, so
+    # the scripted program is told which answer to write the same way the
+    # invocations are ordered.
+    answers = iter(("verify", "build"))
+    backend, context, seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: build_result(
+            request, context=context_id_of(ctx), action=next(answers)
+        ),
+        describe_static=describe_result_document(),
+    )
+    with backend.open(context_dir=context, work_root=tmp_path / "work") as environment:
+        first = environment.invoke("verify")
+        second = environment.invoke("build")
+
+    assert first.successful and second.successful
+    assert len([call for call in seam.calls if "--detach" in call]) == 1
+    assert len([call for call in seam.calls if call[1:2] == ["exec"]]) == 2
+
+
+def test_every_invocation_of_one_environment_states_the_same_session(tmp_path) -> None:
+    """§6.3: ``work`` carries a session marker, and a session is the environment.
+
+    A fresh id per invocation would make the second one find the first
+    one's working area foreign — which is precisely the refusal §6.3
+    exists to produce for a working area left by a *dead* session.
+    """
+    sessions = []
+    backend, context, seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: (
+            sessions.append(request["session"]),
+            build_result(request, context=context_id_of(ctx)),
+        )[-1],
+        describe_static=describe_result_document(),
+    )
+    with backend.open(context_dir=context, work_root=tmp_path / "work") as environment:
+        environment.invoke("build")
+        environment.invoke("build")
+
+    assert len(sessions) == 2
+    assert sessions[0] == sessions[1]
+
+
+def test_two_environments_are_two_sessions(tmp_path) -> None:
+    """And the marker is what makes them different, so it must not repeat."""
+    seen = []
+    backend, context, _seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: (
+            seen.append(request["session"]),
+            build_result(request, context=context_id_of(ctx)),
+        )[-1],
+        describe_static=describe_result_document(),
+    )
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert seen[0] != seen[1]
+
+
+def test_each_invocation_gets_its_own_empty_directory(tmp_path) -> None:
+    """§9.1's fresh ``out`` and ``tmp``, and the reason is egress.
+
+    A stale ``out/firmware.hex`` that still matched a re-declared hash
+    would let a later non-conforming build slip through, and an old
+    ``result.json`` would be judged as this invocation's answer.
+    """
+    directories = []
+    backend, context, _seam = scenario(
+        tmp_path,
+        build=lambda request, ctx: (
+            directories.append(Path(request["out"]).parent),
+            build_result(request, context=context_id_of(ctx)),
+        )[-1],
+        describe_static=describe_result_document(),
+    )
+    with backend.open(context_dir=context, work_root=tmp_path / "work") as environment:
+        environment.invoke("build")
+        environment.invoke("build")
+
+    assert directories[0] != directories[1]
+    assert all(entry.parent == tmp_path / "work" / "inv" for entry in directories)
+
+
+def test_closing_an_environment_reaps_its_container_once(tmp_path) -> None:
+    """And closing twice is not an error: a caller may close what a context manager did."""
+    backend, context, seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    environment = backend.open(context_dir=context, work_root=tmp_path / "work")
+    environment.close()
+    environment.close()
+    assert len([call for call in seam.calls if call[1:2] == ["rm"]]) == 1
+
+
+def test_a_closed_environment_refuses_to_invoke(tmp_path) -> None:
+    """The container is gone; an exec into it would fail with docker's words, not ours."""
+    backend, context, _seam = scenario(
+        tmp_path, build=conforming, describe_static=describe_result_document()
+    )
+    environment = backend.open(context_dir=context, work_root=tmp_path / "work")
+    environment.close()
+    with pytest.raises(RuntimeError):
+        environment.invoke("build")
+
+
+def test_an_action_the_image_does_not_announce_is_refused_before_it_is_invoked(tmp_path) -> None:
+    """§7.1.1: "a backend MUST NOT invoke an action absent from the list"."""
+    program = json.loads(json.dumps(PROGRAM_BLOCK))
+    program["actions"] = ["describe", "build"]
+    backend, context, seam = scenario(
+        tmp_path,
+        build=conforming,
+        describe_static=describe_result_document(program),
+    )
+    with (
+        backend.open(context_dir=context, work_root=tmp_path / "work") as environment,
+        pytest.raises(BuildError),
+    ):
+        environment.invoke("verify")
+    assert not [call for call in seam.calls if call[1:2] == ["exec"]]

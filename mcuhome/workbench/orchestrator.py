@@ -103,6 +103,7 @@ __all__ = [
     "SDK_PACKAGE_NAME",
     "Artifact",
     "BackendConfig",
+    "BuildEnvironment",
     "Completed",
     "Docker",
     "ImageProfile",
@@ -1263,27 +1264,43 @@ class LocalBackend:
     ) -> LocalOutcome:
         """Drive one ``verify`` or ``build`` through the container ABI.
 
-        The lifecycle, in the order §5 and §9.1 fix it: read the context's
-        pins; resolve the image digest and cross-check it against the pin;
-        acquire and verify the SDK; learn the mount layout from
-        ``describe``; arrange the mounts piece by piece and start the
-        container; prepare the per-invocation directory (empty ``out``,
-        empty ``tmp``) and write the request document atomically; exec the
-        program; read the result and judge it against the full §5.3
-        criteria; and reap the container.
+        One environment, one invocation, and the environment is gone when
+        this returns — the ordinary shape for a caller that wants a
+        firmware and not a conversation. It is :meth:`open` plus one
+        :meth:`BuildEnvironment.invoke`, and everything either of them
+        documents holds here.
+        """
+        with self.open(context_dir=context_dir, work_root=work_root) as environment:
+            return environment.invoke(action, mode=mode, on_line=on_line)
+
+    def open(self, *, context_dir: Path, work_root: Path) -> BuildEnvironment:
+        """Materialize the environment this context is built in.
+
+        Everything expensive happens here and once: the pins are read,
+        the image is resolved and cross-checked against them, the SDK
+        package is acquired and verified, the trees are arranged and the
+        container is started. What is deliberately *not* here is any
+        single invocation's state — that is :meth:`BuildEnvironment.invoke`,
+        which may run more than once.
+
+        The split is the contract's own rather than a convenience. §6.2
+        applies a layer's patches **once per session** and records that
+        in ``work``; §6.3 makes ``work`` carry a session marker so that a
+        program handed a working area from a *dead* session refuses it.
+        Both statements are about something that outlives one invocation,
+        and a backend with no such thing could honour neither: a
+        ``verify`` followed by a ``build`` would be two sessions, patched
+        twice, and an incremental build would find its own tree foreign.
+
+        The caller closes it (:meth:`BuildEnvironment.close`), or uses it
+        as a context manager, which is what :meth:`run` does.
         """
         context_dir = Path(context_dir).resolve()
         manifest = read_context_manifest(context_dir / _MANIFEST_FILE)
         context_id = manifest.compute_id()
         patched = derive_patch_layers(context_dir)
         user = current_user()
-
         profile = self._resolve_image(manifest)
-        if action not in profile.actions:
-            raise _image_unusable(
-                profile.reference,
-                f'it does not implement "{action}"; it announced {sorted(profile.actions)}',
-            )
 
         work_root = Path(work_root).resolve()
         work_root.mkdir(parents=True, exist_ok=True)
@@ -1295,43 +1312,26 @@ class LocalBackend:
             into=sdk_tree,
         )
 
-        # §9.1: every invocation gets a **fresh, empty** `out` and `tmp`;
-        # `work` is "the session's persistent working area" — and one
-        # `run()` IS one session here: it starts a fresh container and
-        # reaps it, so the environment whose working area `work` was is
-        # gone when `run()` returns. A `work` left by an earlier run
-        # belongs to a dead session, and the program rightly refuses it
-        # (`error.work.foreign` — the marker never matches a freshly
-        # drawn session ID), so it is removed rather than inherited.
-        # Incremental builds ACROSS runs would need a session identity
-        # persisted beside `work` and bound to the context ID — a named
-        # later step, not a by-product of leaking state. The invocation
-        # directory — `out`, `tmp`, this run's request/result documents —
-        # is wiped for §9.1's reason: an old `out/firmware.hex` that
-        # still matched a re-declared hash would let a later
-        # non-conforming build slip through egress, and a stale
-        # `result.json` would be judged as this run's answer.
+        # §9.1: `work` is "the session's persistent working area", and a
+        # session begins here. A `work` left by an earlier one belongs to
+        # an environment that no longer exists — its container was
+        # reaped — and the program rightly refuses it
+        # (`error.work.foreign`: the marker never matches a freshly drawn
+        # session id, §6.3). So it is removed rather than inherited.
+        # Incremental builds ACROSS sessions would need a session
+        # identity persisted beside `work` and bound to the context ID —
+        # a named later step, not a by-product of leaking state.
         work = work_root / "work"
-        invocation = work_root / "inv"
+        invocations = work_root / "inv"
         if work.exists():
             shutil.rmtree(work)
         work.mkdir(parents=True)
-        if invocation.exists():
-            shutil.rmtree(invocation)
-        out = invocation / "out"
-        tmp = invocation / "tmp"
-        out.mkdir(parents=True)
-        tmp.mkdir(parents=True)
-        # The container's own view of the same three directories. It is
-        # the same for every build on every machine — see
-        # :mod:`mcuhome.model.containerpaths` for why, and note that from
-        # here on every path has two spellings: the backend reads results
-        # through the host one and states the container one in the
-        # request document.
-        inside = containerpaths.invocation(_INVOCATION_ID)
+        if invocations.exists():
+            shutil.rmtree(invocations)
+        invocations.mkdir(parents=True)
 
         trees, mounts = self._arrange_trees(
-            profile, package, patched, context=context_dir, work=work, invocation=invocation
+            profile, package, patched, context=context_dir, work=work, invocations=invocations
         )
         mounts += self._cache_mounts()
         container = self.docker.start(
@@ -1340,39 +1340,23 @@ class LocalBackend:
             user=user,
             limits=self.config.limits(),
         )
-        try:
-            request = invocation / "request.json"
-            result = invocation / "result.json"
-            document = self._document(
-                action=action,
-                result=inside / "result.json",
-                out=inside / "out",
-                work=containerpaths.WORK,
-                tmp=inside / "tmp",
-                context=containerpaths.CONTEXT,
-                trees=trees,
-                patched=patched,
-                mode=mode,
-            )
-            write_request(document, request)
-            completed = self.docker.invoke(
-                container=container,
-                action=action,
-                request=inside / "request.json",
-                user=user,
-                on_line=on_line,
-            )
-            return self._collect(
-                result,
-                out=out,
-                action=action,
-                exit_code=completed.status,
-                session=document["session"],
-                context_id=context_id,
-                patched=patched,
-            )
-        finally:
-            self.docker.remove(container)
+        return BuildEnvironment(
+            docker=self.docker,
+            config=self.config,
+            container=container,
+            profile=profile,
+            context_dir=context_dir,
+            context_id=context_id,
+            patched=patched,
+            trees=trees,
+            invocations=invocations,
+            user=user,
+            # One session id, drawn once, for every invocation in this
+            # environment — §6.3's marker in `work` is what makes that
+            # load-bearing: a fresh id per invocation would make the
+            # second one find the first one's `work` foreign.
+            session=f"local-{uuid.uuid4().hex[:12]}",
+        )
 
     def _resolve_image(self, manifest: ContextManifest) -> ImageProfile:
         """The image the context pins, found on this host and cross-checked.
@@ -1471,14 +1455,16 @@ class LocalBackend:
         *,
         context: Path,
         work: Path,
-        invocation: Path,
+        invocations: Path,
     ) -> tuple[dict[str, TreeEntry], list[Mount]]:
         """Every ``trees`` entry and the mounts behind them (§4.1, E47).
 
         The session tree is mounted **piece by piece and never wholesale**:
-        ``context`` read-only, ``work`` writable, the per-invocation
-        directory writable (mounted as the directory itself, so
-        ``out``/``tmp``/request/result inside it are visible), and the SDK
+        ``context`` read-only, ``work`` writable, the directory the
+        per-invocation ones are created under (writable, and mounted as
+        the *parent* because a mount cannot be added to a running
+        container and an environment may run more than one invocation),
+        and the SDK
         read-only at the path ``describe`` declared for it — or at this
         backend's own choice when ``describe`` declared ``null``. A
         wholesale root mount would expose
@@ -1498,7 +1484,7 @@ class LocalBackend:
         mounts = [
             Mount(source=context, target=containerpaths.CONTEXT, read_only=True),
             Mount(source=work, target=containerpaths.WORK),
-            Mount(source=invocation, target=containerpaths.invocation(_INVOCATION_ID)),
+            Mount(source=invocations, target=containerpaths.INVOCATIONS),
         ]
         sdk_writable = "sdk" in patched
         sdk_target = profile.tree_path("sdk") or containerpaths.SDK
@@ -1544,17 +1530,122 @@ class LocalBackend:
             )
         return mounts
 
+
+@dataclass
+class BuildEnvironment:
+    """One materialized build environment, and the invocations run in it.
+
+    Created by :meth:`LocalBackend.open`. It holds what a *session* is in
+    contract terms — the container, its ``work`` area, the trees it was
+    given, the session id that marks that ``work`` (§6.3) — and nothing
+    about any one invocation, which :meth:`invoke` creates fresh each
+    time.
+
+    An environment is single-threaded: one invocation at a time, because
+    they share one ``work`` and two of them in it would build against
+    each other's tree (§9.1). Nothing here enforces that beyond saying
+    so; the callers that could produce two are the ones that also own
+    the queue that prevents it.
+    """
+
+    docker: Docker
+    config: BackendConfig
+    container: str
+    profile: ImageProfile
+    context_dir: Path
+    context_id: str
+    patched: tuple[str, ...]
+    trees: dict[str, TreeEntry]
+    #: Where per-invocation directories are created, on this host. The
+    #: container sees the same directory at :data:`containerpaths.INVOCATIONS`.
+    invocations: Path
+    session: str
+    user: str | None = None
+    _counter: int = 0
+    _closed: bool = False
+
+    def __enter__(self) -> BuildEnvironment:
+        return self
+
+    def __exit__(self, *_exception: object) -> None:
+        self.close()
+
+    def invoke(
+        self,
+        action: str,
+        *,
+        mode: str | None = None,
+        on_line: LineSink | None = None,
+    ) -> LocalOutcome:
+        """Run one action to its end and judge what came back.
+
+        The §5 lifecycle minus everything the environment already did:
+        prepare this invocation's own directory (an empty ``out``, an
+        empty ``tmp``), write the request document atomically, exec the
+        program, read the result and judge it against the full §5.3
+        criteria.
+
+        **A fresh directory per invocation**, numbered, never reused.
+        §9.1 wants an empty ``out`` and an empty ``tmp`` every time, and
+        the reason is egress rather than tidiness: an old
+        ``out/firmware.hex`` that still matched a re-declared hash would
+        let a later non-conforming build slip through, and a stale
+        ``result.json`` would be judged as this run's answer.
+        """
+        if self._closed:
+            raise RuntimeError("this build environment has been closed")
+        if action not in self.profile.actions:
+            raise _image_unusable(
+                self.profile.reference,
+                f'it does not implement "{action}"; it announced {sorted(self.profile.actions)}',
+            )
+        self._counter += 1
+        identifier = f"inv-{self._counter}"
+        directory = self.invocations / identifier
+        out = directory / "out"
+        tmp = directory / "tmp"
+        out.mkdir(parents=True)
+        tmp.mkdir(parents=True)
+        # The container's own view of the same directory. It is the same
+        # for every build on every machine — see
+        # :mod:`mcuhome.model.containerpaths` for why — and from here on
+        # every path has two spellings: this side reads results through
+        # the host one and states the container one in the request
+        # document.
+        inside = containerpaths.invocation(identifier)
+        request = directory / "request.json"
+        result = directory / "result.json"
+        document = self._document(
+            action=action,
+            result=inside / "result.json",
+            out=inside / "out",
+            tmp=inside / "tmp",
+            mode=mode,
+        )
+        write_request(document, request)
+        completed = self.docker.invoke(
+            container=self.container,
+            action=action,
+            request=inside / "request.json",
+            user=self.user,
+            on_line=on_line,
+        )
+        return self._collect(result, out=out, action=action, exit_code=completed.status)
+
+    def close(self) -> None:
+        """Reap the container. Idempotent, and never the reason a build fails."""
+        if self._closed:
+            return
+        self._closed = True
+        self.docker.remove(self.container)
+
     def _document(
         self,
         *,
         action: str,
         result: Inside,
         out: Inside,
-        work: Inside,
         tmp: Inside,
-        context: Inside,
-        trees: dict[str, TreeEntry],
-        patched: tuple[str, ...],
         mode: str | None,
     ) -> dict[str, Any]:
         """The request document for one invocation (§5.2).
@@ -1573,15 +1664,15 @@ class LocalBackend:
         if action == ACTION_BUILD:
             params = {"mode": mode or "clean"}
             required.append("/params/mode")
-            required += [f"/trees/{layer}" for layer in patched]
+            required += [f"/trees/{layer}" for layer in self.patched]
         return request_document(
             result=result,
-            session=f"local-{uuid.uuid4().hex[:12]}",
+            session=self.session,
             out=out,
-            work=work,
+            work=containerpaths.WORK,
             tmp=tmp,
-            context=context,
-            trees=trees,
+            context=containerpaths.CONTEXT,
+            trees=self.trees,
             jobs=self.config.jobs,
             deadline_seconds=self.config.deadline_seconds,
             cancel_grace_seconds=self.config.cancel_grace_seconds,
@@ -1590,15 +1681,7 @@ class LocalBackend:
         )
 
     def _collect(
-        self,
-        result: Path,
-        *,
-        out: Path,
-        action: str,
-        exit_code: int | None,
-        session: str,
-        context_id: str,
-        patched: tuple[str, ...],
+        self, result: Path, *, out: Path, action: str, exit_code: int | None
     ) -> LocalOutcome:
         """Read the result, harden egress, and decide what it was worth.
 
@@ -1614,9 +1697,9 @@ class LocalBackend:
             result,
             action=action,
             exit_code=exit_code,
-            session=session,
-            context_id=context_id,
-            patched_layers=patched,
+            session=self.session,
+            context_id=self.context_id,
+            patched_layers=self.patched,
         )
         outcome.out = out
         if outcome.result is not None:
