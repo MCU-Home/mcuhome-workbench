@@ -125,6 +125,15 @@ reason naming exactly what is missing (`pytest -rs` shows it).
   `sessionclient`. `tests_py/test_packaging_workbench.py` reads the dependency
   arrows out of the syntax tree, so a plain `import` there is a test
   failure, not a style nit.
+- **The orchestrator is this package's own.** `orchestrator.py` speaks
+  the build-container contract from the outside, `containerbuild.py` is
+  the thin surface over it, `buildenv.py` is the host-side lookup
+  (which container program, is a daemon running, where is this user's
+  cache). They moved out of `mcuhome-compiler`, which is also the
+  program that runs *inside* the container: one package playing both
+  roles could be replaced by neither half. `local` therefore needs no
+  compiler distribution at all; `local-dev` still does, and the `local`
+  extra serves that one until it goes.
 - **Cross-repository version edges are `~=X.Y.0`** (PEP 440, same
   major.minor family) from v1.0 on — the same rule the CLI uses toward
   the workbench (cli ADR 0002). Before v1.0, editable checkouts.

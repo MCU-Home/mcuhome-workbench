@@ -36,12 +36,13 @@ import builtins
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.compiler import devbuild, localbuild
-from mcuhome.compiler import localbackend as lb
+from mcuhome.compiler import devbuild
 from mcuhome.model.artifacts import Artifact
+from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 
-from mcuhome.workbench import buildmethods, sessionclient
+from mcuhome.workbench import buildmethods, containerbuild, sessionclient
+from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
@@ -116,7 +117,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             artifacts=_artifacts(),
             out=tmp_path / "delivery",
         )
-        return localbuild.LocalBuildResult(
+        return containerbuild.LocalBuildResult(
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
@@ -226,8 +227,6 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
 
 def test_the_local_dev_method_refuses_without_the_three_things_only_a_caller_knows(model, tmp_path):
     """A public key file and the two workspace hints; a guess is not offered."""
-    from mcuhome.model.errors import BuildError
-
     with pytest.raises(BuildError) as refusal:
         _run(
             buildmethods.BuildRequest(model=model, out_dir=tmp_path),
@@ -387,13 +386,19 @@ def _failing_import(error: ImportError):
 
 
 def test_a_missing_compiler_distribution_is_the_named_refusal(model, tmp_path, monkeypatch):
-    """The compiler is optional (ADR 0020 decision 3), so its absence is a sentence."""
+    """The compiler is optional (ADR 0020 decision 3), so its absence is a sentence.
+
+    ``local-dev`` is the one method that still asks for it: it compiles in
+    the caller's own west workspace, which is what ``mcuhome.compiler``
+    knows how to drive. The container method used to ask too and does not
+    any more — the test below is that half.
+    """
     importlib, refuse = _failing_import(
         ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler")
     )
     monkeypatch.setattr(importlib, "import_module", refuse)
     with pytest.raises(buildmethods.MethodUnavailable) as refusal:
-        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
+        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL_DEV)
     assert "pip install mcuhome-compiler" in str(refusal.value.hint)
 
 
@@ -402,18 +407,41 @@ def test_a_broken_dependency_inside_an_installed_compiler_surfaces_unchanged(
 ):
     """An ImportError from *within* the compiler is not evidence of its absence.
 
-    A ``zstandard`` wheel built for another interpreter fails the same
-    ``import_module`` call, and translating that into "mcuhome-compiler is
-    not installed" would send the reader to reinstall the one piece that
-    is already there. The discriminator is the failing import's own name.
+    A wheel built for another interpreter fails the same ``import_module``
+    call, and translating that into "mcuhome-compiler is not installed"
+    would send the reader to reinstall the one piece that is already
+    there. The discriminator is the failing import's own name.
     """
     broken = ImportError("libzstd.so.1: cannot open shared object file", name="zstandard")
     importlib, refuse = _failing_import(broken)
     monkeypatch.setattr(importlib, "import_module", refuse)
     with pytest.raises(ImportError) as raised:
-        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
+        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL_DEV)
     assert raised.value is broken
     assert not isinstance(raised.value, buildmethods.MethodUnavailable)
+
+
+def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, monkeypatch):
+    """The orchestrator is the workbench's own, so ``local`` needs no compiler.
+
+    This is the point of moving it. A container build needs a container
+    runtime and nothing else of a toolchain — that was always the claim,
+    and until the orchestrator lived here it was untrue at the level of
+    installed distributions: ``local`` refused without ``mcuhome-compiler``
+    even though nothing it ran came from the container's own package.
+
+    Asserted by making *every* dynamic import fail and showing that the
+    build gets past it — it stops at the first thing it genuinely needs,
+    an SDK source, and names that instead.
+    """
+    importlib, refuse = _failing_import(
+        ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler")
+    )
+    monkeypatch.setattr(importlib, "import_module", refuse)
+    with pytest.raises(BuildError) as refusal:
+        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
+    assert not isinstance(refusal.value, buildmethods.MethodUnavailable)
+    assert "SDK source" in str(refusal.value)
 
 
 # --------------------------------------------------------------------------

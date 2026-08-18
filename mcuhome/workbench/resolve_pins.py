@@ -231,7 +231,7 @@ class SdkResolution:
     :attr:`stated` is what the caller asked for, verbatim — ``SDK_ANY``
     when it asked for nothing. :attr:`package` is what that selected, and
     :attr:`source` is the directory whose index selected it, which is the
-    directory whose bytes :func:`~mcuhome.compiler.localbackend.acquire_sdk`
+    directory whose bytes :func:`~mcuhome.workbench.orchestrator.acquire_sdk`
     then reads.
 
     It exists because a :class:`~mcuhome.model.context.SdkPin` needs more
@@ -285,7 +285,7 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
     (``scripts/build_sdk_archive.py``), never from a network. Sources are
     searched in order and the first that holds a matching package wins,
     which is the same "first source wins" rule
-    :func:`~mcuhome.compiler.localbackend.acquire_sdk` then fetches the
+    :func:`~mcuhome.workbench.orchestrator.acquire_sdk` then fetches the
     bytes by.
 
     **Both halves of the answer are load-bearing, and differently so**

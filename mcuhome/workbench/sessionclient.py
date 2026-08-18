@@ -5,7 +5,7 @@
 The third build method's whole client half. ``local-dev`` runs a build in
 the developer's own workspace and ``local`` drives a build container
 through the invocation ABI on this machine
-(:mod:`mcuhome.compiler.localbackend`); ``remote`` drives *a build server*
+(:mod:`mcuhome.workbench.orchestrator`); ``remote`` drives *a build server*
 over one WebSocket, which speaks the eleven verbs of ADR 0019's session
 protocol. This module is that conversation, and nothing else: it uploads
 a build context, freezes it, starts an invocation, follows its events and
@@ -26,7 +26,7 @@ invariant this module is built around:
     2026-08-09 amendment). A key that cannot be passed cannot be sent.
 
 **Shape, so slice 4 can dispatch uniformly.** :func:`run_remote_build`
-mirrors :meth:`mcuhome.compiler.localbackend.LocalBackend.run`: a locked-
+mirrors :meth:`mcuhome.workbench.orchestrator.LocalBackend.run`: a locked-
 able context directory and a work root go in, an unsigned artifact set
 plus the build report come out, progress arrives through a line sink.
 Turning a device model into a context directory is the shared step above
@@ -34,7 +34,7 @@ both of them and deliberately not repeated here.
 
 **Layering.** This module is in the workbench and must not import the
 compiler (ADR 0020 decision 3), so the two disciplines it shares with
-:mod:`mcuhome.compiler.localbackend` — safe extraction and strict
+:mod:`mcuhome.workbench.orchestrator` — safe extraction and strict
 containment — are re-stated here rather than imported. Both copies name
 each other; the rule they implement is build-container contract §9.1,
 which states it once for "whatever transport delivered" an input.
@@ -229,7 +229,7 @@ class RemoteError(BuildError):
 class RemoteDependencyMissing(RemoteError):
     """``aiohttp`` or ``zstandard`` is not installed.
 
-    Worded the way :mod:`mcuhome.compiler.localbuild` words a missing
+    Worded the way :mod:`mcuhome.workbench.containerbuild` words a missing
     docker: state the fact, then name the exact fix.
     """
 
@@ -903,14 +903,14 @@ def _check_member(name: str, source: Path, caps: IngressCaps) -> None:
 
 
 # --------------------------------------------------------------------------
-# Safe extraction — the sibling of mcuhome.compiler.localbackend._safe_extract
+# Safe extraction — the sibling of mcuhome.workbench.orchestrator._safe_extract
 # --------------------------------------------------------------------------
 
 
 def _safe_member_name(name: str) -> str:
     """A tar member's path, or a refusal. Never normalized — refused.
 
-    The same rule as :func:`mcuhome.compiler.localbackend._safe_member_name`,
+    The same rule as :func:`mcuhome.workbench.orchestrator._safe_member_name`,
     re-stated because a workbench must not import the compiler (ADR 0020
     decision 3). ``..`` and absolute paths are the escape; rewriting
     ``./x`` to ``x`` would accept a tree a stricter reader then refuses.
@@ -940,7 +940,7 @@ def _contained(root: Path, relative: str) -> Path | None:
 
     Strict containment, checked segment by segment with ``lstat`` rather
     than with :meth:`Path.resolve` — the twin of
-    :func:`mcuhome.compiler.localbackend._contained` and of the build
+    :func:`mcuhome.workbench.orchestrator._contained` and of the build
     server's own egress check. ``resolve`` answers where a path *leads*,
     which is the wrong question: a member that is a symlink to
     ``/etc/shadow`` resolves to a contained-looking absolute path only
@@ -1022,7 +1022,7 @@ def _safe_extract(archive: Path, *, into: Path, quota_bytes: int) -> tuple[str, 
 
     *quota_bytes* bounds the whole delivery and is counted **across**
     members while they are written, the way
-    :func:`mcuhome.compiler.localbackend._safe_extract` counts it: a
+    :func:`mcuhome.workbench.orchestrator._safe_extract` counts it: a
     limit that fires only once the bytes are on the disk is not a limit.
     """
     into.mkdir(parents=True, exist_ok=True)
@@ -1098,7 +1098,7 @@ def _decompress(archive: Path, plain: Path, *, limit: int) -> None:
     decompressor that returned its output as one ``bytes`` would have
     allocated the bomb before any check could run. The build server
     applies the identical shape to what a client sends it, and so does
-    :func:`mcuhome.compiler.localbackend._decompress` — including the
+    :func:`mcuhome.workbench.orchestrator._decompress` — including the
     byte count, which is the half that makes the streaming worth
     anything: without it the bomb lands on the disk instead of in memory.
     """
@@ -2191,7 +2191,7 @@ class ArtifactDelivery:
 
     :attr:`root` is where the files actually are, and every artifact's
     ``path`` is relative to it — the same relationship
-    :attr:`mcuhome.compiler.localbackend.LocalOutcome.out` has to its own
+    :attr:`mcuhome.workbench.orchestrator.LocalOutcome.out` has to its own
     artifact list, so a caller that signs an image afterwards does not
     have to know which build method produced it — including the *type* of
     that list, which is :class:`mcuhome.model.artifacts.Artifact` on both
@@ -2220,7 +2220,7 @@ class RemoteBuildResult:
     :attr:`action`, :attr:`context_id`, :attr:`status`,
     :attr:`successful`, :attr:`artifacts` — a tuple of
     :class:`mcuhome.model.artifacts.Artifact`, the very class
-    :attr:`~mcuhome.compiler.localbackend.LocalOutcome.artifacts` carries
+    :attr:`~mcuhome.workbench.orchestrator.LocalOutcome.artifacts` carries
     — and :attr:`out`, where those files are on this machine.
     :attr:`context_id` is the identity the work is attributed to, the one
     the *server* computed and this client already compared against its
@@ -2331,7 +2331,7 @@ async def run_remote_build(
     verdict, ``get-artifact`` into ``work_root/out``, ``close-session``.
 
     *action* is ``build`` or ``verify``, the same two
-    :meth:`mcuhome.compiler.localbackend.LocalBackend.run` takes and the
+    :meth:`mcuhome.workbench.orchestrator.LocalBackend.run` takes and the
     same two the server implements; *mode* applies to ``build`` only.
 
     It mirrors that method: a context directory and a work root in, an

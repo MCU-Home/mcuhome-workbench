@@ -199,14 +199,16 @@ def test_the_declared_dependencies_are_the_ones_the_package_needs() -> None:
     """The runtime set: the model, a line-preserving YAML parser, PEP 440,
     MCUboot's signing tool — the workbench performs the host-side signing
     step, so imgtool is a declared dependency rather than an environment
-    accident (PO 2026-08-15) — and a TOML writer for the project file
-    (tomllib reads it, and only reads)."""
+    accident (PO 2026-08-15) — a TOML writer for the project file
+    (tomllib reads it, and only reads), and a zstd codec, because the
+    orchestrator unpacks the SDK package for every container build."""
     assert _requirement_names(_project()["project"]["dependencies"]) == {
         "mcuhome-model",
         "ruamel.yaml",
         "packaging",
         "imgtool",
         "tomli-w",
+        "zstandard",
     }
 
 
@@ -261,7 +263,7 @@ def test_the_import_edges_follow_the_dependency_arrows() -> None:
 def test_a_missing_extra_is_a_refusal_that_names_the_install() -> None:
     """The refusal a caller without the extra gets, worded like the rest.
 
-    ``mcuhome.compiler.localbuild`` refuses a missing docker by stating
+    ``mcuhome.workbench.containerbuild`` refuses a missing docker by stating
     the fact and naming the fix; a missing transport is the same kind of
     news, and an ``ImportError`` traceback is not.
     """
@@ -282,7 +284,9 @@ def test_the_extras_are_declared_in_the_distribution() -> None:
     checked against each other rather than each against a reader's
     memory. ``local`` is here for the same reason from the other side:
     it is the only place ``mcuhome-compiler`` is named at all, and the
-    build-method dispatch's ``MethodUnavailable`` sends people to it.
+    build-method dispatch's ``MethodUnavailable`` sends people to it —
+    for ``local-dev`` alone now that the orchestrator is this package's
+    own. The extra keeps its name until that method goes.
 
     Read out of ``pyproject.toml`` and not out of ``importlib.metadata``:
     an editable install's metadata is as fresh as the last ``pip install
@@ -295,6 +299,6 @@ def test_the_extras_are_declared_in_the_distribution() -> None:
     project = _project()["project"]
     assert "optional-dependencies" not in project.get("dynamic", [])
     assert project["optional-dependencies"] == {
-        "remote": ["aiohttp>=3.10,<4", "zstandard>=0.22"],
+        "remote": ["aiohttp>=3.10,<4"],
         "local": ["mcuhome-compiler"],
     }

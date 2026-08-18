@@ -24,10 +24,10 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from mcuhome.compiler import container
 from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
+from mcuhome.workbench import buildenv as container
 from mcuhome.workbench.api import load_model
 from mcuhome.workbench.project import Project, find_project_root
 

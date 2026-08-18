@@ -55,18 +55,27 @@ dependencies = [
   # Pinned to the release line of the MCUboot revision the SDK's west
   # manifest resolves to — bump the two as a pair, like CHIP and Zephyr.
   "imgtool~=2.4",
+  # The SDK package is a .tar.zst and the orchestrator unpacks it for
+  # every container build, so the codec is core rather than an extra.
+  # It was in `remote` alone while the orchestrator lived elsewhere.
+  "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]
 # The `remote` build method and nothing else (E18, ADR 0019): the
-# session client needs an async HTTP stack and a zstd codec. Bounds
-# match the build server's for the same two libraries.
-remote = ["aiohttp>=3.10,<4", "zstandard>=0.22"]
-# The `local` and `local-dev` build methods: stages 4-5 and the backend
-# that drives the build container live in mcuhome-compiler, an optional
-# edge resolved at call time (ADR 0020 decision 3). The CLI depends on
-# mcuhome-workbench[local,remote] so all three methods work out of the
-# box (cli ADR 0002); the dashboard deliberately installs neither.
+# session client needs an async HTTP stack. The zstd codec it also needs
+# is a core dependency now — the orchestrator unpacks SDK packages with
+# it on every path. Bound matches the build server's for the same library.
+remote = ["aiohttp>=3.10,<4"]
+# The `local-dev` build method and nothing else: it compiles in the
+# caller's own west workspace, which is what mcuhome-compiler knows how
+# to drive — an optional edge resolved at call time (ADR 0020 decision
+# 3). The container method needs none of it any more: the orchestrator
+# that drives a build container is this package's own.
+#
+# The extra keeps the name `local` because the CLI and the dashboard
+# name it, and it goes when `local-dev` does rather than being renamed
+# twice.
 local = ["mcuhome-compiler"]
 
 [project.urls]

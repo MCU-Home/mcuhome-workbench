@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Driving a ``local`` build from a device model (``localbuild.py``).
+"""Driving a ``local`` build from a device model (``containerbuild.py``).
 
 **Docker never runs here.** The one impure operation is the seam: a
 scripted stand-in dispatches on the argv the real
-:class:`~mcuhome.compiler.localbackend.Docker` composed and writes the
+:class:`~mcuhome.workbench.orchestrator.Docker` composed and writes the
 result document a real container would. What is asserted is the
 composition above the backend — since the ADR 0024 inversion it lives in
 the workbench (:func:`mcuhome.workbench.buildmethods.compose_local_build`)
@@ -35,15 +35,14 @@ from typing import Any
 import pytest
 import zstandard
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.compiler import localbackend as lb
-from mcuhome.compiler import localbuild
-from mcuhome.compiler.localbackend import Docker
 from mcuhome.model import containerpaths
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
-from mcuhome.workbench import buildmethods
+from mcuhome.workbench import buildmethods, containerbuild
+from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
+from mcuhome.workbench.orchestrator import Docker
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 from mcuhome.workbench.signing import (
     generate_key_pem,
@@ -201,7 +200,7 @@ class Seam:
     """A scripted stand-in for docker, recording every argv it is handed.
 
     Dispatches on the composed argv the real
-    :class:`~mcuhome.compiler.localbackend.Docker` produced, so the tests
+    :class:`~mcuhome.workbench.orchestrator.Docker` produced, so the tests
     exercise the true argv composition and can then assert it.
     """
 
@@ -616,7 +615,7 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
             image=IMAGE,
             docker=Docker(runner=runner),
         )
-    assert localbuild.lb.SDK_PACKAGE_NAME in caught.value.message
+    assert containerbuild.lb.SDK_PACKAGE_NAME in caught.value.message
 
 
 # --------------------------------------------------------------------------

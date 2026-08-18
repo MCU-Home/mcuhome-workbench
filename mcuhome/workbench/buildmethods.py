@@ -44,19 +44,25 @@ compiles into MCUboot. There is no slot a private key fits in — on any
 method, by construction — which is the structural half of the invariant
 that the signing key never leaves the machine ``mcuhome`` runs on.
 
-**Why the dispatch is here and the methods are not.** ADR 0020 decision 1
-gives this package the three build methods; decision 3 forbids it a
-*dependency* on :mod:`mcuhome.compiler`, which is where two of the three
-are implemented (a dashboard install must not carry a toolchain, ADR 0017
-§2, and E32 records that parked tension). Both hold at once because the
-edge to the compiler is resolved at call time and refuses in words when
-the distribution is absent — the same shape
-:mod:`mcuhome.workbench.sessionclient` uses for the ``remote`` extra.
-That is also why the import is written through
+**One method still reaches outside this package.** ``local-dev``
+compiles in the caller's own west workspace, which is what
+:mod:`mcuhome.compiler` knows how to drive, and ADR 0020 decision 3
+forbids this package a *dependency* on it (a dashboard install must not
+carry a toolchain, ADR 0017 §2). Both hold at once because the edge is
+resolved at call time and refuses in words when the distribution is
+absent — the same shape :mod:`mcuhome.workbench.sessionclient` uses for
+the ``remote`` extra. That is also why the import is written through
 :func:`importlib.import_module` and not as an ``import`` statement:
-``tests_py/test_packaging.py`` reads the dependency arrows out of the
-syntax tree, and an ``import`` here would be indistinguishable from the
-hard edge that is forbidden.
+``tests_py/test_packaging_workbench.py`` reads the dependency arrows out
+of the syntax tree, and an ``import`` here would be indistinguishable
+from the hard edge that is forbidden.
+
+The container method used to reach outside too, and does not any more:
+the thing that drives a build container is this package's own
+(:mod:`mcuhome.workbench.orchestrator`). "A container build needs a
+container runtime and nothing else of a toolchain" was the claim from
+the start, and it is true at the level of installed distributions now
+rather than only in spirit.
 
 **Awaitable, because builds wait** (E16, E21). ``remote`` is asynchronous
 throughout and the other two block for minutes in a subprocess, so the
@@ -97,6 +103,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
 
+from mcuhome.workbench import containerbuild
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
     DEFAULT_MAX_WAIT_SECONDS,
@@ -605,12 +612,12 @@ def compose_local_build(
     the workbench states the requirement — it creates and locks the
     context, recording the image the compiler half answered with — and
     the compiler's backend half does the answering
-    (:func:`~mcuhome.compiler.localbuild.resolve_checked_image`) and the
-    driving (:func:`~mcuhome.compiler.localbuild.run_locked_build`).
+    (:func:`~mcuhome.workbench.containerbuild.resolve_checked_image`) and the
+    driving (:func:`~mcuhome.workbench.containerbuild.run_locked_build`).
     Order is the composition's promise: the image refusals cost no
     context directory and no SDK lookup. Synchronous — ``build_firmware``
     offloads it; *docker* is the test seam, threaded through to both
-    compiler halves.
+    halves.
 
     *context_dir* is the caller that already holds a **base** context and
     wants this one built — an embedder that assembled one elsewhere, a
@@ -622,9 +629,8 @@ def compose_local_build(
     method makes (E65), because what a context is does not depend on
     where it is built.
     """
-    localbuild = _compiler("localbuild", LOCAL)
     sources = tuple(Path(source) for source in sdk_sources)
-    resolved = localbuild.resolve_checked_image(
+    resolved = containerbuild.resolve_checked_image(
         image, line=model.toolchain.zephyr_line, env=dict(env), docker=docker
     )
     work_root = Path(work_root)
@@ -655,7 +661,7 @@ def compose_local_build(
             # decided, and the decisions are the interesting part.
             on_step("context", **context_facts(context_dir))
         on_step("compile", image=resolved.reference, digest=resolved.digest, jobs=jobs)
-    return localbuild.run_locked_build(
+    return containerbuild.run_locked_build(
         context_dir,
         image=resolved.reference,
         sdk_sources=sources,

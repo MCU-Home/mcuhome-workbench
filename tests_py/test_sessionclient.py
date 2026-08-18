@@ -46,7 +46,6 @@ from typing import Any
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.compiler.localbackend import LocalOutcome
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextRequest, SdkPin
 
@@ -54,6 +53,7 @@ from mcuhome.workbench import buildmethods, imgtool, resolve_pins, signing
 from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.orchestrator import LocalOutcome
 
 #: What this file needs beyond the repository's own dev dependencies, and
 #: the one command that installs each. The gate below is a **single**
@@ -2129,7 +2129,7 @@ def test_the_inbound_frame_size_is_bounded(tmp_path: Path) -> None:
 def test_a_download_is_bounded_in_every_direction(tmp_path: Path) -> None:
     """Nothing announces an egress cap, so this client applies its own.
 
-    The sibling in ``mcuhome.compiler.localbackend`` bounds exactly these
+    The sibling in ``mcuhome.workbench.orchestrator`` bounds exactly these
     two functions — a ``limit`` on the decompression and a
     ``quota_bytes`` across the extraction — and for exactly this reason:
     a few kilobytes of zstd expand to gigabytes, the archive hash is
@@ -2275,7 +2275,7 @@ def test_extraction_refuses_a_member_that_leaves_the_directory(tmp_path: Path) -
     ``out`` is written by the least trusted component in the system and
     travels over the network onto other people's machines, so the client
     checks every member the way the build server checks it at egress and
-    the way ``mcuhome.compiler.localbackend`` checks it locally: no
+    the way ``mcuhome.workbench.orchestrator`` checks it locally: no
     ``..``, no absolute path, no link, segment-by-segment containment.
     """
     raw = io.BytesIO()
@@ -2374,7 +2374,7 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
     """Context in, unsigned artifacts out — the same answer shape as ``local``.
 
     "Same fields, same meanings" is a claim about
-    :class:`~mcuhome.compiler.localbackend.LocalOutcome`, so it is
+    :class:`~mcuhome.workbench.orchestrator.LocalOutcome`, so it is
     asserted *against* it rather than against this dataclass's own
     values: the shared fields are named, the two sets of fields that are
     deliberately not shared are named too — so a new divergence fails
