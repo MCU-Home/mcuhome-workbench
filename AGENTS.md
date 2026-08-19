@@ -102,13 +102,12 @@ fails any test which reaches a real registry.
 
 ## Build methods and the remote method's client
 
-`mcuhome.workbench.buildmethods` dispatches the three build methods
-behind `run_build`: `local-dev` compiles on the caller's own machine,
-`local` drives a build container through the invocation ABI,
-`remote` drives a build server through the session protocol
-(`mcuhome.workbench.sessionclient`, ADR 0019's eleven verbs — comparison
-duty E37, tar.zst context transport). All three deliver an **unsigned**
-image plus a build report; nothing here signs anything.
+`mcuhome.workbench.buildmethods` dispatches the two build methods behind
+`run_build`: `local` drives a build container on this machine through the
+invocation ABI, `remote` drives a build server through the session
+protocol (`mcuhome.workbench.sessionclient`, ADR 0019's eleven verbs —
+comparison duty E37, tar.zst context transport). Both deliver an
+**unsigned** image plus a build report; nothing here signs anything.
 
 `sessionclient` needs the `remote` extra (`aiohttp` + `zstandard`):
 
@@ -137,20 +136,22 @@ reason naming exactly what is missing (`pytest -rs` shows it).
   0020 decision 3 forbids it (a dashboard install must not carry a
   toolchain, ADR 0017 §2): the edge to `mcuhome.compiler` is resolved
   through `importlib.import_module` at call time and refuses in words
-  when the distribution is absent, in both `buildmethods` and
-  `sessionclient`. `tests_py/test_packaging_workbench.py` reads the dependency
-  arrows out of the syntax tree, so a plain `import` there is a test
-  failure, not a style nit.
+  when the distribution is absent — in `generate.py`, which is the one
+  place left that reaches for it, and which no build takes.
+  `tests_py/test_packaging_workbench.py` reads the dependency arrows out
+  of the syntax tree, so a plain `import` there is a test failure, not a
+  style nit.
 - **The orchestrator is this package's own.** `orchestrator.py` speaks
   the build-container contract from the outside, `containerbuild.py` is
   the thin surface over it, `buildenv.py` is the host-side lookup
   (which container program, is a daemon running, is the pinned image
   here, where is this user's cache). They moved out of
   `mcuhome-compiler`, which is also the program that runs *inside* the
-  container: one package playing both
-  roles could be replaced by neither half. `local` therefore needs no
-  compiler distribution at all; `local-dev` still does, and the `local`
-  extra serves that one until it goes.
+  container: one package playing both roles could be replaced by neither
+  half. No build method needs the compiler distribution: it is not a
+  dependency, and the `generate` extra exists for the one caller that
+  writes a device's Zephyr application on this machine
+  (`generate_tree`, i.e. `mcuhome device build --generate-only`).
 - **Cross-repository version edges are `~=X.Y.0`** (PEP 440, same
   major.minor family) from v1.0 on — the same rule the CLI uses toward
   the workbench (cli ADR 0002). Before v1.0, editable checkouts.
@@ -159,9 +160,10 @@ reason naming exactly what is missing (`pytest -rs` shows it).
 
 ```sh
 # Dev install: this repo's own distribution plus its two SDK-side
-# siblings, cloned next to it — mcuhome-compiler provides the
-# `local`/`local-dev` build methods, mcuhome-model is the one hard
-# dependency of mcuhome-workbench.
+# siblings, cloned next to it — mcuhome-model is the one hard dependency
+# of mcuhome-workbench; mcuhome-compiler is not a dependency at all and
+# is installed here only so `generate_tree` and its tests have something
+# to reach.
 git clone https://github.com/mcu-home/mcuhome-sdk ../mcuhome-sdk
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ../mcuhome-sdk/packaging/model \

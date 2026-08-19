@@ -3,11 +3,10 @@
 """Where a build runs, and how it is executed — two axes, not one.
 
 A build has two independent placement questions in it, and the flat list
-of method names this package started with (``local``, ``local-dev``,
-``remote``) answered them in one word, which is why the list could never
-stay symmetric: ``local`` says *here, in a container*, ``remote`` says
-*over there, however that machine builds*, and the two are not the same
-kind of statement at all.
+of method names this package started with answered them in one word,
+which is why the list could never stay symmetric: ``local`` says *here, in
+a container*, ``remote`` says *over there, however that machine builds*,
+and the two are not the same kind of statement at all.
 
 They are separated here:
 
@@ -17,8 +16,11 @@ of the two a caller is entitled to make: build on this machine
 (:class:`RemoteBuild`).
 
 **How it is executed** — :class:`Execution`. A property of the machine
-that ends up doing the work: a build container (:class:`ContainerExecution`)
-or the caller's own west workspace (:class:`WorkspaceExecution`).
+that ends up doing the work. Today there is one: a build container
+(:class:`ContainerExecution`). The axis exists anyway, because the second
+answer — compiling in a build environment that is already unpacked on the
+host, without a container runtime — is a property of *that machine* and
+never a client's to state.
 
 The asymmetry between the two classes is the point rather than an
 oversight: :class:`LocalBuild` carries an :class:`Execution` and
@@ -42,10 +44,8 @@ on.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TextIO
 
 __all__ = [
     "DEFAULT_MAX_WAIT_SECONDS",
@@ -54,7 +54,6 @@ __all__ = [
     "Execution",
     "LocalBuild",
     "RemoteBuild",
-    "WorkspaceExecution",
 ]
 
 #: How long a build waits for a turn on a busy build server before it
@@ -94,36 +93,6 @@ class ContainerExecution(Execution):
     #: user's cache directory, which is what every build does unless
     #: somebody moved it — one cache per user, shared by every project.
     ccache_dir: Path | None = None
-
-
-@dataclass(frozen=True)
-class WorkspaceExecution(Execution):
-    """Compile in the caller's own west workspace with the caller's tools.
-
-    MCUHome's development loop. It is an execution like any other in this
-    vocabulary, and unlike the other one it depends on state this package
-    cannot see — which west workspace is checked out, at which revision,
-    with which local edits in it — so a build through it is reproducible
-    only as far as that state is.
-    """
-
-    #: The **public** key file ``west`` compiles into the bootloader.
-    bootloader_key: Path | None = None
-    #: Where the MCUHome Zephyr module is installed, and where the caller
-    #: was run — the two places the west workspace is looked for. The
-    #: second is called ``started_in`` and not ``cwd`` on purpose: it is a
-    #: directory the caller *states*, and naming it after the process's
-    #: current one invites the next reader to fill it in by asking the
-    #: process (:mod:`mcuhome.model.userpaths`).
-    module_dir: Path | None = None
-    started_in: Path | None = None
-    #: Zephyr snippets, per image.
-    snippets: Sequence[str] = ()
-    bootloader_snippets: Sequence[str] = ()
-    #: Called once with the resolved west plan, before anything runs.
-    on_plan: Callable[[Any], None] | None = None
-    #: Where the compiler's own output goes; ``None`` inherits.
-    stream: TextIO | None = None
 
 
 @dataclass(frozen=True)

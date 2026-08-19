@@ -62,25 +62,6 @@ def test_a_remote_builder_parses_with_its_server(project: Project) -> None:
     assert builder.layer == "project"
 
 
-def test_a_local_dev_builder_expands_its_workspace(tmp_path: Path, project: Project) -> None:
-    write_project(
-        project,
-        "builders:\n  - name: bench\n    type: local-dev\n    workspace: ~/zephyr\n",
-    )
-    env = {"HOME": str(tmp_path / "home")}
-    (builder,) = resolve_settings(project=project, env=env).value("builders")
-    assert builder.workspace == tmp_path / "home" / "zephyr"
-
-
-def test_a_relative_workspace_is_relative_to_the_defining_file(project: Project) -> None:
-    write_project(
-        project,
-        "builders:\n  - name: bench\n    type: local-dev\n    workspace: ./ws\n",
-    )
-    (builder,) = resolve_settings(project=project, env={}).value("builders")
-    assert builder.workspace == project.root / "ws"
-
-
 def test_builders_must_be_a_list(project: Project) -> None:
     write_project(project, "builders: attic\n")
     with pytest.raises(ConfigError) as caught:
@@ -109,7 +90,7 @@ def test_an_unknown_type_lists_the_real_ones(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
         resolve_settings(project=project, env={})
     assert '"cloud" is not a builder type' in caught.value.message
-    assert "local, local-dev, remote" in (caught.value.hint or "")
+    assert "local, remote" in (caught.value.hint or "")
 
 
 def test_a_remote_builder_without_a_server_is_refused_with_the_shape(

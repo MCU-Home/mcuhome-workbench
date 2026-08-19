@@ -12,12 +12,10 @@ somewhere else entirely.
 
 **One signing path, whatever built the image (E56).** Zephyr's
 ``cmake/mcuboot.cmake`` *can* sign inline, deriving the arguments from
-Kconfig and devicetree — but no MCUHome build method uses that any more:
-every build (container, ``local-dev``, ``--no-sign``) produces an
-**unsigned** image and states those same arguments in its report
-(``build-manifest.json`` for a west build, the §7.2.1 ``build-report.json``
-for a container build). This module is the one place they are turned back
-into a command — run right after the build by ``mcuhome device build``, or later
+Kconfig and devicetree — but no MCUHome build uses that any more: every
+build produces an **unsigned** image and states those same arguments in
+its §7.2.1 ``build-report.json``. This module is the one place they are
+turned back into a command — run right after the build by ``mcuhome device build``, or later
 by ``mcuhome device sign-firmware`` on another machine — so the private key lives in no
 build at all (ADR 0015 decision 8). The argument order below is Zephyr's,
 verbatim, so a signature made here is comparable line by line with the
@@ -56,10 +54,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from mcuhome.model import manifest as manifest_module
 from mcuhome.model.errors import BuildError
-from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
 from mcuhome.model.registry import SIGNATURE_TYPE
+from mcuhome.model.signing import SigningParameters
 from mcuhome.model.userpaths import expand
 
 from mcuhome.workbench import signing
@@ -74,7 +71,6 @@ __all__ = [
     "SignPlan",
     "find_imgtool",
     "plan_report_signing",
-    "plan_signing",
     "read_build_report",
     "require_imgtool",
     "run_signing",
@@ -84,9 +80,9 @@ __all__ = [
 
 #: The §7.2.1 build report a build container delivers next to its unsigned
 #: firmware (the ``report`` artifact, ADR 0018 / build-container-contract
-#: §7.2). The leaner sibling of ``build-manifest.json``: it exists for one
-#: consumer — the client that signs detached — and carries only what that
-#: client needs. The name mirrors ``mcuhome.compiler.abi.REPORT_ARTIFACT``,
+#: §7.2). It exists for one consumer — the client that signs detached —
+#: and carries only what that client needs. The name mirrors
+#: ``mcuhome.compiler.abi.REPORT_ARTIFACT``,
 #: restated here because this package must not import the compiler (it is
 #: what the compiler imports).
 BUILD_REPORT_FILE = "build-report.json"
@@ -197,15 +193,14 @@ def sign_command(
 class SignPlan:
     """Every command detached signing will run, decided before any of them.
 
-    Same shape of promise as :class:`~mcuhome.compiler.workspace.BuildPlan`: every
-    refusal a user can hit is raised while this is assembled, so the
+    Every refusal a user can hit is raised while this is assembled, so the
     failure mode of the step itself is "imgtool said no", never "MCUHome
     could not find something".
     """
 
-    #: Directory the manifest lives in; every path below is under it.
+    #: Directory the build report lives in; every path below is under it.
     out_dir: Path
-    manifest_path: Path
+    report_path: Path
     #: The signing key file — the same durable file the commands below
     #: carry: the project's referenced ``mcuboot.pem`` or the override's
     #: plain PEM (:attr:`~mcuhome.workbench.signing.SigningKey.path`).
@@ -220,125 +215,6 @@ class SignPlan:
         return [path for _, _, path in self.commands]
 
 
-def _resolve_manifest(target: Path) -> Path:
-    """Accept a build directory or the manifest inside one."""
-    if target.is_dir():
-        return target / MANIFEST_FILE
-    return target
-
-
-def _contained_name(value: str, *, role: str, manifest_path: Path) -> str:
-    """A signing input/output name that stays inside the build directory.
-
-    :func:`plan_signing` joins these onto *out_dir* to decide what to read
-    and where to write, and ``out_dir / value`` follows ``Path`` join rules:
-    an absolute right-hand side wins outright, and a ``..`` segment climbs
-    out of the directory. A build writes its artifacts *beside* its
-    manifest, so a name that is absolute or reaches upward was not written
-    by one — it is the shape a hand-crafted ``build-manifest.json`` handed
-    to ``mcuhome device sign-firmware`` would take to read and sign a file anywhere on the
-    machine, or to write one outside the build directory. Refused by name,
-    before it is ever joined, rather than trusted because it came from a
-    file named like a manifest.
-    """
-    candidate = Path(value)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        raise BuildError(
-            f"The build manifest {manifest_path} names {value!r} as a signing {role}, "
-            "which is not a path inside the build directory.",
-            hint=(
-                "a build manifest names artifacts a build wrote next to it; an absolute "
-                "path or one with a '..' segment would read or write outside the build "
-                "directory, so it is refused — no build writes one."
-            ),
-        )
-    return value
-
-
-def _require(data: dict, key: str, *, path: Path) -> object:
-    if key not in data:
-        raise BuildError(
-            f"The build manifest {path} has no {key!r} section.",
-            hint=(
-                "it was written by a builder that did not know about detached "
-                "signing yet, or for a board without an update scheme. Build again."
-            ),
-        )
-    return data[key]
-
-
-def plan_signing(
-    target: Path,
-    *,
-    key: Path,
-    env: dict[str, str],
-) -> SignPlan:
-    """Read a build manifest and decide how to sign what it describes.
-
-    *target* is a build directory or the manifest file inside one — a
-    user who has just run a build has the directory in their shell
-    history and the file in the output, and both should work.
-    """
-    manifest_path = _resolve_manifest(target)
-    out_dir = manifest_path.parent
-    data = manifest_module.read_manifest(manifest_path)
-    block = _require(data, "signing", path=manifest_path)
-    if not isinstance(block, dict):
-        raise BuildError(
-            f"The build manifest {manifest_path} describes a build that cannot be signed.",
-            hint=(
-                "only images built for a board with an MCUboot update scheme "
-                "carry signing parameters."
-            ),
-        )
-    parameters = SigningParameters.from_dict(block.get("arguments", {}))
-    inputs = block.get("inputs") or {}
-    outputs = block.get("outputs") or {}
-
-    program = require_imgtool(env=env)
-    commands: list[tuple[str, tuple[str, ...], Path]] = []
-    for form in sorted(inputs):
-        source_name = _contained_name(str(inputs[form]), role="input", manifest_path=manifest_path)
-        source = out_dir / source_name
-        if not source.is_file():
-            raise BuildError(
-                f"The image {source} named by the build manifest is not there.",
-                hint=(
-                    "signing works on the artifacts of a finished build; a build "
-                    "directory that was cleaned has to be built again."
-                ),
-            )
-        if form not in outputs:
-            continue  # pragma: no cover - the builder writes both or neither
-        output_name = _contained_name(
-            str(outputs[form]), role="output", manifest_path=manifest_path
-        )
-        destination = out_dir / output_name
-        commands.append(
-            (
-                form,
-                tuple(
-                    sign_command(
-                        program, parameters=parameters, key=key, source=source, output=destination
-                    )
-                ),
-                destination,
-            )
-        )
-    if not commands:
-        raise BuildError(
-            f"The build manifest {manifest_path} names no image to sign.",
-            hint="build again; a build that produced no image is a build that failed.",
-        )
-    return SignPlan(
-        out_dir=out_dir,
-        manifest_path=manifest_path,
-        key=key,
-        parameters=parameters,
-        commands=tuple(commands),
-    )
-
-
 def _resolve_report(target: Path) -> Path:
     """Accept a build directory or the build report inside one."""
     if target.is_dir():
@@ -349,10 +225,10 @@ def _resolve_report(target: Path) -> Path:
 def read_build_report(path: Path) -> dict:
     """Load a §7.2.1 ``build-report.json``, or refuse in plain language.
 
-    The report is what a build container delivers instead of a full
-    ``build-manifest.json`` (ADR 0018): it carries the ``report`` format
-    version and the mandatory ``signing`` block, and nothing a signer does
-    not need. This checks exactly what has to hold before a signature can
+    The report is what a build environment delivers beside the unsigned
+    firmware (ADR 0018): it carries the ``report`` format version and the
+    mandatory ``signing`` block, and nothing a signer does not need.
+    This checks exactly what has to hold before a signature can
     be planned from it — that it parses, that the version is one this
     signer implements, that a ``signing.arguments`` object is there to turn
     into an ``imgtool sign`` command, and that ``signing.signature_type`` is
@@ -425,14 +301,13 @@ def plan_report_signing(
 ) -> SignPlan:
     """Read a §7.2.1 build report and decide how to sign the firmware beside it.
 
-    The build-report counterpart of :func:`plan_signing`. *target* is the
-    build directory the local method delivered into (or the report file
-    itself); the unsigned ``firmware.bin``/``firmware.hex`` sit next to the
-    report, and the report's ``signing.arguments`` are the exact imgtool
-    parameters the build was linked for. Every refusal is raised here,
-    before imgtool runs, so the step's own failure mode is "imgtool said
-    no" and nothing else. *key* is already resolved — this plans the
-    command, it does not choose the key (:func:`sign_report` does).
+    *target* is the build directory the build delivered into (or the report file
+        itself); the unsigned ``firmware.bin``/``firmware.hex`` sit next to the
+        report, and the report's ``signing.arguments`` are the exact imgtool
+        parameters the build was linked for. Every refusal is raised here,
+        before imgtool runs, so the step's own failure mode is "imgtool said
+        no" and nothing else. *key* is already resolved — this plans the
+        command, it does not choose the key (:func:`sign_report` does).
     """
     report_path = _resolve_report(target)
     out_dir = report_path.parent
@@ -468,7 +343,7 @@ def plan_report_signing(
         )
     return SignPlan(
         out_dir=out_dir,
-        manifest_path=report_path,
+        report_path=report_path,
         key=key,
         parameters=parameters,
         commands=tuple(commands),
@@ -485,8 +360,7 @@ def sign_report(
 ) -> SignPlan:
     """Sign the firmware a build container delivered, from its §7.2.1 report.
 
-    The build-report counterpart of :func:`sign_build`. The key is
-    resolved exactly as a build resolves it (``--signing-key``, then
+    The key is resolved exactly as a build resolves it (``--signing-key``, then
     :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s
     ``secrets/firmware/mcuboot.yaml`` reference) and, as there, **never
     generated** here: a delivered build has to be signed with the key
@@ -539,26 +413,3 @@ def _run(command: list[str]) -> tuple[int, str]:
             hint=f"the command was: {' '.join(command)}",
         ) from error
     return completed.returncode, completed.stdout
-
-
-def sign_build(
-    target: Path,
-    *,
-    env: dict[str, str],
-    key: Path | str | None = None,
-    project: Project | None = None,
-    runner: Runner | None = None,
-) -> SignPlan:
-    """Sign the application image a build directory holds, and say where.
-
-    The key is resolved exactly as a build resolves it (``--signing-key``,
-    then :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s
-    ``secrets/firmware/mcuboot.yaml``), but it is **not** generated on
-    first need here: a build directory that was produced elsewhere has to
-    be signed with the key its device's bootloader carries, and inventing
-    one at this point would produce firmware that nothing accepts.
-    """
-    resolved = signing.signing_key(key, env=env, project=project, create=False)
-    plan = plan_signing(target, key=resolved.path, env=env)
-    run_signing(plan, runner=runner)
-    return plan

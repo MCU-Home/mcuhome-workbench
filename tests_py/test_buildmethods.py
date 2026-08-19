@@ -1,15 +1,13 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The three build methods behind one interface (``buildmethods.py``).
+"""The build methods behind one interface (``buildmethods.py``).
 
-No container, no toolchain and no socket: every method is stubbed at its
-own backend seam — ``compose_local_build``, ``run_dev_build``,
-``run_remote_build`` — and what is asserted is the layer above them. That
-is deliberately the whole point of the module: the three compositions are
-tested where they live (``test_localbuild.py`` and ``test_sessionclient.py``
-here, ``test_workspace.py`` in ``mcuhome-sdk`` since ADR 0024), and this
-file asserts that a caller reaches the right one and reads one answer
-whichever ran.
+No container and no socket: each method is stubbed at its own backend
+seam — ``compose_local_build``, ``run_remote_build`` — and what is
+asserted is the layer above them. That is deliberately the whole point of
+the module: the compositions are tested where they live
+(``test_localbuild.py``, ``test_sessionclient.py``), and this file asserts
+that a caller reaches the right one and reads one answer whichever ran.
 
 The properties, in the order they matter:
 
@@ -36,10 +34,8 @@ import builtins
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.compiler import devbuild
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.errors import BuildError
-from mcuhome.model.manifest import MANIFEST_FILE
 
 from mcuhome.workbench import buildmethods, containerbuild, sessionclient
 from mcuhome.workbench import orchestrator as lb
@@ -82,7 +78,7 @@ def test_no_preference_is_the_local_container(nothing) -> None:
 
 
 def test_an_unknown_method_is_a_refusal_that_lists_the_real_ones() -> None:
-    """Typed, and it names all three — a user who guessed wrong needs them."""
+    """Typed, and it names them all — a user who guessed wrong needs them."""
     with pytest.raises(buildmethods.UnknownMethod) as refusal:
         buildmethods.resolve_method("cloud")
     rendered = str(refusal.value)
@@ -98,7 +94,7 @@ def test_run_build_refuses_an_unknown_method_before_it_runs_anything(model, tmp_
 
 
 # --------------------------------------------------------------------------
-# One outcome shape, three methods
+# One outcome shape, both methods
 # --------------------------------------------------------------------------
 
 
@@ -150,45 +146,6 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
     assert seen["signing_pub"] == "-----BEGIN PUBLIC KEY-----\n"
 
 
-def test_the_local_dev_method_answers_in_the_same_shape(model, tmp_path, monkeypatch):
-    """``local-dev``: a host build, described by its build manifest.
-
-    Two things differ from the container-shaped methods and both are
-    facts rather than gaps: there is no build context, so no context ID,
-    and no build container declared an artifact list — what a west build
-    produced is described by ``build-manifest.json``, which is what
-    :attr:`BuildOutcome.report` names.
-    """
-    seen: dict[str, object] = {}
-
-    def fake(device_model, **kwargs):
-        seen.update(kwargs)
-        return devbuild.DevBuildResult(
-            plan=None, log="", images=[], merged=None, manifest_path=tmp_path / MANIFEST_FILE
-        )
-
-    monkeypatch.setattr(devbuild, "run_dev_build", fake)
-    outcome = _run(
-        buildmethods.BuildRequest(
-            model=model,
-            out_dir=tmp_path,
-            bootloader_key=tmp_path / "signing.pub",
-            module_dir=tmp_path / "module",
-            started_in=tmp_path,
-            snippets=("debug-rtt",),
-        ),
-        buildmethods.LOCAL_DEV,
-    )
-    assert outcome.method == buildmethods.LOCAL_DEV
-    assert outcome.successful and outcome.status == "success"
-    assert outcome.context_id == ""
-    assert outcome.artifacts == ()
-    assert outcome.out_dir == tmp_path
-    assert outcome.report == MANIFEST_FILE
-    assert seen["bootloader_key"] == tmp_path / "signing.pub"
-    assert seen["snippets"] == ("debug-rtt",)
-
-
 def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkeypatch):
     """Whichever method runs, the directory is taken for its duration.
 
@@ -205,34 +162,30 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
 
     def fake(device_model, **kwargs):
         seen["holder"] = holder_of(tmp_path)
-        return devbuild.DevBuildResult(
-            plan=None, log="", images=[], merged=None, manifest_path=tmp_path / MANIFEST_FILE
+        outcome = lb.LocalOutcome(
+            action="build",
+            context_id="sha256:" + "1" * 64,
+            exit_code=0,
+            status="success",
+            successful=True,
+            artifacts=_artifacts(),
+            out=tmp_path / "delivery",
+        )
+        return containerbuild.LocalBuildResult(
+            outcome=outcome,
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            image="ghcr.io/mcu-home/build-container:test",
         )
 
-    monkeypatch.setattr(devbuild, "run_dev_build", fake)
-    request = buildmethods.BuildRequest(
-        model=model,
-        out_dir=tmp_path,
-        bootloader_key=tmp_path / "signing.pub",
-        module_dir=tmp_path / "module",
-        started_in=tmp_path,
-    )
-    assert _run(request, buildmethods.LOCAL_DEV).successful
+    monkeypatch.setattr(buildmethods, "compose_local_build", fake)
+    request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
+    assert _run(request, buildmethods.LOCAL).successful
     holder = seen["holder"]
     assert holder["device"] == model.device.name  # type: ignore[index]
     assert holder["operation"] == "build"  # type: ignore[index]
     # And released again: the next build of that directory just runs.
-    assert _run(request, buildmethods.LOCAL_DEV).successful
-
-
-def test_the_local_dev_method_refuses_without_the_three_things_only_a_caller_knows(model, tmp_path):
-    """A public key file and the two workspace hints; a guess is not offered."""
-    with pytest.raises(BuildError) as refusal:
-        _run(
-            buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-            buildmethods.LOCAL_DEV,
-        )
-    assert "public key file" in str(refusal.value)
+    assert _run(request, buildmethods.LOCAL).successful
 
 
 def test_the_remote_method_answers_in_the_same_shape(model, tmp_path, monkeypatch):
@@ -366,69 +319,18 @@ def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path,
 
 
 # --------------------------------------------------------------------------
-# The optional edge to the compiler: which ImportError means what
+# No build reaches for the compiler at all
 # --------------------------------------------------------------------------
 
 
-def _failing_import(error: ImportError):
-    """Replace the one call ``_compiler`` makes, with a stated failure.
-
-    ``importlib.import_module`` goes straight to the import machinery and
-    never through ``builtins.__import__``, so this is the seam — the same
-    place the ``aiohttp`` test above stubs, one module along.
-    """
-    import importlib
-
-    def refuse(name: str):
-        raise error
-
-    return importlib, refuse
-
-
-def test_a_missing_compiler_distribution_is_the_named_refusal(model, tmp_path, monkeypatch):
-    """The compiler is optional (ADR 0020 decision 3), so its absence is a sentence.
-
-    ``local-dev`` is the one method that still asks for it: it compiles in
-    the caller's own west workspace, which is what ``mcuhome.compiler``
-    knows how to drive. The container method used to ask too and does not
-    any more — the test below is that half.
-    """
-    importlib, refuse = _failing_import(
-        ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler")
-    )
-    monkeypatch.setattr(importlib, "import_module", refuse)
-    with pytest.raises(buildmethods.MethodUnavailable) as refusal:
-        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL_DEV)
-    assert "pip install mcuhome-compiler" in str(refusal.value.hint)
-
-
-def test_a_broken_dependency_inside_an_installed_compiler_surfaces_unchanged(
-    model, tmp_path, monkeypatch
-):
-    """An ImportError from *within* the compiler is not evidence of its absence.
-
-    A wheel built for another interpreter fails the same ``import_module``
-    call, and translating that into "mcuhome-compiler is not installed"
-    would send the reader to reinstall the one piece that is already
-    there. The discriminator is the failing import's own name.
-    """
-    broken = ImportError("libzstd.so.1: cannot open shared object file", name="zstandard")
-    importlib, refuse = _failing_import(broken)
-    monkeypatch.setattr(importlib, "import_module", refuse)
-    with pytest.raises(ImportError) as raised:
-        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL_DEV)
-    assert raised.value is broken
-    assert not isinstance(raised.value, buildmethods.MethodUnavailable)
-
-
 def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, monkeypatch):
-    """The orchestrator is the workbench's own, so ``local`` needs no compiler.
+    """The orchestrator is the workbench's own, so no build needs a compiler.
 
-    This is the point of moving it. A container build needs a container
-    runtime and nothing else of a toolchain — that was always the claim,
-    and until the orchestrator lived here it was untrue at the level of
-    installed distributions: ``local`` refused without ``mcuhome-compiler``
-    even though nothing it ran came from the container's own package.
+    This is the point of moving it. A build needs a container runtime and
+    nothing else of a toolchain — that was always the claim, and until the
+    orchestrator lived here it was untrue at the level of installed
+    distributions: ``local`` refused without ``mcuhome-compiler`` even
+    though nothing it ran came from the container's own package.
 
     Asserted by making *every* dynamic import fail and showing that the
     build gets past it: what it stops at instead is one of the things it
@@ -436,9 +338,11 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
     and which of those comes first depends on the machine, so what is
     asserted is only that the compiler is not among them.
     """
-    importlib, refuse = _failing_import(
-        ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler")
-    )
+    import importlib
+
+    def refuse(name: str):
+        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
     monkeypatch.setattr(importlib, "import_module", refuse)
     # A docker that answers, badly: the daemon is not running. It stops
     # the build at the first thing it genuinely needs, which is the
@@ -446,7 +350,6 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
     monkeypatch.setattr(lb, "_run_command", lambda argv, on_line=None: lb.Completed(1, ""))
     with pytest.raises(BuildError) as refusal:
         _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
-    assert not isinstance(refusal.value, buildmethods.MethodUnavailable)
     assert "mcuhome-compiler" not in str(refusal.value)
 
 

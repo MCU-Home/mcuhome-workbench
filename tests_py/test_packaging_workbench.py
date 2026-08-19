@@ -217,14 +217,15 @@ def test_the_import_edges_follow_the_dependency_arrows() -> None:
 
     The mirror of the SDK repository's assertion about its own two
     packages, and the reason ADR 0020 decision 3 can call the compiler
-    edge optional at all: ``mcuhome-compiler`` is an *extra* here, so a
-    dashboard install carries none of it, and one ``import
-    mcuhome.compiler`` anywhere in this tree — module level or inside a
+    edge optional at all: ``mcuhome-compiler`` is not a dependency here
+    at all — not even an extra — so no install carries it, and one
+    ``import mcuhome.compiler`` anywhere in this tree — module level or inside a
     function, which is why this reads the syntax tree rather than a fresh
     interpreter's ``sys.modules`` — turns that install into an
-    ``ImportError`` at the first build. The call-time resolution lives in
-    ``buildmethods.py`` and goes through :func:`importlib.import_module`,
-    which is a string and not an import edge.
+    ``ImportError`` the first time somebody generates a tree. The
+    call-time resolution lives in ``generate.py`` and goes through
+    :func:`importlib.import_module`, which is a string and not an import
+    edge.
     """
     may_use = {"model", "workbench"}
     for module in sorted((NAMESPACE_DIR / "workbench").glob("*.py")):
@@ -282,11 +283,10 @@ def test_the_extras_are_declared_in_the_distribution() -> None:
     A refusal that names an extra nobody declared sends a user to a
     command that does nothing, so the message and the declaration are
     checked against each other rather than each against a reader's
-    memory. ``local`` is here for the same reason from the other side:
-    it is the only place ``mcuhome-compiler`` is named at all, and the
-    build-method dispatch's ``MethodUnavailable`` sends people to it —
-    for ``local-dev`` alone now that the orchestrator is this package's
-    own. The extra keeps its name until that method goes.
+    memory. ``mcuhome-compiler`` is here for the same reason from the
+    other side: no *build* needs it any more, so it is not a dependency
+    and not part of ``remote`` — it is its own extra, taken by the one
+    caller that generates a tree on this machine.
 
     Read out of ``pyproject.toml`` and not out of ``importlib.metadata``:
     an editable install's metadata is as fresh as the last ``pip install
@@ -300,5 +300,5 @@ def test_the_extras_are_declared_in_the_distribution() -> None:
     assert "optional-dependencies" not in project.get("dynamic", [])
     assert project["optional-dependencies"] == {
         "remote": ["aiohttp>=3.10,<4"],
-        "local": ["mcuhome-compiler"],
+        "generate": ["mcuhome-compiler"],
     }

@@ -80,22 +80,25 @@ What is here, in the order a caller needs it:
 ``registry_data`` / ``config_json_schema``
     What the builder knows about hardware and Matter, and the shape of
     ``main.yaml``, as data an editor or a picker can consume.
-``read_manifest``
-    ``build-manifest.json`` of a finished build.
+``generate_tree`` / ``CompilerUnavailable``
+    Stage 4 on this machine: the Zephyr application a device model
+    describes, written out and nothing more. A build does not take this
+    path — a build environment generates from the model its context
+    carries — so this is the caller who wants the tree for its own sake,
+    and it refuses in words where ``mcuhome-compiler`` is not installed.
 ``build_firmware`` / ``BuildRequest`` / ``BuildOutcome``
     Build a device, at a stated target, behind one awaitable call. A
     build has two placement questions in it and only the first belongs
     to a caller: **where** it runs (``LocalBuild``, ``RemoteBuild``) and
     **how** the machine that runs it executes the work
-    (``ContainerExecution``, ``WorkspaceExecution``) — which is why
-    ``LocalBuild`` carries an ``Execution`` and ``RemoteBuild`` does not.
-    ``MethodUnavailable`` and ``RemoteNotConfigured`` are the typed
-    refusals a caller renders.
+    (``ContainerExecution``) — which is why ``LocalBuild`` carries an
+    ``Execution`` and ``RemoteBuild`` does not. ``RemoteNotConfigured``
+    is the typed refusal a caller renders.
 ``run_build`` / ``resolve_method`` / ``target_for_method``
     The same build, selected by method name — for a caller whose choice
     arrived as a command-line flag or a configuration value.
     ``resolve_method`` turns a name, or nothing, into one of ``LOCAL``,
-    ``LOCAL_DEV``, ``REMOTE`` (``METHODS``, ``DEFAULT_METHOD``) or raises
+    ``REMOTE`` (``METHODS``, ``DEFAULT_METHOD``) or raises
     ``UnknownMethod``; ``target_for_method`` is the name and the request
     read together as the target they describe.
 ``open_environment`` / ``BuildEnvironment`` / ``Invocation``
@@ -150,7 +153,6 @@ from mcuhome.model.errors import (
     error_dicts,
 )
 from mcuhome.model.export import registry_data
-from mcuhome.model.manifest import MANIFEST_FILE, read_manifest
 from mcuhome.model.model import MODEL_VERSION, DeviceModel
 from mcuhome.model.modelfile import read_model
 
@@ -161,12 +163,10 @@ from mcuhome.workbench.buildmethods import (
     DEFAULT_MAX_WAIT_SECONDS,
     DEFAULT_METHOD,
     LOCAL,
-    LOCAL_DEV,
     METHODS,
     REMOTE,
     BuildOutcome,
     BuildRequest,
-    MethodUnavailable,
     RemoteNotConfigured,
     UnknownMethod,
     build_firmware,
@@ -180,7 +180,6 @@ from mcuhome.workbench.buildtarget import (
     Execution,
     LocalBuild,
     RemoteBuild,
-    WorkspaceExecution,
 )
 from mcuhome.workbench.configschema import config_json_schema
 from mcuhome.workbench.configuration import (
@@ -196,6 +195,7 @@ from mcuhome.workbench.configuration import (
     set_config_value,
     unset_config_value,
 )
+from mcuhome.workbench.generate import CompilerUnavailable, generate_tree
 from mcuhome.workbench.loader import load_config
 from mcuhome.workbench.migrations import Migration
 from mcuhome.workbench.migrations import plan_for as upgrade_plan
@@ -275,6 +275,7 @@ __all__ = [
     "CONFIG_FILE",
     "CONFIG_SCOPES",
     "ClusterChoice",
+    "CompilerUnavailable",
     "ConfigError",
     "ConfigErrorGroup",
     "ContainerExecution",
@@ -293,16 +294,13 @@ __all__ = [
     "InitResult",
     "Invocation",
     "LOCAL",
-    "LOCAL_DEV",
     "LocalBuild",
     "LocalOutcome",
     "Location",
-    "MANIFEST_FILE",
     "MARKER_FILE",
     "MCUHomeError",
     "METHODS",
     "MODEL_VERSION",
-    "MethodUnavailable",
     "Migration",
     "MigrationFailed",
     "NewDevice",
@@ -334,13 +332,13 @@ __all__ = [
     "UpgradeSession",
     "VERSION",
     "ValidationResult",
-    "WorkspaceExecution",
     "build_firmware",
     "build_lock",
     "config_json_schema",
     "error_dicts",
     "find_device",
     "find_project_root",
+    "generate_tree",
     "init_pairing",
     "init_project",
     "is_project_root",
@@ -349,7 +347,6 @@ __all__ = [
     "new_device",
     "open_environment",
     "project_at",
-    "read_manifest",
     "read_model",
     "registry_data",
     "render_starter",

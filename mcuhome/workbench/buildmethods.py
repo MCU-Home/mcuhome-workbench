@@ -1,26 +1,24 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The three build methods behind one interface (ADR 0020 decision 6, E18).
+"""The build methods behind one interface (ADR 0020 decision 6, E18).
 
-``local-dev`` compiles on the caller's own machine, ``local`` drives a
-build container through the invocation ABI, ``remote`` drives a build
-server through the session protocol. They differ in almost everything —
-one starts a subprocess, one starts a container, one opens a WebSocket —
-and in exactly the thing a caller cares about they do not differ at all:
-every one of them delivers an **unsigned** image plus a build report, and
-the signature is a separate host-side step afterwards (E55, E56). That is
-what makes one interface possible rather than merely tidy.
+``local`` drives a build environment on this machine through the
+invocation ABI, ``remote`` drives a build server through the session
+protocol. They differ in almost everything — one starts a container, one
+opens a WebSocket — and in exactly the thing a caller cares about they do
+not differ at all: both deliver an **unsigned** image plus a build report,
+and the signature is a separate host-side step afterwards (E55, E56). That
+is what makes one interface possible rather than merely tidy.
 
 So this module is small on purpose. :func:`build_firmware` takes a
 resolved device model plus the inputs a build needs, runs the one the
 target names, and answers with one :class:`BuildOutcome` whose meaning
-does not depend on which ran: *did it succeed*, *where are the unsigned
-artifacts and the report*, and *which report shape is it* — enough for
-the shared signing step, and enough for a caller that only wants to know
-whether to carry on. What is genuinely composition-specific — a west plan
-and its log, a container reference, an invocation id — travels in
-:attr:`BuildOutcome.detail`, typed as itself, so a renderer can reach it
-without every consumer having to.
+does not depend on which ran: *did it succeed*, and *where are the
+unsigned artifacts and the report* — enough for the shared signing step,
+and enough for a caller that only wants to know whether to carry on. What
+is genuinely composition-specific — a container reference, an invocation
+id — travels in :attr:`BuildOutcome.detail`, typed as itself, so a
+renderer can reach it without every consumer having to.
 
 **Two axes, and a name is one word for both.** Where a build runs and how
 the machine that runs it executes it are separate decisions and only the
@@ -35,42 +33,31 @@ whose method arrived as a flag or a configuration value —
 so that the method-specific fields of :class:`BuildRequest` have exactly
 one reader.
 
-**No key of any kind can be private here.** Two fields carry key
-material and both are public halves in the form their method needs:
-:attr:`BuildRequest.signing_pub` is the PEM that becomes
-``keys/signing.pub`` in a build context, and
-:attr:`BuildRequest.bootloader_key` is the public key file ``west``
-compiles into MCUboot. There is no slot a private key fits in — on any
-method, by construction — which is the structural half of the invariant
-that the signing key never leaves the machine ``mcuhome`` runs on.
+**No key of any kind can be private here.** The one field that carries
+key material is :attr:`BuildRequest.signing_pub`, the PEM that becomes
+``keys/signing.pub`` in a build context — the public half, and all of the
+key pair a build ever sees. There is no slot a private key fits in, on
+either method and by construction, which is the structural half of the
+invariant that the signing key never leaves the machine ``mcuhome`` runs
+on.
 
-**One method still reaches outside this package.** ``local-dev``
-compiles in the caller's own west workspace, which is what
-:mod:`mcuhome.compiler` knows how to drive, and ADR 0020 decision 3
-forbids this package a *dependency* on it (a dashboard install must not
-carry a toolchain, ADR 0017 §2). Both hold at once because the edge is
-resolved at call time and refuses in words when the distribution is
-absent — the same shape :mod:`mcuhome.workbench.sessionclient` uses for
-the ``remote`` extra. That is also why the import is written through
-:func:`importlib.import_module` and not as an ``import`` statement:
-``tests_py/test_packaging_workbench.py`` reads the dependency arrows out
-of the syntax tree, and an ``import`` here would be indistinguishable
-from the hard edge that is forbidden.
-
-The container method used to reach outside too, and does not any more:
-the thing that drives a build container is this package's own
-(:mod:`mcuhome.workbench.orchestrator`). "A container build needs a
-container runtime and nothing else of a toolchain" was the claim from
-the start, and it is true at the level of installed distributions now
-rather than only in spirit.
+**Nothing here reaches outside this package.** The thing that drives a
+build container is this package's own
+(:mod:`mcuhome.workbench.orchestrator`), and no build method runs a
+compiler in this process. "A build needs a container runtime and nothing
+else of a toolchain" was the claim from the start, and it is true at the
+level of installed distributions: ``mcuhome-compiler`` is what a *build
+environment* carries, and this package never imports it. The one host-side
+call into it left is code generation for its own sake
+(:mod:`mcuhome.workbench.generate`), which no build takes.
 
 **Awaitable, because builds wait** (E16, E21). ``remote`` is asynchronous
-throughout and the other two block for minutes in a subprocess, so the
-one interface over them is ``async`` and the synchronous methods are
-offloaded to a thread. A command line wraps the whole thing in one
+throughout and ``local`` blocks for minutes in a subprocess, so the one
+interface over them is ``async`` and the synchronous method is offloaded
+to a thread. A command line wraps the whole thing in one
 :func:`asyncio.run` at its entry point and its user sees nothing.
 
-**All three methods are complete** (E65). ``remote`` was the last one
+**Both methods are complete** (E65). ``remote`` was the last one
 that could not start from a device model: a build context is
 content-addressed over the SDK package's hash, and nothing resolved that
 pin on this path. It does now, through the *same* resolver and the same
@@ -95,12 +82,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import CONTEXT_FILE
 from mcuhome.model.errors import BuildError
-from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenv as container
@@ -113,7 +99,6 @@ from mcuhome.workbench.buildtarget import (
     Execution,
     LocalBuild,
     RemoteBuild,
-    WorkspaceExecution,
 )
 from mcuhome.workbench.contextdir import (
     context_facts,
@@ -127,7 +112,6 @@ from mcuhome.workbench.resolve_env import resolve_environment
 __all__ = [
     "DEFAULT_MAX_WAIT_SECONDS",
     "LOCAL",
-    "LOCAL_DEV",
     "METHODS",
     "REMOTE",
     "BuildOutcome",
@@ -136,11 +120,9 @@ __all__ = [
     "ContainerExecution",
     "Execution",
     "LocalBuild",
-    "MethodUnavailable",
     "RemoteBuild",
     "RemoteNotConfigured",
     "UnknownMethod",
-    "WorkspaceExecution",
     "build_firmware",
     "websocket_url",
     "resolve_method",
@@ -148,22 +130,17 @@ __all__ = [
     "target_for_method",
 ]
 
-#: Drives a build container on this machine through the invocation ABI
+#: Drives a build environment on this machine through the invocation ABI
 #: (E51). The default: it is the method that needs a container runtime and
 #: nothing else of a toolchain, and the one whose private key never
 #: reaches the thing that compiles (E54).
 LOCAL = "local"
 
-#: Compiles in the caller's own west workspace with the caller's own
-#: tools. MCUHome's development loop, and what the other two run *inside*
-#: whatever environment they reach (ADR 0020 decision 7).
-LOCAL_DEV = "local-dev"
-
 #: The same as ``local``, through a build server (ADR 0019).
 REMOTE = "remote"
 
 #: Every method name, in the order a refusal lists them.
-METHODS = (LOCAL, LOCAL_DEV, REMOTE)
+METHODS = (LOCAL, REMOTE)
 
 #: What a caller that expressed no preference gets (E54).
 DEFAULT_METHOD = LOCAL
@@ -173,16 +150,6 @@ LineSink = Callable[[str], None]
 
 class UnknownMethod(BuildError):
     """A build method by a name that is not one of :data:`METHODS`."""
-
-
-class MethodUnavailable(BuildError):
-    """The named method is real, and this installation cannot run it.
-
-    Worded like every other missing-piece refusal in the family — state
-    the fact, then name the exact install — because that is what it is:
-    ``local`` and ``local-dev`` are implemented in ``mcuhome-compiler``,
-    which a workbench that only validates configurations does not carry.
-    """
 
 
 #: The port a build server listens on unless its operator moved it
@@ -273,9 +240,8 @@ def resolve_method(name: str | None) -> str:
         hint=(
             "the build methods are "
             + ", ".join(METHODS)
-            + f": {LOCAL} compiles in a build container on this "
-            f"machine, {LOCAL_DEV} in your own west workspace, and {REMOTE} on a build "
-            "server"
+            + f": {LOCAL} compiles in a build environment on this "
+            f"machine, and {REMOTE} on a build server"
         ),
     )
 
@@ -309,9 +275,8 @@ class BuildRequest:
     env: Mapping[str, str] = field(default_factory=dict)
     #: Parallel compile jobs.
     jobs: int = 1
-    #: ``clean`` or the pristine mode a method understands; ``local`` and
-    #: ``remote`` pass it into the invocation, ``local-dev`` derives its
-    #: own from the state of the build directory.
+    #: ``clean`` or the pristine mode a build environment understands;
+    #: both methods pass it into the invocation.
     mode: str = "clean"
     #: Where the build log goes, line by line, while it happens.
     on_line: LineSink | None = None
@@ -357,26 +322,6 @@ class BuildRequest:
     #: user's cache directory, which is what every build does unless
     #: somebody moved it — one cache per user, shared by every project.
     ccache_dir: Path | None = None
-
-    # -- local-dev -----------------------------------------------------
-    #: The **public** key file ``west`` compiles into the bootloader.
-    bootloader_key: Path | None = None
-    #: Where the MCUHome Zephyr module is installed, and where the caller
-    #: was run — the two places the west workspace is looked for. The
-    #: second is called ``started_in`` and not ``cwd`` on purpose: it is a
-    #: directory the caller *states*, and naming it after the process's
-    #: current one invites the next reader to fill it in by asking the
-    #: process, which is exactly what ADR 0020 rules out
-    #: (:mod:`mcuhome.model.userpaths`).
-    module_dir: Path | None = None
-    started_in: Path | None = None
-    #: Zephyr snippets, per image.
-    snippets: Sequence[str] = ()
-    bootloader_snippets: Sequence[str] = ()
-    #: Called once with the resolved west plan, before anything runs.
-    on_plan: Callable[[Any], None] | None = None
-    #: Where the compiler's own output goes; ``None`` inherits.
-    stream: TextIO | None = None
 
     # -- remote --------------------------------------------------------
     #: The build server's address, as a person writes it: a host, a
@@ -429,72 +374,30 @@ class BuildOutcome:
     report's file name — the two together are what the one shared signing
     step needs, and they are the whole reason this class exists (E56).
 
-    :attr:`artifacts` is the declared artifact set where the method
-    declared one: ``local`` and ``remote`` read it out of a contract
-    §5.4 result, in :class:`~mcuhome.model.artifacts.Artifact`, the same
-    type on both sides. ``local-dev`` declares none — no build container
-    ran, and what a host ``west`` build produced is described by its
-    ``build-manifest.json`` instead — so it answers with an empty tuple
-    rather than an invented list.
+    :attr:`artifacts` is the declared artifact set, read out of a contract
+    §5.4 result in :class:`~mcuhome.model.artifacts.Artifact` — the same
+    type whichever method produced it.
     """
 
     #: Which of :data:`METHODS` ran.
     method: str
     successful: bool
     #: The method's own word for the result: ``success``/``failure`` from
-    #: a contract result document, ``success`` from a host build that did
-    #: not raise.
+    #: a contract result document.
     status: str
-    #: The identity the work is attributed to, or ``""`` for ``local-dev``
-    #: — a host build has no build context and therefore no context ID.
+    #: The identity the work is attributed to: the build context's ID.
     context_id: str
     artifacts: tuple[Artifact, ...]
     #: Where the unsigned artifacts and the report are.
     out_dir: Path | None
     #: The build report's file name in :attr:`out_dir`: the contract's
-    #: ``build-report.json`` for the two container-shaped methods, and
-    #: ``build-manifest.json`` for ``local-dev``. Both carry the imgtool
-    #: parameters the host signer needs (E55).
+    #: ``build-report.json``, which carries the imgtool parameters the
+    #: host signer needs (E55).
     report: str
     #: The build-container reference, where one was used.
     image: str = ""
     #: The method's own result object, untouched.
     detail: Any = None
-
-
-def _compiler(module: str, method: str):
-    """Import a compiler-side module, or refuse naming the distribution.
-
-    The optional edge of ADR 0020 decision 3, resolved at call time. See
-    the module docstring for why it is not an ``import`` statement.
-
-    **Only the missing distribution is translated.** An ``ImportError``
-    raised from *inside* an installed compiler — a broken ``zstandard``
-    wheel, a C extension built for another interpreter — says nothing
-    about ``mcuhome-compiler`` being absent, and answering it with "not
-    installed, run pip install mcuhome-compiler" sends the reader to fix
-    the one thing that is already right. So the refusal is made only when
-    the failed import *is* ``mcuhome.compiler`` or something under it;
-    anything else travels on untouched, with its own name in it.
-    """
-    import importlib
-
-    name = f"mcuhome.compiler.{module}"
-    try:
-        return importlib.import_module(name)
-    except ImportError as error:
-        missing = error.name or ""
-        if missing != "mcuhome.compiler" and not missing.startswith("mcuhome.compiler."):
-            raise
-        raise MethodUnavailable(
-            f"The {method} build method needs mcuhome-compiler, and it is not installed.",
-            hint=(
-                "stages 4-5 — code generation and the compile itself — are their own "
-                "distribution, so a workbench that only validates configurations or "
-                "drives a build server does not carry them. Install it with:\n"
-                "    pip install mcuhome-compiler"
-            ),
-        ) from error
 
 
 def _work_root(request: BuildRequest, name: str) -> Path:
@@ -519,18 +422,6 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     if chosen == LOCAL:
         return LocalBuild(
             execution=ContainerExecution(image=request.image, ccache_dir=request.ccache_dir)
-        )
-    if chosen == LOCAL_DEV:
-        return LocalBuild(
-            execution=WorkspaceExecution(
-                bootloader_key=request.bootloader_key,
-                module_dir=request.module_dir,
-                started_in=request.started_in,
-                snippets=tuple(request.snippets),
-                bootloader_snippets=tuple(request.bootloader_snippets),
-                on_plan=request.on_plan,
-                stream=request.stream,
-            )
         )
     return RemoteBuild(
         server=request.server,
@@ -572,8 +463,6 @@ async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> Build
             execution = target.execution
             if isinstance(execution, ContainerExecution):
                 return await _run_local(request, execution)
-            if isinstance(execution, WorkspaceExecution):
-                return await _run_local_dev(request, execution)
             raise TypeError(
                 f"{type(execution).__name__} is not a build execution this package runs"
             )
@@ -742,66 +631,6 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         out_dir=result.out_dir,
         report=BUILD_REPORT_FILE,
         image=result.image,
-        detail=result,
-    )
-
-
-async def _run_local_dev(request: BuildRequest, execution: WorkspaceExecution) -> BuildOutcome:
-    """Local, in the caller's workspace: :func:`…devbuild.run_dev_build`.
-
-    Stage 4 has already run — the generated application is in *out_dir* —
-    because a ``local-dev`` caller wants that tree whether or not it goes
-    on to compile, and ``--generate-only`` is exactly the caller that
-    stops there.
-    """
-    devbuild = _compiler("devbuild", LOCAL_DEV)
-    if (
-        execution.bootloader_key is None
-        or execution.module_dir is None
-        or execution.started_in is None
-    ):
-        raise BuildError(
-            f"The {LOCAL_DEV} build method needs a public key file, a module "
-            "directory and a working directory, and this request names none.",
-            hint=(
-                "the key is the public half MCUboot verifies against; the two "
-                "directories are where the west workspace is looked for, and only "
-                "the caller knows either of them"
-            ),
-        )
-
-    def announce_and_step(plan: Any) -> None:
-        # The plan callback fires after every pre-flight refusal and
-        # immediately before west runs — which makes it exactly the
-        # moment the build enters its compile step, so the method emits
-        # the step itself rather than leaving a caller to guess it.
-        if execution.on_plan is not None:
-            execution.on_plan(plan)
-        if request.on_step is not None:
-            request.on_step("compile")
-
-    result = await asyncio.to_thread(
-        devbuild.run_dev_build,
-        request.model,
-        out_dir=Path(request.out_dir),
-        bootloader_key=Path(execution.bootloader_key),
-        module_dir=Path(execution.module_dir),
-        cwd=Path(execution.started_in),
-        env=dict(request.env),
-        jobs=request.jobs,
-        snippets=tuple(execution.snippets),
-        bootloader_snippets=tuple(execution.bootloader_snippets),
-        on_plan=announce_and_step,
-        stream=execution.stream,
-    )
-    return BuildOutcome(
-        method=LOCAL_DEV,
-        successful=True,
-        status="success",
-        context_id="",
-        artifacts=(),
-        out_dir=Path(request.out_dir),
-        report=MANIFEST_FILE,
         detail=result,
     )
 

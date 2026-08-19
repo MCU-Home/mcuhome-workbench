@@ -5,11 +5,10 @@
 Everything between a YAML file and something a compiler can be handed:
 finding the project directory, resolving its configuration, parsing a
 device file, validating it, resolving it into a device model, creating
-the build context of ADR 0018, and the three build methods of ADR 0020
-decision 6 — ``local-dev``, ``local``, ``remote`` — behind one
-interface. Client-side signing lives here too (ADR 0015 §8), because
-the private key belongs to the person driving the build and to nobody
-the build talks to.
+the build context of ADR 0018, and the build methods of ADR 0020
+decision 6 — ``local``, ``remote`` — behind one interface. Client-side
+signing lives here too (ADR 0015 §8), because the private key belongs to
+the person driving the build and to nobody the build talks to.
 
 This is what runs wherever a build is *driven* rather than performed: the
 command line, the dashboard, a third-party embedder. It must never carry

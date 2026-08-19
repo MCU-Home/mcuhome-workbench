@@ -80,12 +80,10 @@ def test_the_build_methods_are_part_of_the_surface() -> None:
         "BuildRequest",
         "BuildOutcome",
         "LOCAL",
-        "LOCAL_DEV",
         "REMOTE",
         "METHODS",
         "DEFAULT_METHOD",
         "UnknownMethod",
-        "MethodUnavailable",
         "RemoteNotConfigured",
     )
     for name in exported:

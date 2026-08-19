@@ -32,8 +32,8 @@ from pathlib import Path
 
 import pytest
 from mcuhome.model.errors import BuildError
-from mcuhome.model.manifest import MANIFEST_FILE, SigningParameters
 from mcuhome.model.registry import SIGNATURE_TYPE
+from mcuhome.model.signing import SigningParameters
 
 from mcuhome.workbench import imgtool, signing
 
@@ -128,34 +128,8 @@ def test_the_command_is_the_one_zephyr_assembles() -> None:
 
 
 # --------------------------------------------------------------------------
-# Planning
+# The key the suite signs with
 # --------------------------------------------------------------------------
-
-
-MANIFEST = {
-    "manifest_version": 1,
-    "images": [{"name": "app", "role": "application", "flash_bytes": 16, "files": []}],
-    "signing": {
-        "tool": "imgtool",
-        "image": "app",
-        "signed": False,
-        "signed_by_the_build": False,
-        "signature_type": "ecdsa-p256",
-        "arguments": PARAMETERS.to_dict(),
-        "inputs": {"bin": "build/app/zephyr/zephyr.bin"},
-        "outputs": {"bin": "build/app/zephyr/zephyr.signed.bin"},
-    },
-}
-
-
-def _build_dir(tmp_path: Path, manifest: dict | None = None) -> Path:
-    import json
-
-    output = tmp_path / "build" / "app" / "zephyr"
-    output.mkdir(parents=True)
-    (output / "zephyr.bin").write_bytes(bytes(512) + b"payload")
-    (tmp_path / MANIFEST_FILE).write_text(json.dumps(manifest or MANIFEST), "utf-8")
-    return tmp_path
 
 
 def _key(tmp_path: Path) -> Path:
@@ -163,106 +137,6 @@ def _key(tmp_path: Path) -> Path:
     path.write_text(signing.generate_key_pem(TEST_SCALAR), "utf-8")
     path.chmod(0o600)
     return path
-
-
-def test_a_build_directory_and_its_manifest_both_work(tmp_path) -> None:
-    out_dir = _build_dir(tmp_path)
-    key = _key(tmp_path)
-    env = {imgtool.IMGTOOL_VAR: "imgtool"}
-    assert imgtool.plan_signing(out_dir, key=key, env=env).manifest_path == out_dir / MANIFEST_FILE
-    assert imgtool.plan_signing(out_dir / MANIFEST_FILE, key=key, env=env).out_dir == out_dir
-
-
-def test_the_plan_carries_the_manifests_own_parameters(tmp_path) -> None:
-    plan = imgtool.plan_signing(
-        _build_dir(tmp_path), key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"}
-    )
-    assert plan.parameters == PARAMETERS
-    assert plan.outputs == [tmp_path / "build" / "app" / "zephyr" / "zephyr.signed.bin"]
-    assert plan.commands[0][1][:2] == ("imgtool", "sign")
-
-
-def test_a_missing_image_is_a_refusal(tmp_path) -> None:
-    out_dir = _build_dir(tmp_path)
-    (out_dir / "build" / "app" / "zephyr" / "zephyr.bin").unlink()
-    with pytest.raises(BuildError) as caught:
-        imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
-    assert "not there" in caught.value.message
-
-
-def test_a_manifest_without_a_signing_block_is_a_refusal(tmp_path) -> None:
-    out_dir = _build_dir(tmp_path, manifest={"manifest_version": 1, "images": []})
-    with pytest.raises(BuildError) as caught:
-        imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
-    assert "'signing'" in caught.value.message
-
-
-def test_plan_signing_refuses_an_absolute_input(tmp_path) -> None:
-    """An absolute manifest input would read and sign a file outside the build.
-
-    ``out_dir / "/etc/passwd"`` is ``/etc/passwd``: ``Path`` join lets an
-    absolute right-hand side win. A crafted build-manifest.json handed to
-    ``mcuhome sign`` must not be able to name an arbitrary file to sign, so
-    the value is refused by name before it is joined.
-    """
-    manifest = json.loads(json.dumps(MANIFEST))
-    manifest["signing"]["inputs"] = {"bin": "/etc/passwd"}
-    out_dir = _build_dir(tmp_path, manifest=manifest)
-    with pytest.raises(BuildError) as caught:
-        imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
-    assert "/etc/passwd" in caught.value.message
-    assert "signing input" in caught.value.message
-
-
-def test_plan_signing_refuses_an_output_that_escapes_the_build_dir(tmp_path) -> None:
-    """A ``..`` manifest output would write the signed image outside the build."""
-    manifest = json.loads(json.dumps(MANIFEST))
-    manifest["signing"]["outputs"] = {"bin": "../../evil.signed.bin"}
-    out_dir = _build_dir(tmp_path, manifest=manifest)
-    with pytest.raises(BuildError) as caught:
-        imgtool.plan_signing(out_dir, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
-    assert "evil.signed.bin" in caught.value.message
-    assert "signing output" in caught.value.message
-    assert not (tmp_path.parent / "evil.signed.bin").exists()
-
-
-def test_imgtool_failure_carries_imgtools_own_words(tmp_path) -> None:
-    plan = imgtool.plan_signing(
-        _build_dir(tmp_path), key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"}
-    )
-    with pytest.raises(BuildError) as caught:
-        imgtool.run_signing(plan, runner=lambda command: (2, "Image size too large"))
-    assert "Image size too large" in caught.value.hint
-
-
-def test_signing_never_generates_a_key(tmp_path, monkeypatch) -> None:
-    """A build has to be signed with the key its bootloader already carries."""
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
-    with pytest.raises(BuildError) as caught:
-        imgtool.sign_build(_build_dir(tmp_path), env=dict(os.environ))
-    assert "MCUHome has no firmware signing key" in caught.value.message
-
-
-def test_the_installed_imgtool_is_the_one_it_signs_with(tmp_path) -> None:
-    """Signing runs the declared dependency, not an environment accident.
-
-    ``PATH`` is emptied so the console script beside this interpreter is
-    the only answer left — a fallback to anything else would show up as
-    a different argv, and a lost dependency as a refusal.
-    """
-    out_dir = _build_dir(tmp_path)
-    key = _key(tmp_path)
-    beside = Path(sys.executable).parent / "imgtool"
-
-    ran: list[tuple[str, ...]] = []
-    plan = imgtool.sign_build(
-        out_dir,
-        env={"PATH": str(tmp_path / "nothing-here")},
-        key=key,
-        runner=lambda command: (ran.append(tuple(command)), (0, ""))[1],
-    )
-    assert plan.commands[0][1][0] == str(beside)
-    assert ran and ran[0][0] == str(beside)
 
 
 # --------------------------------------------------------------------------
@@ -576,3 +450,34 @@ def test_sign_report_refuses_a_missing_key_rather_than_making_one(tmp_path) -> N
             out, env={"XDG_CONFIG_HOME": str(empty), imgtool.IMGTOOL_VAR: "imgtool"}, key=None
         )
     assert not (out / "firmware.signed.bin").exists()
+
+
+def test_imgtool_failure_carries_imgtools_own_words(tmp_path) -> None:
+    plan = imgtool.plan_report_signing(
+        _report_dir(tmp_path), key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"}
+    )
+    with pytest.raises(BuildError) as caught:
+        imgtool.run_signing(plan, runner=lambda command: (2, "Image size too large"))
+    assert "Image size too large" in caught.value.hint
+
+
+def test_the_installed_imgtool_is_the_one_it_signs_with(tmp_path) -> None:
+    """Signing runs the declared dependency, not an environment accident.
+
+    ``PATH`` is emptied so the console script beside this interpreter is
+    the only answer left — a fallback to anything else would show up as
+    a different argv, and a lost dependency as a refusal.
+    """
+    out = _report_dir(tmp_path)
+    key = _key(tmp_path)
+    beside = Path(sys.executable).parent / "imgtool"
+
+    ran: list[tuple[str, ...]] = []
+    plan = imgtool.sign_report(
+        out,
+        env={"PATH": str(tmp_path / "nothing-here")},
+        key=key,
+        runner=lambda command: (ran.append(tuple(command)), (0, ""))[1],
+    )
+    assert plan.commands[0][1][0] == str(beside)
+    assert ran and ran[0][0] == str(beside)

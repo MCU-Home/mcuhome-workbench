@@ -17,7 +17,7 @@ product owner actually asked for.
 That same sentence is why this module sits beside signing rather than
 inside the compiler package (ADR 0020): the machine that wraps an image
 is the machine that signed it, and it has no toolchain. What it needs
-from the build is the manifest's OTA block, nothing more.
+from the build is the device's OTA identity, nothing more.
 
 The format is small enough that this costs eighty lines: a 16-byte fixed
 header and a Matter-TLV structure of six fields. ``tests_py/test_ota.py``
@@ -69,7 +69,7 @@ _ANONYMOUS_STRUCT = 0x15
 _END_OF_CONTAINER = 0x18
 
 #: Read in blocks: a Matter image is most of a megabyte and there is no
-#: reason for it to be in memory twice (same rule as mcuhome.model.manifest).
+#: reason for it to be in memory twice.
 _BLOCK = 1 << 20
 
 

@@ -309,8 +309,7 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
             hint=(
                 "point at a directory holding one:\n"
                 "    mcuhome config set sdk_sources <dir> --user\n"
-                "or pass --sdk-sources <dir> for a single build. A local-dev build "
-                "(--build-mode local-dev) needs no SDK source."
+                "or pass --sdk-sources <dir> for a single build."
             ),
         )
     searched: list[str] = []

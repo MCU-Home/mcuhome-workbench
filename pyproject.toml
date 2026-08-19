@@ -67,16 +67,13 @@ dependencies = [
 # is a core dependency now — the orchestrator unpacks SDK packages with
 # it on every path. Bound matches the build server's for the same library.
 remote = ["aiohttp>=3.10,<4"]
-# The `local-dev` build method and nothing else: it compiles in the
-# caller's own west workspace, which is what mcuhome-compiler knows how
-# to drive — an optional edge resolved at call time (ADR 0020 decision
-# 3). The container method needs none of it any more: the orchestrator
-# that drives a build container is this package's own.
-#
-# The extra keeps the name `local` because the CLI and the dashboard
-# name it, and it goes when `local-dev` does rather than being renamed
-# twice.
-local = ["mcuhome-compiler"]
+# `generate_tree` and nothing else: writing a device's Zephyr application
+# on this machine, for the caller who wants the tree for its own sake
+# (`mcuhome device build --generate-only`). No build method needs it — a
+# build environment generates from the model its context carries — so it
+# is an optional edge resolved at call time (ADR 0020 decision 3), and an
+# install that never generates locally carries no part of stage 4.
+generate = ["mcuhome-compiler"]
 
 [project.urls]
 Homepage = "https://github.com/mcu-home/mcuhome"

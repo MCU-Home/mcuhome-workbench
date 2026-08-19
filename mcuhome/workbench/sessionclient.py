@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The ``remote`` build method: the session-protocol client (E18, ADR 0019).
 
-The third build method's whole client half. ``local-dev`` runs a build in
-the developer's own workspace and ``local`` drives a build container
-through the invocation ABI on this machine
+The second build method's whole client half. ``local`` drives a build
+container through the invocation ABI on this machine
 (:mod:`mcuhome.workbench.orchestrator`); ``remote`` drives *a build server*
 over one WebSocket, which speaks the eleven verbs of ADR 0019's session
 protocol. This module is that conversation, and nothing else: it uploads
@@ -14,7 +13,7 @@ takes the artifacts back.
 **The build always returns an unsigned image** (E55, E56). Signing is a
 single host-side step that happens after the artifacts are back, over the
 ``build-report.json`` the build container declares (contract §7.2.1), and
-it is the same step for all three methods. Which leads to the one
+it is the same step for either method. Which leads to the one
 invariant this module is built around:
 
     **The private signing key never leaves the local machine.** It is a

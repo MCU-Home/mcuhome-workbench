@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Named builders: where a build runs, as configuration (ADR 0023).
 
-A **builder** is configuration *about* a build method, never a fourth
-method: the method vocabulary underneath (``local``/``local-dev``/
-``remote``), its validation and its typed refusals stay
+A **builder** is configuration *about* a build method, never a third
+method: the method vocabulary underneath (``local``/``remote``), its
+validation and its typed refusals stay
 :mod:`mcuhome.workbench.buildmethods`'s (ADR 0020). What this module
 adds is the product shape on top — ``mcuhome device build`` should
 simply work, and *where* it built is something the user configured
@@ -12,8 +12,6 @@ once:
 
 * ``local`` — a build container on this machine; nothing required,
   the image is optionally configurable.
-* ``local-dev`` — the caller's own west workspace and host toolchain;
-  the workspace path is required, because only the user knows it.
 * ``remote`` — a build server; the address is required, and the
   credentials live **next to the other secrets**, in
   ``secrets/build-server/<name>.yaml`` (ADR 0022 §5), never in the
@@ -56,7 +54,7 @@ __all__ = [
 ]
 
 #: The builder types, one per build method (ADR 0023 §1).
-BUILDER_TYPES = ("local", "local-dev", "remote")
+BUILDER_TYPES = ("local", "remote")
 
 #: The one key a ``secrets/build-server/<name>.yaml`` carries today.
 CREDENTIALS_TOKEN_KEY = "token"
@@ -71,7 +69,6 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _TYPE_KEYS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # type: (required, optional)
     "local": ((), ("image",)),
-    "local-dev": (("workspace",), ()),
     "remote": (("server",), ()),
 }
 
@@ -95,8 +92,6 @@ class Builder:
     source: str
     #: ``remote``: the build server's address, ``IP/hostname[:port]``.
     server: str | None = None
-    #: ``local-dev``: the west workspace to compile in.
-    workspace: Path | None = None
     #: ``local``: the build-container reference; ``None`` takes the
     #: default image.
     image: str | None = None
@@ -106,8 +101,6 @@ class Builder:
         data: dict[str, Any] = {"name": self.name, "type": self.type, "layer": self.layer}
         if self.server is not None:
             data["server"] = self.server
-        if self.workspace is not None:
-            data["workspace"] = str(self.workspace)
         if self.image is not None:
             data["image"] = self.image
         return data
@@ -121,19 +114,8 @@ def _entry_location(entry: Any, file: Path, index: int) -> Location:
         return Location(file=file, key=f"builders[{index}]")
 
 
-def parse_builders(
-    value: Any,
-    *,
-    file: Path,
-    origin: str,
-    expand_path: Callable[[str], Path],
-) -> tuple[Builder, ...]:
-    """One layer's ``builders:`` list, validated entry by entry.
-
-    *expand_path* is the file layer's path rule (``~`` from the stated
-    environment, relative to the defining file) — owned by the caller
-    so this module states no path policy of its own.
-    """
+def parse_builders(value: Any, *, file: Path, origin: str) -> tuple[Builder, ...]:
+    """One layer's ``builders:`` list, validated entry by entry."""
     if not isinstance(value, list):
         raise ConfigError(
             "The option 'builders' must be a list of builder entries.",
@@ -157,7 +139,7 @@ def parse_builders(
                 hint="start each entry with `- name: <builder-name>`",
             )
         builder = _parse_entry(dict(entry), location=location, origin=origin, file=file)
-        builder = _typed(builder, dict(entry), location=location, expand_path=expand_path)
+        builder = _typed(builder, dict(entry), location=location)
         if builder.name in seen:
             raise ConfigError(
                 f'This file defines the builder "{builder.name}" twice.',
@@ -197,20 +179,14 @@ def _parse_entry(entry: dict, *, location: Location, origin: str, file: Path) ->
             hint=(
                 "the builder types are "
                 + ", ".join(BUILDER_TYPES)
-                + ": local compiles in a build container on this machine, "
-                "local-dev in your own west workspace, and remote on a build server"
+                + ": local compiles in a build environment on this machine, "
+                "and remote on a build server"
             ),
         )
     return Builder(name=name, type=kind, layer=origin, source=str(file))
 
 
-def _typed(
-    builder: Builder,
-    entry: dict,
-    *,
-    location: Location,
-    expand_path: Callable[[str], Path],
-) -> Builder:
+def _typed(builder: Builder, entry: dict, *, location: Location) -> Builder:
     required, optional = _TYPE_KEYS[builder.type]
     allowed = {"name", "type", *required, *optional}
     unknown = sorted(set(entry) - allowed)
@@ -243,24 +219,19 @@ def _typed(
                 location=location,
                 hint=_REQUIRED_HINTS[builder.type],
             )
-        values[key] = expand_path(raw) if key == "workspace" else raw
+        values[key] = raw
     return Builder(
         name=builder.name,
         type=builder.type,
         layer=builder.layer,
         source=builder.source,
         server=values.get("server"),
-        workspace=values.get("workspace"),
         image=values.get("image"),
     )
 
 
 _REQUIRED_HINTS = {
     "local": "a local builder needs nothing; `image:` optionally names a build container",
-    "local-dev": "a local-dev builder compiles in your own west workspace:\n"
-    "    - name: bench\n"
-    "      type: local-dev\n"
-    "      workspace: ~/zephyr-workspace",
     "remote": "a remote builder names its build server:\n"
     "    - name: attic\n"
     "      type: remote\n"
@@ -297,7 +268,6 @@ class SelectedBuilder:
     builder: Builder | None = None
     server: str | None = None
     token: str | None = None
-    workspace: Path | None = None
     image: str | None = None
 
 
@@ -329,7 +299,6 @@ def select_builder(
         builder=chosen,
         server=chosen.server,
         token=token_of(chosen) if chosen.type == "remote" else None,
-        workspace=chosen.workspace,
         image=chosen.image,
     )
 

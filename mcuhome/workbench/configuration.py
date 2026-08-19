@@ -328,12 +328,7 @@ def _parse_file_value(
             raise refuse("a list of paths")
         return tuple(_resolve_path(item, env=env, base=file.parent) for item in value)
     if opt.kind == "builders":
-        return builders_module.parse_builders(
-            value,
-            file=file,
-            origin=origin,
-            expand_path=lambda raw: _resolve_path(raw, env=env, base=file.parent),
-        )
+        return builders_module.parse_builders(value, file=file, origin=origin)
     raise ValueError(f"option {opt.name!r} declares unknown kind {opt.kind!r}")
 
 

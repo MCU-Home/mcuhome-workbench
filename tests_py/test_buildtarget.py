@@ -32,8 +32,6 @@ import dataclasses
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.compiler import devbuild
-from mcuhome.model.manifest import MANIFEST_FILE
 
 from mcuhome.workbench import buildmethods, buildtarget, containerbuild, sessionclient
 from mcuhome.workbench import orchestrator as lb
@@ -123,25 +121,6 @@ def test_the_local_method_is_a_local_build_in_a_container(model, tmp_path) -> No
     )
 
 
-def test_the_local_dev_method_is_a_local_build_in_a_workspace(model, tmp_path) -> None:
-    request = buildmethods.BuildRequest(
-        model=model,
-        out_dir=tmp_path,
-        bootloader_key=tmp_path / "signing.pub",
-        module_dir=tmp_path / "module",
-        started_in=tmp_path,
-        snippets=("debug-rtt",),
-    )
-    target = buildmethods.target_for_method(buildmethods.LOCAL_DEV, request)
-    assert isinstance(target, buildtarget.LocalBuild)
-    execution = target.execution
-    assert isinstance(execution, buildtarget.WorkspaceExecution)
-    assert execution.bootloader_key == tmp_path / "signing.pub"
-    assert execution.module_dir == tmp_path / "module"
-    assert execution.started_in == tmp_path
-    assert execution.snippets == ("debug-rtt",)
-
-
 def test_the_remote_method_is_a_remote_build(model, tmp_path) -> None:
     request = buildmethods.BuildRequest(
         model=model,
@@ -205,32 +184,6 @@ def test_a_stated_target_beats_the_requests_method_fields(model, tmp_path, monke
     assert outcome.successful
     assert seen["image"] == "ghcr.io/mcu-home/build-container:from-the-target"
     assert seen["ccache_dir"] == tmp_path / "from-the-target"
-
-
-def test_a_workspace_target_reaches_the_host_build(model, tmp_path, monkeypatch) -> None:
-    seen: dict[str, object] = {}
-
-    def fake(device_model, **kwargs):
-        seen.update(kwargs)
-        return devbuild.DevBuildResult(
-            plan=None, log="", images=[], merged=None, manifest_path=tmp_path / MANIFEST_FILE
-        )
-
-    monkeypatch.setattr(devbuild, "run_dev_build", fake)
-    outcome = _build(
-        buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-        buildtarget.LocalBuild(
-            execution=buildtarget.WorkspaceExecution(
-                bootloader_key=tmp_path / "signing.pub",
-                module_dir=tmp_path / "module",
-                started_in=tmp_path,
-                snippets=("debug-rtt",),
-            )
-        ),
-    )
-    assert outcome.method == buildmethods.LOCAL_DEV
-    assert seen["bootloader_key"] == tmp_path / "signing.pub"
-    assert seen["snippets"] == ("debug-rtt",)
 
 
 def test_a_remote_target_reaches_the_session_client(model, tmp_path, monkeypatch) -> None:
@@ -316,23 +269,16 @@ def test_the_seam_holds_the_build_directory(model, tmp_path, monkeypatch) -> Non
     seam directly — a build server, an embedder — would have had none.
     """
     seen: dict[str, object] = {}
+    inner = _local_result(tmp_path, seen)
 
     def fake(device_model, **kwargs):
         seen["holder"] = holder_of(tmp_path)
-        return devbuild.DevBuildResult(
-            plan=None, log="", images=[], merged=None, manifest_path=tmp_path / MANIFEST_FILE
-        )
+        return inner(device_model, **kwargs)
 
-    monkeypatch.setattr(devbuild, "run_dev_build", fake)
+    monkeypatch.setattr(buildmethods, "compose_local_build", fake)
     outcome = _build(
         buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-        buildtarget.LocalBuild(
-            execution=buildtarget.WorkspaceExecution(
-                bootloader_key=tmp_path / "signing.pub",
-                module_dir=tmp_path / "module",
-                started_in=tmp_path,
-            )
-        ),
+        buildtarget.LocalBuild(execution=buildtarget.ContainerExecution()),
     )
     assert outcome.successful
     holder = seen["holder"]
