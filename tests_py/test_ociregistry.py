@@ -268,6 +268,75 @@ def test_an_index_is_followed_one_level_to_reach_a_config() -> None:
     assert any(url.endswith(inner) for url in seen)
 
 
+def test_an_attestation_in_the_index_is_not_mistaken_for_an_architecture() -> None:
+    """buildx writes SBOM and provenance manifests into the index it pushes.
+
+    They are marked ``platform: unknown/unknown``, carry a config blob
+    like any manifest, and carry no image labels at all — so following
+    one reports an environment that states nothing about itself, and the
+    label gate refuses an image that does carry its labels. Nothing in
+    the OCI spec orders an index; the one this project publishes happens
+    to list its architectures first, which is luck rather than a promise.
+
+    The attestation is first here on purpose: that is the ordering the
+    old code could not survive.
+    """
+    inner = "sha256:" + "ef" * 32
+    attestation = "sha256:" + "ab" * 32
+    followed: list[str] = []
+
+    def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
+        del headers, timeout
+        if "/manifests/" in url:
+            if url.endswith(inner) or url.endswith(attestation):
+                followed.append(url)
+                return Response(status=200, body=manifest_body())
+            return Response(
+                status=200,
+                body=json.dumps(
+                    {
+                        "manifests": [
+                            {
+                                "digest": attestation,
+                                "platform": {"architecture": "unknown", "os": "unknown"},
+                            },
+                            {"digest": inner, "platform": {"architecture": "arm64", "os": "linux"}},
+                        ]
+                    }
+                ).encode(),
+            )
+        return Response(status=200, body=config_body({"k": "v"}))
+
+    assert Registry(opener=opener).labels(reference(f"{REPO}:t")) == {"k": "v"}
+    assert followed == [url for url in followed if url.endswith(inner)], (
+        "the attestation manifest was fetched"
+    )
+
+
+def test_an_index_of_nothing_but_attestations_describes_no_architecture() -> None:
+    """Which is the refusal that already existed, for a case that can now happen."""
+
+    def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
+        del headers, timeout
+        return Response(
+            status=200,
+            body=json.dumps(
+                {
+                    "manifests": [
+                        {
+                            "digest": "sha256:" + "ab" * 32,
+                            "platform": {"architecture": "unknown", "os": "unknown"},
+                        }
+                    ]
+                }
+            ).encode(),
+        )
+
+    with pytest.raises(RegistryError) as refusal:
+        Registry(opener=opener).labels(reference(f"{REPO}:t"))
+    assert "no architecture" in str(refusal.value)
+
+
 def test_an_image_with_no_labels_states_nothing_rather_than_failing() -> None:
     def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
         del headers, timeout

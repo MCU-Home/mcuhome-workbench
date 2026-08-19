@@ -81,6 +81,21 @@ _DEFAULT_TIMEOUT = 15.0
 _HUB_API = "registry-1.docker.io"
 
 
+#: What ``buildx`` marks an SBOM or provenance manifest with when it puts
+#: one in the index it publishes. The OCI spec has no field for "this is
+#: not an image"; the convention is this platform pair, and every tool
+#: that walks an index skips it by exactly this name.
+_ATTESTATION_PLATFORM = "unknown"
+
+
+def _attestation(entry: dict[str, Any]) -> bool:
+    """Whether an index entry describes no architecture (see :data:`_ATTESTATION_PLATFORM`)."""
+    platform = entry.get("platform")
+    if not isinstance(platform, dict):
+        return False
+    return _ATTESTATION_PLATFORM in (platform.get("architecture"), platform.get("os"))
+
+
 def _api(reference: Reference) -> Reference:
     """*reference* as the distribution API wants it addressed."""
     if reference.registry != DOCKER_HUB:
@@ -262,12 +277,27 @@ class Registry:
         project constrains on describe the *environment* (contract
         version, Zephyr release, toolchain), which every architecture of
         one build environment shares by construction.
+
+        **An attestation is not an architecture.** ``buildx`` writes SBOM
+        and provenance manifests into the index it publishes and marks
+        them ``platform: {"architecture": "unknown", "os": "unknown"}``.
+        They carry a config blob like any manifest and no image labels at
+        all, so following one would report an image that states nothing
+        about itself — the environment would be refused for missing the
+        labels it does carry. Nothing in the OCI spec orders an index, and
+        the one this project publishes happens to list its architectures
+        first; that is luck, not a promise, so the marked entries are
+        skipped by name.
         """
         manifest = self._manifest(reference)
         entries = manifest.get("manifests")
         if isinstance(entries, list) and entries:
             first = next(
-                (item for item in entries if isinstance(item, dict) and item.get("digest")),
+                (
+                    item
+                    for item in entries
+                    if isinstance(item, dict) and item.get("digest") and not _attestation(item)
+                ),
                 None,
             )
             if first is None:
