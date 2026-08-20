@@ -23,7 +23,7 @@ Apache-2.0.
 Apache-2.0 for everything: firmware, builder, dashboard. No split license.
 Implementation follows the REUSE 3.3 specification: `LICENSES/` directory,
 SPDX headers in every file, `REUSE.toml` for files that cannot carry
-headers, `reuse lint` in pre-commit.
+headers, `reuse lint` in CI.
 
 Corollary: **no code may ever be ported from GPL projects — explicitly
 including ESPHome's C++ runtime.** ESPHome is inspiration, never a source.

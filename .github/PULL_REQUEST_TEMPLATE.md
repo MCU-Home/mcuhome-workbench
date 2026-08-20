@@ -14,4 +14,3 @@ Closes #
 - [ ] New files carry SPDX headers (`Apache-2.0`)
 - [ ] No code copied from GPL-licensed projects (including ESPHome)
 - [ ] Documentation / ADRs updated where the change affects design decisions
-- [ ] `pre-commit run --all-files` passes

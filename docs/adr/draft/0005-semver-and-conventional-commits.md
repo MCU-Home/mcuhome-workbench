@@ -16,7 +16,7 @@ justify CalVer anyway.
 
 - **SemVer, starting at 0.x**, for both repositories.
 - **Conventional Commits** (`feat:`/`fix:`/`BREAKING CHANGE:` drive version
-  bumps), enforced via pre-commit (commit-msg hook) and later CI.
+  bumps), enforced in CI on every commit of a push or pull request.
 - **DCO sign-off** (`git commit -s`) on every commit from commit #1.
 - Automated release PRs and changelog generation (release-please) once the
   first releasable artifact exists.

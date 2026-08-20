@@ -25,8 +25,6 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -e ../mcuhome-sdk/packaging/model \
             -e ../mcuhome-sdk/packaging/compiler \
             -e '.[remote]'
-pre-commit install --install-hooks
-pre-commit install --hook-type commit-msg
 ```
 
 ## Building and testing
