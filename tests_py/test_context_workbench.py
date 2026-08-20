@@ -14,6 +14,7 @@ bytes off a socket and carries no build logic at all.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model.context import (
     BACKEND_DIR,
+    BUILD_CONTEXT_FILE,
     CONTEXT_FILE,
     CONTEXT_VERSION,
     MANIFEST_FILE,
@@ -36,12 +38,15 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
 from ruamel.yaml import YAML
 
+from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench.contextdir import (
+    GENERATOR_PRODUCT,
     context_facts,
     create_context,
     lock_context,
     read_context_manifest,
     read_context_request,
+    read_generator_chain,
     verify_context,
     write_context_manifest,
 )
@@ -235,10 +240,48 @@ def test_the_locked_manifest_lists_every_content_file_but_neither_document(
     """The freeze lists model and key, and never either context document."""
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir)
-    assert [entry.path for entry in manifest.files] == [SIGNING_KEY_FILE, MODEL_FILE]
+    assert [entry.path for entry in manifest.files] == [
+        BUILD_CONTEXT_FILE,
+        SIGNING_KEY_FILE,
+        MODEL_FILE,
+    ]
     listed = {entry.path for entry in manifest.files}
     assert MANIFEST_FILE not in listed
     assert CONTEXT_FILE not in listed
+
+
+def test_a_created_context_names_the_workbench_as_its_generator(model, tmp_path: Path) -> None:
+    """The one file of a context the build environment specification names.
+
+    A build environment declares which generators it accepts; without
+    this file no environment could ever be admitted to a context, which
+    is why it is written at creation and not at lock time.
+    """
+    out_dir = tmp_path / "context"
+    _create(model, out_dir)
+    document = json.loads((out_dir / BUILD_CONTEXT_FILE).read_text(encoding="utf-8"))
+    assert document == {"generator": f"{GENERATOR_PRODUCT}:{workbench_version}"}
+    [entry] = read_generator_chain(out_dir / BUILD_CONTEXT_FILE)
+    assert entry.product == GENERATOR_PRODUCT
+
+
+def test_the_generator_declaration_is_an_integrity_entry(model, tmp_path: Path) -> None:
+    """Not plumbing: a file that decides who may build is part of the identity.
+
+    Both context documents are excluded from the hash on purpose; this
+    one is not, because swapping it would change which build environments
+    the context admits while leaving its ID untouched.
+    """
+    out_dir = tmp_path / "context"
+    manifest = _lock(model, out_dir)
+    (out_dir / BUILD_CONTEXT_FILE).write_text(
+        '{"generator": "evil-tool:1.0.0"}\n', encoding="utf-8"
+    )
+    report = verify_context(out_dir)
+    assert not report.ok
+    [mismatch] = report.mismatches
+    assert mismatch.path == BUILD_CONTEXT_FILE
+    assert report.actual_id != manifest.id
 
 
 def test_the_declared_id_is_the_recomputed_id(model, tmp_path: Path) -> None:
@@ -329,6 +372,7 @@ def test_patches_pass_through_as_ordinary_integrity_entries(model, tmp_path: Pat
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
     assert [entry.path for entry in manifest.files] == [
+        BUILD_CONTEXT_FILE,
         SIGNING_KEY_FILE,
         MODEL_FILE,
         "patches/sdk/0001-tweak.patch",
@@ -371,7 +415,7 @@ def test_a_base_context_has_facts_but_no_identity_yet(model, tmp_path: Path) -> 
     assert "id" not in facts
     assert facts["sdk"] == SDK.version
     assert facts["patches"] == []
-    assert facts["files"] == 2  # the model and the public signing key
+    assert facts["files"] == 3  # the generator declaration, the model, the public key
 
 
 def test_patches_change_the_id_like_any_other_file(model, tmp_path: Path) -> None:

@@ -5,8 +5,9 @@
 The other half of :mod:`mcuhome.model.context`. That module is the context
 *format* — the manifest as data, and the normative ID rule every party
 computes the same value with. This one is everything that touches a
-filesystem: creating a base context (writing the request ``context.yaml``,
-the model, the public signing key and the patches), locking it (hashing
+filesystem: creating a base context (writing the generator declaration
+``build-context.json``, the request ``context.yaml``, the model, the
+public signing key and the patches), locking it (hashing
 what is in it and writing the result ``manifest.yaml``), reading either
 document back, and the server-side integrity check. The two documents are
 the ``lock-context`` split of ADR 0018's amendment: the client writes the
@@ -23,6 +24,7 @@ to be identical everywhere.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from collections.abc import Sequence
@@ -33,6 +35,7 @@ from typing import Any
 
 from mcuhome.model.context import (
     BACKEND_DIR,
+    BUILD_CONTEXT_FILE,
     CONTEXT_FILE,
     CONTEXT_VERSION,
     MANIFEST_FILE,
@@ -43,9 +46,12 @@ from mcuhome.model.context import (
     ContextManifest,
     ContextRequest,
     EnvironmentPin,
+    GeneratorEntry,
     SdkPin,
     context_id,
     environment_digest,
+    format_generator_chain,
+    parse_generator_chain,
     validate_manifest,
 )
 from mcuhome.model.errors import BuildError
@@ -53,20 +59,25 @@ from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
 from ruamel.yaml import YAML, YAMLError
 
+from mcuhome.workbench import __version__
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
 __all__ = [
+    "GENERATOR_PRODUCT",
     "ContextFormatVersionError",
     "ContextVerification",
     "FileMismatch",
     "context_facts",
     "create_build_context",
     "create_context",
+    "generator_chain",
     "lock_context",
     "read_context_manifest",
     "read_context_request",
+    "read_generator_chain",
     "verify_context",
+    "write_build_context",
     "write_context_manifest",
     "write_context_request",
 ]
@@ -126,6 +137,12 @@ def _content_paths(root: Path) -> list[str]:
     the backend-written ``.mcuhome/`` runtime directory
     (build-container-contract.md §3.2). So none of them is listed, and by
     way of that none of them can influence the ID.
+
+    ``build-context.json`` is not on that list and is content like any
+    other file: it names the tool that wrote the context, which is what a
+    build environment's generator constraint is checked against, and a
+    file that decides who may run a build belongs inside the identity
+    that build is claimed under.
     """
     paths = []
     for path in sorted(root.rglob("*")):
@@ -235,6 +252,8 @@ def create_context(
     ``lock-context`` split (ADR 0018's 2026-08-09 amendment,
     build-container-contract.md §3.2). Concretely, into *out_dir*:
 
+    - ``build-context.json`` — the generator declaration, the one file
+      of a context the build environment specification names itself;
     - ``model/device-model.json`` — the canonical model, verbatim;
     - ``keys/signing.pub`` — *signing_pub*, the **public** half of the
       user's MCUboot key, which became context content in the amendment
@@ -285,6 +304,9 @@ def create_context(
                 "a build. `mcuhome public-key` writes exactly this file."
             ),
         )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_build_context(out_dir, generator=generator_chain())
 
     model_path = out_dir / MODEL_FILE
     model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,6 +437,84 @@ def lock_context(out_dir: Path) -> ContextManifest:
 # --------------------------------------------------------------------------
 # The request document on disk
 # --------------------------------------------------------------------------
+
+
+#: The workbench's own name in a generator chain. Its distribution name,
+#: because that is the name a build environment writes into its version
+#: constraint and the name a reader can look up.
+GENERATOR_PRODUCT = "mcuhome-workbench"
+
+
+def generator_chain() -> str:
+    """The ``generator`` value a context this workbench creates carries.
+
+    One entry, because the workbench creates contexts from a device model
+    rather than modifying somebody else's. A tool that changes a context
+    afterwards prepends itself instead — the chain is read most recent
+    first (:func:`~mcuhome.model.context.format_generator_chain`).
+    """
+    return format_generator_chain((GeneratorEntry(GENERATOR_PRODUCT, __version__),))
+
+
+def write_build_context(out_dir: Path, *, generator: str) -> Path:
+    """Write ``build-context.json`` into *out_dir* and return its path.
+
+    The one file of a context whose name and content the build
+    environment specification fixes; everything else in a context is this
+    workbench's format. It carries the generator chain and, for now,
+    nothing else — the specification says "at least", so a later key can
+    join it without any environment having to change.
+
+    Deterministic bytes for deterministic inputs, like every other file a
+    context is created from: a fixed key order, two-space indent, one
+    trailing newline. It is an integrity entry and therefore part of the
+    context ID, so a serializer that reordered keys would move the
+    identity of a build that did not change.
+    """
+    path = out_dir / BUILD_CONTEXT_FILE
+    document = {"generator": generator}
+    try:
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        raise BuildError(
+            f"The generator declaration {path} cannot be written: {error.strerror}.",
+            hint="pick a writable location for the context directory",
+        ) from error
+    return path
+
+
+def read_generator_chain(path: Path) -> tuple[GeneratorEntry, ...]:
+    """The generator chain out of a context's ``build-context.json``.
+
+    Refuses in plain language rather than raising a parser's error,
+    because the answer decides which build environments may run this
+    context: a context whose generator cannot be read is refused before
+    an environment is started, not carried into a build that would then
+    fail somewhere unrelated.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise BuildError(
+            f"MCUHome cannot read the generator declaration {path}: {error.strerror}.",
+            hint=(
+                f"a build context carries a {BUILD_CONTEXT_FILE} at its top level — "
+                "point at a directory create_context wrote"
+            ),
+        ) from error
+    try:
+        data = json.loads(text)
+    except ValueError as error:
+        raise BuildError(
+            f"The generator declaration {path} is not readable JSON: {error}.",
+            hint=f"{BUILD_CONTEXT_FILE} is one JSON object carrying a generator",
+        ) from error
+    if not isinstance(data, dict):
+        raise BuildError(
+            f"The generator declaration {path} is not a JSON object.",
+            hint=f"{BUILD_CONTEXT_FILE} is one JSON object carrying a generator",
+        )
+    return parse_generator_chain(data.get("generator"))
 
 
 def write_context_request(request: ContextRequest, *, out_dir: Path) -> Path:
