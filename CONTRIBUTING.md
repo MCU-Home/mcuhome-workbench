@@ -32,13 +32,13 @@ pre-commit install --hook-type commit-msg
 ## Building and testing
 
 ```sh
-pytest    # tests_py/ — the workbench test suite
+pytest    # tests/python/ — the workbench test suite
 ```
 
 The `remote` build method's own suite needs one more peer: clone
 [mcu-home/mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver) next
 to this repository and `pip install -e ../mcuhome-buildserver`. Without it,
-`tests_py/test_sessionclient.py` skips itself with one reason naming
+`tests/python/test_sessionclient.py` skips itself with one reason naming
 exactly what is missing (`pytest -rs`).
 
 ## Coding standards

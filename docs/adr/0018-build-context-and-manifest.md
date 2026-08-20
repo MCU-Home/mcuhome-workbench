@@ -328,7 +328,7 @@ block, and `zephyr`.
 Extension rule: new build-relevant fields enter the hash only together
 with a `context` format-version bump. The full normative statement
 lives in the contract, and the golden conformance vector is pinned in
-`tests_py/test_context.py`
+`tests/python/test_context.py`
 ([build-container-contract.md](../design/build-container-contract.md)
 §3.3, "Context identity — normative hashing rule"; an earlier revision
 pointed at §4, which is the filesystem interface and says nothing

@@ -68,7 +68,7 @@ DEFAULT_SAMPLING_BATTERY_MS = 300_000
 #: (components/matter/CMakeLists.txt).
 MATTER_SNIPPET = "matter"
 
-#: Debug output is load-bearing (AGENTS.md, product-owner directive until
+#: Debug output is load-bearing (product-owner directive until
 #: v1.0): every generated application carries the RTT log transport.
 DEBUG_RTT_SNIPPET = "debug-rtt"
 

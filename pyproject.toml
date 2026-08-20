@@ -24,7 +24,7 @@ server — behind one interface. Plus client-side firmware signing.
 
 Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome-workbench
 """, content-type = "text/markdown" }
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [{ name = "The MCUHome Contributors" }]
 keywords = ["zephyr", "matter", "thread", "home-assistant", "firmware"]
@@ -84,13 +84,13 @@ Issues = "https://github.com/mcu-home/mcuhome-workbench/issues"
 # with the SDK's distributions, and find_packages() there would claim
 # directories this distribution does not own. Every subpackage added
 # under mcuhome/workbench/ has to be listed here —
-# tests_py/test_packaging_workbench.py fails when one is missing, which
+# tests/python/test_packaging_workbench.py fails when one is missing, which
 # is cheaper than a wheel that installs without it.
 packages = ["mcuhome.workbench", "mcuhome.workbench.migrations"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 # ADRs are prose; ruff format would rewrite fenced code blocks.
 extend-exclude = ["docs/"]
 
@@ -98,7 +98,7 @@ extend-exclude = ["docs/"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests_py"]
+testpaths = ["tests/python"]
 
 [tool.codespell]
 ignore-words-list = "requestor,pase,ot,rsource"

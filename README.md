@@ -62,7 +62,7 @@ this is the MCUHome **flagship** repository. It holds:
 |---|---|
 | `pyproject.toml` | Project file for `mcuhome-workbench` — the whole distribution builds from the repository root |
 | `mcuhome/workbench/` | The one subpackage this repo publishes — part of the PEP 420 `mcuhome.*` namespace shared with `mcuhome-model`/`mcuhome-compiler` in mcuhome-sdk |
-| `tests_py/` | pytest suite for this package |
+| `tests/python/` | pytest suite for this package |
 | `docs/adr/` | Architecture decision records |
 
 ## Firmware and the west workspace
@@ -104,7 +104,7 @@ pytest
 The `remote` extra pulls in the session-protocol client's dependencies
 (`aiohttp`, `zstandard`); its own test file needs a live
 `mcu-home/mcuhome-buildserver` peer too and skips itself with one reason if it
-is missing — see [AGENTS.md](AGENTS.md) for details.
+is missing.
 
 ## Using the workbench from Python
 

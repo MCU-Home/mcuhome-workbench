@@ -29,7 +29,7 @@ from mcuhome.workbench import otafile
 #: that has the Matter SDK. Absent on a machine that only installed the
 #: builder, which is the normal case for the interop test below.
 CHIP_OTA_TOOL = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "modules"
     / "lib"
     / "connectedhomeip"

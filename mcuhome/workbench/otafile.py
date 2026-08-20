@@ -20,7 +20,7 @@ is the machine that signed it, and it has no toolchain. What it needs
 from the build is the device's OTA identity, nothing more.
 
 The format is small enough that this costs eighty lines: a 16-byte fixed
-header and a Matter-TLV structure of six fields. ``tests_py/test_ota.py``
+header and a Matter-TLV structure of six fields. ``tests/python/test_ota.py``
 pins the result against CHIP's own tool byte for byte whenever the
 workspace has one, so "small enough to reimplement" stays a checked claim
 rather than an opinion.
@@ -125,7 +125,7 @@ def header_tlv(
     Ascending order is not decoration: CHIP's ``TLVWriter`` sorts a
     structure's members by tag, so writing them in any other order would
     produce a valid file that is not the same file its tool writes — and
-    the interop test in ``tests_py/test_ota.py`` compares bytes.
+    the interop test in ``tests/python/test_ota.py`` compares bytes.
     """
     body = b"".join(
         [

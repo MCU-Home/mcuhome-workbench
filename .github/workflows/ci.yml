@@ -6,7 +6,7 @@
 #
 #   lint   — the same ruff/REUSE checks .pre-commit-config.yaml runs
 #            locally. Needs nothing but Python.
-#   pytest — the Python suite in tests_py/, testing mcuhome.workbench.
+#   pytest — the Python suite in tests/python/, testing mcuhome.workbench.
 #            Needs mcuhome-model and mcuhome-compiler, which this repo
 #            does not publish any more (ADR 0024) — they come from a
 #            plain public checkout of the sibling mcu-home/mcuhome-sdk
@@ -42,7 +42,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # Pinned to the same versions as .pre-commit-config.yaml so local
       # and CI runs agree; bump both together.
@@ -59,7 +59,7 @@ jobs:
         run: reuse lint
 
   pytest:
-    name: pytest (tests_py)
+    name: pytest (tests/python)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -3,7 +3,7 @@
 """No workbench module reads process state.
 
 The workbench half of the invariant ``mcuhome-sdk``'s
-``tests_py/test_userpaths.py`` states, created from the recipe its module
+``tests/python/test_userpaths.py`` states, created from the recipe its module
 docstring left behind. What that file *answers* — what
 :mod:`mcuhome.model.userpaths` does with an environment — is the model's
 and stays there; what it forbids is bigger than one module and has to be

@@ -16,7 +16,7 @@ does not depend on.
 **Why the import is written this way.** ADR 0020 decision 3 forbids
 ``mcuhome-workbench`` a dependency on ``mcuhome-compiler`` (a dashboard
 install must not carry a toolchain, ADR 0017 §2), and
-``tests_py/test_packaging_workbench.py`` reads the dependency arrows out
+``tests/python/test_packaging_workbench.py`` reads the dependency arrows out
 of the syntax tree — an ``import`` statement here would be
 indistinguishable from the hard edge that is forbidden. So the edge is
 resolved through :func:`importlib.import_module` and refuses in words

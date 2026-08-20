@@ -31,7 +31,7 @@ independently of the SDK repository
 pip install -e ../mcuhome-sdk/packaging/model \
             -e ../mcuhome-sdk/packaging/compiler \
             -e '.[remote]'
-pytest                           # the suite in ../tests_py/
+pytest                           # the suite in ../tests/python/
 ```
 
 ## Modules
@@ -68,5 +68,5 @@ in review — not an implementation detail.
 install must not carry a toolchain (ADR 0017 §2, ADR 0020 decision 3):
 the edge to `mcuhome.compiler` goes through
 `importlib.import_module` and refuses in words when the distribution is
-absent. `tests_py/test_packaging_workbench.py` reads the dependency
+absent. `tests/python/test_packaging_workbench.py` reads the dependency
 arrows out of the syntax tree, so a plain `import` is a test failure.

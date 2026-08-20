@@ -4,7 +4,7 @@
 
 The workbench half of the commissioning credentials. The math, the CHIP
 vectors and the atomic Kconfig group are :mod:`mcuhome.model.pairing` and
-live in ``mcuhome-sdk``'s ``tests_py/test_pairing.py``; what this file
+live in ``mcuhome-sdk``'s ``tests/python/test_pairing.py``; what this file
 covers is the one command that *draws* credentials — once, into the
 user's YAML, never per build (yaml-schema.md §4.1) — and then the builder
 accepting what it wrote.

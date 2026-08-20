@@ -72,7 +72,7 @@ from mcuhome.workbench.resolve_env import ResolvedEnvironment
 NEEDED = {
     "aiohttp": "pip install -e '.[remote]'",
     "zstandard": "pip install -e '.[remote]'",
-    "mcuhome.buildserver": "pip install -e ../build-server",
+    "mcuhome.buildserver": "pip install -e ../mcuhome-buildserver",
 }
 MISSING = sorted(name for name in NEEDED if importlib.util.find_spec(name) is None)
 if MISSING:

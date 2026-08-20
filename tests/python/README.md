@@ -1,4 +1,4 @@
-# tests_py/
+# tests/python/
 
 Python tests for `mcuhome.workbench` — the one package this repository
 publishes (ADR 0024) — run with pytest:
@@ -18,7 +18,7 @@ modules that are not the ones in this checkout. `mcuhome-model` and
 `mcuhome-compiler` are ordinary installed dependencies here — their own
 suite lives in
 [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk)'s
-`tests_py/`, and files that were split along that boundary carry a
+`tests/python/`, and files that were split along that boundary carry a
 `_workbench` suffix on this side.
 
 `test_sessionclient.py` drives the remote method's client against the

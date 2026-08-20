@@ -273,7 +273,7 @@ number once; a compatibility matrix costs every reader of it, forever.
   `mcuhome/model/userpaths.py` resolves the per-user directories from the
   environment it is handed — refusing rather than guessing when that
   environment names no home, because the directory in question holds a
-  private signing key. `tests_py/test_userpaths.py::test_no_module_reads_process_state`
+  private signing key. `tests/python/test_userpaths.py::test_no_module_reads_process_state`
   reads every module of the package as a syntax tree and fails the suite
   if any of them reaches for the process again.
 - The plain distribution name `mcuhome` (decision 2) collides with the

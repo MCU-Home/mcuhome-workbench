@@ -86,7 +86,7 @@ set up at that point (they were deferred exactly until going public).
 ADR ownership migration two — SDK-shaped ADRs (0004, 0006, 0007,
 0008, 0013, 0014, 0015, 0016 among them) move to `mcuhome-sdk` the
 way the CLI ADRs moved to `cli`; the workspace becomes
-`west init -l mcuhome-sdk`; CI, `tests_py/` and the docs split along
+`west init -l mcuhome-sdk`; CI, `tests/python/` and the docs split along
 the same line; `docs/design/` and the build-container contract get
 assigned by the survey. The exact file-level assignment is the split
 block's first step, not decided here.
@@ -115,5 +115,5 @@ block's first step, not decided here.
 - Whether `mcuhome-sdk` restructures its interior (e.g. a `python/`
   subtree) during the move or keeps today's layout minus the
   workbench.
-- The exact fate of `tests_py/` files that exercise workbench and
+- The exact fate of `tests/python/` files that exercise workbench and
   compiler together.

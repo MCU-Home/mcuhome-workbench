@@ -34,7 +34,7 @@ from mcuhome.workbench.api import load_model
 from mcuhome.workbench.project import Project, find_project_root
 
 TESTS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = TESTS_DIR.parent
+REPO_ROOT = TESTS_DIR.parents[1]
 DATA_DIR = TESTS_DIR / "data"
 EXAMPLES_DIR = DATA_DIR / "examples"
 GOLDEN_DIR = DATA_DIR / "golden"
@@ -144,7 +144,7 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     them covers half the paths that lead there.
 
     **What this fixture no longer has to catch.** The package itself
-    stopped reading the process — ``tests_py/test_userpaths_workbench.py``
+    stopped reading the process — ``tests/python/test_userpaths_workbench.py``
     proves it for every module — so nothing here resolves a key out of the
     environment pytest happens to run in. What is left for this fixture
     is everything that hands the process environment *in*: the command
@@ -170,13 +170,14 @@ def _no_docker(monkeypatch):
 
     def refuse(command, env):
         raise AssertionError(
-            f"a test tried to run {command[0]!r}: stage 5 must be stubbed, see tests_py/README.md"
+            f"a test tried to run {command[0]!r}: stage 5 must be stubbed, "
+            "see tests/python/README.md"
         )
 
     def refuse_argv(argv, on_line=None):
         del on_line
         raise AssertionError(
-            f"a test tried to run {argv[0]!r}: stage 5 must be stubbed, see tests_py/README.md"
+            f"a test tried to run {argv[0]!r}: stage 5 must be stubbed, see tests/python/README.md"
         )
 
     monkeypatch.setattr(container, "_run_quiet", refuse)

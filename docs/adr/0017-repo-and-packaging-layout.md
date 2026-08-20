@@ -20,8 +20,7 @@ backend, the frontend **and** the build server, per dashboard
 ADR 0003. The Python code was not published anywhere — the dashboard
 installed it from the sibling checkout (dashboard ADR 0011).
 
-Two invariants pull on the layout. AGENTS.md already states the hard
-lesson: Python codegen and C runtime must version in lockstep — which
+Two invariants pull on the layout. The first is a hard lesson: Python codegen and C runtime must version in lockstep — which
 is why they share a repository. And the dashboard invariants demand
 that the build server be installable on a machine that has no
 dashboard, and the CLI usable without any dashboard version.
