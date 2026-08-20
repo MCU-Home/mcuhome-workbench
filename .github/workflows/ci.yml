@@ -12,7 +12,7 @@
 #            plain public checkout of the sibling mcu-home/mcuhome-sdk
 #            repository. The `remote` build method's own suite
 #            (test_sessionclient.py) additionally needs a live
-#            mcuhome-build-server peer, so mcu-home/build-server is
+#            mcuhome-buildserver peer, so mcu-home/mcuhome-buildserver is
 #            checked out the same way. Both repositories are public, so
 #            no deploy key is needed for either checkout — ADR 0024 §3
 #            retired those together with repository privacy.
@@ -73,24 +73,24 @@ jobs:
           repository: mcu-home/mcuhome-sdk
           path: .deps/mcuhome-sdk
 
-      - name: Checkout mcu-home/build-server
+      - name: Checkout mcu-home/mcuhome-buildserver
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: mcu-home/build-server
-          path: .deps/build-server
+          repository: mcu-home/mcuhome-buildserver
+          path: .deps/mcuhome-buildserver
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # The workbench itself supports >=3.11; 3.13 is the floor of
-          # mcuhome-build-server, installed below as the live peer
+          # mcuhome-buildserver, installed below as the live peer
           # test_sessionclient.py drives its client against.
           python-version: "3.13"
 
       # mcuhome-model and mcuhome-compiler from the SDK checkout,
       # mcuhome-workbench (this repo, with the `remote` extra for
       # test_sessionclient.py's aiohttp/zstandard dependency) and
-      # mcuhome-build-server as the real peer that same file drives its
+      # mcuhome-buildserver as the real peer that same file drives its
       # session-protocol client against.
       - name: Install the distributions
         run: |
@@ -98,7 +98,7 @@ jobs:
             -e ./.deps/mcuhome-sdk/packaging/model \
             -e ./.deps/mcuhome-sdk/packaging/compiler \
             -e '.[remote]' \
-            -e ./.deps/build-server \
+            -e ./.deps/mcuhome-buildserver \
             'pytest>=8.0'
 
       - name: pytest

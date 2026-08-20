@@ -9,9 +9,9 @@ body:
     attributes:
       value: |
         Thanks for taking the time to report a bug! MCUHome is pre-alpha —
-        please check [existing issues](https://github.com/mcu-home/mcuhome/issues)
+        please check [existing issues](https://github.com/mcu-home/mcuhome-workbench/issues)
         first. Questions belong in
-        [Discussions](https://github.com/mcu-home/mcuhome/discussions).
+        [Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions).
   - type: input
     id: version
     attributes:

@@ -18,7 +18,7 @@ run*, not what it is about:
 `mcuhome.workbench.api` is the supported programmatic surface; every
 other module here is an implementation detail. The `mcuhome` command
 itself is a thin shell in its own repository
-([mcu-home/cli](https://github.com/mcu-home/cli)) — it parses arguments
+([mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli)) — it parses arguments
 and calls in here.
 
 The project file is the repository root's `pyproject.toml` (ADR 0024):

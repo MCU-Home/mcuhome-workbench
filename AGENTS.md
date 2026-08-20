@@ -22,7 +22,7 @@ number sequence:
 
 | Repo | Contents | Distributions |
 |---|---|---|
-| **This repo** (`mcu-home/mcuhome`) | `mcuhome.workbench`, project-wide + tools-shaped ADRs, community files | `mcuhome-workbench` |
+| **This repo** (`mcu-home/mcuhome-workbench`) | `mcuhome.workbench`, project-wide + tools-shaped ADRs, community files | `mcuhome-workbench` |
 | [`mcu-home/mcuhome-sdk`](https://github.com/mcu-home/mcuhome-sdk) | West manifest + Zephyr module, C runtime, `components/`, boards, samples, `patches/`, the build-container definition, `mcuhome.model` + `mcuhome.compiler`, SDK-shaped ADRs, `docs/design/` | `mcuhome-model`, `mcuhome-compiler` |
 
 **Nothing C/Zephyr/west/twister/Matter/container-shaped lives here any
@@ -52,7 +52,7 @@ SDK side of the split.
 implementation detail** covered by no compatibility promise. Names
 exported here are covered by the project's SemVer promise (draft ADR
 0005): they do not change shape within a major version. The `mcuhome`
-command line ([mcu-home/cli](https://github.com/mcu-home/cli)) is a thin
+command line ([mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli)) is a thin
 shell over it; the dashboard imports it in-process (dashboard ADR 0011
 decision 1) — a one-directional dependency: the dashboard declares the
 workbench versions it supports and follows its releases, and the
@@ -116,9 +116,9 @@ pip install -e '.[remote]'
 ```
 
 `tests_py/test_sessionclient.py` goes further: it drives the client
-against the **real** `mcuhome-build-server` over a real socket rather
+against the **real** `mcuhome-buildserver` over a real socket rather
 than a mock, so it also needs that peer installed —
-`pip install -e ../build-server` (cloned next to this repo). Without
+`pip install -e ../mcuhome-buildserver` (cloned next to this repo). Without
 either the extra or the peer, that one file skips itself with a single
 reason naming exactly what is missing (`pytest -rs` shows it).
 
@@ -182,8 +182,8 @@ pip install \
 pytest   # test_sessionclient.py skips itself without the build-server peer
 
 # The remote build method's own suite needs a live peer too (see above).
-git clone https://github.com/mcu-home/build-server ../build-server
-pip install -e ../build-server
+git clone https://github.com/mcu-home/mcuhome-buildserver ../mcuhome-buildserver
+pip install -e ../mcuhome-buildserver
 
 # Lint/format
 ruff check --fix . && ruff format .

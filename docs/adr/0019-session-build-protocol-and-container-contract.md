@@ -107,7 +107,7 @@ axis the isolation rules actually hang on (contract §1.2):
   program and reads its result. Contract §1.2 states it in the same
   words. Subprocess, not literally in-process, for reasons the
   subprocess backend's own module records
-  (`build-server/mcuhome_buildserver/subprocessbackend.py`): a build
+  (`build-server/mcuhome/buildserver/subprocessbackend.py`): a build
   running inside the server process cannot be cancelled without
   killing the server; an out-of-memory kill or a segfaulting compiler
   takes the queue, the job history and every connected client with it;

@@ -153,7 +153,7 @@ class UnknownMethod(BuildError):
 
 
 #: The port a build server listens on unless its operator moved it
-#: (``mcuhome-build-server --port``). An address without one means "the
+#: (``mcuhome-buildserver --port``). An address without one means "the
 #: usual place", which is what makes `--build-server attic` a complete
 #: answer.
 DEFAULT_SERVER_PORT = 8100

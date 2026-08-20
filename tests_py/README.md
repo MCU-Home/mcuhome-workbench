@@ -22,8 +22,8 @@ suite lives in
 `_workbench` suffix on this side.
 
 `test_sessionclient.py` drives the remote method's client against the
-**real** `mcuhome-build-server` over a real socket rather than a mock,
-so it needs that peer installed too (`pip install -e ../build-server`);
+**real** `mcuhome-buildserver` over a real socket rather than a mock,
+so it needs that peer installed too (`pip install -e ../mcuhome-buildserver`);
 without it the file skips itself with a reason naming what is missing.
 
 These tests need neither Zephyr nor a west workspace and run in a few

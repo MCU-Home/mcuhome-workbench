@@ -36,7 +36,7 @@ generation, the three build methods and client-side signing — is
 the C runtime and the west workspace that consumes it live in
 [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk); the
 companion web interface lives in
-[mcu-home/dashboard](https://github.com/mcu-home/dashboard).
+[mcu-home/mcuhome-ui](https://github.com/mcu-home/mcuhome-ui).
 
 ## This repository: the workbench
 
@@ -79,9 +79,9 @@ workspace setup and the `mcuhome` command-line walkthrough.
 | Repo | What it is |
 |---|---|
 | [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) | West manifest, Zephyr module, C runtime, build-container definition, `mcuhome-model` + `mcuhome-compiler` |
-| [mcu-home/cli](https://github.com/mcu-home/cli) | The `mcuhome` command line — a thin shell over this repository's workbench |
-| [mcu-home/dashboard](https://github.com/mcu-home/dashboard) | The web interface |
-| [mcu-home/build-server](https://github.com/mcu-home/build-server) | The remote-build orchestrator the `remote` build method talks to |
+| [mcu-home/mcuhome-cli](https://github.com/mcu-home/mcuhome-cli) | The `mcuhome` command line — a thin shell over this repository's workbench |
+| [mcu-home/mcuhome-ui](https://github.com/mcu-home/mcuhome-ui) | The web interface |
+| [mcu-home/mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver) | The remote-build orchestrator the `remote` build method talks to |
 
 ## Getting started (developers)
 
@@ -91,7 +91,7 @@ docker required to work on it. Clone
 it for the two packages the workbench builds on:
 
 ```sh
-git clone https://github.com/mcu-home/mcuhome
+git clone https://github.com/mcu-home/mcuhome-workbench
 git clone https://github.com/mcu-home/mcuhome-sdk
 cd mcuhome
 python3 -m venv .venv && . .venv/bin/activate
@@ -103,7 +103,7 @@ pytest
 
 The `remote` extra pulls in the session-protocol client's dependencies
 (`aiohttp`, `zstandard`); its own test file needs a live
-`mcu-home/build-server` peer too and skips itself with one reason if it
+`mcu-home/mcuhome-buildserver` peer too and skips itself with one reason if it
 is missing — see [AGENTS.md](AGENTS.md) for details.
 
 ## Using the workbench from Python
@@ -149,8 +149,8 @@ stay clean of GPL code — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 Questions and ideas go to
-[GitHub Discussions](https://github.com/mcu-home/mcuhome/discussions);
-bug reports to the [issue tracker](https://github.com/mcu-home/mcuhome/issues).
+[GitHub Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions);
+bug reports to the [issue tracker](https://github.com/mcu-home/mcuhome-workbench/issues).
 
 ## License
 

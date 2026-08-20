@@ -31,9 +31,9 @@ same value.
 supported surface documents itself as synchronous and CPU-bound and
 tells callers with an event loop to use an executor (`api.py:47-48`);
 the dashboard repeats that instruction for its own wrapper
-(`dashboard/backend/mcuhome_dashboard/builder.py:105-106`) and offloads
+(`dashboard/backend/mcuhome/ui/builder.py:105-106`) and offloads
 every call with `asyncio.to_thread`
-(`dashboard/backend/mcuhome_dashboard/commands.py:246`, `:408`). That
+(`dashboard/backend/mcuhome/ui/commands.py:246`, `:408`). That
 was adequate while the surface was YAML parsing. It is not adequate for
 a surface whose principal operations are a compile and a session
 protocol.
@@ -69,8 +69,8 @@ here may claim `mcuhome`, because `pip install mcuhome` should yield
 the command a user expects, and no other package has a better claim
 to the plain name. The command line's half — its distribution bearing
 that name, the console script unchanged — is recorded in cli
-ADR 0002. The services keep `mcuhome-dashboard` and
-`mcuhome-build-server`.
+ADR 0002. The services keep `mcuhome-ui` and
+`mcuhome-buildserver`.
 
 "lib" is retired as a term. It named where the package came from rather
 than what it is, and it could only ever mean "the rest" — a name three
@@ -106,7 +106,7 @@ failure.
 The build-server code already performs this reduction on its own
 account: it spawns the build program as a subprocess and imports the
 library only for the version constants
-(`build-server/mcuhome_buildserver/builder.py:30-32`, until that file
+(`build-server/mcuhome/buildserver/builder.py:30-32`, until that file
 went with the job protocol) — which are
 `mcuhome-model` contents.
 
@@ -149,7 +149,7 @@ layout cannot express. The dashboard embeds the library in-process and
 offloads it with `asyncio.to_thread`, which can neither stream a
 subprocess's output nor cancel it — which is precisely why the build
 server imports nothing and spawns the CLI instead, and says so with its
-three reasons (`build-server/mcuhome_buildserver/builder.py:3-28`,
+three reasons (`build-server/mcuhome/buildserver/builder.py:3-28`,
 read at `8b8ceb4`; the file has since been removed with the job
 protocol, and the build server imports nothing from this package today).
 Streaming is what ADR 0019 §3's typed progress stream and separate raw
@@ -247,13 +247,13 @@ number once; a compatibility matrix costs every reader of it, forever.
   are set from the measured path, not ahead of it.
 - **The documented synchronous contract changes.** `api.py:47-48`
   states synchrony as a property of the whole supported surface;
-  `dashboard/backend/mcuhome_dashboard/builder.py:105-106` repeats it
+  `dashboard/backend/mcuhome/ui/builder.py:105-106` repeats it
   for the dashboard's wrapper. Under decision 5 that is no longer
   expressible module-wide: it holds for the computation and stops
   holding at the build methods and the session client. Both docstrings
   are rewritten to state synchrony per operation, and the dashboard's
   `asyncio.to_thread` offload sites
-  (`dashboard/backend/mcuhome_dashboard/commands.py:246`, `:408`)
+  (`dashboard/backend/mcuhome/ui/commands.py:246`, `:408`)
   become direct awaits as the operations they wrap become awaitable.
 - **Process-global state has to go, and it is not incidental.** Two
   shapes of it. The first is the installed-location assumption:

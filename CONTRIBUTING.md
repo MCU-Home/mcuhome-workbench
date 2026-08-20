@@ -9,7 +9,7 @@ instead — see its own CONTRIBUTING.md.
 
 The most valuable contributions right now are discussion and review of
 the [architecture decision records](docs/adr/) and participation in
-[GitHub Discussions](https://github.com/mcu-home/mcuhome/discussions).
+[GitHub Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions).
 
 ## Development environment
 
@@ -18,7 +18,7 @@ No west workspace here — this repository is plain Python. Clone
 it for the two packages the workbench builds on:
 
 ```sh
-git clone https://github.com/mcu-home/mcuhome
+git clone https://github.com/mcu-home/mcuhome-workbench
 git clone https://github.com/mcu-home/mcuhome-sdk
 cd mcuhome
 python3 -m venv .venv && . .venv/bin/activate
@@ -36,8 +36,8 @@ pytest    # tests_py/ — the workbench test suite
 ```
 
 The `remote` build method's own suite needs one more peer: clone
-[mcu-home/build-server](https://github.com/mcu-home/build-server) next
-to this repository and `pip install -e ../build-server`. Without it,
+[mcu-home/mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver) next
+to this repository and `pip install -e ../mcuhome-buildserver`. Without it,
 `tests_py/test_sessionclient.py` skips itself with one reason naming
 exactly what is missing (`pytest -rs`).
 
@@ -69,7 +69,7 @@ exactly what is missing (`pytest -rs`).
 
 ## Reporting issues
 
-Use the [issue forms](https://github.com/mcu-home/mcuhome/issues/new/choose).
+Use the [issue forms](https://github.com/mcu-home/mcuhome-workbench/issues/new/choose).
 Security vulnerabilities go through [SECURITY.md](SECURITY.md), never public
 issues.
 

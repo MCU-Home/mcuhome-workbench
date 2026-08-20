@@ -9,7 +9,7 @@ body:
     attributes:
       value: |
         For open-ended ideas or discussion, please start in
-        [Discussions](https://github.com/mcu-home/mcuhome/discussions) —
+        [Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions) —
         use this form for concrete, scoped proposals.
   - type: textarea
     id: problem

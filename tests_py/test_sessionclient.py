@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """The ``remote`` build method, driven against the real build server.
 
-**The peer here is the real thing wherever it can be.** ``mcuhome-build-server``
+**The peer here is the real thing wherever it can be.** ``mcuhome-buildserver``
 is importable in this development environment, so most of these tests run
 :mod:`mcuhome.workbench.sessionclient` against
-:func:`mcuhome_buildserver.app.create_app` over a real socket: one client
+:func:`mcuhome.buildserver.app.create_app` over a real socket: one client
 and one server, tested against each other rather than each against a
 mock of the other. Only docker is stubbed at the same seam the build
 server's own suite stubs it at, because a build server is an orchestrator
@@ -65,14 +65,14 @@ from mcuhome.workbench.resolve_env import ResolvedEnvironment
 #: reads, and the two tests here that need none of this have been moved
 #: to ``test_packaging_workbench.py`` so they run in every environment.
 #:
-#: Note for CI: ``mcuhome-build-server`` lives in a private sibling
+#: Note for CI: ``mcuhome-buildserver`` lives in a private sibling
 #: repository and ``.github/workflows/ci.yml`` has no deploy key for it
 #: (only ``CLI_DEPLOY_KEY``), so everything below is skipped there until
 #: one exists. That is a known, stated gap and not a silent one.
 NEEDED = {
     "aiohttp": "pip install -e '.[remote]'",
     "zstandard": "pip install -e '.[remote]'",
-    "mcuhome_buildserver": "pip install -e ../build-server",
+    "mcuhome.buildserver": "pip install -e ../build-server",
 }
 MISSING = sorted(name for name in NEEDED if importlib.util.find_spec(name) is None)
 if MISSING:
@@ -87,11 +87,11 @@ if MISSING:
 # because they may only be resolved after the gate above.
 test_utils = importlib.import_module("aiohttp.test_utils")
 zstandard = importlib.import_module("zstandard")
-bs_app = importlib.import_module("mcuhome_buildserver.app")
-bs_config = importlib.import_module("mcuhome_buildserver.config")
-bs_container = importlib.import_module("mcuhome_buildserver.container")
-bs_protocol = importlib.import_module("mcuhome_buildserver.protocol")
-bs_sessions = importlib.import_module("mcuhome_buildserver.sessions")
+bs_app = importlib.import_module("mcuhome.buildserver.app")
+bs_config = importlib.import_module("mcuhome.buildserver.config")
+bs_container = importlib.import_module("mcuhome.buildserver.container")
+bs_protocol = importlib.import_module("mcuhome.buildserver.protocol")
+bs_sessions = importlib.import_module("mcuhome.buildserver.sessions")
 
 TOKEN = "test-token-000000000000000000000000"
 
@@ -224,7 +224,7 @@ class FakeDocker:
 
     A condensed twin of ``build-server/tests/conftest.py``'s fake, and
     deliberately a copy rather than an import: this repository does not
-    depend on ``mcuhome-build-server`` and must not start doing so
+    depend on ``mcuhome-buildserver`` and must not start doing so
     through a test fixture. What it has to get right is only what the
     *client* path touches — the inventory, the image lookup, ``describe``,
     one container and one exec per invocation.

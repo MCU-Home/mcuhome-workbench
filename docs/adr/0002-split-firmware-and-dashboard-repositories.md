@@ -21,9 +21,9 @@ tooling — separate CI, separate release cadences.
 
 Two product repositories from day one:
 
-- **`mcu-home/mcuhome`** — firmware framework: Zephyr runtime, components,
+- **`mcu-home/mcuhome-workbench`** — firmware framework: Zephyr runtime, components,
   and the Python YAML builder in ONE repo (codegen and runtime in lockstep).
-- **`mcu-home/dashboard`** — the web interface as a standalone product with
+- **`mcu-home/mcuhome-ui`** — the web interface as a standalone product with
   its own release cycle.
 
 A thin `mcu-home/home-assistant-addon` packaging repo follows later, as

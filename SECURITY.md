@@ -12,7 +12,7 @@ and build tooling are still welcome.
 
 Use GitHub's private vulnerability reporting:
 **Security → Report a vulnerability** on this repository
-([direct link](https://github.com/mcu-home/mcuhome/security/advisories/new)).
+([direct link](https://github.com/mcu-home/mcuhome-workbench/security/advisories/new)).
 
 We aim to acknowledge reports within **3 business days**. Please include a
 description of the issue, affected component (runtime, builder, generated

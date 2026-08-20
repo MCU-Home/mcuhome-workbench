@@ -34,8 +34,8 @@ dashboard, and the CLI usable without any dashboard version.
 |---|---|---|
 | `mcuhome` | SDK (C components, samples), YAML spec + codegen, the published Python distributions (below), west manifest (Zephyr pin), build-container definition + CI, golden tests. One shared version for everything it publishes. | — |
 | `cli` | The command shell — its own decisions live in cli ADR 0002 | `mcuhome-compiler` (pip) |
-| `dashboard` | Web UI + user key handling (detached signing) (distribution `mcuhome-dashboard`) | `mcuhome-workbench` (pip) |
-| `build-server` | Service orchestrating build containers (distribution `mcuhome-build-server`) | `mcuhome-model` (pip) + the build-container contract |
+| `dashboard` | Web UI + user key handling (detached signing) (distribution `mcuhome-ui`) | `mcuhome-workbench` (pip) |
+| `build-server` | Service orchestrating build containers (distribution `mcuhome-buildserver`) | `mcuhome-model` (pip) + the build-container contract |
 
 The `mcuhome` repository publishes **three Python distributions over
 one PEP 420 namespace** — `mcuhome-model` (the shared vocabulary:
@@ -69,7 +69,7 @@ consumes `mcuhome-model` and nothing else (§3). The CLI's own
 attributes — thin-shell nature, its distribution bearing the plain
 name, versioning — are recorded in cli ADR 0002; ADR 0020 §2 keeps
 the renouncing half of the name. The services keep
-`mcuhome-dashboard` and `mcuhome-build-server`.
+`mcuhome-ui` and `mcuhome-buildserver`.
 
 ### 2. Repo ≠ package
 
@@ -141,7 +141,7 @@ the server orchestrates against.
   to the published `mcuhome-workbench` package; the direction and the
   version-range rule of dashboard ADR 0011 are unchanged. Interim,
   while the repositories are private and nothing is on an index: the
-  supported range lives in `mcuhome_dashboard/versions.py` and is
+  supported range lives in `mcuhome/ui/versions.py` and is
   enforced at server startup, the dev setup installs from the sibling
   checkout, and moving the range into the package metadata is release
   tooling for the first published release.

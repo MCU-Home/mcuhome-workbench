@@ -9,7 +9,7 @@ change to one of them is a breaking change to the builder. Names anywhere
 else in the package may move between releases without notice, and a
 caller that imports them is on its own. The ``mcuhome`` command line is
 such a caller too: it lives in its own repository
-(github.com/mcu-home/cli) as a thin shell over this package, and it is
+(github.com/mcu-home/mcuhome-cli) as a thin shell over this package, and it is
 version-locked to the builder rather than the other way around.
 
 The intended consumer is a program that embeds the builder rather than

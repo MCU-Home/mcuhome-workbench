@@ -4,13 +4,13 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions & ideas
-    url: https://github.com/mcu-home/mcuhome/discussions
+    url: https://github.com/mcu-home/mcuhome-workbench/discussions
     about: Ask questions and discuss feature ideas in GitHub Discussions before filing an issue.
   - name: Dashboard / web interface issues
-    url: https://github.com/mcu-home/dashboard/issues
-    about: Problems with the MCUHome web interface belong in the dashboard repository.
+    url: https://github.com/mcu-home/mcuhome-ui/issues
+    about: Problems with the MCUHome web interface belong in the mcuhome-ui repository.
   # TODO(publish): enable private vulnerability reporting in the repo
   # settings, otherwise this link 404s for reporters.
   - name: Security vulnerabilities
-    url: https://github.com/mcu-home/mcuhome/security/advisories/new
+    url: https://github.com/mcu-home/mcuhome-workbench/security/advisories/new
     about: Report security issues privately — never as public issues.

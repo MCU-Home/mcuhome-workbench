@@ -5,7 +5,7 @@ lightweight [MADR](https://adr.github.io/madr/) style: **Context /
 Decision / Consequences**, plus a status.
 
 This index covers the ADRs that live **in this repository**
-(`mcu-home/mcuhome`) — project-wide decisions, and the ones about the
+(`mcu-home/mcuhome-workbench`) — project-wide decisions, and the ones about the
 workbench (`mcuhome.workbench`) it publishes. SDK-shaped ADRs (the west
 manifest/Zephyr module, the C runtime, `mcuhome.model`/`mcuhome.compiler`)
 live in the SDK repository,
@@ -41,7 +41,7 @@ Statuses: `draft` (in `draft/`), `accepted`, `deferred`,
 
 Project-wide decisions live in this repository (the flagship repo);
 dashboard-specific decisions live in
-[mcu-home/dashboard](https://github.com/mcu-home/dashboard).
+[mcu-home/mcuhome-ui](https://github.com/mcu-home/mcuhome-ui).
 
 ## Final ADRs (this repo)
 
@@ -66,6 +66,8 @@ dashboard-specific decisions live in
 | [0024](draft/0024-sdk-and-tools-repositories.md) | The SDK repository and the tools repository (public from here on) |
 | [0025](draft/0025-package-distribution.md) | Package distribution: host layout, signing and mirrors |
 | [0026](draft/0026-container-paths-and-the-compiler-cache.md) | Where a build sits in its container, and where its cache lives |
+| [0027](draft/0027-seat-tokens-for-a-busy-build-server.md) | Seat tokens: how a busy build server hands out turns |
+| [0028](draft/0028-one-naming-scheme-for-repositories-and-distributions.md) | One naming scheme for repositories, distributions and import paths |
 
 ## Elsewhere in the sequence
 

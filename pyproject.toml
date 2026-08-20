@@ -22,7 +22,7 @@ server — behind one interface. Plus client-side firmware signing.
 
 `mcuhome.workbench.api` is the supported programmatic surface.
 
-Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome
+Part of the MCUHome firmware framework — https://github.com/mcu-home/mcuhome-workbench
 """, content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -76,8 +76,8 @@ remote = ["aiohttp>=3.10,<4"]
 generate = ["mcuhome-compiler"]
 
 [project.urls]
-Homepage = "https://github.com/mcu-home/mcuhome"
-Issues = "https://github.com/mcu-home/mcuhome/issues"
+Homepage = "https://github.com/mcu-home/mcuhome-workbench"
+Issues = "https://github.com/mcu-home/mcuhome-workbench/issues"
 
 [tool.setuptools]
 # Enumerated, not discovered: `mcuhome` is a PEP 420 namespace shared
