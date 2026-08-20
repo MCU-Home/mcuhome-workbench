@@ -143,11 +143,11 @@ is an implementation detail and may change between releases.
 
 MCUHome is inspired by ESPHome's YAML-first user experience but shares no
 code with it. ESPHome's C++ runtime is GPLv3; MCUHome is Apache-2.0 and must
-stay clean of GPL code — see [CONTRIBUTING.md](CONTRIBUTING.md).
+stay clean of GPL code — see [the contributing rules](https://github.com/mcu-home/.github/blob/main/CONTRIBUTING.md).
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome — see [the contributing rules](https://github.com/mcu-home/.github/blob/main/CONTRIBUTING.md).
 Questions and ideas go to
 [GitHub Discussions](https://github.com/mcu-home/mcuhome-workbench/discussions);
 bug reports to the [issue tracker](https://github.com/mcu-home/mcuhome-workbench/issues).
