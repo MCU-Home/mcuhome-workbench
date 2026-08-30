@@ -71,6 +71,14 @@ jobs:
       # itself, never the runner's Python. The dev tools are a PEP 735
       # dependency group (--group dev), which needs pip >= 25.1; upgrade
       # first.
+      #
+      # All four editable installs must be one pip invocation:
+      # mcuhome-buildserver depends on mcuhome-workbench, which is not on
+      # PyPI, so pip can only resolve that dependency by seeing this
+      # checkout (the '.[remote]' entry) as an editable install on the
+      # same command line. Splitting the buildserver install into its own
+      # pip call fails with "Could not find a version that satisfies the
+      # requirement mcuhome-workbench".
       - name: Create .venv and install
         run: |
           python -m venv .venv
@@ -78,8 +86,8 @@ jobs:
           .venv/bin/pip install --disable-pip-version-check \
             -e ./.deps/mcuhome-sdk/packaging/model \
             -e ./.deps/mcuhome-sdk/packaging/compiler \
-            -e ./.deps/mcuhome-buildserver
-          .venv/bin/pip install --disable-pip-version-check -e '.[remote]' --group dev
+            -e ./.deps/mcuhome-buildserver \
+            -e '.[remote]' --group dev
 
       - name: scripts/test pytest
         run: scripts/test pytest -rs
