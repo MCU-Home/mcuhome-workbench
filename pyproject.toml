@@ -79,6 +79,20 @@ generate = ["mcuhome-compiler"]
 Homepage = "https://github.com/mcu-home/mcuhome-workbench"
 Issues = "https://github.com/mcu-home/mcuhome-workbench/issues"
 
+# PEP 735 dependency group, not a [project.optional-dependencies] extra:
+# these tools are for working on this repository, never a runtime
+# dependency of it, so they must install standalone without pulling in
+# mcuhome-model and its unpublished siblings. Pinned to the versions CI
+# installs; bump here, CI follows.
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff==0.16.1",
+  "codespell==2.4.3",
+  "reuse==5.0.2",
+  "pre-commit-hooks==5.0.0",
+]
+
 [tool.setuptools]
 # Enumerated, not discovered: `mcuhome` is a PEP 420 namespace shared
 # with the SDK's distributions, and find_packages() there would claim
@@ -100,5 +114,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
 
+# The ignored words are deliberate spellings, not slips: Requestor and PASE
+# are the Matter specification's own, OT is OpenThread, rsource is
+# Kconfig's. Generated documents and patches are skipped because their
+# wording is not ours to correct. Moved here from the CI command line so
+# scripts/lint.d/codespell can run the plain tool.
 [tool.codespell]
-ignore-words-list = "requestor,pase,ot,rsource"
+ignore-words-list = "requestor,pase,ot,rsource,re-declared,re-declare,re-used,unparseable,pre-empt"
+skip = "./.git,./frontend/node_modules,*.matter,*.zap,pnpm-lock.yaml,*.patch"

@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test gate for the workbench: one job per wrapper in scripts/test.d/
+# (today just pytest), plus a pre-check that every wrapper has a job
+# here.
+#
+# test-pytest needs mcuhome-model and mcuhome-compiler from
+# mcu-home/mcuhome-sdk (ADR 0024 split) and a live mcuhome-buildserver
+# peer for the `remote` build method's own suite
+# (test_sessionclient.py) — three public siblings, plain checkouts, no
+# deploy keys. Once the packages are published this becomes a plain pip
+# install.
+#
+# All actions are pinned to commit SHAs, not tags.
+
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-gates:
+    name: Check gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: scripts/test check-ci
+        run: scripts/test check-ci
+
+  test-pytest:
+    name: Test (pytest)
+    needs: check-gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Plain public checkouts — both repositories are public (ADR 0024
+      # §3), so no token or deploy key is needed for either.
+      - name: Checkout mcu-home/mcuhome-sdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-sdk
+          path: .deps/mcuhome-sdk
+
+      - name: Checkout mcu-home/mcuhome-buildserver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-buildserver
+          path: .deps/mcuhome-buildserver
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # mcuhome-model and mcuhome-compiler from the SDK checkout, this
+      # repository with the `remote` extra for test_sessionclient.py's
+      # aiohttp/zstandard dependency, and mcuhome-buildserver as the real
+      # peer that same file drives its session-protocol client against.
+      # Installed into this job's own .venv — scripts/test selects it
+      # itself, never the runner's Python. The dev tools are a PEP 735
+      # dependency group (--group dev), which needs pip >= 25.1; upgrade
+      # first.
+      - name: Create .venv and install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check -U pip
+          .venv/bin/pip install --disable-pip-version-check \
+            -e ./.deps/mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome-sdk/packaging/compiler \
+            -e ./.deps/mcuhome-buildserver
+          .venv/bin/pip install --disable-pip-version-check -e '.[remote]' --group dev
+
+      - name: scripts/test pytest
+        run: scripts/test pytest -rs
