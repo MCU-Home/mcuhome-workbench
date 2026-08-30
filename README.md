@@ -48,19 +48,36 @@ thin command-line shell over it, and by
 [mcuhome-ui](https://github.com/mcu-home/mcuhome-ui), which imports it in-process
 so a configuration error arrives in an editor as a marker.
 
-## Working on this repository
+## Development — how to work on this repository
 
-Needs Python 3.13, editable installs of `mcuhome-model` and `mcuhome-compiler`
-from a checkout of `mcuhome-sdk`, and this package with the `remote` extra — the
-session-client tests drive a live `mcuhome-buildserver` peer. The suite lives in
-`tests/python/`; run the checks with:
+This repository has its own virtual environment in `.venv/`; nothing is
+installed into the system Python or into another repository's environment.
+`bin/` holds the user-facing entry points, `scripts/` the development
+tooling: `scripts/test` and `scripts/lint` dispatch the checks — `all` runs
+every one, `list` names them, `<name>` runs one — and each check is its own
+wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
+`.venv` themselves (never activate one by hand) and are exactly what CI
+runs, one job per check.
+
+Needs Python 3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`
+and `packaging/compiler`) and `mcuhome-buildserver`, installed editable
+alongside this package's `remote` extra — the session-client tests drive a
+live `mcuhome-buildserver` peer, not a mock.
 
 ```sh
-ruff check . && ruff format --check . && pytest -q
+python3.13 -m venv .venv && .venv/bin/pip install \
+  -e ../mcuhome-sdk/packaging/model -e ../mcuhome-sdk/packaging/compiler \
+  -e ../mcuhome-buildserver -e '.[remote]' --group dev
 ```
 
-CI runs the same two gates on every push and pull request, next to license
-(`reuse`), spelling (`codespell`), whitespace and commit-message checks.
+```sh
+scripts/test all
+scripts/lint all
+```
+
+The rules that hold across every MCUHome repository — coding standards,
+commits, licensing — are in the organization's
+[contributing guide](https://github.com/mcu-home/.github/blob/main/CONTRIBUTING.md).
 
 ## Configuration
 
