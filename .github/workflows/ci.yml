@@ -4,8 +4,11 @@
 # CI for the MCUHome workbench (the flagship/tools repository, ADR
 # 0024). Two gates:
 #
-#   lint   — ruff over the whole tree. Needs nothing but Python.
-#   pytest — the Python suite in tests/python/, testing mcuhome.workbench.
+#   lint   — scripts/lint (ruff over the whole tree). Needs nothing but
+#            Python, installed into this job's own .venv, the same
+#            selection scripts/lint does locally.
+#   pytest — scripts/test (the Python suite in tests/python/, testing
+#            mcuhome.workbench), same .venv convention.
 #            Needs mcuhome-model and mcuhome-compiler, which this repo
 #            does not publish any more (ADR 0024) — they come from a
 #            plain public checkout of the sibling mcu-home/mcuhome-sdk
@@ -43,14 +46,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install lint tools
-        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+      # scripts/lint selects .venv itself — never the runner's Python —
+      # so the job has to create it first, exactly as a developer would.
+      - name: Create .venv and install lint tools
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check ruff==0.16.1
 
-      - name: ruff check
-        run: ruff check .
-
-      - name: ruff format --check
-        run: ruff format --check .
+      - name: scripts/lint
+        run: scripts/lint
 
 
   test-pytest:
@@ -86,18 +90,20 @@ jobs:
       # mcuhome-workbench (this repo, with the `remote` extra for
       # test_sessionclient.py's aiohttp/zstandard dependency) and
       # mcuhome-buildserver as the real peer that same file drives its
-      # session-protocol client against.
-      - name: Install the distributions
+      # session-protocol client against. Installed into this job's own
+      # .venv — scripts/test selects it itself, never the runner's Python.
+      - name: Create .venv and install the distributions
         run: |
-          python -m pip install --disable-pip-version-check \
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check \
             -e ./.deps/mcuhome-sdk/packaging/model \
             -e ./.deps/mcuhome-sdk/packaging/compiler \
             -e '.[remote]' \
             -e ./.deps/mcuhome-buildserver \
             'pytest>=8.0'
 
-      - name: pytest
-        run: pytest -q -rs
+      - name: scripts/test
+        run: scripts/test -rs
 
   license-reuse:
     name: License (reuse)
