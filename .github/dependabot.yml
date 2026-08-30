@@ -11,7 +11,7 @@ updates:
       python-deps:
         patterns: ["*"]
 
-  # Added together with the first CI workflow (.github/workflows/ci.yml).
+  # Added together with the first CI workflows.
   # All actions there are pinned to commit SHAs, not tags, so dependabot
   # can bump them with a reviewable diff.
   - package-ecosystem: github-actions

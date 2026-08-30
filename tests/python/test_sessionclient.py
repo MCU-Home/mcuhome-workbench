@@ -66,7 +66,7 @@ from mcuhome.workbench.resolve_env import ResolvedEnvironment
 #: to ``test_packaging_workbench.py`` so they run in every environment.
 #:
 #: Note for CI: ``mcuhome-buildserver`` lives in a private sibling
-#: repository and ``.github/workflows/ci.yml`` has no deploy key for it
+#: repository and ``.github/workflows/ci-test.yml`` has no deploy key for it
 #: (only ``CLI_DEPLOY_KEY``), so everything below is skipped there until
 #: one exists. That is a known, stated gap and not a silent one.
 NEEDED = {
