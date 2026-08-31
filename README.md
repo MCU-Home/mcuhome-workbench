@@ -99,7 +99,6 @@ used for a signature. Report a vulnerability as described in the organization's
 
 ## Documentation
 
-- [`docs/adr/`](docs/adr/) — architecture decision records
 - [mcuhome-sdk specifications](https://github.com/mcu-home/mcuhome-sdk/tree/main/docs/spec)
   — build environment, context, actions
 - [MCUHome on GitHub](https://github.com/mcu-home) — every repository of the
