@@ -59,13 +59,13 @@ wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
 `.venv` themselves (never activate one by hand) and are exactly what CI
 runs, one job per check.
 
-Needs Python 3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`
+Needs Python ≥3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`
 and `packaging/compiler`) and `mcuhome-buildserver`, installed editable
 alongside this package's `remote` extra — the session-client tests drive a
 live `mcuhome-buildserver` peer, not a mock.
 
 ```sh
-python3.13 -m venv .venv && .venv/bin/pip install \
+python3 -m venv .venv && .venv/bin/pip install \
   -e ../mcuhome-sdk/packaging/model -e ../mcuhome-sdk/packaging/compiler \
   -e ../mcuhome-buildserver -e '.[remote]' --group dev
 ```
