@@ -2742,8 +2742,8 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
             )
 
     run(scenario())
-    stated = resolve_pins.sdk_constraint(_model().sources.sdk)
-    found = resolve_pins.resolve_sdk((sources,), constraint=stated)
+    stated, prereleases = resolve_pins.sdk_constraint(_model().sources.sdk)
+    found = resolve_pins.resolve_sdk((sources,), constraint=stated, prereleases=prereleases)
     written = read_context_request(
         tmp_path / "build" / ".mcuhome-remote" / "context" / "context.yaml"
     )
@@ -2763,7 +2763,7 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
     )
     # And the three-value helper the `local` method reads answers the same
     # package, with the constraint as *stated*.
-    assert resolve_pins.resolve_sdk_pin((sources,), constraint=stated) == (
+    assert resolve_pins.resolve_sdk_pin((sources,), constraint=stated, prereleases=prereleases) == (
         stated,
         found.package.version,
         real_sha256,

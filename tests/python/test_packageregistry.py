@@ -1142,18 +1142,10 @@ def test_the_sdk_resolves_locally_first_and_from_the_registry_second(
     assert locally.url == ""
 
 
-def test_the_default_constraint_pins_the_minor(tmp_path: Path, keys) -> None:
-    """A device that names no version follows patch releases, not feature ones."""
-    assert sdk_constraint() == DEFAULT_SDK_CONSTRAINT
-    assert sdk_constraint("sdk/mcuhome-sdk") == DEFAULT_SDK_CONSTRAINT
-    assert sdk_constraint("sdk/mcuhome-sdk:0.1.9") == "==0.1.9"
-
-    directory = tmp_path / "operator"
-    directory.mkdir()
-    # Three published versions, two of them in the pinned minor and one
-    # past it: the resolution has to pick the newest patch, not the newest
-    # version.
-    for version in (VERSION, "0.1.4", "0.2.0"):
+def _sdk_source_holding(directory: Path, versions: tuple[str, ...]) -> Path:
+    """An operator directory publishing exactly *versions* of the SDK."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for version in versions:
         (directory / f"{SDK}-{version}.tar.zst").write_bytes(SDK_ARCHIVE + version.encode())
     entries = {
         version: {
@@ -1161,12 +1153,71 @@ def test_the_default_constraint_pins_the_minor(tmp_path: Path, keys) -> None:
             "sha256": orchestrator.sha256_file(directory / f"{SDK}-{version}.tar.zst"),
             "size": (directory / f"{SDK}-{version}.tar.zst").stat().st_size,
         }
-        for version in (VERSION, "0.1.4", "0.2.0")
+        for version in versions
     }
     (directory / INDEX_FILE).write_text(json.dumps({"packages": {SDK: entries}}), encoding="utf-8")
+    return directory
 
-    found = resolve_sdk((directory,), constraint=DEFAULT_SDK_CONSTRAINT)
+
+def test_the_default_constraint_pins_the_minor(tmp_path: Path) -> None:
+    """A device that names no version follows patch releases, not feature ones."""
+    assert sdk_constraint() == (DEFAULT_SDK_CONSTRAINT, True)
+    assert sdk_constraint("sdk/mcuhome-sdk") == (DEFAULT_SDK_CONSTRAINT, True)
+    # A version the device states is a stated constraint, and the ordinary
+    # pre-release rule applies to it.
+    assert sdk_constraint("sdk/mcuhome-sdk:0.1.9") == ("==0.1.9", None)
+
+    # Three published versions, two of them in the pinned minor and one
+    # past it: the resolution has to pick the newest patch, not the newest
+    # version.
+    directory = _sdk_source_holding(tmp_path / "operator", (VERSION, "0.1.4", "0.2.0"))
+    constraint, prereleases = sdk_constraint()
+    found = resolve_sdk((directory,), constraint=constraint, prereleases=prereleases)
     assert found.package.version == "0.1.4"
+
+
+def test_the_default_resolves_the_newest_dev_release_of_the_minor(tmp_path: Path) -> None:
+    """Every MCUHome package in 0.1 is a `.devN`, so the default has to take one.
+
+    The stable-constraint rule applied to a line that publishes nothing
+    but pre-releases resolves to nothing at all — not a pin, an outage,
+    and the one the build server's end-to-end build hit. What the default
+    must still refuse is the *next* minor, dev or not.
+    """
+    directory = _sdk_source_holding(
+        tmp_path / "operator", ("0.1.0.dev1", "0.1.10.dev1", "0.2.0.dev1")
+    )
+    constraint, prereleases = sdk_constraint()
+    found = resolve_sdk((directory,), constraint=constraint, prereleases=prereleases)
+    assert found.package.version == "0.1.10.dev1"
+
+
+def test_a_version_the_device_states_keeps_the_ordinary_pre_release_rule(
+    tmp_path: Path,
+) -> None:
+    """A stated constraint is the user's, and the rule for it does not move.
+
+    Somebody who wants a dev version says so; a device that pins `0.1.10`
+    does not silently get `0.1.10.dev1`, which is a different SDK.
+    """
+    directory = _sdk_source_holding(tmp_path / "operator", ("0.1.10.dev1",))
+    constraint, prereleases = sdk_constraint("sdk/mcuhome-sdk:0.1.10")
+    assert (constraint, prereleases) == ("==0.1.10", None)
+    # A source whose only candidate does not satisfy the constraint is a
+    # source that does not hold the package, which is what the search says.
+    with pytest.raises(BuildError, match="No configured SDK source holds"):
+        resolve_sdk((directory,), constraint=constraint, prereleases=prereleases)
+
+    stated, allow = sdk_constraint("sdk/mcuhome-sdk:0.1.10.dev1")
+    found = resolve_sdk((directory,), constraint=stated, prereleases=allow)
+    assert found.package.version == "0.1.10.dev1"
+
+
+def test_the_default_still_refuses_the_next_minor(tmp_path: Path) -> None:
+    directory = _sdk_source_holding(tmp_path / "operator", ("0.2.0.dev1", "0.2.0"))
+    constraint, prereleases = sdk_constraint()
+    with pytest.raises(BuildError, match="No configured SDK source holds"):
+        resolve_sdk((directory,), constraint=constraint, prereleases=prereleases)
 
 
 def test_a_source_directory_carrying_a_meta_entry_resolves_through_it(

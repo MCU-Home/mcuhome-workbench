@@ -58,6 +58,18 @@ such as ``~=2.3`` never resolves to a pre-release. This is
 ``contains(v, prereleases=None)`` admits pre-releases, so the default here
 translates ``None`` to the constraint's own pre-release nature rather than
 passing it through — which is exactly the rule above.
+
+**The workbench's own default is the one place that overrides it**
+(:func:`sdk_constraint`). ``DEFAULT_SDK_CONSTRAINT`` is not a range
+somebody chose; it names MCUHome's own SDK line for the minor this
+workbench was released alongside, and during 0.1 everything MCUHome
+publishes in it is a ``.devN`` release. Applying the stable-constraint
+rule there would resolve to nothing at all — not a pin, an outage — so
+that resolution passes ``prereleases=True`` and takes the newest release
+of the minor, dev included. The minor bound does the work it was chosen
+for either way: 0.2 is refused. A constraint a **user** states, in a
+device's ``sources.sdk`` or on a command line, keeps the rule above
+untouched; somebody who wants a dev version says so, exactly as E52 asks.
 """
 
 from __future__ import annotations
@@ -112,8 +124,8 @@ from mcuhome.workbench.packageregistry import (  # noqa: E402
 #: :class:`~packaging.specifiers.SpecifierSet` matches every version.
 SDK_ANY = ""
 
-#: Which SDK a device that names none is built with: the newest patch of
-#: the minor this workbench was released alongside.
+#: Which SDK a device that names none is built with: the newest release
+#: of the minor this workbench was released alongside.
 #:
 #: The workbench follows the SDK at release time. It can guarantee it
 #: works with the SDK version published when it was released and with
@@ -125,21 +137,33 @@ SDK_ANY = ""
 DEFAULT_SDK_CONSTRAINT = "==0.1.*"
 
 
-def sdk_constraint(reference: str = "") -> str:
-    """The constraint a device's ``sources.sdk`` reference resolves under.
+def sdk_constraint(reference: str = "") -> tuple[str, bool | None]:
+    """How a device's ``sources.sdk`` reference resolves: constraint, and pre-releases.
 
     A reference is ``[registry/]path[:version]``. Naming a version is a
     device *pinning* itself and is honoured exactly: ``:0.1.9`` resolves
-    under ``==0.1.9``. Naming none — which is the default, and what is
-    written into a device unless somebody asks otherwise — resolves under
+    under ``==0.1.9`` — a **stated** constraint, so the E52 pre-release
+    rule applies to it unchanged and a dev version satisfies it only if
+    the pin itself names one. Naming none — the default, and what a
+    device carries unless somebody asks otherwise — resolves under
     :data:`DEFAULT_SDK_CONSTRAINT`, so a device is not frozen onto
     whatever version happened to be current on the day it was created.
+
+    **The default admits pre-releases**, and the second half of the
+    answer is that decision. The default names MCUHome's own SDK line
+    rather than a range somebody chose, and everything MCUHome publishes
+    in 0.1 is a ``.devN`` release; a default that applied the
+    stable-constraint rule to it would resolve to nothing at all, which
+    is not a pin, it is an outage. Whatever MCUHome publishes within the
+    pinned minor is acceptable and the newest wins, dev included — and
+    the minor bound still holds, so a 0.2 release is refused exactly as a
+    stable constraint would refuse it.
     """
     tag = reference.rsplit("@", 1)[0].rsplit("/", 1)[-1]
     _, separator, version = tag.partition(":")
     if separator and version:
-        return f"=={version}"
-    return DEFAULT_SDK_CONSTRAINT
+        return f"=={version}", None
+    return DEFAULT_SDK_CONSTRAINT, True
 
 
 def resolve_version(
@@ -374,6 +398,7 @@ def resolve_sdk(
     sources: Sequence[Path],
     *,
     constraint: str = SDK_ANY,
+    prereleases: bool | None = None,
     registry: RegistrySource | None = None,
     source_name: str = SDK_SOURCE,
     platform: str | None = None,
@@ -453,8 +478,9 @@ def resolve_sdk(
             # but wrong for "any", which is literally any: so an empty
             # constraint admits pre-releases, and a stated one keeps the
             # rule.
-            allow = True if constraint == SDK_ANY else None
-            resolved = resolve_from_index(index, SDK_PACKAGE_NAME, constraint, prereleases=allow)
+            resolved = resolve_from_index(
+                index, SDK_PACKAGE_NAME, constraint, prereleases=_allow(constraint, prereleases)
+            )
         except BuildError:
             continue
         return SdkResolution(stated=constraint, package=resolved, source=source)
@@ -462,7 +488,11 @@ def resolve_sdk(
     client = opened(registry)
     if client is not None:
         return _from_registry(
-            client, constraint=constraint, source_name=source_name, platform=platform
+            client,
+            constraint=constraint,
+            prereleases=prereleases,
+            source_name=source_name,
+            platform=platform,
         )
 
     listed = ", ".join(searched) or "none"
@@ -476,10 +506,23 @@ def resolve_sdk(
     )
 
 
+def _allow(constraint: str, prereleases: bool | None) -> bool | None:
+    """The pre-release rule for one resolution.
+
+    A caller that stated one is obeyed. Otherwise the empty specifier —
+    "any version at all", which is literally any — admits pre-releases,
+    and every other constraint follows E52's own rule for itself.
+    """
+    if prereleases is not None:
+        return prereleases
+    return True if constraint == SDK_ANY else None
+
+
 def _from_registry(
     registry: PackageRegistry,
     *,
     constraint: str,
+    prereleases: bool | None,
     source_name: str,
     platform: str | None,
 ) -> SdkResolution:
@@ -492,14 +535,19 @@ def _from_registry(
     location hint in a context can say something true.
     """
     index: VerifiedIndex = registry.index(source_name)
-    allow = True if constraint == SDK_ANY else None
     resolved = resolve_from_entries(
-        index.entries, SDK_PACKAGE_NAME, constraint, prereleases=allow, platform=platform
+        index.entries,
+        SDK_PACKAGE_NAME,
+        constraint,
+        prereleases=_allow(constraint, prereleases),
+        platform=platform,
     )
     return SdkResolution(stated=constraint, package=resolved, source=None, base=index.base)
 
 
-def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tuple[str, str, str]:
+def resolve_sdk_pin(
+    sources: Sequence[Path], *, constraint: str = SDK_ANY, prereleases: bool | None = None
+) -> tuple[str, str, str]:
     """The three values an SDK pin *is*: ``(constraint, version, sha256)``.
 
     :func:`resolve_sdk` with everything a document needs left out, for the
@@ -509,5 +557,5 @@ def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tu
     recoverable here and the rendering decision belongs to whoever writes
     the document.
     """
-    found = resolve_sdk(sources, constraint=constraint)
+    found = resolve_sdk(sources, constraint=constraint, prereleases=prereleases)
     return found.stated, found.package.version, found.package.sha256

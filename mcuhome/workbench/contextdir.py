@@ -368,8 +368,12 @@ def create_build_context(
     this workbench was released alongside when it named none. A device is
     therefore neither frozen onto whatever was current the day it was
     created nor carried forward onto an SDK this workbench has never
-    seen. *registry* is the second tier the resolution may fall through
-    to; without one, only the operator's directories are searched.
+    seen. That function decides the pre-release rule with it, because the
+    two are one decision: the default names MCUHome's own line, whose
+    releases are all pre-releases today, while a version the device
+    states is held to the ordinary rule. *registry* is the second tier
+    the resolution may fall through to; without one, only the operator's
+    directories are searched.
 
     The two never-hashed fields of the pin — the intent and the location
     hint — are rendered by :class:`~mcuhome.workbench.resolve_pins.SdkResolution`
@@ -380,9 +384,12 @@ def create_build_context(
     server. The server accepts both empty; absence, not emptiness, is
     what a reader refuses as malformed.
     """
+    prereleases = None
     if constraint is None:
-        constraint = sdk_constraint(model.sources.sdk)
-    found = resolve_sdk(sdk_sources, constraint=constraint, registry=registry)
+        constraint, prereleases = sdk_constraint(model.sources.sdk)
+    found = resolve_sdk(
+        sdk_sources, constraint=constraint, prereleases=prereleases, registry=registry
+    )
     out_dir = Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)

@@ -151,12 +151,18 @@ other registry the file is yours to create.
 
 ### Which SDK a build uses
 
-A device that names no version in `sources.sdk` is built with the newest patch
-release of the SDK minor this workbench was released alongside, and nothing is
-written into the device: a device created today is not frozen onto today's
-version, and it is not carried forward onto an SDK this workbench has never seen
-either. Naming a version — `sources.sdk: sdk/mcuhome-sdk:0.1.9` — pins exactly
-that one.
+A device that names no version in `sources.sdk` is built with the newest release
+of the SDK minor this workbench was released alongside, and nothing is written
+into the device: a device created today is not frozen onto today's version, and
+it is not carried forward onto an SDK this workbench has never seen either.
+
+That default takes **pre-releases** — every MCUHome package in the 0.1 line is a
+`.devN` release, so a default that skipped them would resolve to nothing at all.
+It is the one place that does: a version you state yourself follows the ordinary
+rule, where a dev release satisfies a constraint only if the constraint names one.
+So `sources.sdk: sdk/mcuhome-sdk:0.1.9` pins exactly `0.1.9` and will not quietly
+become `0.1.9.dev1`; write `:0.1.9.dev1` if that is what you want. Either way the
+minor bound holds — the default never crosses into 0.2.
 
 Packages are looked for in the operator's own directories first (`sdk_sources`)
 and only then on the registry, and their bytes are checked against the pinned
