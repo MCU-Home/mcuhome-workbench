@@ -5,6 +5,9 @@
 build_*/
 twister-out*/
 .cache/
+# where tests/python/test_buildenvstore_real.py looks for the published
+# build environment packages: 800 MB of archives, fetched by hand
+tests/python/data/real-packages/
 
 # ai coding agents, which live in the workspace and never in a repository
 AGENTS.md

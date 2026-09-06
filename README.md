@@ -171,6 +171,46 @@ A package published per architecture is named once — the index says which
 concrete package that name stands for on this host, and the mapping is checked
 against the members it points at before anything is fetched.
 
+### The build environment store
+
+A build that does not run in a container needs its build environment as files on
+this machine. The workbench unpacks the environment's packages into a store under
+the user's own cache home:
+
+```
+${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments/<package name>-<version>/
+```
+
+One directory per package and version, so two projects on different versions do
+not disturb each other and neither is ever unpacked twice. Unpacking happens
+beside the entry and the finished tree is moved into place in one step, an entry
+is finalized once — the build's Python environment created from the wheels the
+package carries, offline; west's configuration checked; git told that the
+workspace's repositories are not foreign — and is then **frozen read-only**,
+because every build using that version shares it, including builds running at
+the same time. A build that needs to change a tree works on a copy.
+
+**Clearing it.** The store is a cache: deleting it costs the next build the
+unpacking time and nothing else. Since the entries are read-only, deletion takes
+two commands:
+
+```console
+$ store="${XDG_CACHE_HOME:-$HOME/.cache}/mcuhome/build-environments"
+$ chmod -R u+w "$store"
+$ rm -rf "$store"
+```
+
+Single entries go the same way — `chmod -R u+w`, then `rm -rf`, on the one
+directory.
+
+**The host's Python.** The environment's tools package carries the Python
+packages a build needs as wheels, and some of them are compiled against one
+version of Python — the one current Debian stable ships, which is what the
+package is built with. MCUHome checks that before it creates anything and refuses
+with the version it needs; nothing is downloaded or compiled to paper over the
+difference. Run MCUHome on that version, or build in a container, where the
+question does not arise.
+
 ## Security
 
 Firmware is signed on the machine the user controls, never on a build server:

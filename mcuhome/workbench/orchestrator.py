@@ -49,6 +49,7 @@ import contextlib
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import stat
@@ -1352,6 +1353,7 @@ def acquire_package(
     registry: RegistrySource | None = None,
     platform: str | None = None,
     max_bytes: int = SDK_MAX_BYTES,
+    symlinks: bool = False,
 ) -> AcquiredPackage:
     """Find the pinned package, verify its bytes, unpack it safely.
 
@@ -1383,7 +1385,16 @@ def acquire_package(
     whose sha256 is not the pinned one is refused before a byte is
     fetched. The unpack is the safe extraction of §9.1: regular files and
     directories only, and the executable bit preserved so ``bin/generate``
-    can be spawned (§6.1).
+    can be spawned (§6.1). *symlinks* widens that by exactly one member
+    type, for the packages a build environment is assembled from —
+    a toolchain and a third party's source world cannot be delivered
+    without links — and only for links that stay inside their own tree;
+    see :func:`_safe_extract`.
+
+    *max_bytes* is how much the archive may unpack to. It is a caller's
+    decision because the packages differ by orders of magnitude, and a
+    bound generous enough for the source world would be no bound at all
+    for the SDK.
 
     A directory with **no index** is searched by the conventional
     filename, ``<name>-<version>.tar.zst``. That is not a weaker rule:
@@ -1416,7 +1427,13 @@ def acquire_package(
                 f"{archive} is named for this version and hashes to {measured}",
             )
         return _unpack(
-            archive, into=into, name=concrete, version=version, sha256=sha256, limit=max_bytes
+            archive,
+            into=into,
+            name=concrete,
+            version=version,
+            sha256=sha256,
+            limit=max_bytes,
+            symlinks=symlinks,
         )
 
     client = opened(registry)
@@ -1435,7 +1452,13 @@ def acquire_package(
         try:
             archive = client.fetch_package(index, entry, into=staging)
             return _unpack(
-                archive, into=into, name=entry.name, version=version, sha256=sha256, limit=max_bytes
+                archive,
+                into=into,
+                name=entry.name,
+                version=version,
+                sha256=sha256,
+                limit=max_bytes,
+                symlinks=symlinks,
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -1472,14 +1495,21 @@ def acquire_sdk(
 
 
 def _unpack(
-    archive: Path, *, into: Path, name: str, version: str, sha256: str, limit: int
+    archive: Path,
+    *,
+    into: Path,
+    name: str,
+    version: str,
+    sha256: str,
+    limit: int,
+    symlinks: bool = False,
 ) -> AcquiredPackage:
     """The archive on disk, expanded into *into* under the safe-extraction rules."""
     into.mkdir(parents=True, exist_ok=True)
     spool = into.parent / f"{into.name}.tar"
     try:
-        _decompress(archive, spool, limit=limit)
-        _safe_extract(spool, into=into, quota_bytes=limit)
+        _decompress(archive, spool, limit=limit, what=name)
+        _safe_extract(spool, into=into, quota_bytes=limit, what=name, symlinks=symlinks)
     finally:
         spool.unlink(missing_ok=True)
     return AcquiredPackage(version=version, sha256=sha256, source=archive, tree=into, name=name)
@@ -1570,7 +1600,7 @@ def _index_entries(index: object) -> dict[str, dict[str, dict]]:
     }
 
 
-def _decompress(archive: Path, spool: Path, *, limit: int) -> None:
+def _decompress(archive: Path, spool: Path, *, limit: int, what: str = SDK_PACKAGE_NAME) -> None:
     """zstd to a plain tar on disk, refusing an expansion mid-stream.
 
     Streaming rather than one-shot: a few kilobytes of zstd can expand to
@@ -1584,13 +1614,20 @@ def _decompress(archive: Path, spool: Path, *, limit: int) -> None:
             written += len(block)
             if written > limit:
                 raise BuildError(
-                    f"The SDK package at {archive} unpacks to more than {limit} bytes.",
+                    f"The {what} package at {archive} unpacks to more than {limit} bytes.",
                     hint="the archive is corrupt or hostile — do not list a source you distrust",
                 )
             handle.write(block)
 
 
-def _safe_extract(archive: Path, *, into: Path, quota_bytes: int) -> None:
+def _safe_extract(
+    archive: Path,
+    *,
+    into: Path,
+    quota_bytes: int,
+    what: str = SDK_PACKAGE_NAME,
+    symlinks: bool = False,
+) -> None:
     """Safe extraction (§9.1): regular files and directories only.
 
     Absolute paths, ``..`` after normalization, symlinks, hardlinks and
@@ -1600,33 +1637,65 @@ def _safe_extract(archive: Path, *, into: Path, quota_bytes: int) -> None:
     because §6.1 spawns ``bin/generate`` as a child process and an SDK
     unpacked without its exec bit answers exit 127 where code generation
     should be.
+
+    **Symlinks, for the packages that cannot be delivered without them.**
+    The SDK package is unpacked with *symlinks* false and the rule above
+    holds for it unchanged. A build environment package is a third
+    party's source world and toolchain — the compiler driver reached
+    through ``arm-zephyr-eabi-cc``, a source tree that links its own
+    subdirectories — and refusing links there would refuse the package
+    outright. They are then created, and only these: a **relative**
+    target whose lexical resolution against the link's own directory
+    stays inside the tree. An absolute target and one that climbs out are
+    refused exactly as a ``..`` path component is, and for the same
+    reason. Hardlinks and device nodes stay refused either way — a
+    hardlink names an inode rather than a path, so nothing about it can
+    be checked lexically.
+
+    That check is lexical, and it is only sound while a member's path on
+    disk means what the archive's path says: an archive that first links
+    ``a`` to ``.`` and then writes ``a/b`` has the kernel resolve ``a``
+    and land one level higher than the name suggests, and a chain of such
+    links walks out of the tree with every member passing a lexical test.
+    So **no entry is ever placed under a link**: every directory in a
+    member's path is created here, remembered, and required to be one of
+    those — a name that is already a link is refused rather than followed.
+    With the two rules together the lexical path and the real path are the
+    same path, and containment composes.
     """
     into.mkdir(parents=True, exist_ok=True)
     written = 0
+    # The directories this extraction made itself, as archive paths. The
+    # root is in it from the start; nothing else gets in without being
+    # created as a directory here.
+    made: set[str] = {""}
     try:
         with archive.open("rb") as raw, tarfile.open(fileobj=raw, mode="r|") as tar:
             for member in tar:
-                name = _safe_member_name(member.name)
+                name = _safe_member_name(member.name, what=what)
                 target = into / name
                 if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    _make_directory(into, name, made=made, what=what)
+                    continue
+                _make_directory(into, posixpath.dirname(name), made=made, what=what)
+                if symlinks and member.issym():
+                    target.symlink_to(_safe_link_target(member, name, what=what))
                     continue
                 if not member.isfile():
                     raise BuildError(
-                        f'The SDK package carries "{member.name}", which is not a regular '
+                        f'The {what} package carries "{member.name}", which is not a regular '
                         "file: a symlink, hardlink or device node is a way out of the tree.",
-                        hint="an SDK package holds regular files and directories only (§9.1)",
+                        hint=f"a {what} package holds regular files and directories only",
                     )
                 source = tar.extractfile(member)
                 if source is None:  # pragma: no cover - isfile() was true a line ago
-                    raise BuildError(f'The SDK entry "{member.name}" carries no data.', hint="")
-                target.parent.mkdir(parents=True, exist_ok=True)
+                    raise BuildError(f'The {what} entry "{member.name}" carries no data.', hint="")
                 with target.open("wb") as handle:
                     while block := source.read(_BLOCK):
                         written += len(block)
                         if written > quota_bytes:
                             raise BuildError(
-                                f"The SDK package unpacks to more than {quota_bytes} bytes.",
+                                f"The {what} package unpacks to more than {quota_bytes} bytes.",
                                 hint="the archive is corrupt or hostile",
                             )
                         handle.write(block)
@@ -1634,7 +1703,7 @@ def _safe_extract(archive: Path, *, into: Path, quota_bytes: int) -> None:
                 target.chmod(0o700 if executable else 0o600)
     except tarfile.TarError as error:
         raise BuildError(
-            f"The SDK package at {archive} is not a readable tar ({error}).",
+            f"The {what} package at {archive} is not a readable tar ({error}).",
             hint="the archive is corrupt — re-fetch it or point at another source",
         ) from error
     except OSError as error:
@@ -1647,13 +1716,14 @@ def _safe_extract(archive: Path, *, into: Path, quota_bytes: int) -> None:
         # `BuildError`s raised above (unsafe path, quota) are not `OSError`
         # and pass through this arm untouched.
         raise BuildError(
-            f"The SDK package at {archive} holds an entry this filesystem cannot unpack ({error}).",
-            hint="an SDK entry names a path the filesystem rejects — a segment over NAME_MAX, "
-            "or a tree too deep; the archive is corrupt or hostile",
+            f"The {what} package at {archive} holds an entry this filesystem cannot "
+            f"unpack ({error}).",
+            hint=f"a {what} entry names a path the filesystem rejects — a segment over "
+            "NAME_MAX, or a tree too deep; the archive is corrupt or hostile",
         ) from error
 
 
-def _safe_member_name(name: str) -> str:
+def _safe_member_name(name: str, *, what: str = SDK_PACKAGE_NAME) -> str:
     """A tar member's path, or a refusal. Never normalized — refused.
 
     ``..`` and absolute paths are the escape, and rewriting ``./x`` to
@@ -1671,13 +1741,64 @@ def _safe_member_name(name: str) -> str:
     )
     if not usable:
         raise BuildError(
-            f"The SDK package carries an unsafe path {name!r}.",
+            f"The {what} package carries an unsafe path {name!r}.",
             hint=(
-                "an SDK entry is a relative path with forward slashes and no empty, . or .. "
-                "segment — a traversal is refused, never normalized (§9.1)"
+                f"a {what} entry is a relative path with forward slashes and no empty, . or .. "
+                "segment — a traversal is refused, never normalized"
             ),
         )
     return cleaned
+
+
+def _make_directory(into: Path, relative: str, *, made: set[str], what: str) -> None:
+    """*relative* below *into*, created component by component, never followed.
+
+    The one guarantee this gives the caller is that every component of
+    the path is a real directory this extraction created — so a member's
+    path on disk is the path the archive named, and a link the archive
+    placed earlier cannot have moved the ground under it.
+    """
+    current = ""
+    for part in relative.split("/") if relative else []:
+        current = f"{current}/{part}" if current else part
+        if current in made:
+            continue
+        path = into / current
+        if path.is_symlink():
+            raise BuildError(
+                f'The {what} package puts entries under "{current}", which it made a link.',
+                hint="a package writes into directories it creates as directories — "
+                "the archive is corrupt or hostile",
+            )
+        path.mkdir(exist_ok=True)
+        made.add(current)
+
+
+def _safe_link_target(member: tarfile.TarInfo, name: str, *, what: str) -> str:
+    """A symlink member's target, verbatim, once it is known to stay inside.
+
+    Lexical and not :meth:`~pathlib.Path.resolve`: the tree is being
+    written as this runs, so a target may name something that does not
+    exist yet, and resolving would answer for a filesystem state that is
+    not the final one. Lexical containment is enough because every link
+    in the tree passes this check and no member is ever placed under a
+    link (see :func:`_safe_extract`), so the real path of every link is
+    the path the archive named and containment composes.
+    """
+    target = member.linkname
+    # Segment-wise, not by string prefix: a file really called "..data"
+    # (Kubernetes writes them, and so do a few build systems) is an
+    # ordinary name and only "..", or a path that starts with it, climbs.
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    escapes = target.startswith("/") or resolved == ".." or resolved.startswith("../")
+    if escapes or "\x00" in target:
+        raise BuildError(
+            f'The {what} package links "{member.name}" to {target!r}, which is outside '
+            "the package.",
+            hint=f"a {what} entry may link to a relative path inside its own tree and to "
+            "nothing else — the archive is corrupt or hostile",
+        )
+    return target
 
 
 # --------------------------------------------------------------------------

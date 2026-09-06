@@ -1330,6 +1330,116 @@ def test_the_safe_extractor_refuses_a_hardlink(tmp_path) -> None:
     assert "not a regular file" in caught.value.message
 
 
+# --------------------------------------------------------------------------
+# Symlinks, for the packages a build environment is assembled from
+# --------------------------------------------------------------------------
+#
+# A toolchain reaches its compiler through `arm-zephyr-eabi-cc -> ...-gcc`
+# and a vendored source tree links its own subdirectories, so the two
+# environment packages carry hundreds of links and cannot be delivered
+# without them. The rule that replaces "no links at all" is lexical
+# containment, and these are its edges.
+
+
+def _link_archive(spool: Path, target: str, *, name: str = "deep/link") -> None:
+    with tarfile.open(spool, "w") as tar:
+        directory = tarfile.TarInfo("deep")
+        directory.type = tarfile.DIRTYPE
+        tar.addfile(directory)
+        payload = tarfile.TarInfo("deep/real")
+        payload.size = 2
+        tar.addfile(payload, io.BytesIO(b"hi"))
+        link = tarfile.TarInfo(name)
+        link.type = tarfile.SYMTYPE
+        link.linkname = target
+        tar.addfile(link)
+
+
+def test_a_link_inside_the_tree_is_created_when_the_package_may_carry_links(tmp_path) -> None:
+    """And verbatim: a relative target stays relative, so the tree relocates."""
+    spool = tmp_path / "package.tar"
+    _link_archive(spool, "real")
+    into = tmp_path / "out"
+    lb._safe_extract(spool, into=into, quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert (into / "deep" / "link").is_symlink()
+    assert os.readlink(into / "deep" / "link") == "real"
+    assert (into / "deep" / "link").read_bytes() == b"hi"
+
+
+def test_a_link_climbing_back_into_the_tree_is_created(tmp_path) -> None:
+    """``../..`` is only an escape when it ends up outside — CHIP's own
+    ``third_party/connectedhomeip -> ../../..`` does not."""
+    spool = tmp_path / "package.tar"
+    _link_archive(spool, "../deep", name="deep/inner/link")
+    into = tmp_path / "out"
+    lb._safe_extract(spool, into=into, quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert (into / "deep" / "inner" / "link").is_symlink()
+
+
+def test_a_link_out_of_the_tree_is_refused(tmp_path) -> None:
+    spool = tmp_path / "package.tar"
+    _link_archive(spool, "../../../../etc/passwd")
+    with pytest.raises(BuildError) as caught:
+        lb._safe_extract(spool, into=tmp_path / "out", quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert "outside the package" in caught.value.message
+
+
+def test_a_target_that_only_begins_with_dots_is_a_name_and_not_a_climb(tmp_path) -> None:
+    """``..data`` is a file name. The check is segment-wise for that reason:
+    a string prefix test would refuse it and the package with it."""
+    spool = tmp_path / "package.tar"
+    _link_archive(spool, "..data")
+    into = tmp_path / "out"
+    lb._safe_extract(spool, into=into, quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert os.readlink(into / "deep" / "link") == "..data"
+
+
+def test_an_absolute_link_is_refused(tmp_path) -> None:
+    spool = tmp_path / "package.tar"
+    _link_archive(spool, "/etc/passwd")
+    with pytest.raises(BuildError) as caught:
+        lb._safe_extract(spool, into=tmp_path / "out", quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert "outside the package" in caught.value.message
+
+
+def test_an_entry_under_a_link_the_archive_placed_itself_is_refused(tmp_path) -> None:
+    """The escape a lexical check alone does not catch: link ``l1`` to
+    ``.``, then link ``l1/l2`` to ``..`` — both resolve inside *by name*,
+    while on disk the second one lands a level above the tree and the file
+    written through it lands outside it. Each further link climbs another
+    level, so the write target is arbitrary."""
+    spool = tmp_path / "evil.tar"
+    with tarfile.open(spool, "w") as tar:
+        for name, target in (("l1", "."), ("l1/l2", "..")):
+            link = tarfile.TarInfo(name)
+            link.type = tarfile.SYMTYPE
+            link.linkname = target
+            tar.addfile(link)
+        payload = tarfile.TarInfo("l1/l2/escaped")
+        payload.size = 5
+        tar.addfile(payload, io.BytesIO(b"pwned"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with pytest.raises(BuildError) as caught:
+        lb._safe_extract(spool, into=outside / "tree", quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert "which it made a link" in caught.value.message
+    assert not (outside / "escaped").exists()
+
+
+def test_a_hardlink_stays_refused_where_symlinks_are_allowed(tmp_path) -> None:
+    """A hardlink names an inode, not a path — nothing about it can be
+    checked lexically, so widening the rule for symlinks does not widen it."""
+    spool = tmp_path / "evil.tar"
+    with tarfile.open(spool, "w") as tar:
+        link = tarfile.TarInfo("hard")
+        link.type = tarfile.LNKTYPE
+        link.linkname = "real"
+        tar.addfile(link)
+    with pytest.raises(BuildError) as caught:
+        lb._safe_extract(spool, into=tmp_path / "out", quota_bytes=lb.SDK_MAX_BYTES, symlinks=True)
+    assert "not a regular file" in caught.value.message
+
+
 def test_the_safe_extractor_refuses_a_device_node(tmp_path) -> None:
     spool = tmp_path / "evil.tar"
     with tarfile.open(spool, "w") as tar:
