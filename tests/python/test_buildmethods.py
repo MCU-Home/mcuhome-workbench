@@ -31,13 +31,14 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.errors import BuildError
 
-from mcuhome.workbench import buildmethods, containerbuild, sessionclient
+from mcuhome.workbench import buildmethods, containerbuild, sessionclient, subprocessbuild
 from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
@@ -91,6 +92,157 @@ def test_run_build_refuses_an_unknown_method_before_it_runs_anything(model, tmp_
     request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
     with pytest.raises(buildmethods.UnknownMethod):
         _run(request, "cloud")
+
+
+# --------------------------------------------------------------------------
+# Choosing how this machine executes it
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", buildmethods.BUILD_MODES)
+def test_every_build_mode_resolves_to_itself(name: str) -> None:
+    assert buildmethods.resolve_build_mode(name) == name
+
+
+@pytest.mark.parametrize("nothing", [None, ""])
+def test_no_preference_is_the_container(nothing) -> None:
+    """The default is the container: it is the only mode that isolates."""
+    assert buildmethods.resolve_build_mode(nothing) == buildmethods.MODE_CONTAINER
+    assert buildmethods.DEFAULT_BUILD_MODE == buildmethods.MODE_CONTAINER
+    assert buildmethods.BuildRequest(model=None, out_dir=Path()).build_mode == (
+        buildmethods.MODE_CONTAINER
+    )
+
+
+def test_an_unknown_build_mode_is_a_refusal_that_lists_the_real_ones() -> None:
+    with pytest.raises(buildmethods.UnknownBuildMode) as refusal:
+        buildmethods.resolve_build_mode("vm")
+    rendered = str(refusal.value)
+    assert '"vm"' in rendered
+    for name in buildmethods.BUILD_MODES:
+        assert name in rendered
+
+
+def test_the_mode_selects_the_execution_the_local_method_runs(model, tmp_path) -> None:
+    """One name, two decisions: the target states them apart."""
+    container = buildmethods.target_for_method(
+        buildmethods.LOCAL, buildmethods.BuildRequest(model=model, out_dir=tmp_path)
+    )
+    assert isinstance(container.execution, buildmethods.ContainerExecution)
+
+    subprocess_target = buildmethods.target_for_method(
+        buildmethods.LOCAL,
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            build_mode=buildmethods.MODE_SUBPROCESS,
+            ccache_dir=tmp_path / "ccache",
+        ),
+    )
+    execution = subprocess_target.execution
+    assert isinstance(execution, buildmethods.SubprocessExecution)
+    assert execution.ccache_dir == tmp_path / "ccache"
+
+
+def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkeypatch):
+    """``build.mode = subprocess`` selects the backend, and nothing else does."""
+    seen: dict[str, object] = {}
+
+    def fake(device_model, **kwargs):
+        seen.update(kwargs)
+        outcome = lb.LocalOutcome(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            exit_code=0,
+            status="success",
+            successful=True,
+            artifacts=_artifacts(),
+            out=tmp_path / "delivery",
+        )
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=outcome,
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            environment=None,
+        )
+
+    monkeypatch.setattr(buildmethods, "compose_subprocess_build", fake)
+    outcome = _run(
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            build_mode=buildmethods.MODE_SUBPROCESS,
+            ccache_dir=tmp_path / "ccache",
+            jobs=2,
+        ),
+        buildmethods.LOCAL,
+    )
+    assert outcome.method == buildmethods.LOCAL
+    assert outcome.successful
+    assert outcome.artifacts == _artifacts()
+    assert outcome.report == BUILD_REPORT_FILE
+    # No image ran, and the outcome says so rather than naming one.
+    assert outcome.image == ""
+    assert seen["ccache_dir"] == tmp_path / "ccache"
+    assert seen["jobs"] == 2
+
+
+def test_a_subprocess_build_with_nothing_to_run_refuses_in_words(model, tmp_path) -> None:
+    """The environment is not derivable from a context that names an image."""
+    with pytest.raises(lb.EnvironmentUnavailable) as refusal:
+        asyncio.run(
+            buildmethods.build_firmware(
+                buildmethods.BuildRequest(
+                    model=model, out_dir=tmp_path, build_mode=buildmethods.MODE_SUBPROCESS
+                ),
+                target=buildmethods.LocalBuild(execution=buildmethods.SubprocessExecution()),
+            )
+        )
+    assert "build.mode to container" in refusal.value.hint
+
+
+def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
+    model, tmp_path, monkeypatch
+) -> None:
+    """With an environment and a context, the composition drives the backend."""
+    driven: dict[str, object] = {}
+
+    def fake_run(context_dir, **kwargs):
+        driven["context_dir"] = context_dir
+        driven.update(kwargs)
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=kwargs["environment"],
+        )
+
+    monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
+    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+
+    class FakeEnvironment:
+        def described(self) -> str:
+            return "mcuhome-build-workspace 0.1.0"
+
+    steps: list[tuple] = []
+    result = buildmethods.compose_subprocess_build(
+        model,
+        sdk_sources=(tmp_path / "sdk",),
+        work_root=tmp_path / "work",
+        env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
+        environment=FakeEnvironment(),
+        context_dir=tmp_path / "context",
+        jobs=5,
+        on_step=lambda name, **facts: steps.append((name, facts)),
+    )
+    assert result.out_dir == tmp_path / "out"
+    assert driven["jobs"] == 5
+    # Nobody configured a cache, so it is the user's cache directory —
+    # the same answer a container build gets, from the same resolution.
+    assert driven["ccache_dir"] == tmp_path / "cache" / "mcuhome" / "ccache"
+    assert driven["context_dir"] == tmp_path / "context"
+    assert [name for name, _ in steps] == ["environment", "environment", "compile"]
+    assert steps[1][1]["build_environment"] == "mcuhome-build-workspace 0.1.0"
 
 
 # --------------------------------------------------------------------------

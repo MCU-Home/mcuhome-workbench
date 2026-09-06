@@ -54,6 +54,7 @@ from mcuhome.workbench.resolve_env import ResolvedEnvironment, resolve_environme
 
 __all__ = [
     "LocalBuildResult",
+    "cache_root",
     "fetch_environment",
     "prepare_environment",
     "run_locked_build",
@@ -173,7 +174,7 @@ def _streams(seam: lb.Docker) -> container.Puller:
     return streams
 
 
-def _cache_root(env: dict[str, str], stated: Path | None) -> Path | None:
+def cache_root(env: dict[str, str], stated: Path | None) -> Path | None:
     """Where this machine keeps its compiler cache, or ``None`` for nowhere.
 
     The compiler cache belongs to the person building rather than to the
@@ -241,7 +242,7 @@ def run_locked_build(
             sdk_sources=tuple(Path(source) for source in sdk_sources),
             jobs=jobs,
             registry=registry,
-            ccache_dir=_cache_root(env, ccache_dir),
+            ccache_dir=cache_root(env, ccache_dir),
         ),
         docker=seam,
     )

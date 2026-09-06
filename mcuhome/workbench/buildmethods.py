@@ -91,7 +91,7 @@ from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenv as container
-from mcuhome.workbench import containerbuild
+from mcuhome.workbench import containerbuild, subprocessbuild
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
     DEFAULT_MAX_WAIT_SECONDS,
@@ -100,6 +100,7 @@ from mcuhome.workbench.buildtarget import (
     Execution,
     LocalBuild,
     RemoteBuild,
+    SubprocessExecution,
 )
 from mcuhome.workbench.contextdir import (
     context_facts,
@@ -108,6 +109,7 @@ from mcuhome.workbench.contextdir import (
     read_context_request,
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.orchestrator import EnvironmentUnavailable
 from mcuhome.workbench.resolve_env import resolve_environment
 
 if TYPE_CHECKING:  # pragma: no cover - types only
@@ -117,9 +119,13 @@ if TYPE_CHECKING:  # pragma: no cover - types only
     from mcuhome.workbench.packageregistry import RegistrySettings, RegistrySource
 
 __all__ = [
+    "BUILD_MODES",
+    "DEFAULT_BUILD_MODE",
     "DEFAULT_MAX_WAIT_SECONDS",
     "LOCAL",
     "METHODS",
+    "MODE_CONTAINER",
+    "MODE_SUBPROCESS",
     "REMOTE",
     "BuildOutcome",
     "BuildRequest",
@@ -129,9 +135,13 @@ __all__ = [
     "LocalBuild",
     "RemoteBuild",
     "RemoteNotConfigured",
+    "SubprocessExecution",
+    "UnknownBuildMode",
     "UnknownMethod",
     "build_firmware",
+    "compose_subprocess_build",
     "websocket_url",
+    "resolve_build_mode",
     "resolve_method",
     "run_build",
     "target_for_method",
@@ -152,11 +162,32 @@ METHODS = (LOCAL, REMOTE)
 #: What a caller that expressed no preference gets (E54).
 DEFAULT_METHOD = LOCAL
 
+#: How the ``local`` method executes a build on this machine. The two
+#: values of the ``build.mode`` configuration key, and the two
+#: executions :mod:`mcuhome.workbench.buildtarget` distinguishes: in a
+#: build container, or as a child process against a build environment
+#: unpacked on the host.
+MODE_CONTAINER = "container"
+MODE_SUBPROCESS = "subprocess"
+
+#: Every build mode, in the order a refusal lists them.
+BUILD_MODES = (MODE_CONTAINER, MODE_SUBPROCESS)
+
+#: What a caller that expressed no preference gets. The container: it is
+#: the mode that needs a container runtime and nothing else of a
+#: toolchain, and the only one that isolates a build context — which is
+#: untrusted input, because it carries patches.
+DEFAULT_BUILD_MODE = MODE_CONTAINER
+
 LineSink = Callable[[str], None]
 
 
 class UnknownMethod(BuildError):
     """A build method by a name that is not one of :data:`METHODS`."""
+
+
+class UnknownBuildMode(BuildError):
+    """A build mode by a name that is not one of :data:`BUILD_MODES`."""
 
 
 #: The port a build server listens on unless its operator moved it
@@ -253,6 +284,29 @@ def resolve_method(name: str | None) -> str:
     )
 
 
+def resolve_build_mode(name: str | None) -> str:
+    """The build mode *name* selects, or a refusal listing the real ones.
+
+    ``None`` and the empty string mean "no preference" and resolve to
+    :data:`DEFAULT_BUILD_MODE`, so a caller can hand through whatever its
+    own configuration ladder produced without checking it first — the
+    same contract :func:`resolve_method` has for the axis beside this one.
+    """
+    if not name:
+        return DEFAULT_BUILD_MODE
+    if name in BUILD_MODES:
+        return name
+    raise UnknownBuildMode(
+        f'"{name}" is not a build mode MCUHome knows.',
+        hint=(
+            "the build modes are "
+            + ", ".join(BUILD_MODES)
+            + f": {MODE_CONTAINER} compiles in a build container, and "
+            f"{MODE_SUBPROCESS} in a build environment unpacked on this machine"
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class BuildRequest:
     """Everything a build method may be given, whichever one runs.
@@ -335,6 +389,12 @@ class BuildRequest:
     registries: Sequence[RegistrySettings] = ()
 
     # -- local ---------------------------------------------------------
+    #: How this machine executes the build: ``container`` (the default,
+    #: and what every build did before this existed) or ``subprocess``.
+    #: The ``build.mode`` configuration key states it; a caller that
+    #: builds a :class:`~mcuhome.workbench.buildtarget.BuildTarget`
+    #: itself states the execution instead.
+    build_mode: str = DEFAULT_BUILD_MODE
     #: Build-container reference to compile in; ``None`` takes the default.
     image: str | None = None
     #: Where the compiler cache lives on this machine. ``None`` takes the
@@ -479,6 +539,8 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     """
     chosen = resolve_method(method)
     if chosen == LOCAL:
+        if resolve_build_mode(request.build_mode) == MODE_SUBPROCESS:
+            return LocalBuild(execution=SubprocessExecution(ccache_dir=request.ccache_dir))
         return LocalBuild(
             execution=ContainerExecution(image=request.image, ccache_dir=request.ccache_dir)
         )
@@ -522,6 +584,8 @@ async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> Build
             execution = target.execution
             if isinstance(execution, ContainerExecution):
                 return await _run_local(request, execution)
+            if isinstance(execution, SubprocessExecution):
+                return await _run_subprocess(request, execution)
             raise TypeError(
                 f"{type(execution).__name__} is not a build execution this package runs"
             )
@@ -563,6 +627,8 @@ def compose_local_build(
     on_step: Any = None,
     docker: Any = None,
     registry: Any = None,
+    build_mode: str = DEFAULT_BUILD_MODE,
+    environment: Any = None,
 ):
     """The container execution's composition: pin, create, lock, drive.
 
@@ -589,7 +655,30 @@ def compose_local_build(
     one. **Its own pin then decides the environment**, not this model's,
     which is what makes a received context a complete statement rather
     than half of one.
+
+    *build_mode* is the other execution axis and is dispatched here
+    rather than by the caller, so that a name a configuration produced
+    reaches the right composition without every caller learning both:
+    ``subprocess`` hands over to :func:`compose_subprocess_build`, and
+    *environment* — the store entries it runs against — belongs to that
+    mode alone.
     """
+    if resolve_build_mode(build_mode) == MODE_SUBPROCESS:
+        return compose_subprocess_build(
+            model,
+            sdk_sources=sdk_sources,
+            work_root=work_root,
+            env=env,
+            project_root=project_root,
+            registries=registries,
+            environment=environment,
+            jobs=jobs,
+            ccache_dir=ccache_dir,
+            context_dir=context_dir,
+            on_line=on_line,
+            on_step=on_step,
+            registry=registry,
+        )
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = _package_registry(
@@ -665,6 +754,127 @@ def compose_local_build(
         registry=packages,
         on_line=on_line,
         docker=docker,
+    )
+
+
+def compose_subprocess_build(
+    model: DeviceModel,
+    *,
+    sdk_sources: Sequence[Path],
+    work_root: Path,
+    env: dict[str, str],
+    environment: Any = None,
+    project_root: Path | None = None,
+    registries: Sequence[RegistrySettings] = (),
+    jobs: int = 1,
+    ccache_dir: Path | None = None,
+    context_dir: Path | None = None,
+    on_line: Any = None,
+    on_step: Any = None,
+    registry: Any = None,
+) -> subprocessbuild.SubprocessBuildResult:
+    """The subprocess execution's composition: environment, lock, drive.
+
+    The same three announced steps a container build has, minus the one
+    that fetches an image. **environment** is the package set this build
+    runs against, already provisioned into the store and handed over as
+    the two frozen entries
+    (:class:`mcuhome.workbench.subprocessbuild.Environment`);
+    **context** is the locked directory the build is attributed to; and
+    **compile** hands the two to
+    :func:`mcuhome.workbench.subprocessbuild.run_locked_build`.
+
+    Two things this composition does **not** do yet, and it says so
+    rather than guessing at either: resolve which packages a device's
+    build environment is made of, and create a build context that states
+    them. Both are properties of the build context format — a context
+    names its environment, and today it names a container image — so a
+    caller that has neither is told to build in a container instead of
+    being handed a build against an environment nobody chose.
+    """
+    sources = tuple(Path(source) for source in sdk_sources)
+    work_root = Path(work_root)
+    if environment is None:
+        raise EnvironmentUnavailable(
+            f"MCUHome cannot build {model.device.name} outside a container yet: nothing "
+            "states which build environment packages to use.",
+            hint="build in a container: set build.mode to container",
+        )
+    if context_dir is None:
+        raise EnvironmentUnavailable(
+            "MCUHome cannot create a build context for a build outside a container yet.",
+            hint="build in a container: set build.mode to container, or build a context "
+            "you already have",
+        )
+    packages = _package_registry(
+        model,
+        project_root=project_root,
+        registries=registries,
+        work_root=work_root,
+        on_line=on_line,
+    )
+    context_dir = Path(context_dir)
+    if on_step is not None:
+        on_step("environment")
+        on_step("environment", build_environment=environment.described(), fetched=False)
+    lock_context(context_dir)
+    if on_step is not None:
+        on_step("compile", image="", jobs=jobs)
+    return subprocessbuild.run_locked_build(
+        context_dir,
+        environment=environment,
+        sdk_sources=sources,
+        work_root=work_root / "backend",
+        env=dict(env),
+        jobs=jobs,
+        # Resolved the way a container build resolves it, so that a
+        # machine nobody configured still has a compiler cache and has
+        # only one: unset means the user's cache directory, and a caller
+        # without a home directory gets a slow build rather than a
+        # refusal.
+        ccache_dir=containerbuild.cache_root(dict(env), ccache_dir),
+        registry=packages,
+        on_line=on_line,
+    )
+
+
+async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution) -> BuildOutcome:
+    """Local, without a container: :func:`compose_local_build`, offloaded.
+
+    The mirror of :func:`_run_local`, through the same module-global
+    seam and with the same reason for being offloaded: underneath it
+    drives a child process and blocks until it ends.
+    """
+    result = await asyncio.to_thread(
+        compose_local_build,
+        request.model,
+        signing_pub=request.signing_pub,
+        sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        work_root=_work_root(request, ".mcuhome-local"),
+        env=dict(request.env),
+        project_root=request.project_root,
+        registries=request.registries,
+        jobs=request.jobs,
+        ccache_dir=execution.ccache_dir,
+        context_dir=request.context_dir,
+        on_line=request.on_line,
+        on_step=request.on_step,
+        build_mode=MODE_SUBPROCESS,
+    )
+    outcome = result.outcome
+    return BuildOutcome(
+        method=LOCAL,
+        successful=outcome.successful,
+        status=outcome.status,
+        context_id=outcome.context_id,
+        artifacts=tuple(outcome.artifacts),
+        out_dir=result.out_dir,
+        report=BUILD_REPORT_FILE,
+        # No image ran, and an empty reference is the honest answer: the
+        # environment is named by its packages, which travel on the
+        # composition's own result.
+        image="",
+        detail=result,
     )
 
 

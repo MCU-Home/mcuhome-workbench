@@ -135,6 +135,7 @@ __all__ = [
     "TreeEntry",
     "acquire_package",
     "acquire_sdk",
+    "contained",
     "open_environment",
     "current_user",
     "describe_run_command",
@@ -144,6 +145,7 @@ __all__ = [
     "read_file_command",
     "remove_command",
     "request_document",
+    "spawn_process",
     "start_command",
     "verify_artifacts",
     "write_request",
@@ -595,6 +597,13 @@ class _Child:
     cannot both be the thing a single thread is blocked on.
     """
 
+    #: This handle is a process. The counterpart on :class:`_Absent` is
+    #: what lets a caller tell "it ran and has not finished" from "it
+    #: never started at all" — two states ``poll()`` cannot distinguish,
+    #: and the difference between waiting for a build and waiting for
+    #: nothing.
+    started = True
+
     def __init__(self, process: subprocess.Popen[bytes], on_line: LineSink | None) -> None:
         self._process = process
         self._lines: list[str] = []
@@ -637,26 +646,61 @@ class _Child:
             self._process.kill()
 
 
-def _spawn_command(argv: Sequence[str], on_line: LineSink | None = None) -> Running:
+def spawn_process(
+    argv: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+    on_line: LineSink | None = None,
+) -> Running:
     """Start *argv* and hand back a handle that streams its merged output.
 
     Merged because §8 says the two streams **are** one stream: "standard
-    output and standard error together are one raw, opaque log stream".
+    output and standard error together are one raw, opaque log stream" —
+    and because a build log with the two halves interleaved by anybody
+    but the build is a log nobody can read.
+
+    *env* and *cwd* are stated rather than inherited, which matters for
+    the caller this exists for: the subprocess profile of the build
+    environment specification runs the builder as a child of this
+    process, and a child that inherited this process's environment would
+    build differently depending on the shell it was started from. A
+    ``None`` env inherits, which is what the container path wants — there
+    the environment that matters is the container's.
     """
     try:
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             list(argv),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=None if env is None else dict(env),
+            cwd=None if cwd is None else str(cwd),
         )
     except OSError:
         return _Absent()
     return _Child(process, on_line)
 
 
-class _Absent:
-    """No container runtime at all: the one failure a spawn has of its own."""
+def _spawn_command(argv: Sequence[str], on_line: LineSink | None = None) -> Running:
+    """:func:`spawn_process` in the shape :data:`Spawner` has.
 
+    The seam a :class:`Docker` uses by default, and the name a caller
+    replaces to drive a build without a container runtime.
+    """
+    return spawn_process(argv, on_line=on_line)
+
+
+class _Absent:
+    """No program at all: the one failure a spawn has of its own.
+
+    ``poll()`` and ``wait()`` answer ``None`` because there is no status
+    to report, which reads as "still running" to anything that only asks
+    them — so :attr:`started` is what a caller checks when the difference
+    matters. It matters wherever a supervisor waits: a deadline is the
+    wrong way to find out that a program does not exist.
+    """
+
+    started = False
     output = ""
 
     def poll(self) -> int | None:
@@ -1266,7 +1310,7 @@ def verify_artifacts(
     verified: list[Artifact] = []
     problems: list[str] = []
     for entry in declared:
-        resolved = _contained(out, entry.path)
+        resolved = contained(out, entry.path)
         if resolved is None:
             problems.append(
                 f'the declared artifact "{entry.path}" is not contained in out: a segment is '
@@ -1303,7 +1347,7 @@ def verify_artifacts(
     return tuple(verified), tuple(problems)
 
 
-def _contained(out: Path, relative: str) -> Path | None:
+def contained(out: Path, relative: str) -> Path | None:
     """The absolute path of a declared artifact under ``out``, or ``None``.
 
     Strict containment, checked segment by segment with ``lstat`` rather

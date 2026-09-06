@@ -16,11 +16,10 @@ of the two a caller is entitled to make: build on this machine
 (:class:`RemoteBuild`).
 
 **How it is executed** — :class:`Execution`. A property of the machine
-that ends up doing the work. Today there is one: a build container
-(:class:`ContainerExecution`). The axis exists anyway, because the second
-answer — compiling in a build environment that is already unpacked on the
-host, without a container runtime — is a property of *that machine* and
-never a client's to state.
+that ends up doing the work. There are two: a build container
+(:class:`ContainerExecution`) and a build environment already unpacked on
+the host (:class:`SubprocessExecution`). Which of them a machine uses is
+that machine's own property and never a client's to state.
 
 The asymmetry between the two classes is the point rather than an
 oversight: :class:`LocalBuild` carries an :class:`Execution` and
@@ -54,6 +53,7 @@ __all__ = [
     "Execution",
     "LocalBuild",
     "RemoteBuild",
+    "SubprocessExecution",
 ]
 
 #: How long a build waits for a turn on a busy build server before it
@@ -92,6 +92,30 @@ class ContainerExecution(Execution):
     #: Where the compiler cache lives on this machine. ``None`` takes the
     #: user's cache directory, which is what every build does unless
     #: somebody moved it — one cache per user, shared by every project.
+    ccache_dir: Path | None = None
+
+
+@dataclass(frozen=True)
+class SubprocessExecution(Execution):
+    """Compile in a build environment unpacked on this host, without a container.
+
+    The second answer to "how", and the one the module docstring
+    anticipated: the environment's packages are unpacked into a per-user
+    store and the builder runs as an ordinary child process. It needs no
+    container runtime and isolates nothing — the build runs with the
+    calling user's rights — so it is the execution for a machine whose
+    builds are its own, and never the one a build server offers to
+    strangers.
+
+    Like :class:`ContainerExecution` this is a statement about *this*
+    machine. A :class:`RemoteBuild` carries no execution at all, so a
+    client can no more ask a build server to run without a container than
+    it can ask it to run with one.
+    """
+
+    #: Where the compiler cache lives on this machine, as for a container
+    #: build: the parent of the two role directories. ``None`` builds
+    #: without a durable cache, which is slow rather than wrong.
     ccache_dir: Path | None = None
 
 

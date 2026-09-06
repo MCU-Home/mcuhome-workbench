@@ -91,16 +91,21 @@ What is here, in the order a caller needs it:
     build has two placement questions in it and only the first belongs
     to a caller: **where** it runs (``LocalBuild``, ``RemoteBuild``) and
     **how** the machine that runs it executes the work
-    (``ContainerExecution``) — which is why ``LocalBuild`` carries an
-    ``Execution`` and ``RemoteBuild`` does not. ``RemoteNotConfigured``
-    is the typed refusal a caller renders.
+    (``ContainerExecution`` in a build container, ``SubprocessExecution``
+    against a build environment unpacked on the host) — which is why
+    ``LocalBuild`` carries an ``Execution`` and ``RemoteBuild`` does not.
+    ``RemoteNotConfigured`` is the typed refusal a caller renders.
 ``run_build`` / ``resolve_method`` / ``target_for_method``
     The same build, selected by method name — for a caller whose choice
     arrived as a command-line flag or a configuration value.
     ``resolve_method`` turns a name, or nothing, into one of ``LOCAL``,
     ``REMOTE`` (``METHODS``, ``DEFAULT_METHOD``) or raises
     ``UnknownMethod``; ``target_for_method`` is the name and the request
-    read together as the target they describe.
+    read together as the target they describe. ``resolve_build_mode``
+    does the same for the other axis — ``MODE_CONTAINER``,
+    ``MODE_SUBPROCESS`` (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or
+    ``UnknownBuildMode`` — and ``BuildRequest.build_mode`` is where a
+    caller states it.
 ``open_environment`` / ``BuildEnvironment`` / ``Invocation``
     The **backend role**, for the one caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a
@@ -160,16 +165,22 @@ from mcuhome.workbench import __version__
 from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildmethods import (
+    BUILD_MODES,
+    DEFAULT_BUILD_MODE,
     DEFAULT_MAX_WAIT_SECONDS,
     DEFAULT_METHOD,
     LOCAL,
     METHODS,
+    MODE_CONTAINER,
+    MODE_SUBPROCESS,
     REMOTE,
     BuildOutcome,
     BuildRequest,
     RemoteNotConfigured,
+    UnknownBuildMode,
     UnknownMethod,
     build_firmware,
+    resolve_build_mode,
     resolve_method,
     run_build,
     target_for_method,
@@ -180,6 +191,7 @@ from mcuhome.workbench.buildtarget import (
     Execution,
     LocalBuild,
     RemoteBuild,
+    SubprocessExecution,
 )
 from mcuhome.workbench.configschema import config_json_schema
 from mcuhome.workbench.configuration import (
@@ -268,6 +280,7 @@ __all__ = [
     "BuildEnvironment",
     "BuildError",
     "BuildOutcome",
+    "BUILD_MODES",
     "BuildRequest",
     "BuildTarget",
     "Builder",
@@ -280,6 +293,7 @@ __all__ = [
     "ConfigErrorGroup",
     "ContainerExecution",
     "DEFAULT_MAX_WAIT_SECONDS",
+    "DEFAULT_BUILD_MODE",
     "DEFAULT_METHOD",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
@@ -300,6 +314,8 @@ __all__ = [
     "MARKER_FILE",
     "MCUHomeError",
     "METHODS",
+    "MODE_CONTAINER",
+    "MODE_SUBPROCESS",
     "MODEL_VERSION",
     "Migration",
     "MigrationFailed",
@@ -319,12 +335,14 @@ __all__ = [
     "REMOTE",
     "RemoteBuild",
     "RemoteNotConfigured",
+    "SubprocessExecution",
     "RunningBuild",
     "SdkUnavailable",
     "SelectedBuilder",
     "Setting",
     "Settings",
     "UPGRADE_FILE",
+    "UnknownBuildMode",
     "UnknownMethod",
     "UpgradeInProgress",
     "UpgradeInterrupted",
@@ -351,6 +369,7 @@ __all__ = [
     "registry_data",
     "render_starter",
     "resolve_builder",
+    "resolve_build_mode",
     "resolve_method",
     "resolve_project",
     "resolve_settings",
