@@ -112,12 +112,17 @@ def test_every_build_mode_resolves_to_itself(name: str) -> None:
 
 @pytest.mark.parametrize("nothing", [None, ""])
 def test_no_preference_is_the_container(nothing) -> None:
-    """The default is the container: it is the only mode that isolates."""
+    """The default is the container: it is the only mode that isolates.
+
+    A request that states no mode states none — the configuration
+    answers, and with nothing configured that answer is the container.
+    So the default is asserted where it is decided, on the target, and
+    not on a field that now means "nobody said".
+    """
     assert buildmethods.resolve_build_mode(nothing) == buildmethods.MODE_CONTAINER
     assert buildmethods.DEFAULT_BUILD_MODE == buildmethods.MODE_CONTAINER
-    assert buildmethods.BuildRequest(model=None, out_dir=Path()).build_mode == (
-        buildmethods.MODE_CONTAINER
-    )
+    assert buildmethods.BuildRequest(model=None, out_dir=Path()).build_mode is None
+    assert buildmethods.BuildOptions().mode == buildmethods.MODE_CONTAINER
 
 
 def test_an_unknown_build_mode_is_a_refusal_that_lists_the_real_ones() -> None:

@@ -810,6 +810,58 @@ def test_the_registry_block_parses(tmp_path: Path) -> None:
     )
 
 
+def test_a_registry_may_name_its_own_trust_anchor(tmp_path: Path) -> None:
+    """The third thing a registry entry may say, for anchors kept outside a project."""
+    file = tmp_path / "mcuhome.yaml"
+    file.write_text("", encoding="utf-8")
+    parsed = parse_registries(
+        {DOMAIN: {"anchor": "./anchors/private.json"}},
+        file=file,
+        origin="project",
+        env={},
+    )
+    assert parsed[0].anchor == tmp_path / "anchors" / "private.json"
+    # Unset stays unset: the project's own file answers then.
+    assert parse_registries({DOMAIN: {}}, file=file, origin="project", env={})[0].anchor is None
+
+
+def test_a_configured_anchor_replaces_the_projects_own(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    elsewhere = tmp_path / "anchors" / "private.json"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_bytes(b'{"keys": [], "threshold": 1}\n')
+    assert trust_anchor_for(root, DOMAIN, stated=elsewhere) == elsewhere
+    # …and it is used for that domain even where the project has no file
+    # at all, which is the case it exists for.
+    assert trust_anchor_for(bare(tmp_path), DOMAIN, stated=elsewhere) == elsewhere
+
+
+def test_a_configured_anchor_that_is_not_there_is_refused(tmp_path: Path) -> None:
+    """Not a fallback: a build must not check a registry against something
+    other than what the operator named."""
+    root = project(tmp_path)
+    with pytest.raises(TrustAnchorMissing) as refusal:
+        trust_anchor_for(root, DOMAIN, stated=tmp_path / "gone.json")
+    assert str(tmp_path / "gone.json") in str(refusal.value)
+    # …unless the project said it does not want this registry checked.
+    assert trust_anchor_for(root, DOMAIN, stated=tmp_path / "gone.json", untrusted=True) is None
+
+
+def test_registry_for_reads_the_configured_anchor(tmp_path: Path, keys) -> None:
+    root = bare(tmp_path)
+    elsewhere = tmp_path / "anchors" / f"{DOMAIN}.json"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_bytes(dump(anchor_document(keys, ("root-a", "root-b", "root-c"))))
+    client = registry_for(
+        DOMAIN,
+        project_root=root,
+        settings=(RegistrySettings(DOMAIN, anchor=elsewhere),),
+        into=tmp_path / "fetched",
+        opener=Offline(),
+    )
+    assert not client.untrusted
+
+
 @pytest.mark.parametrize(
     "block",
     [
@@ -818,6 +870,8 @@ def test_the_registry_block_parses(tmp_path: Path) -> None:
         {DOMAIN: {"untrusted": "yes"}},
         {DOMAIN: {"mirrors": {"sdk": "one string, not a list"}}},
         {DOMAIN: {"nonsense": True}},
+        {DOMAIN: {"anchor": 7}},
+        {DOMAIN: {"anchor": ""}},
     ],
 )
 def test_a_malformed_registry_block_is_refused(tmp_path: Path, block: object) -> None:

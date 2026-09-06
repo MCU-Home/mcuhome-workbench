@@ -465,6 +465,10 @@ class BackendConfig:
     #: if it is actually needed. ``None`` means the local tier is all
     #: there is.
     registry: RegistrySource | None = None
+    #: How much the SDK package may unpack to. ``None`` is the bound
+    #: :func:`acquire_package` applies by itself; an operator raises it
+    #: for an SDK package of their own that is legitimately larger.
+    sdk_max_bytes: int | None = None
     #: Root of the host's compiler cache — the parent of the two role
     #: directories, from :func:`mcuhome.workbench.buildenv.ccache_directory`.
     #: ``None`` mounts nothing, and the cache then lives in the container
@@ -1400,7 +1404,7 @@ def acquire_package(
     into: Path,
     registry: RegistrySource | None = None,
     platform: str | None = None,
-    max_bytes: int = SDK_MAX_BYTES,
+    max_bytes: int | None = None,
     symlinks: bool = False,
 ) -> AcquiredPackage:
     """Find the pinned package, verify its bytes, unpack it safely.
@@ -1442,7 +1446,9 @@ def acquire_package(
     *max_bytes* is how much the archive may unpack to. It is a caller's
     decision because the packages differ by orders of magnitude, and a
     bound generous enough for the source world would be no bound at all
-    for the SDK.
+    for the SDK. ``None`` takes the SDK's own bound, which is the
+    smallest of them: a caller that says nothing about a package's size
+    is the one to be least generous with.
 
     A directory with **no index** is searched by the conventional
     filename, ``<name>-<version>.tar.zst``. That is not a weaker rule:
@@ -1452,6 +1458,7 @@ def acquire_package(
     said, and requiring them to hand-write a manifest beside it would be
     a ceremony with nothing behind it.
     """
+    limit = SDK_MAX_BYTES if max_bytes is None else max_bytes
     searched = [str(directory) for directory in sources]
     for directory in sources:
         found = _local_candidate(
@@ -1480,7 +1487,7 @@ def acquire_package(
             name=concrete,
             version=version,
             sha256=sha256,
-            limit=max_bytes,
+            limit=limit,
             symlinks=symlinks,
         )
 
@@ -1505,7 +1512,7 @@ def acquire_package(
                 name=entry.name,
                 version=version,
                 sha256=sha256,
-                limit=max_bytes,
+                limit=limit,
                 symlinks=symlinks,
             )
         finally:
@@ -1523,6 +1530,7 @@ def acquire_sdk(
     sources: Sequence[Path],
     into: Path,
     registry: RegistrySource | None = None,
+    max_bytes: int | None = None,
 ) -> AcquiredPackage:
     """:func:`acquire_package` for the SDK — the one package with a name of its own.
 
@@ -1539,6 +1547,7 @@ def acquire_sdk(
         sources=sources,
         into=into,
         registry=registry,
+        max_bytes=max_bytes,
     )
 
 
@@ -1929,6 +1938,7 @@ class LocalBackend:
             sources=self.config.sdk_sources,
             into=sdk_tree,
             registry=self.config.registry,
+            max_bytes=self.config.sdk_max_bytes,
         )
 
         # §9.1: `work` is "the session's persistent working area", and a

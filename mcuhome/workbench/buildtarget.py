@@ -47,7 +47,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 __all__ = [
+    "BUILD_MODES",
+    "DEFAULT_BUILD_MODE",
     "DEFAULT_MAX_WAIT_SECONDS",
+    "MODE_CONTAINER",
+    "MODE_SUBPROCESS",
     "BuildTarget",
     "ContainerExecution",
     "Execution",
@@ -55,6 +59,23 @@ __all__ = [
     "RemoteBuild",
     "SubprocessExecution",
 ]
+
+#: The two executions, as the words a configuration writes them in: the
+#: values of the ``build.mode`` key. They live here, with the classes
+#: they name, so that the option registry can validate the key without
+#: importing the module that dispatches builds — a configuration read
+#: must not cost the whole build stack.
+MODE_CONTAINER = "container"
+MODE_SUBPROCESS = "subprocess"
+
+#: Every build mode, in the order a refusal lists them.
+BUILD_MODES = (MODE_CONTAINER, MODE_SUBPROCESS)
+
+#: What a caller that expressed no preference gets. The container: it is
+#: the mode that needs a container runtime and nothing else of a
+#: toolchain, and the only one that isolates a build context — which is
+#: untrusted input, because it carries patches.
+DEFAULT_BUILD_MODE = MODE_CONTAINER
 
 #: How long a build waits for a turn on a busy build server before it
 #: stops. Six hours, and it is not a fairness rule: waiting is bounded so

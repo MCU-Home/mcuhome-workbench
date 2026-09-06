@@ -86,14 +86,18 @@ from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import BUILD_CONTEXT_FILE, CONTEXT_FILE, format_generator_chain
-from mcuhome.model.errors import BuildError
+from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
-from mcuhome.workbench import containerbuild, subprocessbuild
+from mcuhome.workbench import buildenvstore, containerbuild, subprocessbuild
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
+    BUILD_MODES,
+    DEFAULT_BUILD_MODE,
     DEFAULT_MAX_WAIT_SECONDS,
+    MODE_CONTAINER,
+    MODE_SUBPROCESS,
     BuildTarget,
     ContainerExecution,
     Execution,
@@ -101,6 +105,7 @@ from mcuhome.workbench.buildtarget import (
     RemoteBuild,
     SubprocessExecution,
 )
+from mcuhome.workbench.configuration import Settings, resolve_settings
 from mcuhome.workbench.contextdir import (
     context_facts,
     create_build_context,
@@ -110,6 +115,7 @@ from mcuhome.workbench.contextdir import (
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.orchestrator import EnvironmentUnavailable
+from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import package_reference
 
 if TYPE_CHECKING:  # pragma: no cover - types only
@@ -127,6 +133,7 @@ __all__ = [
     "MODE_CONTAINER",
     "MODE_SUBPROCESS",
     "REMOTE",
+    "BuildOptions",
     "BuildOutcome",
     "BuildRequest",
     "BuildTarget",
@@ -139,7 +146,9 @@ __all__ = [
     "UnknownBuildMode",
     "UnknownMethod",
     "build_firmware",
+    "build_options",
     "compose_subprocess_build",
+    "options_for",
     "websocket_url",
     "resolve_build_mode",
     "resolve_method",
@@ -162,22 +171,17 @@ METHODS = (LOCAL, REMOTE)
 #: What a caller that expressed no preference gets (E54).
 DEFAULT_METHOD = LOCAL
 
-#: How the ``local`` method executes a build on this machine. The two
+#: How the ``local`` method executes a build on this machine: the two
 #: values of the ``build.mode`` configuration key, and the two
-#: executions :mod:`mcuhome.workbench.buildtarget` distinguishes: in a
+#: executions :mod:`mcuhome.workbench.buildtarget` distinguishes — in a
 #: build container, or as a child process against a build environment
-#: unpacked on the host.
-MODE_CONTAINER = "container"
-MODE_SUBPROCESS = "subprocess"
-
-#: Every build mode, in the order a refusal lists them.
-BUILD_MODES = (MODE_CONTAINER, MODE_SUBPROCESS)
-
-#: What a caller that expressed no preference gets. The container: it is
-#: the mode that needs a container runtime and nothing else of a
+#: unpacked on the host. Defined with those classes and re-exported
+#: here, so that reading a configuration file does not pull in the
+#: module that dispatches builds. :data:`DEFAULT_BUILD_MODE` is what a
+#: caller that expressed no preference gets: the container, because it
+#: is the mode that needs a container runtime and nothing else of a
 #: toolchain, and the only one that isolates a build context — which is
 #: untrusted input, because it carries patches.
-DEFAULT_BUILD_MODE = MODE_CONTAINER
 
 LineSink = Callable[[str], None]
 
@@ -308,6 +312,140 @@ def resolve_build_mode(name: str | None) -> str:
 
 
 @dataclass(frozen=True)
+class BuildOptions:
+    """What the ``build`` section of the configuration says, resolved once.
+
+    Everything in here is a property of **this machine**: which of the
+    two executions it uses, where it keeps unpacked build environments,
+    which interpreter creates their virtual environments, how much a
+    package may unpack to, where its compiler cache tiers are. None of it
+    describes the firmware, which is why none of it lives in a device and
+    all of it is configuration.
+
+    It travels as one object rather than as a dozen fields on
+    :class:`BuildRequest` for two reasons. A caller that has resolved the
+    configuration hands over what it resolved
+    (:func:`build_options`), and a caller that has not — an embedder
+    driving a bare model — gets the machine's own answer without having
+    to know that these keys exist (:func:`options_for`). And the build
+    compositions take one parameter instead of growing one per key.
+
+    Unset values are ``None`` throughout and mean *the default of
+    whatever consumes them*, never a value invented here: the store
+    resolves its own location from the user's cache home, the cache tiers
+    fall back to the cache root, and the sources fall back to
+    ``sdk_sources`` — so an option nobody set changes nothing.
+    """
+
+    #: ``build.mode``: ``container`` or ``subprocess``.
+    mode: str = DEFAULT_BUILD_MODE
+    #: Where ``mode`` came from, in the words :class:`…configuration.Setting`
+    #: uses — the file, the variable, or ``default``. Carried so that a
+    #: refusal caused by the mode can say who chose it.
+    mode_source: str = "default"
+    #: ``build.env_store``: the store's root. ``None`` is the user's
+    #: cache home, which is where a machine nobody configured keeps it.
+    env_store: Path | None = None
+    #: ``build.dev_workspace`` / ``build.dev_tools``: development mode.
+    dev_workspace: Path | None = None
+    dev_tools: Path | None = None
+    #: ``build.python``: the interpreter that creates a build
+    #: environment's virtual environment. ``None`` is the one MCUHome
+    #: itself runs on, which is right whenever the host's Python is the
+    #: one the tools package was built for.
+    python: str | None = None
+    #: ``build.workspace_sources`` / ``build.tools_sources``: operator
+    #: directories per package kind. Empty falls back to ``sdk_sources``,
+    #: so one directory holding everything keeps working.
+    workspace_sources: tuple[Path, ...] = ()
+    tools_sources: tuple[Path, ...] = ()
+    #: ``build.<kind>_max_bytes``: how much each package may unpack to.
+    sdk_max_bytes: int | None = None
+    workspace_max_bytes: int | None = None
+    tools_max_bytes: int | None = None
+    #: ``build.cache_*``: the compiler cache tiers. ``cache_local`` and
+    #: ``cache_shared`` name a tier outright; unset, both are laid out
+    #: under the cache root the build already resolves.
+    cache_local: Path | None = None
+    cache_shared: Path | None = None
+    cache_session: Path | None = None
+    cache_project: Path | None = None
+
+    def bound(self, kind: str) -> int | None:
+        """The configured unpacking bound for a package *kind*, if any."""
+        return {
+            buildenvstore.SDK_KIND: self.sdk_max_bytes,
+            buildenvstore.WORKSPACE_KIND: self.workspace_max_bytes,
+            buildenvstore.TOOLS_KIND: self.tools_max_bytes,
+        }.get(kind)
+
+
+def build_options(settings: Settings) -> BuildOptions:
+    """The ``build`` section of a resolved configuration, as one object.
+
+    Every value comes out of the registry that declared it — this
+    function knows the names and nothing else, so a key's kind, default,
+    validation and the five layers it merged through are stated in
+    exactly one place (:data:`mcuhome.workbench.configuration.OPTIONS`).
+    """
+    setting = settings.setting("build.mode")
+
+    def path(name: str) -> Path | None:
+        value = settings.value(name)
+        return None if value is None else Path(value)
+
+    def number(name: str) -> int | None:
+        # A bound the registry answered with its own default is not a
+        # statement: the store's table is the same value, and passing it
+        # on would make every kind look configured.
+        return int(settings.value(name)) if settings.origin(name) != "default" else None
+
+    return BuildOptions(
+        mode=resolve_build_mode(setting.value),
+        mode_source=setting.source or setting.origin,
+        env_store=path("build.env_store"),
+        dev_workspace=path("build.dev_workspace"),
+        dev_tools=path("build.dev_tools"),
+        python=settings.value("build.python") or None,
+        workspace_sources=tuple(settings.value("build.workspace_sources")),
+        tools_sources=tuple(settings.value("build.tools_sources")),
+        sdk_max_bytes=number("build.sdk_max_bytes"),
+        workspace_max_bytes=number("build.workspace_max_bytes"),
+        tools_max_bytes=number("build.tools_max_bytes"),
+        cache_local=path("build.cache_local"),
+        cache_shared=path("build.cache_shared"),
+        cache_session=path("build.cache_session"),
+        cache_project=path("build.cache_project"),
+    )
+
+
+def options_for(request: BuildRequest) -> BuildOptions:
+    """The build options of *request* — its own, or this machine's.
+
+    A caller that resolved the configuration itself states the result
+    (:attr:`BuildRequest.options`) and is answered with it unchanged. A
+    caller that did not gets the configuration resolved here, from the
+    environment the request states and the project it names: the system
+    and user files, the project's ``mcuhome.yaml``, and the ``MCUHOME_*``
+    variables. Not the command line — these options have no flags — so
+    the four layers below it are the whole ladder.
+
+    The project is taken as a directory and not read as a project: what
+    is wanted from it is one configuration file, and a build is not the
+    moment to refuse over a project marker somebody else's tool already
+    accepted.
+    """
+    if request.options is not None:
+        return request.options
+    project = (
+        None
+        if request.project_root is None
+        else Project(root=Path(request.project_root), discovered=True)
+    )
+    return build_options(resolve_settings(project=project, env=request.env))
+
+
+@dataclass(frozen=True)
 class BuildRequest:
     """Everything a build method may be given, whichever one runs.
 
@@ -389,12 +527,20 @@ class BuildRequest:
     registries: Sequence[RegistrySettings] = ()
 
     # -- local ---------------------------------------------------------
-    #: How this machine executes the build: ``container`` (the default,
-    #: and what every build did before this existed) or ``subprocess``.
-    #: The ``build.mode`` configuration key states it; a caller that
-    #: builds a :class:`~mcuhome.workbench.buildtarget.BuildTarget`
-    #: itself states the execution instead.
-    build_mode: str = DEFAULT_BUILD_MODE
+    #: What the ``build`` section of this machine's configuration says
+    #: (:class:`BuildOptions`). ``None`` — the ordinary case — resolves
+    #: it here, from :attr:`env` and :attr:`project_root`; a caller that
+    #: has already resolved the configuration states the result and is
+    #: answered with exactly that.
+    options: BuildOptions | None = None
+    #: How this machine executes the build: ``container`` (what every
+    #: build did before this existed) or ``subprocess``. ``None`` takes
+    #: the ``build.mode`` configuration key, which is where the answer
+    #: ordinarily comes from; a caller that builds a
+    #: :class:`~mcuhome.workbench.buildtarget.BuildTarget` itself states
+    #: the execution instead, and one that states a mode here overrides
+    #: the configuration for this build.
+    build_mode: str | None = None
     #: Build-container reference to compile in; ``None`` takes the default.
     image: str | None = None
     #: Where the compiler cache lives on this machine. ``None`` takes the
@@ -404,7 +550,10 @@ class BuildRequest:
     #: Development mode, for ``build.mode = subprocess`` only: an unpacked
     #: build workspace and build tools the developer maintains, used
     #: instead of the ones MCUHome provisions into its store. ``None`` —
-    #: the ordinary case — provisions. Both or neither.
+    #: the ordinary case — takes the ``build.dev_workspace`` /
+    #: ``build.dev_tools`` configuration keys, which are unset on a
+    #: machine that is not developing the build environment itself. Both
+    #: or neither.
     dev_workspace: Path | None = None
     dev_tools: Path | None = None
 
@@ -529,6 +678,30 @@ def _package_registry(
     )
 
 
+def _refuse_image_without_container(image: str, *, source: str) -> ConfigError:
+    """A build container was named for a build that does not start one.
+
+    The two statements contradict each other and neither can be
+    honoured halfway: ignoring the image would compile against something
+    other than what was named, and ignoring the mode would start a
+    container the machine is configured not to use. So the build stops
+    before anything is fetched, and says which of the two to drop —
+    *source* names where the mode came from, because it usually came
+    from a file the person is not looking at.
+    """
+    return ConfigError(
+        f"This build was given the container image {image}, and it is set to "
+        f"build without a container.",
+        hint=(
+            f"the build mode is {MODE_SUBPROCESS} (from {source}). "
+            f"Either drop the image, or build in a container:\n"
+            f"    mcuhome config set build.mode {MODE_CONTAINER}\n"
+            f"A build without a container runs the build environment MCUHome unpacked "
+            f"on this machine, which no image reference can name."
+        ),
+    )
+
+
 def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     """The build target a method *name* and a request describe together.
 
@@ -542,15 +715,38 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     *method* goes through :func:`resolve_method` first, so ``None`` and
     the empty string mean the default and an unknown name is the same
     refusal a caller would have got from ``run_build``.
+
+    **This is also where the configuration is consulted** for the three
+    values a request may leave open — the mode and the two development
+    trees (:func:`options_for`) — because they answer the same question
+    the method-specific fields answer and must be read in one place with
+    them. What the request states wins over what the machine is
+    configured to do: a caller that named a value meant it.
     """
     chosen = resolve_method(method)
     if chosen == LOCAL:
-        if resolve_build_mode(request.build_mode) == MODE_SUBPROCESS:
+        options = options_for(request)
+        mode = resolve_build_mode(request.build_mode) if request.build_mode else options.mode
+        if mode == MODE_SUBPROCESS:
+            if request.image is not None:
+                raise _refuse_image_without_container(
+                    request.image,
+                    # Whoever chose the mode is who has to be told, and a
+                    # mode this request states itself did not come from
+                    # any configuration file.
+                    source="this build" if request.build_mode else options.mode_source,
+                )
             return LocalBuild(
                 execution=SubprocessExecution(
                     ccache_dir=request.ccache_dir,
-                    dev_workspace=request.dev_workspace,
-                    dev_tools=request.dev_tools,
+                    dev_workspace=(
+                        request.dev_workspace
+                        if request.dev_workspace is not None
+                        else options.dev_workspace
+                    ),
+                    dev_tools=(
+                        request.dev_tools if request.dev_tools is not None else options.dev_tools
+                    ),
                 )
             )
         return LocalBuild(
@@ -641,6 +837,7 @@ def compose_local_build(
     registry: Any = None,
     build_mode: str = DEFAULT_BUILD_MODE,
     environment: Any = None,
+    options: BuildOptions | None = None,
 ):
     """The container execution's composition: pin, create, lock, drive.
 
@@ -678,6 +875,7 @@ def compose_local_build(
     *environment* — the store entries it runs against — belongs to that
     mode alone.
     """
+    options = options if options is not None else BuildOptions()
     if resolve_build_mode(build_mode) == MODE_SUBPROCESS:
         return compose_subprocess_build(
             model,
@@ -695,6 +893,7 @@ def compose_local_build(
             on_line=on_line,
             on_step=on_step,
             registry=registry,
+            options=options,
         )
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
@@ -737,6 +936,9 @@ def compose_local_build(
             out_dir=context_dir,
             work_root=work_root,
             sdk_sources=sources,
+            workspace_sources=options.workspace_sources,
+            tools_sources=options.tools_sources,
+            sdk_max_bytes=options.sdk_max_bytes,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
@@ -758,6 +960,7 @@ def compose_local_build(
         jobs=jobs,
         mode=mode,
         ccache_dir=ccache_dir,
+        sdk_max_bytes=options.sdk_max_bytes,
         registry=packages,
         on_line=on_line,
         docker=docker,
@@ -781,6 +984,7 @@ def compose_subprocess_build(
     on_line: Any = None,
     on_step: Any = None,
     registry: Any = None,
+    options: BuildOptions | None = None,
 ) -> subprocessbuild.SubprocessBuildResult:
     """The subprocess execution's composition: environment, lock, drive.
 
@@ -819,6 +1023,7 @@ def compose_subprocess_build(
     accepts, the packages it consists of and the Zephyr release it builds
     against).
     """
+    options = options if options is not None else BuildOptions()
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = _package_registry(
@@ -838,6 +1043,9 @@ def compose_subprocess_build(
             out_dir=context_dir,
             work_root=work_root,
             sdk_sources=sources,
+            workspace_sources=options.workspace_sources,
+            tools_sources=options.tools_sources,
+            sdk_max_bytes=options.sdk_max_bytes,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
@@ -861,6 +1069,15 @@ def compose_subprocess_build(
             workspace_source=package_reference(model.sources.build_workspace).source,
             tools_source=package_reference(model.sources.build_tools).source,
             sources=sources,
+            workspace_sources=options.workspace_sources,
+            tools_sources=options.tools_sources,
+            store=options.env_store,
+            interpreter=options.python,
+            bounds={
+                kind: bound
+                for kind in (buildenvstore.WORKSPACE_KIND, buildenvstore.TOOLS_KIND)
+                if (bound := options.bound(kind)) is not None
+            },
             registry=packages,
             on_line=on_line,
         )
@@ -876,6 +1093,7 @@ def compose_subprocess_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", image="", jobs=jobs)
+    cache_root = containerbuild.cache_root(dict(env), ccache_dir)
     return subprocessbuild.run_locked_build(
         context_dir,
         environment=environment,
@@ -883,12 +1101,21 @@ def compose_subprocess_build(
         work_root=work_root / "backend",
         env=dict(env),
         jobs=jobs,
-        # Resolved the way a container build resolves it, so that a
-        # machine nobody configured still has a compiler cache and has
-        # only one: unset means the user's cache directory, and a caller
-        # without a home directory gets a slow build rather than a
-        # refusal.
-        ccache_dir=containerbuild.cache_root(dict(env), ccache_dir),
+        sdk_max_bytes=options.sdk_max_bytes,
+        # The cache root is resolved the way a container build resolves
+        # it, so that a machine nobody configured still has a compiler
+        # cache and has only one: unset means the user's cache directory,
+        # and a caller without a home directory gets a slow build rather
+        # than a refusal. The tiers on top of it are this profile's, and
+        # each of them may be moved somewhere else outright.
+        ccache_dir=cache_root,
+        tiers=subprocessbuild.cache_tiers(
+            ccache_dir=cache_root,
+            local_dir=options.cache_local,
+            shared_ccache_dir=options.cache_shared,
+            session_dir=options.cache_session,
+            project_dir=options.cache_project,
+        ),
         registry=packages,
         on_line=on_line,
     )
@@ -947,6 +1174,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         on_step=request.on_step,
         build_mode=MODE_SUBPROCESS,
         environment=_developer_environment(execution),
+        options=options_for(request),
     )
     outcome = result.outcome
     return BuildOutcome(
@@ -989,6 +1217,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         context_dir=request.context_dir,
         on_line=request.on_line,
         on_step=request.on_step,
+        options=options_for(request),
     )
     outcome = result.outcome
     return BuildOutcome(
@@ -1022,11 +1251,15 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     context_dir = Path(work_root) / "context"
     if request.on_step is not None:
         request.on_step("environment")
+    options = options_for(request)
     create_build_context(
         request.model,
         out_dir=context_dir,
         work_root=Path(work_root),
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        workspace_sources=options.workspace_sources,
+        tools_sources=options.tools_sources,
+        sdk_max_bytes=options.sdk_max_bytes,
         signing_pub=request.signing_pub,
         registry=_package_registry(
             request.model,

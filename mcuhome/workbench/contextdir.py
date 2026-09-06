@@ -336,6 +336,9 @@ def create_build_context(
     work_root: Path,
     sdk_sources: Sequence[Path],
     signing_pub: str,
+    workspace_sources: Sequence[Path] = (),
+    tools_sources: Sequence[Path] = (),
+    sdk_max_bytes: int | None = None,
     created: datetime | None = None,
     constraint: str | None = None,
     registry: RegistrySource | None = None,
@@ -364,7 +367,15 @@ def create_build_context(
 
     *work_root* is a directory this function may use as scratch; the SDK
     package is unpacked there to read its environment lock out of bytes
-    that were verified against the pin.
+    that were verified against the pin — under *sdk_max_bytes*, the
+    operator's bound on that unpacking, which is the store's own default
+    when nobody moved it.
+
+    *workspace_sources* and *tools_sources* are the operator directories
+    the two environment packages are looked up in. Empty means "wherever
+    the SDK comes from" (*sdk_sources*), which is what one directory
+    holding everything wants; a machine that keeps the gigabyte-sized
+    environment packages somewhere else names that place instead.
 
     *out_dir* is **removed if it exists**, because :func:`create_context`
     requires an empty directory and a build method's context directory is
@@ -410,6 +421,9 @@ def create_build_context(
         sdk_source=model.sources.sdk,
         sdk=found,
         sources=sdk_sources,
+        workspace_sources=workspace_sources,
+        tools_sources=tools_sources,
+        max_bytes=sdk_max_bytes,
         work_root=Path(work_root),
         registry=registry,
         platform=platform,

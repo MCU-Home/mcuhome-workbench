@@ -991,6 +991,37 @@ def test_the_recorded_digest_is_cross_checked_against_the_resolved_one(tmp_path)
 # exists, against a registry, and is tested in `test_resolve_env.py`.
 
 
+def test_the_backends_sdk_bound_reaches_the_acquisition(tmp_path, monkeypatch) -> None:
+    """An operator's bound on the SDK unpacking is not decoration: the
+    backend that does the unpacking is the one that has to apply it."""
+
+    class Stop(Exception):
+        pass
+
+    seen: dict[str, object] = {}
+
+    def fake_acquire_sdk(**kwargs):
+        seen.update(kwargs)
+        raise Stop
+
+    monkeypatch.setattr(lb, "acquire_sdk", fake_acquire_sdk)
+    real = make_sdk_source(tmp_path / "src")
+    context = make_context(tmp_path / "ctx", sdk_sha=real)
+    seam = Seam(facts=image_facts(), build=lambda request: None)
+    backend = lb.LocalBackend(
+        lb.BackendConfig(
+            image=IMAGE_REFERENCE,
+            sdk_sources=(tmp_path / "src",),
+            jobs=1,
+            sdk_max_bytes=4096,
+        ),
+        docker=lb.Docker(runner=seam, spawner=seam.spawn),
+    )
+    with pytest.raises(Stop):
+        backend.run(context_dir=context, action="build", work_root=tmp_path / "work")
+    assert seen["max_bytes"] == 4096
+
+
 def test_a_missing_image_refuses_before_a_container_starts(tmp_path) -> None:
     make_sdk_source(tmp_path / "src")
 

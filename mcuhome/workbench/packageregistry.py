@@ -265,6 +265,7 @@ def trust_anchor_for(
     base_domain: str,
     *,
     untrusted: bool = False,
+    stated: Path | None = None,
     on_warning: Callable[[str], None] | None = None,
 ) -> Path | None:
     """The project's trust anchor for *base_domain*, or a refusal.
@@ -279,7 +280,33 @@ def trust_anchor_for(
     So: the file is there and is used as it is, or *untrusted* says the
     project accepts an unsigned source and this answers ``None``, or the
     build refuses with the path to create.
+
+    *stated* is the configuration naming this registry's anchor outright
+    (``registry.<base-domain>.anchor``), for anchors that are deployed
+    with a machine rather than kept in a project. It replaces the
+    project's file entirely — it is not a fallback for a missing one —
+    and a path that names nothing is refused rather than quietly
+    ignored: a configured anchor that silently did not exist would leave
+    a registry checked against something else than the operator chose.
+    ``untrusted: true`` still wins over both, as it does over a project's
+    own file — the setting is the statement, and a missing file does not
+    turn it into a refusal.
     """
+    if stated is not None:
+        path = Path(stated)
+        if not path.is_file():
+            if untrusted:
+                return None
+            raise TrustAnchorMissing(
+                f"The trust anchor configured for the registry {base_domain} is not there: {path}.",
+                hint=(
+                    "save the key set the registry's operator publishes at that path, "
+                    "or drop the anchor entry to use the project's own copy under "
+                    "secrets/trust-anchor/ instead."
+                ),
+            )
+        check_secret_file(path, key_material=False, on_warning=on_warning)
+        return path
     path = anchor_file(project_root, base_domain)
     if path.is_file():
         check_secret_file(path, key_material=False, on_warning=on_warning)
@@ -345,11 +372,23 @@ class RegistrySettings:
     rather than addition is the point — an operator who lists a local
     mirror for an air-gapped build must not have the workbench fall back
     to a public host the moment the local copy is short of something.
+
+    :attr:`anchor` names the trust anchor of *this* registry outright,
+    for an operator whose anchors do not live in a project — a private
+    registry whose key set is deployed with the machine, or a build that
+    runs outside any project at all. It is stated per registry and never
+    as one directory for all of them, because a setting that moved every
+    anchor at once would move MCUHome's own along with the private one,
+    and that is a decision nobody meant to make while configuring their
+    own registry.
     """
 
     base_domain: str
     untrusted: bool = False
     mirrors: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    #: The anchor file to hold this registry's signatures against, or
+    #: ``None`` for the project's own ``secrets/trust-anchor/`` copy.
+    anchor: Path | None = None
 
 
 def parse_registries(
@@ -362,6 +401,7 @@ def parse_registries(
         registry:
           packages.mcuhome.org:
             untrusted: false
+            anchor: /etc/mcuhome/anchors/packages.example.org.json
             mirrors:
               sdk:
                 - /srv/mirrors/sdk
@@ -371,7 +411,7 @@ def parse_registries(
     a path to a directory laid out like a served source. Relative paths
     are relative to the file that names them, like every other path in a
     configuration file: the file's author can see where the file is, and
-    the reading process cannot.
+    the reading process cannot — and ``anchor`` follows the same rule.
     """
     del origin
 
@@ -390,14 +430,15 @@ def parse_registries(
         if not isinstance(settings, dict):
             raise refuse(
                 f"The registry {base_domain!r} must be a mapping — it may carry "
-                "'untrusted' and 'mirrors'.",
+                "'untrusted', 'mirrors' and 'anchor'.",
                 base_domain,
             )
-        unknown = set(settings) - {"untrusted", "mirrors"}
+        unknown = set(settings) - {"untrusted", "mirrors", "anchor"}
         if unknown:
             raise refuse(
                 f"The registry {base_domain!r} carries {', '.join(sorted(map(str, unknown)))}, "
-                "which is nothing MCUHome knows — it takes 'untrusted' and 'mirrors'.",
+                "which is nothing MCUHome knows — it takes 'untrusted', 'mirrors' "
+                "and 'anchor'.",
                 base_domain,
             )
         untrusted = settings.get("untrusted", False)
@@ -406,6 +447,16 @@ def parse_registries(
                 f"The registry {base_domain!r} must state 'untrusted' as true or false.",
                 base_domain,
             )
+        stated = settings.get("anchor")
+        if stated is not None and (not isinstance(stated, str) or not stated):
+            raise refuse(
+                f"The registry {base_domain!r} must state 'anchor' as the path of its "
+                "trust anchor file.",
+                base_domain,
+            )
+        anchor = (
+            None if stated is None else _resolve_anchor(stated, env=env or {}, base=file.parent)
+        )
         mirrors: dict[str, tuple[str, ...]] = {}
         declared = settings.get("mirrors", {})
         if not isinstance(declared, dict):
@@ -432,9 +483,20 @@ def parse_registries(
                 resolved.append(_resolve_mirror(location, env=env or {}, base=file.parent))
             mirrors[str(source)] = tuple(resolved)
         parsed.append(
-            RegistrySettings(base_domain=base_domain, untrusted=untrusted, mirrors=mirrors)
+            RegistrySettings(
+                base_domain=base_domain,
+                untrusted=untrusted,
+                mirrors=mirrors,
+                anchor=anchor,
+            )
         )
     return tuple(parsed)
+
+
+def _resolve_anchor(location: str, *, env: Mapping[str, str], base: Path | None) -> Path:
+    """A configured anchor path: expanded, and relative to the file that named it."""
+    path = expand(location, dict(env))
+    return path if base is None or path.is_absolute() else (base / path).resolve()
 
 
 def merge_registries(
@@ -1168,7 +1230,11 @@ def registry_for(
     """
     configured = settings_for(settings, base_domain)
     anchor_path = trust_anchor_for(
-        project_root, base_domain, untrusted=configured.untrusted, on_warning=on_warning
+        project_root,
+        base_domain,
+        untrusted=configured.untrusted,
+        stated=configured.anchor,
+        on_warning=on_warning,
     )
     # An anchor next to `untrusted: true` is read but never used: the
     # project said it does not want this registry checked, and honouring

@@ -437,6 +437,55 @@ def test_a_family_pin_keeps_the_family_name_and_the_meta_hash(tmp_path) -> None:
     assert concrete.sha256 == hashes[f"{TOOLS}_linux-amd64"]
 
 
+def test_each_package_may_be_looked_for_in_its_own_directories(tmp_path) -> None:
+    """The environment packages are two orders of magnitude larger than the
+    SDK, so a machine may well keep them somewhere else.
+
+    The SDK directory here holds only the SDK, and each environment
+    package is published in a directory of its own — which resolves only
+    if each pin searched the directories it was given rather than the
+    SDK's.
+    """
+    sdk_dir = tmp_path / "sdk"
+    _sdk_with_lock(
+        sdk_dir,
+        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
+    )
+    workspace_dir = tmp_path / "workspaces"
+    tools_dir = tmp_path / "tools"
+    for directory in (workspace_dir, tools_dir):
+        directory.mkdir()
+        (directory / "index.json").write_text('{"packages": {}}', encoding="utf-8")
+    workspace_hashes = _environment_index(workspace_dir)
+    tools_hashes = _environment_index(tools_dir)
+
+    found = resolve_sdk((sdk_dir,), constraint="==0.1.0", prereleases=True)
+    pin = resolve_environment(
+        workspace=DEFAULT_BUILD_WORKSPACE,
+        tools=DEFAULT_BUILD_TOOLS,
+        sdk_source=DEFAULT_SDK,
+        sdk=found,
+        sources=(sdk_dir,),
+        workspace_sources=(workspace_dir,),
+        tools_sources=(tools_dir,),
+        work_root=tmp_path / "work",
+    )
+    assert pin.workspace.sha256 == workspace_hashes[WORKSPACE]
+    assert pin.tools.sha256 == tools_hashes[TOOLS]
+
+    # And without the per-package directories the same call cannot pin
+    # anything, because the SDK's directory publishes neither.
+    with pytest.raises(BuildError):
+        resolve_environment(
+            workspace=DEFAULT_BUILD_WORKSPACE,
+            tools=DEFAULT_BUILD_TOOLS,
+            sdk_source=DEFAULT_SDK,
+            sdk=found,
+            sources=(sdk_dir,),
+            work_root=tmp_path / "work",
+        )
+
+
 def test_a_device_override_replaces_one_derivation_only(tmp_path) -> None:
     """Each `sources.*` entry overrides its own package and nothing else."""
     source = tmp_path / "src"

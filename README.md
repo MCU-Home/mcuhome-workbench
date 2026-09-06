@@ -97,13 +97,32 @@ the invocation's own arguments. The firmware signing key and a build server's
 token live under the project's `secrets/` directory and are referenced from
 configuration rather than inlined.
 
+An option may state the area it belongs to, and the dot in its name is a real
+level in every spelling of it: a section in a file, an underscore in the
+variable. Everything that describes **how this machine builds** lives under
+`build`:
+
+```yaml
+build:
+  mode: subprocess          # MCUHOME_BUILD_MODE
+  env_store: /srv/mcuhome/build-environments
+```
+
+Those options have no command-line flag — no flag in MCUHome is written with a
+dot, and `--build-mode` on the command line already means something else (where
+a build runs, not how this machine executes it). Set them in a file or in the
+environment; `mcuhome config print` shows every one of them with the layer it
+came from, and `mcuhome config set build.mode subprocess --user` writes the
+section for you.
+
 ### Package registries
 
 A registry is a base domain. The workbench asks it where a source is served —
 `https://<base-domain>/<source>/mirrors.json` — fetches the signed documents from
 a mirror, and verifies them against the project's trust anchor before it reads a
-single package name out of them. Two things are configurable per registry, in a
-configuration file only:
+single package name out of them. What a registry is configured with — its
+mirrors, whether it is checked at all, and which anchor it is checked against —
+lives in a configuration file only:
 
 ```yaml
 registry:
@@ -148,6 +167,22 @@ download something has verified nothing. If yours went missing, run
 `mcuhome project init . --force` over the project again. An anchor file that
 already exists is never rewritten — if you edited yours, you meant to. For any
 other registry the file is yours to create.
+
+An anchor that is deployed with the machine rather than kept in a project is
+named in the registry's own entry:
+
+```yaml
+registry:
+  packages.example.org:
+    anchor: /etc/mcuhome/anchors/packages.example.org.json
+```
+
+It replaces the project's file for that one registry — it is not a fallback for
+a missing one, and a path that names nothing is refused rather than ignored,
+because a build must not end up checking a registry against something other
+than what you chose. It is stated per registry on purpose: one setting that
+moved every anchor at once would move MCUHome's own along with your private
+one.
 
 ### Which SDK a build uses
 
@@ -210,6 +245,67 @@ Everything else needs an index that lists the two packages, because a hash can
 come from nowhere else: put them in one of the operator's own package
 directories, or configure the registry.
 
+### Building without a container
+
+A local build runs in a build container by default. The other way is to run the
+build environment directly on this machine, as an ordinary child process:
+
+```yaml
+build:
+  mode: subprocess          # container (the default) | subprocess
+```
+
+It is for machines where a container runtime is unavailable — inside an
+unprivileged container, on a locked-down host — and for builds you already
+trust. **It isolates nothing.** The build runs with your own rights, and a build
+context is untrusted input: it carries patches, and patches are code. Build
+somebody else's context in a container, and never offer this mode to strangers;
+a build server does not.
+
+What it needs is a host that qualifies (below) and the environment's packages,
+which MCUHome fetches, verifies and unpacks itself the first time. After that a
+build needs no network at all. Naming a container image for a build that starts
+no container is refused rather than half-honoured: either drop the image, or set
+`build.mode` back to `container`.
+
+The compiler cache follows the same layout a container build uses, so a machine
+that built both ways has one cache. Each tier can be moved on its own:
+
+| key | what it is |
+|---|---|
+| `build.cache_local` | this machine's own cache; unset it lives under `ccache_dir` |
+| `build.cache_shared` | a cache shared with other machines, offered read-only |
+| `build.cache_session` | kept for one build session |
+| `build.cache_project` | kept for one project |
+
+### The host a build without a container needs
+
+The container is simply a host that always qualifies; without it, this machine
+has to. The compiler toolchain, cmake, ninja, west and gn come with the build
+tools package, so what the host itself has to provide is short — and one line of
+it is not a floor but an exact version:
+
+| what | requirement | why |
+|---|---|---|
+| operating system | Linux on x86_64 or aarch64 | every prebuilt tool in the package |
+| C library | glibc ≥ 2.28, no musl | the Zephyr SDK toolchain |
+| Python | exactly the minor the build tools package was built with — the current Debian stable's, 3.13 today | the compiled wheels in that package |
+| git | any current version | west and the build's version stamping shell out to it |
+
+**Why Python is exact.** The tools package carries the Python packages a build
+needs as wheels, and some of them are compiled against one version of Python.
+Compiled wheels install into that minor and no other, so MCUHome checks the
+interpreter before it creates anything and refuses with the version it needs;
+nothing is downloaded or compiled to paper over the difference. If the machine's
+`python3` is another minor, name one that is not:
+
+```yaml
+build:
+  python: python3.13        # a command on PATH, or a full path
+```
+
+Or build in a container, where the question does not arise.
+
 ### The build environment store
 
 A build that does not run in a container needs its build environment as files on
@@ -218,6 +314,14 @@ the user's own cache home:
 
 ```
 ${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments/<package name>-<version>/
+```
+
+Somewhere else if you say so — a volume with room for it, or off a network home
+directory:
+
+```yaml
+build:
+  env_store: /srv/mcuhome/build-environments
 ```
 
 One directory per package and version, so two projects on different versions do
@@ -240,15 +344,58 @@ $ rm -rf "$store"
 ```
 
 Single entries go the same way — `chmod -R u+w`, then `rm -rf`, on the one
-directory.
+directory. The host's Python decides whether an entry can be finalized at all,
+which is the section above.
 
-**The host's Python.** The environment's tools package carries the Python
-packages a build needs as wheels, and some of them are compiled against one
-version of Python — the one current Debian stable ships, which is what the
-package is built with. MCUHome checks that before it creates anything and refuses
-with the version it needs; nothing is downloaded or compiled to paper over the
-difference. Run MCUHome on that version, or build in a container, where the
-question does not arise.
+**Where the packages come from, and how large they may get.** They are looked
+for in the operator's own directories first and on the registry second, like
+every other package. The environment packages are two orders of magnitude
+larger than the SDK, so each may be kept somewhere else, and each unpacks under
+a bound of its own — a bound is protection against an archive that expands
+without end, not a budget, and the defaults are an order of magnitude above what
+MCUHome's own packages need:
+
+| key | default |
+|---|---|
+| `build.workspace_sources`, `build.tools_sources` | the `sdk_sources` directories |
+| `build.sdk_max_bytes` | 2 GiB |
+| `build.workspace_max_bytes` | 20 GiB |
+| `build.tools_max_bytes` | 10 GiB |
+
+Raise a bound for a package of your own that is legitimately larger; a package
+whose contents exceed it is refused and leaves nothing behind.
+
+### Developing the build environment itself
+
+If you are changing the build workspace or the build tools, point a build at
+your own unpacked trees instead of at a published package:
+
+```yaml
+build:
+  mode: subprocess
+  dev_workspace: ~/work/build-workspace
+  dev_tools: ~/work/build-tools
+```
+
+Both or neither: an environment is a set of packages, and a workspace of one
+version against tools of another fails deep inside a compile with nothing to
+point at. The trees are checked for what they claim to be — the package manifest
+of their kind, the version they state, an entry point that runs — but nothing
+else happens to them: **development mode does not finalize**, so a raw unpacked
+tools tree has no virtual environment and a workspace no git configuration, and
+a build against one fails at the entry point until you have created those the
+way the store would. Nothing is hashed either; nobody published these bytes.
+
+A build context that carries a **patch** is a hard error in this mode. A patch
+belongs to a tree MCUHome unpacked and may copy; your working tree is yours, and
+a build that quietly patched it — or quietly ignored the patch — would be wrong
+either way.
+
+One thing to know about the SDK: a developer workspace that already holds an
+`mcuhome-sdk` checkout builds *that* checkout, while the build context and the
+build report name the SDK version the device pinned. That is the point of a
+developer workspace, and it means the report is not the whole truth about what
+was compiled.
 
 ## Security
 

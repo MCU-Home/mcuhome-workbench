@@ -39,6 +39,22 @@ rather than replacing each other wholesale: builder lists by builder
 name, package registries by base domain. ``mcuhome config print`` falls
 out of the same registry: :meth:`Settings.print_data` answers with every
 effective value and the layer it came from.
+
+**Areas.** An option's name may state the area it belongs to, separated
+by a dot: ``build.mode``, ``build.env_store``. The dot is a real level
+everywhere the option is written down — the file nests them under the
+area, the environment variable joins them with an underscore
+(``MCUHOME_BUILD_MODE``) — so one option name still produces every
+spelling::
+
+    build:
+      mode: subprocess
+      env_store: /var/cache/mcuhome/build-environments
+
+An option in an area has no command-line flag: no flag in MCUHome is
+written with a dot, and deriving one from the name would advertise a
+spelling that either does not exist or, worse, already means something
+else. Those options are set from a file or from the environment.
 """
 
 from __future__ import annotations
@@ -54,7 +70,14 @@ from mcuhome.model.userpaths import config_dir, expand
 
 from mcuhome.workbench import builders as builders_module
 from mcuhome.workbench import packageregistry
+from mcuhome.workbench.buildenvstore import (
+    EXTRACTION_BOUNDS,
+    SDK_KIND,
+    TOOLS_KIND,
+    WORKSPACE_KIND,
+)
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
+from mcuhome.workbench.buildtarget import BUILD_MODES, DEFAULT_BUILD_MODE
 from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file
 
@@ -105,6 +128,12 @@ class Option:
     :func:`resolve_settings` refuses them from files and skips them in
     the merge (:func:`mcuhome.workbench.project.resolve_project` is
     their resolver).
+
+    *choices* and *minimum* are the declaration's own validation, and
+    they are here rather than in each reader for the reason the rest of
+    this class exists: a value is checked once, in the layer that
+    supplied it, so a refusal can name the file and the line — and every
+    channel is held to the same rule without three of them agreeing to.
     """
 
     name: str
@@ -115,14 +144,40 @@ class Option:
     arguments: bool = True
     bootstrap: bool = False
     help: str = ""
+    #: The values a ``string`` option accepts, if it is a vocabulary
+    #: rather than free text. Empty means free text.
+    choices: tuple[str, ...] = ()
+    #: The smallest value an ``integer`` option accepts. ``None`` means
+    #: any whole number.
+    minimum: int | None = None
+
+    @property
+    def area(self) -> str:
+        """The area the name states, or the empty string for a bare name."""
+        return self.name.partition(".")[0] if "." in self.name else ""
+
+    @property
+    def leaf(self) -> str:
+        """The name inside the area — the key a configuration file writes."""
+        return self.name.partition(".")[2] or self.name
 
     @property
     def env_var(self) -> str:
-        return "MCUHOME_" + self.name.upper()
+        return "MCUHOME_" + self.name.upper().replace(".", "_")
 
     @property
     def flag(self) -> str:
-        return "--" + self.name.replace("_", "-")
+        """The command-line spelling, or empty for an option in an area.
+
+        An option that names its area is not settable by a flag: no flag
+        in MCUHome is written with a dot, and the obvious substitution
+        would produce spellings that mean something else — ``--build-mode``
+        is the command line's word for *where* a build runs, not for how
+        this machine executes it. Those options are set in a file or in
+        the environment, and a message that offers a flag checks this
+        first.
+        """
+        return "" if self.area else "--" + self.name.replace("_", "-")
 
 
 def option(name: str, registry: tuple[Option, ...] | None = None) -> Option:
@@ -205,6 +260,111 @@ OPTIONS: tuple[Option, ...] = (
         arguments=False,
         help="the builder a plain `mcuhome device build` uses",
     ),
+    # -- build.* : how this machine builds -----------------------------
+    # Everything below describes the machine a build runs on, not the
+    # firmware: which of the two executions it uses, where the unpacked
+    # build environment lives, and what it may spend on it. All of it is
+    # a property of the host, so all of it is configuration and none of
+    # it belongs in a device.
+    Option(
+        "build.mode",
+        kind="string",
+        default=DEFAULT_BUILD_MODE,
+        choices=BUILD_MODES,
+        help="how a local build is executed: in a build container, or as a child process",
+    ),
+    Option(
+        "build.env_store",
+        kind="path",
+        help="where unpacked build environments are kept; unset means the user cache directory",
+    ),
+    # Development mode. Both or neither — an environment is a set of
+    # packages and half a set is not one — which is refused where the
+    # two are read, because a refusal that can name the missing half is
+    # worth more than a declaration that can only say "required".
+    Option(
+        "build.dev_workspace",
+        kind="path",
+        help="an unpacked build workspace to build against instead of a provisioned one",
+    ),
+    Option(
+        "build.dev_tools",
+        kind="path",
+        help="unpacked build tools to build against instead of a provisioned one",
+    ),
+    # A name, not a path option: `python3.13` is what an operator writes
+    # and it is looked up on PATH like any other program, while a path
+    # option would resolve that name against the configuration file's
+    # own directory and produce a file nobody has.
+    Option(
+        "build.python",
+        kind="string",
+        help="the Python that creates a build environment's virtual environment",
+    ),
+    Option(
+        "build.workspace_sources",
+        kind="paths",
+        default=(),
+        help="directories holding build workspace packages; unset uses sdk_sources",
+    ),
+    Option(
+        "build.tools_sources",
+        kind="paths",
+        default=(),
+        help="directories holding build tools packages; unset uses sdk_sources",
+    ),
+    # The unpacking bounds. Not a tuning knob for speed: a package is
+    # trusted by its pinned hash before a byte of it is unpacked, and the
+    # bound is what turns a corrupt or hostile archive into a bounded
+    # read instead of a full disk. They are overridable because somebody
+    # else's workspace package is legitimately a much larger thing than
+    # MCUHome's own.
+    Option(
+        "build.sdk_max_bytes",
+        kind="integer",
+        default=EXTRACTION_BOUNDS[SDK_KIND],
+        minimum=1,
+        help="how much the SDK package may unpack to, in bytes",
+    ),
+    Option(
+        "build.workspace_max_bytes",
+        kind="integer",
+        default=EXTRACTION_BOUNDS[WORKSPACE_KIND],
+        minimum=1,
+        help="how much the build workspace package may unpack to, in bytes",
+    ),
+    Option(
+        "build.tools_max_bytes",
+        kind="integer",
+        default=EXTRACTION_BOUNDS[TOOLS_KIND],
+        minimum=1,
+        help="how much the build tools package may unpack to, in bytes",
+    ),
+    # The compiler cache, by tier. `ccache_dir` above names the root the
+    # local and shared tiers are laid out under, which is what a machine
+    # nobody configured further uses; these name a tier's directory
+    # outright, for the machine that keeps one somewhere else — a shared
+    # cache on a read-only mount, a project-wide cache on a fast disk.
+    Option(
+        "build.cache_local",
+        kind="path",
+        help="this machine's own compiler cache; unset uses the cache directory",
+    ),
+    Option(
+        "build.cache_shared",
+        kind="path",
+        help="a compiler cache shared with other machines, read-only to a build",
+    ),
+    Option(
+        "build.cache_session",
+        kind="path",
+        help="a cache kept for one build session; unset means a fresh one per step",
+    ),
+    Option(
+        "build.cache_project",
+        kind="path",
+        help="a cache kept for one project",
+    ),
 )
 
 
@@ -259,6 +419,7 @@ class Settings:
                 return {
                     "domain": value.base_domain,
                     "untrusted": value.untrusted,
+                    "anchor": None if value.anchor is None else str(value.anchor),
                     "mirrors": {name: list(value.mirrors[name]) for name in value.mirrors},
                 }
             if isinstance(value, tuple):
@@ -335,10 +496,14 @@ def _parse_file_value(
     if opt.kind == "string":
         if not isinstance(value, str):
             raise refuse("a string")
+        if opt.choices and value not in opt.choices:
+            raise refuse("one of " + ", ".join(opt.choices))
         return value
     if opt.kind == "integer":
         if isinstance(value, bool) or not isinstance(value, int):
             raise refuse("a whole number")
+        if opt.minimum is not None and value < opt.minimum:
+            raise refuse(f"at least {opt.minimum}")
         return value
     if opt.kind == "path":
         if not isinstance(value, str) or not value:
@@ -370,15 +535,26 @@ def _resolve_path(value: str, *, env: Mapping[str, str], base: Path | None) -> P
 
 def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
     if opt.kind == "string":
+        if opt.choices and value not in opt.choices:
+            raise ConfigError(
+                f"{opt.env_var} must be one of {', '.join(opt.choices)}, not {value!r}.",
+                hint=opt.help or None,
+            )
         return value
     if opt.kind == "integer":
         try:
-            return int(value)
+            number = int(value)
         except ValueError:
             raise ConfigError(
                 f"{opt.env_var} must be a whole number, not {value!r}.",
                 hint=opt.help or None,
             ) from None
+        if opt.minimum is not None and number < opt.minimum:
+            raise ConfigError(
+                f"{opt.env_var} must be at least {opt.minimum}, not {number}.",
+                hint=opt.help or None,
+            )
+        return number
     if opt.kind == "path":
         return _resolve_path(value, env=env, base=None)
     if opt.kind == "paths":
@@ -397,7 +573,18 @@ _MERGERS: dict[str, Callable[[Any, Any], Any]] = {
 
 
 def _refuse_not_file_settable(opt: Option, location: Location | None) -> ConfigError:
-    """The channel refusal of ADR 0022 §3, for reading and writing alike."""
+    """The channel refusal, for reading and writing alike.
+
+    Both texts offer the two per-invocation channels by name. An option
+    in an area has no flag to offer (:attr:`Option.flag`), and the
+    sentence then names the environment variable alone rather than a
+    spelling that does not exist.
+    """
+    per_invocation = (
+        f"{opt.flag} on the command line, or {opt.env_var} in the environment"
+        if opt.flag
+        else f"{opt.env_var} in the environment"
+    )
     if opt.bootstrap:
         return ConfigError(
             f"{opt.name!r} cannot be set from a configuration file.",
@@ -405,17 +592,13 @@ def _refuse_not_file_settable(opt: Option, location: Location | None) -> ConfigE
             hint=(
                 f"{opt.name!r} decides where the project layer *is*, so it runs "
                 f"before any configuration file is read. Set it per "
-                f"invocation: {opt.flag} on the command line, or {opt.env_var} in "
-                "the environment."
+                f"invocation: {per_invocation}."
             ),
         )
     return ConfigError(
         f"{opt.name!r} cannot be set from a configuration file.",
         location=location,
-        hint=(
-            f"{opt.name!r} is a per-invocation value: set it with {opt.flag} "
-            f"on the command line or as {opt.env_var} in the environment."
-        ),
+        hint=f"{opt.name!r} is a per-invocation value: set it with {per_invocation}.",
     )
 
 
@@ -439,20 +622,60 @@ def _read_layer(
         )
     by_name = {opt.name: opt for opt in registry}
     settable = sorted(name for name, opt in by_name.items() if opt.files and not opt.bootstrap)
+    areas = {opt.area for opt in registry if opt.area}
     settings: dict[str, Setting] = {}
-    for key, raw in data.items():
-        location = _key_location(data, str(key), file)
-        if key not in by_name:
-            raise ConfigError(
-                f"There is no option called {key!r}.",
-                location=location,
-                hint="options settable from a configuration file: " + ", ".join(settable),
-            )
-        opt = by_name[key]
+
+    def in_area(area: str) -> str:
+        return ", ".join(sorted(opt.leaf for opt in registry if opt.area == area and opt.files))
+
+    def read(opt: Option, raw: Any, location: Location) -> None:
         if opt.bootstrap or not opt.files:
             raise _refuse_not_file_settable(opt, location)
         value = _parse_file_value(opt, raw, file=file, env=env, location=location, origin=origin)
         settings[opt.name] = Setting(option=opt, value=value, origin=origin, source=str(file))
+
+    for key, raw in data.items():
+        location = _key_location(data, str(key), file)
+        declared = by_name.get(key)
+        if declared is not None and not declared.area:
+            read(declared, raw, location)
+            continue
+        if key in areas:
+            # An area is a block, and its keys are the option names
+            # without the area in front of them. Read one level down and
+            # nothing further: an option is declared or it is not, and a
+            # deeper nesting is somebody's misunderstanding rather than a
+            # shape this registry has.
+            if not isinstance(raw, dict):
+                raise ConfigError(
+                    f"The section {key!r} must be a mapping of `option: value` pairs.",
+                    location=location,
+                    hint=f"its options are: {in_area(key)}",
+                )
+            for leaf, value in raw.items():
+                name = f"{key}.{leaf}"
+                inner = _key_location(raw, str(leaf), file)
+                if name not in by_name:
+                    raise ConfigError(
+                        f"There is no option called {name!r}.",
+                        location=inner,
+                        hint=f"the options of {key} are: {in_area(key)}",
+                    )
+                read(by_name[name], value, inner)
+            continue
+        if declared is not None:
+            # `build.mode: subprocess` written flat. The option exists,
+            # the spelling does not: the dot is a section in a file.
+            raise ConfigError(
+                f"The option {declared.name!r} is written under its own section here.",
+                location=location,
+                hint=f"write it as:\n    {declared.area}:\n      {declared.leaf}: <value>",
+            )
+        raise ConfigError(
+            f"There is no option called {key!r}.",
+            location=location,
+            hint="options settable from a configuration file: " + ", ".join(settable),
+        )
     return settings
 
 
@@ -533,7 +756,12 @@ def resolve_settings(
             raise ValueError(f"{name!r} is a bootstrap option; resolve_project consumed it already")
         if not opt.arguments:
             raise ValueError(f"{name!r} is not settable from the command line")
-        resolved[name] = Setting(option=opt, value=value, origin="arguments", source=opt.flag)
+        # An option in an area has no flag, so the source is its own
+        # name: whatever an embedder called this channel with, it did not
+        # call it a flag that does not exist.
+        resolved[name] = Setting(
+            option=opt, value=value, origin="arguments", source=opt.flag or opt.name
+        )
 
     return Settings(resolved)
 
@@ -723,7 +951,7 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
             location=location,
             hint=(
                 "edit the `registry:` block in the file directly — one entry per "
-                "registry domain, each with untrusted: and mirrors:"
+                "registry domain, each with untrusted:, anchor: and mirrors:"
             ),
         )
     if opt.kind == "integer":
@@ -737,6 +965,10 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
             ) from None
     if opt.kind == "paths":
         return [item for item in text.split(os.pathsep) if item]
+    # A vocabulary is deliberately *not* checked here: the caller proves
+    # the written form reads back before it touches the file, and that
+    # check is the same one every layer is held to. A second one here
+    # would be a second wording of one refusal.
     return text
 
 
@@ -797,7 +1029,26 @@ def set_config_value(
     data = _load_for_editing(file, yaml)
     if data is None:
         data = {}
-    data[name] = value
+    if opt.area:
+        # The area is a section in the file, and an existing one is
+        # written into rather than replaced: the section may hold other
+        # options, and their comments and `!file` references are as much
+        # somebody's work as the rest of the file.
+        section = data.get(opt.area)
+        if section is None:
+            section = {}
+            data[opt.area] = section
+        elif not isinstance(section, dict):
+            raise ConfigError(
+                f"The section {opt.area!r} in {file.name} is not a mapping of "
+                "`option: value` pairs.",
+                location=Location(file=file, key=opt.area),
+                hint=f"it holds the options of {opt.area}, one per line:\n"
+                f"    {opt.area}:\n      {opt.leaf}: <value>",
+            )
+        section[opt.leaf] = value
+    else:
+        data[name] = value
     _dump_config(file, data, yaml)
     return value
 
@@ -813,10 +1064,24 @@ def unset_config_value(
     The name must be a declared option — ``unset`` with a typo saying
     "nothing to remove" would confirm a removal that never happened.
     """
-    _declared_or_refuse(name, registry)
+    opt = _declared_or_refuse(name, registry)
     yaml = editing_yaml()
     data = _load_for_editing(file, yaml)
-    if data is None or name not in data:
+    if data is None:
+        return False
+    if opt.area:
+        section = data.get(opt.area)
+        if not isinstance(section, dict) or opt.leaf not in section:
+            return False
+        del section[opt.leaf]
+        # An empty section is removed with its last option: a `build:`
+        # with nothing under it configures nothing and reads as an
+        # unfinished edit to the next person opening the file.
+        if not section:
+            del data[opt.area]
+        _dump_config(file, data, yaml)
+        return True
+    if name not in data:
         return False
     del data[name]
     _dump_config(file, data, yaml)

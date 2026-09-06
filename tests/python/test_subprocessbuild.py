@@ -289,6 +289,102 @@ def test_the_entries_of_a_provisioned_environment_are_found(store, environment) 
     assert "mcuhome-build-workspace 0.1.0" in environment.described()
 
 
+def test_each_pinned_package_is_provisioned_with_its_own_directories_and_bound(
+    tmp_path, monkeypatch
+) -> None:
+    """What the machine is configured with reaches the provisioner per package.
+
+    The two environment packages may be published in directories of their
+    own and may be bounded differently, and both decisions are per
+    package — so this asserts the arguments each call was made with, not
+    that some call was made.
+    """
+    provisioned: list[dict] = []
+    looked_up: list[dict] = []
+
+    def fake_concrete(pin, **kwargs):
+        looked_up.append({"name": pin.name, **kwargs})
+        return PackagePin(name=pin.name + "-concrete", version="9.9.9", sha256="a" * 64)
+
+    def fake_provision(**kwargs):
+        provisioned.append(kwargs)
+        return StoreEntry(
+            path=tmp_path / kwargs["name"],
+            kind=kwargs["kind"],
+            name=kwargs["name"],
+            version=kwargs["version"],
+            sha256=kwargs["sha256"],
+        )
+
+    monkeypatch.setattr(subprocessbuild, "concrete_package", fake_concrete)
+    monkeypatch.setattr(subprocessbuild, "provision", fake_provision)
+    monkeypatch.setattr(subprocessbuild, "_require_entry_point", lambda entry: entry)
+
+    subprocessbuild.environment_from_pins(
+        EnvironmentPin(
+            workspace=PackagePin(name="mcuhome-build-workspace", version="1", sha256="b" * 64),
+            tools=PackagePin(name="mcuhome-build-tools", version="1", sha256="c" * 64),
+        ),
+        env={},
+        sources=(tmp_path / "sdk",),
+        workspace_sources=(tmp_path / "workspaces",),
+        tools_sources=(tmp_path / "tools",),
+        store=tmp_path / "store",
+        interpreter="python3.13",
+        bounds={WORKSPACE_KIND: 22, TOOLS_KIND: 33},
+    )
+
+    assert [call["sources"] for call in looked_up] == [
+        (tmp_path / "workspaces",),
+        (tmp_path / "tools",),
+    ]
+    assert [call["kind"] for call in provisioned] == [WORKSPACE_KIND, TOOLS_KIND]
+    assert [call["max_bytes"] for call in provisioned] == [22, 33]
+    assert [call["sources"] for call in provisioned] == [
+        (tmp_path / "workspaces",),
+        (tmp_path / "tools",),
+    ]
+    assert {call["store"] for call in provisioned} == {tmp_path / "store"}
+    assert {call["interpreter"] for call in provisioned} == {"python3.13"}
+
+
+def test_without_its_own_directories_a_package_is_looked_for_where_the_sdk_is(
+    tmp_path, monkeypatch
+) -> None:
+    """One directory holding everything is the ordinary machine, and it
+    keeps working: unset means the SDK's own sources."""
+    provisioned: list[dict] = []
+    monkeypatch.setattr(
+        subprocessbuild,
+        "concrete_package",
+        lambda pin, **kwargs: PackagePin(name=pin.name, version="1", sha256="a" * 64),
+    )
+
+    def fake_provision(**kwargs):
+        provisioned.append(kwargs)
+        return StoreEntry(
+            path=tmp_path / kwargs["name"],
+            kind=kwargs["kind"],
+            name=kwargs["name"],
+            version=kwargs["version"],
+            sha256=kwargs["sha256"],
+        )
+
+    monkeypatch.setattr(subprocessbuild, "provision", fake_provision)
+    monkeypatch.setattr(subprocessbuild, "_require_entry_point", lambda entry: entry)
+    subprocessbuild.environment_from_pins(
+        EnvironmentPin(
+            workspace=PackagePin(name="mcuhome-build-workspace", version="1", sha256="b" * 64),
+            tools=PackagePin(name="mcuhome-build-tools", version="1", sha256="c" * 64),
+        ),
+        env={},
+        sources=(tmp_path / "sdk",),
+    )
+    assert {call["sources"] for call in provisioned} == {(tmp_path / "sdk",)}
+    # And a kind nobody bounded is left to the store's own table.
+    assert {call["max_bytes"] for call in provisioned} == {None}
+
+
 def test_a_package_that_was_never_provisioned_is_refused(store) -> None:
     with pytest.raises(BuildEnvironmentError) as refusal:
         environment_from_store(

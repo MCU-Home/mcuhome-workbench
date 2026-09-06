@@ -316,10 +316,13 @@ def environment_from_pins(
     workspace_source: str = WORKSPACE_SOURCE,
     tools_source: str = TOOLS_SOURCE,
     sources: Sequence[Path] = (),
+    workspace_sources: Sequence[Path] = (),
+    tools_sources: Sequence[Path] = (),
     registry: Any = None,
     store: Path | str | None = None,
     platform: str | None = None,
     interpreter: str | Path | None = None,
+    bounds: Mapping[str, int] | None = None,
     on_line: LineSink | None = None,
 ) -> Environment:
     """Provision what a context pins and answer with the two store entries.
@@ -340,16 +343,24 @@ def environment_from_pins(
     Provisioning a package that is already in the store costs a marker
     read: :func:`~mcuhome.workbench.buildenvstore.provision` answers
     without touching the network, the disk or its lock.
+
+    *sources* are the operator directories both packages are looked for
+    in; *workspace_sources* and *tools_sources* replace them for one
+    package each, for a machine that keeps the two large environment
+    packages somewhere other than the SDK. *bounds* is how much each
+    kind may unpack to, by kind — a kind that is not in it takes the
+    store's own bound.
     """
     entries = []
-    for package, kind, source in (
-        (pin.workspace, WORKSPACE_KIND, workspace_source),
-        (pin.tools, TOOLS_KIND, tools_source),
+    for package, kind, source, directories in (
+        (pin.workspace, WORKSPACE_KIND, workspace_source, workspace_sources),
+        (pin.tools, TOOLS_KIND, tools_source, tools_sources),
     ):
+        searched = tuple(directories) or tuple(sources)
         found = concrete_package(
             package,
             source=source,
-            sources=sources,
+            sources=searched,
             registry=registry,
             platform=platform,
         )
@@ -360,11 +371,12 @@ def environment_from_pins(
                 version=found.version,
                 sha256=found.sha256,
                 env=env,
-                sources=sources,
+                sources=searched,
                 registry=registry,
                 store=store,
                 platform=platform,
                 interpreter=interpreter,
+                max_bytes=(bounds or {}).get(kind),
                 on_line=on_line,
             )
         )
@@ -552,6 +564,7 @@ def launcher(
 def cache_tiers(
     *,
     ccache_dir: Path | None = None,
+    local_dir: Path | None = None,
     shared_ccache_dir: Path | None = None,
     session_dir: Path | None = None,
     project_dir: Path | None = None,
@@ -576,20 +589,32 @@ def cache_tiers(
     differ by their paths anyway.
     """
     tiers: dict[str, CacheTier] = {}
-    if ccache_dir is not None:
-        tiers["local"] = CacheTier(
-            path=Path(ccache_dir) / containerpaths.CCACHE_LOCAL.name, writable=True
-        )
+    # A tier named outright wins over the layout under the cache root:
+    # `ccache_dir` says where this machine keeps its caches, `local_dir`
+    # says where this one tier is, and a machine that states both meant
+    # the more specific of the two.
+    local = (
+        local_dir
+        if local_dir is not None
+        else _under_root(ccache_dir, containerpaths.CCACHE_LOCAL.name)
+    )
+    if local is not None:
+        tiers["local"] = CacheTier(path=Path(local), writable=True)
     if session_dir is not None:
         tiers["session"] = CacheTier(path=Path(session_dir), writable=True)
     if project_dir is not None:
         tiers["project"] = CacheTier(path=Path(project_dir), writable=True)
     shared = shared_ccache_dir
-    if shared is None and ccache_dir is not None:
-        shared = Path(ccache_dir) / containerpaths.CCACHE_SHARED.name
+    if shared is None:
+        shared = _under_root(ccache_dir, containerpaths.CCACHE_SHARED.name)
     if shared is not None and Path(shared).is_dir():
         tiers["shared"] = CacheTier(path=Path(shared), writable=False)
     return tiers
+
+
+def _under_root(root: Path | None, name: str) -> Path | None:
+    """A role directory under the cache root, or ``None`` without one."""
+    return None if root is None else Path(root) / name
 
 
 # --------------------------------------------------------------------------
@@ -915,6 +940,7 @@ def run_locked_build(
     jobs: int = 1,
     ccache_dir: Path | None = None,
     tiers: Mapping[str, CacheTier] | None = None,
+    sdk_max_bytes: int | None = None,
     registry: RegistrySource | None = None,
     deadline_seconds: int = 5400,
     on_line: LineSink | None = None,
@@ -961,6 +987,7 @@ def run_locked_build(
         sources=tuple(Path(source) for source in sdk_sources),
         into=work_root / "sdk",
         registry=registry,
+        max_bytes=sdk_max_bytes,
     )
     session = BuilderSession(
         root=work_root / "session",

@@ -666,6 +666,7 @@ def environment_lock(
     sources: Sequence[Path],
     into: Path,
     registry: RegistrySource | None = None,
+    max_bytes: int | None = None,
 ) -> EnvironmentLock:
     """What the SDK release *version* states about its build environment.
 
@@ -694,6 +695,7 @@ def environment_lock(
         sources=sources,
         into=Path(into),
         registry=registry,
+        max_bytes=max_bytes,
     )
     path = acquired.tree / LOCK_FILE
     try:
@@ -841,6 +843,9 @@ def resolve_environment(
     sdk: SdkResolution,
     sources: Sequence[Path],
     work_root: Path,
+    workspace_sources: Sequence[Path] = (),
+    tools_sources: Sequence[Path] = (),
+    max_bytes: int | None = None,
     registry: RegistrySource | None = None,
     platform: str | None = None,
 ) -> EnvironmentPin:
@@ -871,6 +876,12 @@ def resolve_environment(
     — so the hash always comes from a package index: an operator
     directory's, or the one a registry mirror served and the project's
     trust anchor accepted.
+
+    *sources* are the operator directories, and *workspace_sources* /
+    *tools_sources* replace them for their own package when the
+    environment packages are kept somewhere else than the SDK — they are
+    two orders of magnitude larger, and a machine may well keep them on
+    another disk. Empty means "the same directories the SDK comes from".
     """
     workspace_reference = package_reference(workspace, what="build workspace package")
     tools_reference = package_reference(tools, what="build tools package")
@@ -889,12 +900,13 @@ def resolve_environment(
             sources=sources,
             into=Path(work_root) / "sdk-lock",
             registry=registry,
+            max_bytes=max_bytes,
         )
     return EnvironmentPin(
         workspace=_pin_package(
             workspace_reference,
             workspace_reference.version or _locked(lock, workspace_reference.name),
-            sources=sources,
+            sources=tuple(workspace_sources) or sources,
             registry=registry,
             platform=platform,
             what="build workspace",
@@ -902,7 +914,7 @@ def resolve_environment(
         tools=_pin_package(
             tools_reference,
             tools_reference.version or _locked(lock, family_of(tools_reference.name)),
-            sources=sources,
+            sources=tuple(tools_sources) or sources,
             registry=registry,
             platform=platform,
             what="build tools",
