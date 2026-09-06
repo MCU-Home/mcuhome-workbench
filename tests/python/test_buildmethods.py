@@ -220,7 +220,7 @@ def test_a_subprocess_build_resolves_its_pins_like_every_other_build(model, tmp_
                 target=buildmethods.LocalBuild(execution=buildmethods.SubprocessExecution()),
             )
         )
-    assert "sdk_sources" in refusal.value.hint
+    assert "build.sdk_sources" in refusal.value.hint
     assert "build.mode" not in refusal.value.hint
 
 
@@ -543,7 +543,7 @@ def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> No
         )
     rendered = str(refusal.value)
     assert "--sdk-sources" in rendered
-    assert "sdk_sources" in rendered
+    assert "build.sdk_sources" in rendered
 
 
 def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path, monkeypatch):

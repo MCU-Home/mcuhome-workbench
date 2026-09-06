@@ -334,7 +334,7 @@ class BuildOptions:
     whatever consumes them*, never a value invented here: the store
     resolves its own location from the user's cache home, the cache tiers
     fall back to the cache root, and the sources fall back to
-    ``sdk_sources`` — so an option nobody set changes nothing.
+    ``build.sdk_sources`` — so an option nobody set changes nothing.
     """
 
     #: ``build.mode``: ``container`` or ``subprocess``.
@@ -355,8 +355,9 @@ class BuildOptions:
     #: one the tools package was built for.
     python: str | None = None
     #: ``build.workspace_sources`` / ``build.tools_sources``: operator
-    #: directories per package kind. Empty falls back to ``sdk_sources``,
-    #: so one directory holding everything keeps working.
+    #: directories per package kind. Empty falls back to
+    #: ``build.sdk_sources``, so one directory holding everything keeps
+    #: working.
     workspace_sources: tuple[Path, ...] = ()
     tools_sources: tuple[Path, ...] = ()
     #: ``build.<kind>_max_bytes``: how much each package may unpack to.
@@ -387,6 +388,12 @@ def build_options(settings: Settings) -> BuildOptions:
     function knows the names and nothing else, so a key's kind, default,
     validation and the five layers it merged through are stated in
     exactly one place (:data:`mcuhome.workbench.configuration.OPTIONS`).
+
+    One key of the section is deliberately not here:
+    ``build.sdk_sources`` is a field of the request itself
+    (:attr:`BuildRequest.sdk_sources`), because the remote method needs
+    it too and never reads these options at all. A caller that resolves
+    the configuration states both.
     """
     setting = settings.setting("build.mode")
 
@@ -1341,7 +1348,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
                 "with, and none is configured.",
                 hint=(
                     "point at a directory holding an MCUHome SDK package:\n"
-                    "    mcuhome config set sdk_sources <dir> --user\n"
+                    "    mcuhome config set build.sdk_sources <dir> --user\n"
                     "or pass --sdk-sources <dir> for a single build."
                 ),
             )

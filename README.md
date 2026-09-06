@@ -108,12 +108,14 @@ build:
   env_store: /srv/mcuhome/build-environments
 ```
 
-Those options have no command-line flag — no flag in MCUHome is written with a
-dot, and `--build-mode` on the command line already means something else (where
-a build runs, not how this machine executes it). Set them in a file or in the
-environment; `mcuhome config print` shows every one of them with the layer it
-came from, and `mcuhome config set build.mode subprocess --user` writes the
-section for you.
+No command-line flag is derived for those options — no flag in MCUHome is
+written with a dot, and `--build-mode` on the command line already means
+something else (where a build runs, not how this machine executes it). Set them
+in a file or in the environment; `mcuhome config print` shows every one of them
+with the layer it came from, and `mcuhome config set build.mode subprocess
+--user` writes the section for you. A tool may still map a flag of its own onto
+one: `mcuhome device build --sdk-sources` sets `build.sdk_sources`, which
+carried that flag before the areas existed.
 
 ### Package registries
 
@@ -199,12 +201,12 @@ So `sources.sdk: sdk/mcuhome-sdk:0.1.9` pins exactly `0.1.9` and will not quietl
 become `0.1.9.dev1`; write `:0.1.9.dev1` if that is what you want. Either way the
 minor bound holds — the default never crosses into 0.2.
 
-Packages are looked for in the operator's own directories first (`sdk_sources`)
-and only then on the registry, and their bytes are checked against the pinned
-hash on every path. A machine that already has the package never opens a socket.
-A package published per architecture is named once — the index says which
-concrete package that name stands for on this host, and the mapping is checked
-against the members it points at before anything is fetched.
+Packages are looked for in the operator's own directories first
+(`build.sdk_sources`) and only then on the registry, and their bytes are checked
+against the pinned hash on every path. A machine that already has the package
+never opens a socket. A package published per architecture is named once — the
+index says which concrete package that name stands for on this host, and the
+mapping is checked against the members it points at before anything is fetched.
 
 ### Which build environment a build uses
 
@@ -357,7 +359,7 @@ MCUHome's own packages need:
 
 | key | default |
 |---|---|
-| `build.workspace_sources`, `build.tools_sources` | the `sdk_sources` directories |
+| `build.workspace_sources`, `build.tools_sources` | the `build.sdk_sources` directories |
 | `build.sdk_max_bytes` | 2 GiB |
 | `build.workspace_max_bytes` | 20 GiB |
 | `build.tools_max_bytes` | 10 GiB |

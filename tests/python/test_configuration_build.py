@@ -45,6 +45,7 @@ KEYS = {
     "build.dev_workspace": "MCUHOME_BUILD_DEV_WORKSPACE",
     "build.dev_tools": "MCUHOME_BUILD_DEV_TOOLS",
     "build.python": "MCUHOME_BUILD_PYTHON",
+    "build.sdk_sources": "MCUHOME_BUILD_SDK_SOURCES",
     "build.workspace_sources": "MCUHOME_BUILD_WORKSPACE_SOURCES",
     "build.tools_sources": "MCUHOME_BUILD_TOOLS_SOURCES",
     "build.sdk_max_bytes": "MCUHOME_BUILD_SDK_MAX_BYTES",
@@ -96,6 +97,25 @@ def test_an_option_in_an_area_has_no_flag() -> None:
     # The bare options keep theirs.
     assert option("jobs").flag == "--jobs"
     assert option("jobs").area == ""
+
+
+def test_the_pre_area_spelling_of_a_moved_key_is_not_an_option(project: Project) -> None:
+    """A key that moved into the section does not answer to its old name.
+
+    ``build.sdk_sources`` was ``sdk_sources`` before the areas existed,
+    and nothing is kept compatible with an earlier spelling of itself: a
+    file that still carries the old one is refused, naming the real key,
+    rather than ignored — a silently dropped source list would send the
+    build looking for the SDK in nowhere at all. The variable of the old
+    spelling is nobody's option and simply sets nothing.
+    """
+    write_project(project, "sdk_sources:\n  - /pkgs\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert caught.value.message == "There is no option called 'sdk_sources'."
+    assert "build.sdk_sources" in (caught.value.hint or "")
+    settings = resolve_settings(project=None, env={"MCUHOME_SDK_SOURCES": "/pkgs"})
+    assert settings.value("build.sdk_sources") == ()
 
 
 # --- the five layers, on a key of the section --------------------------

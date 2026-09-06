@@ -51,10 +51,13 @@ spelling::
       mode: subprocess
       env_store: /var/cache/mcuhome/build-environments
 
-An option in an area has no command-line flag: no flag in MCUHome is
-written with a dot, and deriving one from the name would advertise a
-spelling that either does not exist or, worse, already means something
-else. Those options are set from a file or from the environment.
+No command-line flag is derived for an option in an area: no flag in
+MCUHome is written with a dot, and deriving one from the name would
+advertise a spelling that either does not exist or, worse, already means
+something else. Those options are set from a file or from the
+environment — or by a tool that maps a flag of its own onto one, which is
+what the command line's ``--sdk-sources`` does with
+``build.sdk_sources``.
 """
 
 from __future__ import annotations
@@ -167,15 +170,21 @@ class Option:
 
     @property
     def flag(self) -> str:
-        """The command-line spelling, or empty for an option in an area.
+        """The flag this registry derives, or empty for an option in an area.
 
-        An option that names its area is not settable by a flag: no flag
-        in MCUHome is written with a dot, and the obvious substitution
-        would produce spellings that mean something else — ``--build-mode``
-        is the command line's word for *where* a build runs, not for how
-        this machine executes it. Those options are set in a file or in
-        the environment, and a message that offers a flag checks this
-        first.
+        No flag in MCUHome is written with a dot, and the obvious
+        substitution would produce spellings that mean something else —
+        ``--build-mode`` is the command line's word for *where* a build
+        runs, not for how this machine executes it. So nothing is derived
+        for an option that names its area, and a message that offers a
+        flag checks this first: such an option is set in a file or in the
+        environment.
+
+        A tool may still put a flag of its **own** on one, because the
+        arguments channel takes the option's name rather than a spelling.
+        The command line does exactly that for ``build.sdk_sources``,
+        which carried ``--sdk-sources`` before the areas existed. What
+        this registry will not do is invent the spelling.
         """
         return "" if self.area else "--" + self.name.replace("_", "-")
 
@@ -199,12 +208,6 @@ OPTIONS: tuple[Option, ...] = (
         files=False,
         bootstrap=True,
         help="the project directory; disables the upward marker search",
-    ),
-    Option(
-        "sdk_sources",
-        kind="paths",
-        default=(),
-        help="directories holding hash-pinned MCUHome SDK packages",
     ),
     Option(
         "signing_key",
@@ -302,16 +305,22 @@ OPTIONS: tuple[Option, ...] = (
         help="the Python that creates a build environment's virtual environment",
     ),
     Option(
+        "build.sdk_sources",
+        kind="paths",
+        default=(),
+        help="directories holding hash-pinned MCUHome SDK packages",
+    ),
+    Option(
         "build.workspace_sources",
         kind="paths",
         default=(),
-        help="directories holding build workspace packages; unset uses sdk_sources",
+        help="directories holding build workspace packages; unset uses build.sdk_sources",
     ),
     Option(
         "build.tools_sources",
         kind="paths",
         default=(),
-        help="directories holding build tools packages; unset uses sdk_sources",
+        help="directories holding build tools packages; unset uses build.sdk_sources",
     ),
     # The unpacking bounds. Not a tuning knob for speed: a package is
     # trusted by its pinned hash before a byte of it is unpacked, and the
@@ -770,9 +779,9 @@ def resolve_settings(
             raise ValueError(f"{name!r} is a bootstrap option; resolve_project consumed it already")
         if not opt.arguments:
             raise ValueError(f"{name!r} is not settable from the command line")
-        # An option in an area has no flag, so the source is its own
-        # name: whatever an embedder called this channel with, it did not
-        # call it a flag that does not exist.
+        # An option in an area has no derived flag, so the source is its
+        # own name: a caller may have mapped a flag of its own onto it,
+        # and this registry cannot name a spelling it never wrote.
         resolved[name] = Setting(
             option=opt, value=value, origin="arguments", source=opt.flag or opt.name
         )

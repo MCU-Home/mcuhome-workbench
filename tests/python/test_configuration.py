@@ -57,9 +57,9 @@ def write_project(project: Project, text: str) -> Path:
 
 
 def test_the_spellings_derive_from_the_declaration() -> None:
-    declared = option("sdk_sources")
-    assert declared.env_var == "MCUHOME_SDK_SOURCES"
-    assert declared.flag == "--sdk-sources"
+    declared = option("ccache_dir")
+    assert declared.env_var == "MCUHOME_CCACHE_DIR"
+    assert declared.flag == "--ccache-dir"
 
 
 def test_the_bootstrap_options_are_declared_but_stand_outside() -> None:
@@ -171,25 +171,25 @@ def test_an_empty_configuration_file_is_an_empty_layer(tmp_path: Path, project: 
 
 
 def test_paths_from_a_file_are_relative_to_that_file(project: Project) -> None:
-    write_project(project, "sdk_sources:\n  - ./packages\n")
+    write_project(project, "build:\n  sdk_sources:\n    - ./packages\n")
     settings = resolve_settings(project=project, env={})
-    assert settings.value("sdk_sources") == (project.root / "packages",)
+    assert settings.value("build.sdk_sources") == (project.root / "packages",)
 
 
 def test_paths_from_the_environment_split_like_PATH(project: Project) -> None:
-    env = {"MCUHOME_SDK_SOURCES": "/a:/b:"}
+    env = {"MCUHOME_BUILD_SDK_SOURCES": "/a:/b:"}
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("sdk_sources") == (Path("/a"), Path("/b"))
+    assert settings.value("build.sdk_sources") == (Path("/a"), Path("/b"))
 
 
 def test_a_tilde_in_a_path_uses_the_stated_home(tmp_path: Path, project: Project) -> None:
-    env = {"HOME": str(tmp_path / "home"), "MCUHOME_SDK_SOURCES": "~/pkgs"}
+    env = {"HOME": str(tmp_path / "home"), "MCUHOME_BUILD_SDK_SOURCES": "~/pkgs"}
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("sdk_sources") == (tmp_path / "home" / "pkgs",)
+    assert settings.value("build.sdk_sources") == (tmp_path / "home" / "pkgs",)
 
 
 def test_a_single_string_where_a_list_belongs_is_explained(project: Project) -> None:
-    write_project(project, "sdk_sources: ./packages\n")
+    write_project(project, "build:\n  sdk_sources: ./packages\n")
     with pytest.raises(ConfigError) as caught:
         resolve_settings(project=project, env={})
     assert "must be a list of paths" in caught.value.message
@@ -228,7 +228,7 @@ def test_an_unknown_key_lists_what_a_file_may_set(project: Project) -> None:
     assert caught.value.message == "There is no option called 'jobz'."
     hint = caught.value.hint or ""
     assert "jobs" in hint
-    assert "sdk_sources" in hint
+    assert "build.sdk_sources" in hint
     assert "signing_key" not in hint  # not settable from files
     assert "project_dir" not in hint  # bootstrap
 
@@ -275,11 +275,11 @@ def test_arguments_for_undeclared_or_bootstrap_names_are_programming_errors(
 
 def test_print_data_shows_every_value_with_its_origin(tmp_path: Path, project: Project) -> None:
     env = user_env(tmp_path) | {"MCUHOME_JOBS": "7"}
-    write_user(tmp_path, "sdk_sources:\n  - /pkgs\n")
+    write_user(tmp_path, "build:\n  sdk_sources:\n    - /pkgs\n")
     data = resolve_settings(project=project, env=env).print_data()
     assert data["jobs"] == {"value": 7, "origin": "environment", "source": "MCUHOME_JOBS"}
-    assert data["sdk_sources"]["value"] == ["/pkgs"]  # JSON-ready, not Path
-    assert data["sdk_sources"]["origin"] == "user"
+    assert data["build.sdk_sources"]["value"] == ["/pkgs"]  # JSON-ready, not Path
+    assert data["build.sdk_sources"]["origin"] == "user"
     assert "project_dir" not in data  # bootstrap options are not settings
 
 
@@ -340,7 +340,7 @@ def test_set_writes_a_value_the_next_resolve_reads_back(project: Project) -> Non
 
 
 def test_set_preserves_comments_and_neighboring_keys(project: Project) -> None:
-    write_project(project, "# my project\nsdk_sources:\n  - /pkgs  # pinned packages\n")
+    write_project(project, "# my project\nbuild:\n  sdk_sources:\n    - /pkgs  # pinned packages\n")
     configuration.set_config_value(project.config_file, "jobs", "2", env={})
     text = project.config_file.read_text(encoding="utf-8")
     assert "# my project" in text
@@ -357,9 +357,11 @@ def test_set_creates_the_file_and_its_directory(tmp_path: Path) -> None:
 
 
 def test_set_splits_a_paths_value_like_the_environment_does(project: Project) -> None:
-    configuration.set_config_value(project.config_file, "sdk_sources", "/a:relative/b", env={})
+    configuration.set_config_value(
+        project.config_file, "build.sdk_sources", "/a:relative/b", env={}
+    )
     resolved = resolve_settings(project=project, env={})
-    values = resolved.value("sdk_sources")
+    values = resolved.value("build.sdk_sources")
     assert values[0] == Path("/a")
     # The user's spelling is written; the file's own rule resolves it on read.
     assert values[1] == (project.root / "relative/b").resolve()

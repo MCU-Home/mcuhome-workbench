@@ -116,7 +116,10 @@ What is here, in the order a caller needs it:
     the options it states, or the machine's own, resolved from the
     environment and the project the request names. A caller that never
     touches any of it builds the way the machine is configured, which is
-    the point: these keys have no command-line flags.
+    the point: the registry derives no command-line flag for these keys.
+    The section's ``build.sdk_sources`` is the one key that travels on
+    the request instead (``BuildRequest.sdk_sources``), because the
+    remote method needs it as well.
 ``open_environment`` / ``BuildEnvironment`` / ``Invocation``
     The **backend role**, for the one caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a

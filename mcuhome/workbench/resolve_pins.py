@@ -535,7 +535,7 @@ def resolve_sdk(
             "The build needs the MCUHome SDK package, and no SDK source is configured.",
             hint=(
                 "point at a directory holding one:\n"
-                "    mcuhome config set sdk_sources <dir> --user\n"
+                "    mcuhome config set build.sdk_sources <dir> --user\n"
                 "or pass --sdk-sources <dir> for a single build."
             ),
         )
@@ -560,7 +560,7 @@ def resolve_sdk(
                 hint=(
                     "the index is what scripts/build_sdk_archive.py writes next to "
                     "the archive — regenerate it, or drop the source from "
-                    "--sdk-sources/MCUHOME_SDK_SOURCES"
+                    "--sdk-sources/MCUHOME_BUILD_SDK_SOURCES"
                 ),
             ) from broken
         try:
