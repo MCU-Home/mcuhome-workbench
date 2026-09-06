@@ -553,6 +553,47 @@ def test_an_untrusted_source_is_read_and_says_so_loudly(
     assert any("NOTHING IS VERIFIED" in warning for warning in warnings)
 
 
+def test_an_untrusted_registry_may_serve_a_source_with_no_signatures_at_all(
+    tmp_path: Path,
+) -> None:
+    """ "Unsigned" is the case the untrusted marking exists for.
+
+    A source that carries nothing but an index — no key set, no publisher
+    signatures, nothing to check — is readable exactly when the project
+    has said in writing that it accepts one, and never otherwise.
+    """
+    warnings: list[str] = []
+    served = bootstrap(Served())
+    served.put(
+        MIRROR + INDEX_FILE,
+        json.dumps(
+            {"packages": {SDK: {VERSION: {"file": "x.tar.zst", "sha256": "a" * 64, "size": 1}}}}
+        ).encode(),
+    )
+    client = PackageRegistry(
+        DOMAIN,
+        anchor=None,
+        into=tmp_path / "fetched",
+        untrusted=True,
+        opener=served,
+        on_warning=warnings.append,
+        now=NOW,
+    )
+    index = client.index(SOURCE)
+    assert not index.verified
+    assert index.versions(SDK) == (VERSION,)
+    assert any("NOTHING IS VERIFIED" in warning for warning in warnings)
+
+
+def test_a_source_with_no_signatures_is_refused_when_the_registry_is_trusted(
+    tmp_path: Path, anchor: Path
+) -> None:
+    served = bootstrap(Served())
+    served.put(MIRROR + INDEX_FILE, json.dumps({"packages": {}}).encode())
+    with pytest.raises(PackageRegistryError):
+        registry(tmp_path, anchor, served).index(SOURCE)
+
+
 def test_a_registry_without_an_anchor_and_without_untrusted_is_refused(tmp_path: Path) -> None:
     with pytest.raises(TrustAnchorMissing):
         PackageRegistry(DOMAIN, anchor=None, into=tmp_path / "fetched")

@@ -798,20 +798,31 @@ class PackageRegistry:
         held to being a plain file name in the source before it is used
         as one — the fetch happens before the verification by necessity,
         so the names get checked instead.
+
+        An **untrusted** registry is allowed to publish no signatures at
+        all, which is what makes "unsigned source" a thing this can read:
+        only the index is then required, and the documents that exist
+        only in order to be checked are fetched if they are there and
+        skipped if they are not.
         """
         if tree.exists():
             shutil.rmtree(tree)
         tree.mkdir(parents=True)
 
-        for name in (KEYS_FILE, MIRRORS_FILE, INDEX_FILE):
-            self._fetch_into(mirror, name, tree)
-            self._fetch_into(mirror, name + SIGNATURE_SUFFIX, tree)
+        required = not self.untrusted
+        for name in (KEYS_FILE, MIRRORS_FILE):
+            self._fetch_into(mirror, name, tree, required=required)
+            self._fetch_into(mirror, name + SIGNATURE_SUFFIX, tree, required=required)
+        self._fetch_into(mirror, INDEX_FILE, tree)
+        self._fetch_into(mirror, INDEX_FILE + SIGNATURE_SUFFIX, tree, required=required)
 
         index = _as_json((tree / INDEX_FILE).read_bytes(), mirror + INDEX_FILE)
         for part in index.get("parts") or []:
             name = str(part.get("file", "")) if isinstance(part, dict) else ""
             self._fetch_into(mirror, _usable_name(name, f"{mirror}: index part"), tree)
 
+        if not (tree / KEYS_FILE).is_file():
+            return
         seen: set[str] = set()
         previous = _as_json((tree / KEYS_FILE).read_bytes(), mirror + KEYS_FILE).get("previous")
         while isinstance(previous, str) and previous:
@@ -827,10 +838,16 @@ class PackageRegistry:
             self._fetch_into(mirror, name + SIGNATURE_SUFFIX, tree)
             previous = _as_json((tree / name).read_bytes(), mirror + name).get("previous")
 
-    def _fetch_into(self, mirror: str, name: str, tree: Path) -> None:
+    def _fetch_into(self, mirror: str, name: str, tree: Path, *, required: bool = True) -> None:
         target = tree / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(self._read_url(f"{mirror}{name}"))
+        try:
+            payload = self._read_url(f"{mirror}{name}")
+        except PackageRegistryError:
+            if required:
+                raise
+            return
+        target.write_bytes(payload)
 
     def _read_url(self, url: str) -> bytes:
         """One small document, whole. Only ever used for the signed set."""
