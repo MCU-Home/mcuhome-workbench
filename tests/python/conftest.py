@@ -29,7 +29,7 @@ from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenv as container
-from mcuhome.workbench import ociregistry, orchestrator
+from mcuhome.workbench import configuration, ociregistry, orchestrator
 from mcuhome.workbench.api import load_model
 from mcuhome.workbench.project import Project, find_project_root
 
@@ -153,6 +153,40 @@ def _no_real_signing_key(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.delenv("MCUHOME_SIGNING_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_system_layer(monkeypatch, tmp_path_factory):
+    """No test may read the machine's own ``/etc/mcuhome``.
+
+    The system layer is the one configuration layer that is not derived
+    from a stated environment by convention — a machine's is where the
+    machine says it is — so a developer or a CI image that has
+    ``/etc/mcuhome/configuration.yaml`` would feed it into every test
+    that resolves settings, and the suite would answer differently there
+    than here. ``XDG_CONFIG_DIRS`` is what states the directory
+    (:func:`mcuhome.workbench.configuration.system_config_dir`), so the
+    process gets one pointing at this test's own empty directory, and an
+    environment a test *states* without that variable is answered with
+    the same empty directory rather than with the real one.
+
+    A test about the resolution itself states ``XDG_CONFIG_DIRS`` and is
+    answered by the real function; one that patches
+    ``configuration.system_config_dir`` outright wins over this fixture,
+    because its monkeypatch is applied later.
+    """
+    # Deliberately not under the test's own tmp_path: several tests
+    # require that directory to be empty, and a fixture that put
+    # something in it would break them for a reason nobody would look
+    # for here.
+    empty = tmp_path_factory.mktemp("system-config")
+    monkeypatch.setenv("XDG_CONFIG_DIRS", str(empty))
+    real = configuration.system_config_dir
+
+    def stated_or_empty(env):
+        return real(env) if env.get("XDG_CONFIG_DIRS") else empty / "mcuhome"
+
+    monkeypatch.setattr(configuration, "system_config_dir", stated_or_empty)
 
 
 @pytest.fixture(autouse=True)

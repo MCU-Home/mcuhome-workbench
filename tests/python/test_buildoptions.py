@@ -386,6 +386,39 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
     assert driven["sdk_max_bytes"] == 11
 
 
+def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch) -> None:
+    """The remote method writes its base context through the same writer,
+    so the machine's package directories and bound reach it there too.
+
+    Remote builds are out of service until the build server runs
+    package-built environments, but this composition is live code: it is
+    what a client runs to pin a context before anything is sent.
+    """
+    created: dict[str, object] = {}
+    monkeypatch.setattr(
+        buildmethods,
+        "create_build_context",
+        lambda device_model, **kwargs: created.update(kwargs),
+    )
+    monkeypatch.setattr(buildmethods, "context_facts", lambda directory: {"build_environment": ""})
+
+    request = BuildRequest(
+        model=model,
+        out_dir=tmp_path,
+        sdk_sources=(tmp_path / "sdk",),
+        options=BuildOptions(
+            workspace_sources=(tmp_path / "workspaces",),
+            tools_sources=(tmp_path / "tools",),
+            sdk_max_bytes=11,
+        ),
+    )
+    assert buildmethods._remote_context(request, tmp_path / "work") == tmp_path / "work" / "context"
+    assert created["sdk_sources"] == (tmp_path / "sdk",)
+    assert created["workspace_sources"] == (tmp_path / "workspaces",)
+    assert created["tools_sources"] == (tmp_path / "tools",)
+    assert created["sdk_max_bytes"] == 11
+
+
 class _Stop(Exception):
     """Raised by a stubbed acquisition: the arguments are the whole subject."""
 
@@ -486,10 +519,31 @@ def test_a_local_tier_can_be_named_without_a_cache_root(tmp_path) -> None:
     assert "shared" not in tiers
 
 
-def test_a_named_shared_tier_is_read_only_and_only_when_it_exists(tmp_path) -> None:
-    absent = subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "nothing")
-    assert "shared" not in absent
+def test_a_named_shared_tier_is_read_only(tmp_path) -> None:
     (tmp_path / "shared").mkdir()
     tiers = subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "shared")
     assert tiers["shared"].path == tmp_path / "shared"
     assert not tiers["shared"].writable
+
+
+def test_a_named_shared_tier_that_is_not_there_is_refused(tmp_path) -> None:
+    """Somebody said where the shared cache is; silently building without
+    it would hide a mount that never appeared."""
+    with pytest.raises(ConfigError) as refusal:
+        subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "nothing")
+    assert str(tmp_path / "nothing") in str(refusal.value)
+    assert subprocessbuild.SHARED_CACHE_OPTION in (refusal.value.hint or "")
+    # A file is not a directory either.
+    (tmp_path / "a-file").write_text("", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "a-file")
+
+
+def test_a_derived_shared_tier_may_simply_be_absent(tmp_path) -> None:
+    """The directory under the cache root is nobody's statement: a machine
+    that never made one builds without a shared cache."""
+    tiers = subprocessbuild.cache_tiers(ccache_dir=tmp_path / "root")
+    assert "shared" not in tiers
+    (tmp_path / "root" / "cache-shared").mkdir(parents=True)
+    tiers = subprocessbuild.cache_tiers(ccache_dir=tmp_path / "root")
+    assert tiers["shared"].path == tmp_path / "root" / "cache-shared"

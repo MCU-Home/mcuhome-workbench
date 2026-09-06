@@ -70,7 +70,7 @@ from mcuhome.model.context import (
     PackagePin,
     format_generator_chain,
 )
-from mcuhome.model.errors import BuildError
+from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.jobs import JOBS_VAR
 
 from mcuhome.workbench.buildenvsession import (
@@ -111,6 +111,7 @@ __all__ = [
     "DEV_OPTIONS",
     "DEV_TOOLS_OPTION",
     "DEV_WORKSPACE_OPTION",
+    "SHARED_CACHE_OPTION",
     "ENTRY_POINT_DIR",
     "TOOLS_ROOT_VAR",
     "WORKSPACE_ROOT_VAR",
@@ -133,6 +134,10 @@ __all__ = [
 #: store entries. Named here because every refusal of development mode has
 #: to tell a person which setting to change; turning them into
 #: configuration is a separate piece of work.
+#: The configuration key that names a shared compiler cache, quoted in
+#: the refusal when the directory it names is not there.
+SHARED_CACHE_OPTION = "build.cache_shared"
+
 DEV_WORKSPACE_OPTION = "build.dev_workspace"
 DEV_TOOLS_OPTION = "build.dev_tools"
 DEV_OPTIONS = {WORKSPACE_KIND: DEV_WORKSPACE_OPTION, TOOLS_KIND: DEV_TOOLS_OPTION}
@@ -587,6 +592,14 @@ def cache_tiers(
     the container profile points ccache at the role directory itself and
     this one at ``<tier>/ccache`` inside it, and the compile commands
     differ by their paths anyway.
+
+    **A shared tier somebody named has to exist.** The shared cache is
+    offered read-only and is the one tier this function will not create,
+    so a path that is not a directory would silently mean "no shared
+    cache" — and a machine configured to start warm off a network mount
+    that failed to appear would build cold for weeks without saying so.
+    A *derived* shared directory (the one under the cache root) may be
+    absent, because that is not a statement anybody made.
     """
     tiers: dict[str, CacheTier] = {}
     # A tier named outright wins over the layout under the cache root:
@@ -604,11 +617,22 @@ def cache_tiers(
         tiers["session"] = CacheTier(path=Path(session_dir), writable=True)
     if project_dir is not None:
         tiers["project"] = CacheTier(path=Path(project_dir), writable=True)
-    shared = shared_ccache_dir
-    if shared is None:
-        shared = _under_root(ccache_dir, containerpaths.CCACHE_SHARED.name)
-    if shared is not None and Path(shared).is_dir():
-        tiers["shared"] = CacheTier(path=Path(shared), writable=False)
+    if shared_ccache_dir is not None:
+        shared = Path(shared_ccache_dir)
+        if not shared.is_dir():
+            raise ConfigError(
+                f"The shared compiler cache {shared} is not a directory.",
+                hint=(
+                    "the shared cache is read-only to a build, so MCUHome does not "
+                    "create it: mount or create the directory, or unset "
+                    f"{SHARED_CACHE_OPTION} to build without a shared cache"
+                ),
+            )
+        tiers["shared"] = CacheTier(path=shared, writable=False)
+        return tiers
+    derived = _under_root(ccache_dir, containerpaths.CCACHE_SHARED.name)
+    if derived is not None and derived.is_dir():
+        tiers["shared"] = CacheTier(path=derived, writable=False)
     return tiers
 
 

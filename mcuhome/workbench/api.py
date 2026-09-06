@@ -106,6 +106,17 @@ What is here, in the order a caller needs it:
     ``MODE_SUBPROCESS`` (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or
     ``UnknownBuildMode`` — and ``BuildRequest.build_mode`` is where a
     caller states it.
+``BuildOptions`` / ``build_options`` / ``options_for``
+    What the ``build`` section of the configuration says about *this
+    machine*: the execution it uses, where it keeps unpacked build
+    environments and which interpreter finalizes them, how much a package
+    may unpack to, which directories each package is looked for in, and
+    where the compiler cache tiers are. ``build_options`` turns resolved
+    ``Settings`` into that object; ``options_for`` answers for a request —
+    the options it states, or the machine's own, resolved from the
+    environment and the project the request names. A caller that never
+    touches any of it builds the way the machine is configured, which is
+    the point: these keys have no command-line flags.
 ``open_environment`` / ``BuildEnvironment`` / ``Invocation``
     The **backend role**, for the one caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a

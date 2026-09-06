@@ -13,7 +13,7 @@ because they decide where the project layer even is).
 
 The five layers, ascending — later wins::
 
-    system       /etc/mcuhome/configuration.yaml
+    system       /etc/mcuhome/configuration.yaml (or XDG_CONFIG_DIRS')
     user         $XDG_CONFIG_HOME/mcuhome/configuration.yaml
     project      mcuhome.yaml in the project directory
     environment  MCUHOME_* variables
@@ -358,12 +358,12 @@ OPTIONS: tuple[Option, ...] = (
     Option(
         "build.cache_session",
         kind="path",
-        help="a cache kept for one build session; unset means a fresh one per step",
+        help="a compiler cache kept for one build session; unset means no session tier",
     ),
     Option(
         "build.cache_project",
         kind="path",
-        help="a cache kept for one project",
+        help="a compiler cache kept for one project; unset means no project tier",
     ),
 )
 
@@ -439,14 +439,28 @@ class Settings:
 def system_config_dir(env: Mapping[str, str]) -> Path | None:
     """The system configuration directory, or None when the platform names none.
 
-    ``/etc/mcuhome`` on POSIX; ``%ProgramData%\\mcuhome`` on Windows,
-    from the stated environment. ``None`` — rather than an error —
-    because an absent system layer is a normal machine, not a broken
-    one.
+    ``/etc/mcuhome`` on POSIX; ``%ProgramData%\\mcuhome`` on Windows.
+    ``None`` — rather than an error — because an absent system layer is a
+    normal machine, not a broken one.
+
+    **The stated environment decides this layer too.** ``XDG_CONFIG_DIRS``
+    is the convention's own name for the system configuration search
+    path, and its first entry — the most important one — is where this
+    layer lives when the variable is set: ``<first entry>/mcuhome``.
+    Unset, the answer is the conventional ``/etc/mcuhome``. So a caller
+    that states an environment gets an answer *about that environment*
+    rather than about the machine the process happens to run on, which is
+    what every other path in MCUHome already promises
+    (:mod:`mcuhome.model.userpaths`) — and what lets a test, a container
+    or a second session have a system layer of its own instead of the
+    one real ``/etc``.
     """
     if os.name == "nt":
         base = env.get("ProgramData")
         return Path(base) / "mcuhome" if base else None
+    stated = env.get("XDG_CONFIG_DIRS", "").split(os.pathsep)[0]
+    if stated:
+        return _resolve_path(stated, env=env, base=None) / "mcuhome"
     return Path("/etc/mcuhome")
 
 
@@ -905,7 +919,8 @@ def scope_config_file(
             f"This environment names no {scope} configuration directory.",
             hint=(
                 "the user directory follows XDG_CONFIG_HOME/HOME (POSIX) or %APPDATA% "
-                "(Windows); the system directory is /etc/mcuhome or %ProgramData%\\mcuhome"
+                "(Windows); the system directory is the first XDG_CONFIG_DIRS entry, "
+                "else /etc/mcuhome, or %ProgramData%\\mcuhome"
             ),
         )
     return directory / CONFIG_FILE

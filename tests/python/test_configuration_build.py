@@ -321,3 +321,26 @@ def test_every_build_key_is_printed_with_its_value_and_origin(project: Project) 
     }
     # Paths are rendered as strings, so the whole thing is JSON-ready.
     assert data["build.workspace_sources"]["value"] == []
+
+
+def test_a_registrys_configured_anchor_is_printed_as_a_string(project: Project) -> None:
+    """`mcuhome config print` renders every registry setting, the anchor
+    included, and renders it JSON-ready."""
+    write_project(
+        project,
+        "registry:\n  packages.example.org:\n    anchor: anchors/private.json\n",
+    )
+    data = resolve_settings(project=project, env={}).print_data()
+    printed = data["registry"]["value"]
+    assert printed == [
+        {
+            "domain": "packages.example.org",
+            "untrusted": False,
+            "anchor": str((project.root / "anchors" / "private.json").resolve()),
+            "mirrors": {},
+        }
+    ]
+    # A registry that names none says so rather than omitting the key.
+    write_project(project, "registry:\n  packages.example.org: {}\n")
+    printed = resolve_settings(project=project, env={}).print_data()["registry"]["value"]
+    assert printed[0]["anchor"] is None

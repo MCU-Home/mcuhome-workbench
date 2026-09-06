@@ -297,6 +297,36 @@ def test_the_posix_layer_directories_follow_the_conventions(tmp_path: Path) -> N
     assert user_config_dir({}) is None
 
 
+def test_the_stated_environment_decides_the_system_layer_too(tmp_path: Path) -> None:
+    """A resolution answers about the environment it was given, not about
+    the machine the process runs on — the system layer included."""
+    stated = {"XDG_CONFIG_DIRS": f"{tmp_path / 'first'}:{tmp_path / 'second'}"}
+    # The first entry is the most important one, which is the only one a
+    # single system layer can be.
+    assert system_config_dir(stated) == tmp_path / "first" / "mcuhome"
+    assert system_config_dir({"XDG_CONFIG_DIRS": ""}) == Path("/etc/mcuhome")
+    assert system_config_dir({"XDG_CONFIG_DIRS": "~/etc", "HOME": str(tmp_path)}) == (
+        tmp_path / "etc" / "mcuhome"
+    )
+
+
+def test_a_stated_system_directory_is_the_layer_that_is_read(
+    tmp_path: Path, project: Project
+) -> None:
+    """End to end: the file under the stated directory is the system layer."""
+    directory = tmp_path / "etc" / "mcuhome"
+    directory.mkdir(parents=True)
+    (directory / CONFIG_FILE).write_text("jobs: 8\n", encoding="utf-8")
+    env = {"XDG_CONFIG_DIRS": str(tmp_path / "etc")}
+    settings = resolve_settings(project=project, env=env)
+    assert settings.value("jobs") == 8
+    assert settings.origin("jobs") == "system"
+    # And an environment that points somewhere empty has no system layer,
+    # whatever this machine's own /etc holds.
+    empty = {"XDG_CONFIG_DIRS": str(tmp_path / "nothing")}
+    assert resolve_settings(project=project, env=empty).origin("jobs") == "default"
+
+
 # --- writing configuration (config set/unset, ADR 0022 §3) ------------
 
 
@@ -408,9 +438,14 @@ def test_scope_files_answer_per_scope(tmp_path: Path, project: Project) -> None:
         configuration.scope_config_file("user", project=None, env=env)
         == tmp_path / "xdg" / "mcuhome" / CONFIG_FILE
     )
+    # The system scope follows the same stated environment; where that
+    # directory *is* by default is asserted where the directories are
+    # (the suite never lets a test read the machine's own /etc).
     assert (
-        configuration.scope_config_file("system", project=None, env={})
-        == Path("/etc/mcuhome") / CONFIG_FILE
+        configuration.scope_config_file(
+            "system", project=None, env={"XDG_CONFIG_DIRS": str(tmp_path / "etc")}
+        )
+        == tmp_path / "etc" / "mcuhome" / CONFIG_FILE
     )
 
 

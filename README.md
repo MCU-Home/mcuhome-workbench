@@ -274,9 +274,9 @@ that built both ways has one cache. Each tier can be moved on its own:
 | key | what it is |
 |---|---|
 | `build.cache_local` | this machine's own cache; unset it lives under `ccache_dir` |
-| `build.cache_shared` | a cache shared with other machines, offered read-only |
-| `build.cache_session` | kept for one build session |
-| `build.cache_project` | kept for one project |
+| `build.cache_shared` | a cache shared with other machines, offered read-only; the directory has to exist |
+| `build.cache_session` | kept for one build session; unset there is no session tier |
+| `build.cache_project` | kept for one project; unset there is no project tier |
 
 ### The host a build without a container needs
 
@@ -391,11 +391,11 @@ belongs to a tree MCUHome unpacked and may copy; your working tree is yours, and
 a build that quietly patched it — or quietly ignored the patch — would be wrong
 either way.
 
-One thing to know about the SDK: a developer workspace that already holds an
-`mcuhome-sdk` checkout builds *that* checkout, while the build context and the
-build report name the SDK version the device pinned. That is the point of a
-developer workspace, and it means the report is not the whole truth about what
-was compiled.
+One thing to know about the SDK: today a developer workspace that already holds
+an `mcuhome-sdk` checkout is built from *that* checkout, while the build context
+and the build report name the SDK version the device pinned — so in this mode the
+report does not describe everything that was compiled. Check what your workspace
+holds before you read a dev-mode report as the whole truth.
 
 ## Security
 
