@@ -401,6 +401,12 @@ class BuildRequest:
     #: user's cache directory, which is what every build does unless
     #: somebody moved it — one cache per user, shared by every project.
     ccache_dir: Path | None = None
+    #: Development mode, for ``build.mode = subprocess`` only: an unpacked
+    #: build workspace and build tools the developer maintains, used
+    #: instead of the ones MCUHome provisions into its store. ``None`` —
+    #: the ordinary case — provisions. Both or neither.
+    dev_workspace: Path | None = None
+    dev_tools: Path | None = None
 
     # -- remote --------------------------------------------------------
     #: The build server's address, as a person writes it: a host, a
@@ -540,7 +546,13 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     chosen = resolve_method(method)
     if chosen == LOCAL:
         if resolve_build_mode(request.build_mode) == MODE_SUBPROCESS:
-            return LocalBuild(execution=SubprocessExecution(ccache_dir=request.ccache_dir))
+            return LocalBuild(
+                execution=SubprocessExecution(
+                    ccache_dir=request.ccache_dir,
+                    dev_workspace=request.dev_workspace,
+                    dev_tools=request.dev_tools,
+                )
+            )
         return LocalBuild(
             execution=ContainerExecution(image=request.image, ccache_dir=request.ccache_dir)
         )
@@ -791,6 +803,15 @@ def compose_subprocess_build(
     names its environment, and today it names a container image — so a
     caller that has neither is told to build in a container instead of
     being handed a build against an environment nobody chose.
+
+    One refusal happens before any of the three steps: a context that
+    carries patches against a build environment the developer maintains
+    themselves
+    (:func:`~mcuhome.workbench.subprocessbuild.refuse_patched_context`).
+    It is placed ahead of the environment step rather than inside the
+    backend because locking the context writes into a directory the user
+    keeps, and a build that is going to be refused must not have changed
+    anything first.
     """
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
@@ -806,6 +827,11 @@ def compose_subprocess_build(
             hint="build in a container: set build.mode to container, or build a context "
             "you already have",
         )
+    context_dir = Path(context_dir)
+    # Before the registry is consulted and before the context is locked:
+    # locking writes into a directory the user keeps, and a build that is
+    # going to be refused must not have changed anything first.
+    subprocessbuild.refuse_patched_context(context_dir, environment)
     packages = _package_registry(
         model,
         project_root=project_root,
@@ -813,7 +839,6 @@ def compose_subprocess_build(
         work_root=work_root,
         on_line=on_line,
     )
-    context_dir = Path(context_dir)
     if on_step is not None:
         on_step("environment")
         on_step("environment", build_environment=environment.described(), fetched=False)
@@ -838,6 +863,36 @@ def compose_subprocess_build(
     )
 
 
+def _developer_environment(
+    execution: SubprocessExecution,
+) -> subprocessbuild.Environment | None:
+    """The build environment a developer stated, or ``None`` for the store.
+
+    Development mode is all or nothing: an environment is a *set* of
+    packages, and half a set is not one — a workspace of one version
+    against tools of another is exactly the kind of build that fails
+    somewhere deep in a compile with nothing to point at. So one path
+    without the other is refused here, before anything is fetched or
+    written, and naming the one that is missing.
+    """
+    workspace, tools = execution.dev_workspace, execution.dev_tools
+    if workspace is None and tools is None:
+        return None
+    if workspace is None or tools is None:
+        missing = (
+            subprocessbuild.DEV_WORKSPACE_OPTION
+            if workspace is None
+            else subprocessbuild.DEV_TOOLS_OPTION
+        )
+        raise EnvironmentUnavailable(
+            f"MCUHome needs both halves of a build environment and {missing} is not set.",
+            hint=f"set {subprocessbuild.DEV_WORKSPACE_OPTION} and "
+            f"{subprocessbuild.DEV_TOOLS_OPTION} together, or unset both to build "
+            "against the build environment MCUHome unpacks itself",
+        )
+    return subprocessbuild.environment_from_paths(workspace, tools)
+
+
 async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution) -> BuildOutcome:
     """Local, without a container: :func:`compose_local_build`, offloaded.
 
@@ -860,6 +915,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         on_line=request.on_line,
         on_step=request.on_step,
         build_mode=MODE_SUBPROCESS,
+        environment=_developer_environment(execution),
     )
     outcome = result.outcome
     return BuildOutcome(

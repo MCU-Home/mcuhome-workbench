@@ -90,6 +90,7 @@ __all__ = [
     "git_config_file",
     "provision",
     "provisioned",
+    "require_manifest",
     "required_python",
     "store_root",
 ]
@@ -494,7 +495,7 @@ def _finalize(
     — is simply unpacked and frozen.
     """
     if kind == TOOLS_KIND:
-        _require_manifest(tree, TOOLS_MANIFEST, name)
+        require_manifest(tree, TOOLS_MANIFEST, name)
         _create_venv(tree, interpreter=interpreter, name=name, on_line=on_line)
         return
     if kind == WORKSPACE_KIND:
@@ -502,8 +503,14 @@ def _finalize(
         _write_git_config(tree, workspace)
 
 
-def _require_manifest(tree: Path, manifest: str, name: str) -> dict:
-    """The package's own statement of what it is, or a refusal."""
+def require_manifest(tree: Path, manifest: str, name: str) -> dict:
+    """The package's own statement of what it is, or a refusal.
+
+    Public because it is the one check a *developer-supplied* tree can
+    still be held to (:func:`mcuhome.workbench.subprocessbuild.environment_from_paths`):
+    nothing acquired those bytes, so there is no hash and no marker, and
+    what the tree says about itself is all there is.
+    """
     try:
         document = json.loads((tree / manifest).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -716,7 +723,7 @@ def _check_west_config(tree: Path, name: str) -> Path:
     package that does not is not usable in this profile and says so here,
     before a build discovers it as a permission error deep inside CMake.
     """
-    manifest = _require_manifest(tree, WORKSPACE_MANIFEST, name)
+    manifest = require_manifest(tree, WORKSPACE_MANIFEST, name)
     stated = str(manifest.get("workspace") or "workspace")
     # The package says where its workspace is, and the answer has to be
     # inside the package: the value ends up in a git configuration and in

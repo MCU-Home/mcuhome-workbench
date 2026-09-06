@@ -221,6 +221,8 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
     monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
 
     class FakeEnvironment:
+        developer = False
+
         def described(self) -> str:
             return "mcuhome-build-workspace 0.1.0"
 
@@ -586,3 +588,136 @@ def test_an_address_that_is_not_one_is_refused_in_words(address) -> None:
         buildmethods.websocket_url(address)
     assert refusal.value.hint
     assert "<host" in refusal.value.hint
+
+
+def test_the_developer_trees_reach_the_execution(model, tmp_path) -> None:
+    """``build.dev_workspace`` and ``build.dev_tools`` are read where every
+    other method-specific field is read, and land on the target."""
+    target = buildmethods.target_for_method(
+        buildmethods.LOCAL,
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            build_mode=buildmethods.MODE_SUBPROCESS,
+            dev_workspace=tmp_path / "workspace-tree",
+            dev_tools=tmp_path / "tools-tree",
+        ),
+    )
+    assert target.execution.dev_workspace == tmp_path / "workspace-tree"
+    assert target.execution.dev_tools == tmp_path / "tools-tree"
+
+
+def test_half_a_developer_environment_is_refused(model, tmp_path) -> None:
+    """An environment is a set of packages, and half a set is not one: a
+    workspace of one version against tools of another fails deep inside a
+    compile with nothing to point at."""
+    for stated in ("dev_workspace", "dev_tools"):
+        with pytest.raises(lb.EnvironmentUnavailable, match="both halves") as refusal:
+            asyncio.run(
+                buildmethods.build_firmware(
+                    buildmethods.BuildRequest(model=model, out_dir=tmp_path),
+                    target=buildmethods.LocalBuild(
+                        execution=buildmethods.SubprocessExecution(**{stated: tmp_path / "tree"})
+                    ),
+                )
+            )
+        assert "build.dev_workspace" in refusal.value.hint
+        assert "build.dev_tools" in refusal.value.hint
+
+
+def test_a_developer_environment_reaches_the_composition(model, tmp_path, monkeypatch) -> None:
+    """The trees a developer stated become the environment the subprocess
+    composition runs against, in place of the store's entries."""
+    workspace = tmp_path / "workspace-tree"
+    (workspace / "workspace").mkdir(parents=True)
+    (workspace / "build-workspace.json").write_text(
+        '{"package": "mcuhome-build-workspace", "version": "0.1.0+dev", "workspace": "workspace"}',
+        encoding="utf-8",
+    )
+    tools = tmp_path / "tools-tree"
+    (tools / "bin").mkdir(parents=True)
+    entry = tools / "bin" / "build-environment-entry"
+    entry.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    entry.chmod(0o755)
+    (tools / "build-tools.json").write_text(
+        '{"package": "mcuhome-build-tools_linux-amd64", "version": "0.1.0+dev"}',
+        encoding="utf-8",
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake(device_model, **kwargs):
+        seen.update(kwargs)
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            environment=kwargs["environment"],
+        )
+
+    monkeypatch.setattr(buildmethods, "compose_subprocess_build", fake)
+    asyncio.run(
+        buildmethods.build_firmware(
+            buildmethods.BuildRequest(model=model, out_dir=tmp_path),
+            target=buildmethods.LocalBuild(
+                execution=buildmethods.SubprocessExecution(dev_workspace=workspace, dev_tools=tools)
+            ),
+        )
+    )
+    environment = seen["environment"]
+    assert environment.developer is True
+    assert environment.workspace.path == workspace
+    assert environment.tools.path == tools
+
+
+def test_a_patched_context_is_refused_before_the_context_is_locked(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The refusal comes before anything the build would have changed.
+
+    Locking writes into a directory the user keeps, so a dev-mode build
+    that is going to be refused for its patches must not have written the
+    lock into that directory first — nor fetched an SDK, nor talked to a
+    registry.
+    """
+    workspace = tmp_path / "workspace-tree"
+    (workspace / "workspace").mkdir(parents=True)
+    (workspace / "build-workspace.json").write_text(
+        '{"package": "mcuhome-build-workspace", "version": "0.1.0+dev", "workspace": "workspace"}',
+        encoding="utf-8",
+    )
+    tools = tmp_path / "tools-tree"
+    (tools / "bin").mkdir(parents=True)
+    entry = tools / "bin" / "build-environment-entry"
+    entry.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    entry.chmod(0o755)
+    (tools / "build-tools.json").write_text(
+        '{"package": "mcuhome-build-tools_linux-amd64", "version": "0.1.0+dev"}',
+        encoding="utf-8",
+    )
+    context = tmp_path / "context"
+    (context / "patches" / "zephyr").mkdir(parents=True)
+    (context / "patches" / "zephyr" / "0001-fix.patch").write_text("--- a\n+++ b\n")
+
+    locked: list[Path] = []
+    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: locked.append(directory))
+    monkeypatch.setattr(
+        subprocessbuild,
+        "run_locked_build",
+        lambda *arguments, **keywords: pytest.fail("the backend must not be reached"),
+    )
+
+    with pytest.raises(subprocessbuild.BuildEnvironmentError, match="cannot apply them"):
+        asyncio.run(
+            buildmethods.build_firmware(
+                buildmethods.BuildRequest(model=model, out_dir=tmp_path, context_dir=context),
+                target=buildmethods.LocalBuild(
+                    execution=buildmethods.SubprocessExecution(
+                        dev_workspace=workspace, dev_tools=tools
+                    )
+                ),
+            )
+        )
+    assert locked == []
+    assert not (context / "manifest.yaml").exists()
+    assert not (tmp_path / ".mcuhome-local").exists()

@@ -501,3 +501,182 @@ def test_the_frozen_store_denies_a_build_that_tries_to_write_into_it(
 
     assert result.outcome.successful
     assert snapshot(store) == before
+
+
+# --------------------------------------------------------------------------
+# Development mode: trees the developer maintains
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def developer(tmp_path: Path) -> tuple[Path, Path]:
+    """A workspace and a tools tree as a developer keeps them: unfrozen.
+
+    Same shape as a store entry minus everything the store adds — no
+    completion marker, no package hash, and writable, because the whole
+    point is that the person running the build edits them.
+    """
+    workspace = tmp_path / "dev" / "workspace-tree"
+    (workspace / "workspace" / ".west").mkdir(parents=True)
+    (workspace / "workspace" / ".west" / "config").write_text(
+        "[zephyr]\n\tbase = zephyr\n", encoding="utf-8"
+    )
+    (workspace / "build-workspace.json").write_text(
+        json.dumps(
+            {
+                "package": "mcuhome-build-workspace",
+                "version": "0.1.0+dev",
+                "workspace": "workspace",
+            }
+        ),
+        encoding="utf-8",
+    )
+    tools = tmp_path / "dev" / "tools-tree"
+    tools.mkdir(parents=True)
+    entry_point(tools, DELIVERS)
+    (tools / "build-tools.json").write_text(
+        json.dumps({"package": "mcuhome-build-tools_linux-amd64", "version": "0.1.0+dev"}),
+        encoding="utf-8",
+    )
+    return workspace, tools
+
+
+def test_an_environment_can_be_two_directories_a_developer_maintains(developer) -> None:
+    """What the store would have said about the trees, read out of the trees."""
+    workspace, tools = developer
+    environment = subprocessbuild.environment_from_paths(workspace, tools)
+
+    assert environment.developer is True
+    assert environment.workspace.path == workspace
+    assert environment.workspace.name == "mcuhome-build-workspace"
+    assert environment.workspace.version == "0.1.0+dev"
+    assert environment.tools.name == "mcuhome-build-tools_linux-amd64"
+    # No package published these bytes, so there is no hash to state.
+    assert environment.workspace.sha256 == ""
+    assert environment.entry_point == tools / "bin" / "build-environment-entry"
+
+
+def test_a_developer_environment_names_its_trees_where_it_is_described(developer) -> None:
+    """Two builds a week apart can state the same version over different
+    bytes, so the log line names the paths as well."""
+    workspace, tools = developer
+    described = subprocessbuild.environment_from_paths(workspace, tools).described()
+
+    assert str(workspace) in described
+    assert str(tools) in described
+
+
+def test_a_developer_directory_that_is_not_there_is_refused(tmp_path, developer) -> None:
+    workspace, tools = developer
+    with pytest.raises(BuildEnvironmentError, match="no directory at") as refused:
+        subprocessbuild.environment_from_paths(tmp_path / "absent", tools)
+    assert subprocessbuild.DEV_WORKSPACE_OPTION in refused.value.hint
+
+    with pytest.raises(BuildEnvironmentError, match="no directory at") as refused:
+        subprocessbuild.environment_from_paths(workspace, tmp_path / "absent")
+    assert subprocessbuild.DEV_TOOLS_OPTION in refused.value.hint
+
+
+def test_a_developer_tree_that_does_not_say_what_it_is_gets_refused(developer) -> None:
+    """The manifest is per kind, so the two trees swapped is caught here
+    rather than three minutes into a compile."""
+    workspace, tools = developer
+    with pytest.raises(BuildEnvironmentError, match="build-workspace.json"):
+        subprocessbuild.environment_from_paths(tools, tools)
+    with pytest.raises(BuildEnvironmentError, match="build-tools.json"):
+        subprocessbuild.environment_from_paths(workspace, workspace)
+
+
+def test_a_developer_tree_without_a_package_and_version_is_refused(developer) -> None:
+    """A build log that cannot name what it built against is worth fixing
+    before the build, not after."""
+    workspace, tools = developer
+    (workspace / "build-workspace.json").write_text('{"workspace": "workspace"}', encoding="utf-8")
+    with pytest.raises(BuildEnvironmentError, match="which package and version"):
+        subprocessbuild.environment_from_paths(workspace, tools)
+
+
+def test_a_developer_tools_tree_without_an_entry_point_is_refused(developer) -> None:
+    workspace, tools = developer
+    (tools / "bin" / "build-environment-entry").unlink()
+    with pytest.raises(BuildEnvironmentError, match="no entry point"):
+        subprocessbuild.environment_from_paths(workspace, tools)
+
+
+def test_a_developer_build_reaches_the_launcher_with_its_own_trees(tmp_path, developer) -> None:
+    """The ordinary case: no patches, and the build runs against the
+    developer's trees exactly as it runs against a store's."""
+    workspace, tools = developer
+    environment = subprocessbuild.environment_from_paths(workspace, tools)
+    result = run_one_step(tmp_path, environment)
+    values = child_environment(result)
+
+    assert result.outcome.successful
+    assert values["MCUHOME_BUILD_ENV_WORKSPACE"] == str(workspace)
+    assert values["MCUHOME_BUILD_ENV_TOOLS"] == str(tools)
+
+
+def test_a_context_with_patches_is_refused_in_development_mode(tmp_path, developer) -> None:
+    """Neither applied nor ignored.
+
+    Applying would edit source trees the developer maintains; ignoring
+    would build firmware that is not what the build context says it is.
+    The refusal is typed, and it happens before anything is fetched or
+    written — no SDK package, no session directory.
+    """
+    workspace, tools = developer
+    environment = subprocessbuild.environment_from_paths(workspace, tools)
+    sdk_sha256 = make_sdk_source(tmp_path / "packages")
+    context = make_context(tmp_path / "context", sdk_sha256)
+    (context / "patches" / "zephyr").mkdir(parents=True)
+    (context / "patches" / "zephyr" / "0001-fix.patch").write_text("--- a\n+++ b\n")
+
+    with pytest.raises(BuildEnvironmentError, match="cannot apply them") as refused:
+        run_locked_build(
+            context,
+            environment=environment,
+            sdk_sources=(tmp_path / "packages",),
+            work_root=tmp_path / "work",
+            env=CALLER_ENV,
+        )
+    assert "zephyr" in str(refused.value)
+    assert subprocessbuild.DEV_WORKSPACE_OPTION in refused.value.hint
+    assert not (tmp_path / "work").exists()
+
+
+def test_a_context_with_patches_builds_against_a_store(tmp_path, environment) -> None:
+    """The other side of the refusal: with a provisioned environment there
+    is nothing to refuse, because the trees a patch names are copied and
+    patched in the copy."""
+    sdk_sha256 = make_sdk_source(tmp_path / "packages")
+    context = make_context(tmp_path / "context", sdk_sha256)
+    (context / "patches" / "zephyr").mkdir(parents=True)
+    (context / "patches" / "zephyr" / "0001-fix.patch").write_text("--- a\n+++ b\n")
+
+    result = run_locked_build(
+        context,
+        environment=environment,
+        sdk_sources=(tmp_path / "packages",),
+        work_root=tmp_path / "work",
+        env=CALLER_ENV,
+    )
+    assert result.outcome.successful
+
+
+def test_an_empty_patch_directory_is_not_a_patched_context(tmp_path, developer) -> None:
+    """A context that carries the directory and no patches is the ordinary
+    case, not a refusal."""
+    workspace, tools = developer
+    environment = subprocessbuild.environment_from_paths(workspace, tools)
+    sdk_sha256 = make_sdk_source(tmp_path / "packages")
+    context = make_context(tmp_path / "context", sdk_sha256)
+    (context / "patches").mkdir()
+
+    result = run_locked_build(
+        context,
+        environment=environment,
+        sdk_sources=(tmp_path / "packages",),
+        work_root=tmp_path / "work",
+        env=CALLER_ENV,
+    )
+    assert result.outcome.successful

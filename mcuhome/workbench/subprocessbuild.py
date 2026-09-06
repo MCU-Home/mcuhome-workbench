@@ -31,6 +31,15 @@ the entries are frozen, a patched tree becomes a copy under ``work``,
 and the compiler cache lives in a cache tier the orchestrator provides.
 The one write this profile does outside its own session directory is the
 one ccache does inside the tier it was pointed at.
+
+**Development mode** is the same profile pointed at trees a developer
+maintains instead of at store entries
+(:func:`environment_from_paths`): a workspace they patch by hand, a
+tools tree they rebuilt. Nothing verified those bytes and nothing froze
+them, so the one thing that mode cannot do is take a build context's
+patches — applying them would edit somebody's own source trees and
+ignoring them would build firmware that is not what the context says.
+It is refused instead.
 """
 
 from __future__ import annotations
@@ -41,7 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mcuhome.model import containerpaths
-from mcuhome.model.context import MANIFEST_FILE
+from mcuhome.model.context import MANIFEST_FILE, PATCHES_DIR
 from mcuhome.model.jobs import JOBS_VAR
 
 from mcuhome.workbench.buildenvsession import (
@@ -56,12 +65,15 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.buildenvstore import (
     TOOLS_KIND,
+    TOOLS_MANIFEST,
     WORKSPACE_KIND,
+    WORKSPACE_MANIFEST,
     BuildEnvironmentError,
     StoreEntry,
     entry_directory,
     git_config_file,
     provisioned,
+    require_manifest,
 )
 from mcuhome.workbench.contextdir import read_context_manifest
 from mcuhome.workbench.orchestrator import (
@@ -74,6 +86,9 @@ from mcuhome.workbench.orchestrator import (
 from mcuhome.workbench.packageregistry import RegistrySource
 
 __all__ = [
+    "DEV_OPTIONS",
+    "DEV_TOOLS_OPTION",
+    "DEV_WORKSPACE_OPTION",
     "ENTRY_POINT_DIR",
     "TOOLS_ROOT_VAR",
     "WORKSPACE_ROOT_VAR",
@@ -81,11 +96,21 @@ __all__ = [
     "SubprocessBuildResult",
     "cache_tiers",
     "entry_point_of",
+    "environment_from_paths",
     "environment_from_store",
     "launcher",
+    "refuse_patched_context",
     "run_locked_build",
     "step_environment",
 ]
+
+#: What points this profile at trees a developer maintains instead of at
+#: store entries. Named here because every refusal of development mode has
+#: to tell a person which setting to change; turning them into
+#: configuration is a separate piece of work.
+DEV_WORKSPACE_OPTION = "build.dev_workspace"
+DEV_TOOLS_OPTION = "build.dev_tools"
+DEV_OPTIONS = {WORKSPACE_KIND: DEV_WORKSPACE_OPTION, TOOLS_KIND: DEV_TOOLS_OPTION}
 
 #: Where the entry point sits inside the tools package. Not the
 #: specification's business — where an environment keeps its own content
@@ -159,15 +184,28 @@ DEFAULT_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 @dataclass(frozen=True)
 class Environment:
-    """The store entries one subprocess build runs against.
+    """The two package trees one subprocess build runs against.
 
     Two packages, and the entry point is in the tools one because the
-    interpreter it hands over to lives there too. Both are frozen store
-    entries: this profile reads them and never writes into either.
+    interpreter it hands over to lives there too. Ordinarily both are
+    frozen store entries: this profile reads them and never writes into
+    either.
+
+    :attr:`developer` says they are not. **Development mode** is a
+    developer pointing the build at trees they maintain themselves —
+    a workspace they patch, a tools tree they rebuilt — instead of at
+    what the store provisioned. The bytes are then nobody's to vouch for:
+    they have no package hash, they are writable, and a build against
+    them is reproducible by nobody but the person who made them. That is
+    the point of the mode and also its one hard consequence, which
+    :func:`run_locked_build` enforces: a build context that carries
+    patches is refused rather than applied to somebody's own trees.
     """
 
     workspace: StoreEntry
     tools: StoreEntry
+    #: The trees were supplied by a developer rather than provisioned.
+    developer: bool = False
 
     @property
     def entry_point(self) -> Path:
@@ -175,10 +213,18 @@ class Environment:
 
     def described(self) -> str:
         """The package set, for a log line and for a build's own record."""
-        return (
+        described = (
             f"{self.workspace.name} {self.workspace.version}, "
             f"{self.tools.name} {self.tools.version}"
         )
+        if not self.developer:
+            return described
+        # The paths, because in this mode the version is whatever the
+        # developer's trees say about themselves and two builds a week
+        # apart can state the same one over different bytes. A log line
+        # that names only the version would be a log line that cannot be
+        # trusted afterwards.
+        return f"{described} (developer trees at {self.workspace.path} and {self.tools.path})"
 
 
 def entry_point_of(tools: StoreEntry) -> Path:
@@ -206,6 +252,61 @@ def environment_from_store(
         workspace=_entry(store, kind=WORKSPACE_KIND, name=workspace[0], version=workspace[1]),
         tools=_entry(store, kind=TOOLS_KIND, name=tools[0], version=tools[1]),
     )
+
+
+def environment_from_paths(workspace: Path | str, tools: Path | str) -> Environment:
+    """A build environment out of two directories a developer maintains.
+
+    Development mode. The store's job — fetch, verify, unpack, finalize,
+    freeze — is skipped entirely, because there is nothing here that was
+    acquired: these are trees the person running the build made. What is
+    **not** skipped is every check that can still be made, and they are
+    the store's own, applied where the trees carry the answer:
+
+    * each directory exists and is a directory,
+    * each carries the package manifest of its kind — the same file the
+      entry point itself refuses to start without, and a different name
+      per kind, so a workspace handed in as the tools tree is caught
+      here rather than three minutes into a compile,
+    * that manifest states which package and version the tree is, so a
+      build log can say what it ran against,
+    * the tools tree carries an entry point this machine can execute.
+
+    What cannot be checked is a hash: nothing published these bytes. The
+    environment is marked :attr:`Environment.developer` for that reason,
+    and everything downstream that has to behave differently reads that
+    flag rather than guessing from a path.
+    """
+    return Environment(
+        workspace=_tree(Path(workspace), kind=WORKSPACE_KIND, manifest=WORKSPACE_MANIFEST),
+        tools=_require_entry_point(_tree(Path(tools), kind=TOOLS_KIND, manifest=TOOLS_MANIFEST)),
+        developer=True,
+    )
+
+
+def _tree(directory: Path, *, kind: str, manifest: str) -> StoreEntry:
+    """One developer-supplied package tree, checked against what it claims.
+
+    ``sha256`` comes out empty and that is the honest value: these bytes
+    were never acquired from anywhere, so there is no hash anybody could
+    have checked them against.
+    """
+    if not directory.is_dir():
+        raise BuildEnvironmentError(
+            f"There is no directory at {directory} to build against.",
+            hint=f"point {DEV_OPTIONS[kind]} at an unpacked {kind} tree, or unset it "
+            "to build against the build environment MCUHome unpacks itself",
+        )
+    document = require_manifest(directory, manifest, str(directory))
+    name = document.get("package")
+    version = document.get("version")
+    if not isinstance(name, str) or not isinstance(version, str):
+        raise BuildEnvironmentError(
+            f"{directory / manifest} does not say which package and version it is.",
+            hint="a MCUHome build environment tree states both in its manifest — "
+            "rebuild the tree with the packaging scripts of the SDK it belongs to",
+        )
+    return StoreEntry(kind=kind, name=name, version=version, sha256="", path=directory)
 
 
 def _entry(store: Path, *, kind: str, name: str, version: str) -> StoreEntry:
@@ -408,6 +509,45 @@ def cache_tiers(
 # --------------------------------------------------------------------------
 
 
+def refuse_patched_context(context_dir: Path, environment: Environment) -> None:
+    """A build context with patches is refused against developer trees.
+
+    The two ways to be wrong here are both worse than refusing. **Applying**
+    the patches would edit source trees the developer maintains — the whole
+    point of the mode is that those trees are theirs, and a build that
+    leaves changes in them has broken the thing the person is working on.
+    **Ignoring** them would produce firmware that does not contain what the
+    build context says it contains, silently, and hand it to whoever the
+    device goes to.
+
+    So neither. It is called **twice on purpose**: by the composition
+    before the context is locked — locking writes into a directory the user
+    keeps, and a build that is going to be refused must not have changed
+    anything first — and again at the top of :func:`run_locked_build`,
+    which is the entry point an embedder or a test reaches directly. The
+    check is a directory listing; running it twice costs nothing and makes
+    the rule one no caller can go around.
+
+    Against a provisioned store there is nothing to refuse — the trees the
+    patches name are copied and patched in the copy, which is what the
+    build environment specification asks for and what makes the store come
+    out of the build unchanged.
+    """
+    patches = context_dir / PATCHES_DIR
+    if not environment.developer or not patches.is_dir():
+        return
+    carried = sorted(entry.name for entry in patches.iterdir())
+    if not carried:
+        return
+    raise BuildEnvironmentError(
+        f"This build applies patches ({', '.join(carried)}) and cannot apply them to a "
+        f"build environment you maintain yourself.",
+        hint=f"unset {DEV_WORKSPACE_OPTION} and {DEV_TOOLS_OPTION} and run the build "
+        "again — MCUHome then unpacks its own build environment, patches a copy of the "
+        "trees the patches name and leaves your own trees untouched",
+    )
+
+
 @dataclass(frozen=True)
 class SubprocessBuildResult:
     """What one :func:`run_locked_build` produced, from the caller's side.
@@ -452,6 +592,7 @@ def run_locked_build(
     """
     context_dir = Path(context_dir).resolve()
     work_root = Path(work_root).resolve()
+    refuse_patched_context(context_dir, environment)
     work_root.mkdir(parents=True, exist_ok=True)
     manifest = read_context_manifest(context_dir / MANIFEST_FILE)
     package = acquire_sdk(

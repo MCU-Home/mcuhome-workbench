@@ -117,6 +117,15 @@ class SubprocessExecution(Execution):
     #: build: the parent of the two role directories. ``None`` builds
     #: without a durable cache, which is slow rather than wrong.
     ccache_dir: Path | None = None
+    #: Development mode: the unpacked build workspace and build tools to
+    #: use **instead of** what MCUHome would provision into its store —
+    #: trees the developer maintains, so that a change in them can be
+    #: built without publishing a package first. Both or neither; an
+    #: environment is a set and half a set is not one. A build context
+    #: that carries patches is refused in this mode rather than applied
+    #: to trees somebody else owns.
+    dev_workspace: Path | None = None
+    dev_tools: Path | None = None
 
 
 @dataclass(frozen=True)
