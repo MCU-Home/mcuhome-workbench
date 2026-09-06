@@ -34,7 +34,8 @@ simply does not exist for that resolution.
 
 Merge semantics: scalars are nearest-wins, whole value per layer.
 Structured values define their own rule where they are introduced —
-builder lists merge by name (ADR 0023 §3). ``mcuhome config print``
+builder lists merge by name (ADR 0023 §3), package registries by base
+domain. ``mcuhome config print``
 falls out of the same registry: :meth:`Settings.print_data` answers
 with every effective value and the layer it came from.
 """
@@ -51,6 +52,7 @@ from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import config_dir, expand
 
 from mcuhome.workbench import builders as builders_module
+from mcuhome.workbench import packageregistry
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
 from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file
@@ -91,7 +93,9 @@ class Option:
     """One declared option — the single source of every spelling.
 
     *kind* is one of ``string``, ``path``, ``paths`` (an ordered list,
-    ``os.pathsep``-separated in the environment) and ``integer``.
+    ``os.pathsep``-separated in the environment), ``integer``, and the
+    two structured kinds ``builders`` and ``registry``, which parse and
+    merge themselves and live in files only.
     The three channel switches say where the option may be set:
     *files* covers all three file layers at once — there is no option
     that a user file may set and a system file may not. *bootstrap*
@@ -179,6 +183,18 @@ OPTIONS: tuple[Option, ...] = (
         arguments=False,
         help="named builders: where a build may run",
     ),
+    # Package registries, by base domain. A nested map, so it is a file
+    # option like `builders`: an environment variable spelling of
+    # `registry.<domain>.mirrors.<source>` would be a second grammar to
+    # specify and parse for a value nobody sets per invocation.
+    Option(
+        "registry",
+        kind="registry",
+        default=(),
+        environment=False,
+        arguments=False,
+        help="package registries by domain: their mirrors, and whether they are trusted",
+    ),
     # Settable up to the environment; the *invocation* selects with
     # --builder, which is selection rather than configuration — so the
     # arguments channel is deliberately off here.
@@ -238,6 +254,12 @@ class Settings:
                 return str(value)
             if isinstance(value, Builder):
                 return value.to_dict()
+            if isinstance(value, packageregistry.RegistrySettings):
+                return {
+                    "domain": value.base_domain,
+                    "untrusted": value.untrusted,
+                    "mirrors": {name: list(value.mirrors[name]) for name in value.mirrors},
+                }
             if isinstance(value, tuple):
                 return [jsonable(item) for item in value]
             return value
@@ -329,6 +351,8 @@ def _parse_file_value(
         return tuple(_resolve_path(item, env=env, base=file.parent) for item in value)
     if opt.kind == "builders":
         return builders_module.parse_builders(value, file=file, origin=origin)
+    if opt.kind == "registry":
+        return packageregistry.parse_registries(value, file=file, origin=origin, env=env)
     raise ValueError(f"option {opt.name!r} declares unknown kind {opt.kind!r}")
 
 
@@ -361,6 +385,14 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
             _resolve_path(item, env=env, base=None) for item in value.split(os.pathsep) if item
         )
     raise ValueError(f"option {opt.name!r} declares unknown kind {opt.kind!r}")
+
+
+#: How a structured option's value from a higher layer combines with the
+#: one below it. A kind that is absent here is nearest-wins, whole value.
+_MERGERS: dict[str, Callable[[Any, Any], Any]] = {
+    "builders": builders_module.merge_builders,
+    "registry": packageregistry.merge_registries,
+}
 
 
 def _refuse_not_file_settable(opt: Option, location: Location | None) -> ConfigError:
@@ -453,16 +485,18 @@ def resolve_settings(
     }
 
     def apply(layer_settings: dict[str, Setting]) -> None:
-        # Scalars are whole-value nearest-wins; builder lists merge by
-        # name across the layers (ADR 0023 §3), so a machine can ship
-        # site builders, a user can add their own, and a project can
-        # pin its default without any layer repeating the others.
+        # Scalars are whole-value nearest-wins; the structured kinds
+        # merge by the name they are keyed on (ADR 0023 §3 for builders,
+        # the base domain for registries), so a machine can ship site
+        # entries, a user can add their own, and a project can pin one
+        # without any layer repeating the others.
         for name, setting in layer_settings.items():
             below = resolved.get(name)
-            if setting.option.kind == "builders" and below is not None and below.value:
+            merge = _MERGERS.get(setting.option.kind)
+            if merge is not None and below is not None and below.value:
                 setting = Setting(
                     option=setting.option,
-                    value=builders_module.merge_builders(below.value, setting.value),
+                    value=merge(below.value, setting.value),
                     origin=setting.origin,
                     source=setting.source,
                 )
@@ -680,6 +714,15 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
             hint=(
                 "edit the `builders:` list in the file directly — one entry per "
                 "builder with name:, type: and the type's options"
+            ),
+        )
+    if opt.kind == "registry":
+        raise ConfigError(
+            "'registry' is structured configuration and not settable as one value.",
+            location=location,
+            hint=(
+                "edit the `registry:` block in the file directly — one entry per "
+                "registry domain, each with untrusted: and mirrors:"
             ),
         )
     if opt.kind == "integer":

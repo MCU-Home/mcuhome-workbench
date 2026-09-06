@@ -39,6 +39,18 @@ classifiers = [
 # edge becomes `~=X.Y.0` — same major.minor family, newest patch wins.
 dependencies = [
   "mcuhome-model",
+  # The package registry's own reference verifier, used as a library.
+  # Signature thresholds, key rotation, document freshness and the
+  # meta-entry hash have exactly one implementation in MCUHome, and it is
+  # the one the registry runs over its own tree before it publishes — a
+  # second copy of those rules here would drift from it silently.
+  #
+  # That repository publishes no distribution, so the edge is pinned the
+  # way the SDK's image build pins the same library: by the commit its CI
+  # checks out (`.github/workflows/ci-test.yml`, the mcuhome-packagetool
+  # checkout `ref:`). Bumping it is deliberate — read that repository's
+  # commits, then put the new SHA in that one place.
+  "mcuhome-packagetool",
   # ruamel.yaml keeps line/column information on the parsed tree; every
   # validation error in this package points at a line.
   "ruamel.yaml>=0.18",
@@ -101,6 +113,14 @@ dev = [
 # tests/python/test_packaging_workbench.py fails when one is missing, which
 # is cheaper than a wheel that installs without it.
 packages = ["mcuhome.workbench", "mcuhome.workbench.migrations"]
+
+# The trust anchors shipped with the workbench. They are data, not code:
+# one JSON file per package-registry base domain, used only to create a
+# project's `secrets/trust-anchor/<base-domain>.json` the first time.
+# An anchor that failed to install would leave a fresh project unable to
+# verify anything it downloads, so it is declared rather than assumed.
+[tool.setuptools.package-data]
+"mcuhome.workbench" = ["trust-anchor/*.json"]
 
 [tool.ruff]
 line-length = 100

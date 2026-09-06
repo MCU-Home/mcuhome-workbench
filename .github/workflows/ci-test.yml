@@ -6,11 +6,19 @@
 # here.
 #
 # test-pytest needs mcuhome-model and mcuhome-compiler from
-# mcu-home/mcuhome-sdk (ADR 0024 split) and a live mcuhome-buildserver
-# peer for the `remote` build method's own suite
-# (test_sessionclient.py) — three public siblings, plain checkouts, no
-# deploy keys. Once the packages are published this becomes a plain pip
-# install.
+# mcu-home/mcuhome-sdk (ADR 0024 split), a live mcuhome-buildserver peer
+# for the `remote` build method's own suite (test_sessionclient.py), and
+# mcuhome-packagetool for the package registry's reference verifier —
+# four public siblings, plain checkouts, no deploy keys. Once the
+# packages are published this becomes a plain pip install.
+#
+# THE PACKAGETOOL PIN LIVES HERE, and only here: that repository
+# publishes no distribution, so this checkout `ref:` is what fixes which
+# verifier the workbench is tested and shipped against. Not a branch —
+# `main` over there is somebody else's moving target, and a verifier that
+# changed under this job would change what "verified" means with no diff
+# here to show for it. To bump it: read that repository's commits, then
+# put the new SHA in the `ref:` below and nowhere else.
 #
 # All actions are pinned to commit SHAs, not tags.
 
@@ -58,21 +66,30 @@ jobs:
           repository: mcu-home/mcuhome-buildserver
           path: .deps/mcuhome-buildserver
 
+      - name: Checkout mcu-home/mcuhome-packagetool
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-packagetool
+          ref: aaa6cf559281f2ef468015918267d13d6af88622 # main as of 2026-09-06
+          path: .deps/mcuhome-packagetool
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      # mcuhome-model and mcuhome-compiler from the SDK checkout, this
-      # repository with the `remote` extra for test_sessionclient.py's
-      # aiohttp/zstandard dependency, and mcuhome-buildserver as the real
-      # peer that same file drives its session-protocol client against.
+      # mcuhome-model and mcuhome-compiler from the SDK checkout,
+      # mcuhome-packagetool at the pinned commit for the registry
+      # verifier, this repository with the `remote` extra for
+      # test_sessionclient.py's aiohttp/zstandard dependency, and
+      # mcuhome-buildserver as the real peer that same file drives its
+      # session-protocol client against.
       # Installed into this job's own .venv — scripts/test selects it
       # itself, never the runner's Python. The dev tools are a PEP 735
       # dependency group (--group dev), which needs pip >= 25.1; upgrade
       # first.
       #
-      # All four editable installs must be one pip invocation:
+      # All editable installs must be one pip invocation:
       # mcuhome-buildserver depends on mcuhome-workbench, which is not on
       # PyPI, so pip can only resolve that dependency by seeing this
       # checkout (the '.[remote]' entry) as an editable install on the
@@ -86,6 +103,7 @@ jobs:
           .venv/bin/pip install --disable-pip-version-check \
             -e ./.deps/mcuhome-sdk/packaging/model \
             -e ./.deps/mcuhome-sdk/packaging/compiler \
+            -e ./.deps/mcuhome-packagetool \
             -e ./.deps/mcuhome-buildserver \
             -e '.[remote]' --group dev
 

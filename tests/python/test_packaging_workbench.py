@@ -200,10 +200,14 @@ def test_the_declared_dependencies_are_the_ones_the_package_needs() -> None:
     MCUboot's signing tool — the workbench performs the host-side signing
     step, so imgtool is a declared dependency rather than an environment
     accident (PO 2026-08-15) — a TOML writer for the project file
-    (tomllib reads it, and only reads), and a zstd codec, because the
-    orchestrator unpacks the SDK package for every container build."""
+    (tomllib reads it, and only reads), a zstd codec, because the
+    orchestrator unpacks the SDK package for every container build, and
+    the package registry's own reference verifier, because the rules for
+    signatures, key rotation and the meta-entry hash have one
+    implementation in MCUHome and this is not the copy of it."""
     assert _requirement_names(_project()["project"]["dependencies"]) == {
         "mcuhome-model",
+        "mcuhome-packagetool",
         "ruamel.yaml",
         "packaging",
         "imgtool",
@@ -213,7 +217,7 @@ def test_the_declared_dependencies_are_the_ones_the_package_needs() -> None:
 
 
 def test_the_import_edges_follow_the_dependency_arrows() -> None:
-    """The workbench imports the model and itself. As syntax.
+    """The workbench imports the model, the packagetool and itself. As syntax.
 
     The mirror of the SDK repository's assertion about its own two
     packages, and the reason ADR 0020 decision 3 can call the compiler
@@ -227,7 +231,7 @@ def test_the_import_edges_follow_the_dependency_arrows() -> None:
     :func:`importlib.import_module`, which is a string and not an import
     edge.
     """
-    may_use = {"model", "workbench"}
+    may_use = {"model", "packagetool", "workbench"}
     for module in sorted((NAMESPACE_DIR / "workbench").glob("*.py")):
         for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
             found: str | None = None

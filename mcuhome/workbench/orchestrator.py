@@ -97,6 +97,8 @@ from packaging.version import InvalidVersion, Version
 from mcuhome.workbench import programevents
 from mcuhome.workbench.buildenv import local_address
 from mcuhome.workbench.contextdir import read_context_manifest
+from mcuhome.workbench.packageregistry import PackageRegistry
+from mcuhome.workbench.resolve_pins import SDK_SOURCE
 
 __all__ = [
     "ACTION_BUILD",
@@ -123,8 +125,9 @@ __all__ = [
     "Spawner",
     "Mount",
     "ResourceLimits",
-    "SdkPackage",
+    "AcquiredPackage",
     "TreeEntry",
+    "acquire_package",
     "acquire_sdk",
     "open_environment",
     "current_user",
@@ -334,15 +337,20 @@ class Completed:
 
 
 @dataclass(frozen=True)
-class SdkPackage:
-    """One SDK package, found and verified. The tree is already unpacked."""
+class AcquiredPackage:
+    """One package, found and verified. The tree is already unpacked."""
 
     version: str
     sha256: str
-    #: Where the archive was found, for the log and for a bug report.
+    #: Where the archive was found, for the log and for a bug report. A
+    #: path under the work root when it came off a registry mirror.
     source: Path
-    #: The unpacked tree, which is what ``trees.sdk`` names.
+    #: The unpacked tree — for the SDK, what ``trees.sdk`` names.
     tree: Path
+    #: The package's own name, which is the concrete one: a family
+    #: published per architecture was already resolved to this host's
+    #: member before anything was fetched.
+    name: str = SDK_PACKAGE_NAME
 
 
 @dataclass(frozen=True)
@@ -423,8 +431,12 @@ class BackendConfig:
     """Everything the ``local`` method needs that is not the context.
 
     ``sdk_sources`` are operator-configured local directories, searched in
-    order (ADR 0019 §8, contract v1's first tier — E48). Everything else
-    is the resource shape of the one container this backend starts.
+    order (ADR 0019 §8, the first tier — E48), and ``registry`` is the
+    second: a package registry whose index this project's trust anchor
+    accepted. A backend with no registry is the offline case and is not
+    an error — a directory that holds the package answers without one.
+    Everything else is the resource shape of the one container this
+    backend starts.
 
     **Which image is not here.** The context names it, pinned to a
     digest, and a backend that could be told a different one would be a
@@ -434,6 +446,10 @@ class BackendConfig:
 
     sdk_sources: tuple[Path, ...]
     jobs: int
+    #: The package registry to fall back to when no source directory
+    #: holds the pinned package. ``None`` means the local tier is all
+    #: there is.
+    registry: PackageRegistry | None = None
     #: Root of the host's compiler cache — the parent of the two role
     #: directories, from :func:`mcuhome.workbench.buildenv.ccache_directory`.
     #: ``None`` mounts nothing, and the cache then lives in the container
@@ -1317,7 +1333,7 @@ def _lstat(path: Path) -> os.stat_result | None:
 # --------------------------------------------------------------------------
 
 
-def _exact_index_entry(index: object, version: str) -> tuple[str, str] | None:
+def _exact_index_entry(index: object, name: str, version: str) -> tuple[str, str] | None:
     """The ``(file, sha256)`` the index states for exactly *version*, else ``None``.
 
     The backend's own reading of the index the workbench also writes and
@@ -1327,7 +1343,7 @@ def _exact_index_entry(index: object, version: str) -> tuple[str, str] | None:
     an index that spells ``2.4`` still answers a pin of ``2.4.0``.
     """
     packages = index.get("packages") if isinstance(index, dict) else None
-    entries = packages.get(SDK_PACKAGE_NAME) if isinstance(packages, dict) else None
+    entries = packages.get(name) if isinstance(packages, dict) else None
     if not isinstance(entries, dict):
         return None
     try:
@@ -1347,60 +1363,140 @@ def _exact_index_entry(index: object, version: str) -> tuple[str, str] | None:
     return None
 
 
-def acquire_sdk(*, version: str, sha256: str, sources: Sequence[Path], into: Path) -> SdkPackage:
-    """Find the pinned SDK package, verify its bytes, unpack it safely.
+def acquire_package(
+    *,
+    kind: str = SDK_SOURCE,
+    name: str = SDK_PACKAGE_NAME,
+    version: str,
+    sha256: str,
+    sources: Sequence[Path],
+    into: Path,
+    registry: PackageRegistry | None = None,
+    max_bytes: int = SDK_MAX_BYTES,
+) -> AcquiredPackage:
+    """Find the pinned package, verify its bytes, unpack it safely.
 
-    §9.1 makes a verified SDK a backend duty: the content of ``trees.sdk``
-    matches the manifest's ``mcuhome.package.sha256``, acquired "by (name,
-    version, sha256) from operator-configured sources only; the manifest's
-    ``package.url`` is a hint, never an instruction". This backend
-    implements contract v1's first source tier — local directories,
-    searched in order (E48) — so "not here" is a final answer.
+    §9.1 makes a verified SDK a backend duty, and the same rule serves
+    every package a build environment is assembled from: the content of
+    a tree matches the ``sha256`` that was pinned, and the package is
+    acquired "by (name, version, sha256) from operator-configured sources
+    only; the manifest's ``package.url`` is a hint, never an
+    instruction".
 
-    The **hash decides, not the name.** A source directory's ``index.json``
-    (``scripts/build_sdk_archive.py``) maps the version to a file; that
-    file's bytes are hashed and the value must equal the pin. A file with
-    the right name and the wrong bytes is refused exactly as loudly as one
-    that is not there. The unpack is the safe extraction of §9.1: regular
-    files and directories only, and the executable bit preserved so
-    ``bin/generate`` can be spawned (§6.1).
+    **Two tiers, in this order.** The operator's own directories are
+    searched first, in order, so a machine that already has the package
+    never opens a socket — that is what makes an offline build a matter
+    of configuration rather than a mode. Only when none of them holds it
+    is *registry* asked, and then the bytes come off a mirror whose index
+    the project's trust anchor accepted. *kind* names the source within
+    that registry (``sdk``, ``build-workspace``, ``build-tools``); *name*
+    is the concrete package, a family published per architecture having
+    been resolved to this host's member before a pin ever existed.
+
+    **The hash decides, not the name — on every path.** A local
+    directory's ``index.json`` maps the version to a file; that file's
+    bytes are hashed and the value must equal the pin. A registry's
+    archive is hashed as it lands, against the entry in the index that
+    verified. A file with the right name and the wrong bytes is refused
+    exactly as loudly as one that is not there, and a registry entry
+    whose sha256 is not the pinned one is refused before a byte is
+    fetched. The unpack is the safe extraction of §9.1: regular files and
+    directories only, and the executable bit preserved so ``bin/generate``
+    can be spawned (§6.1).
 
     A directory with **no index** is searched by the conventional
-    filename, ``mcuhome-sdk-<version>.tar.zst``. That is not a weaker
-    rule: what makes a candidate the pinned package is that its bytes
-    hash to the pin, and the index only ever made it findable. An
-    operator who drops one archive in a directory has said everything
-    that has to be said, and requiring them to hand-write a manifest
-    beside it would be a ceremony with nothing behind it.
+    filename, ``<name>-<version>.tar.zst``. That is not a weaker rule:
+    what makes a candidate the pinned package is that its bytes hash to
+    the pin, and the index only ever made it findable. An operator who
+    drops one archive in a directory has said everything that has to be
+    said, and requiring them to hand-write a manifest beside it would be
+    a ceremony with nothing behind it.
     """
     searched = [str(directory) for directory in sources]
     for directory in sources:
-        found = _sdk_candidate(directory, version=version, sha256=sha256, searched=searched)
+        found = _local_candidate(
+            directory, name=name, version=version, sha256=sha256, searched=searched
+        )
         if found is None:
             continue
         measured = sha256_file(found)
         if measured != sha256:
-            raise _sdk_unavailable(
+            raise _package_unavailable(
+                name,
                 version,
                 sha256,
                 searched,
                 f"{found} is named for this version and hashes to {measured}",
             )
-        into.mkdir(parents=True, exist_ok=True)
-        spool = into.parent / f"{into.name}.tar"
+        return _unpack(found, into=into, name=name, version=version, sha256=sha256, limit=max_bytes)
+
+    if registry is not None:
+        index = registry.index(kind)
+        entry = index.resolve(name, version)
+        if entry.sha256 != sha256:
+            raise _package_unavailable(
+                name,
+                version,
+                sha256,
+                [*searched, index.base],
+                f"{index.base} publishes {entry.name} {version} with sha256 {entry.sha256}",
+            )
+        staging = into.parent / f"{into.name}.download"
         try:
-            _decompress(found, spool, limit=SDK_MAX_BYTES)
-            _safe_extract(spool, into=into, quota_bytes=SDK_MAX_BYTES)
+            archive = registry.fetch_package(index, entry, into=staging)
+            return _unpack(
+                archive, into=into, name=entry.name, version=version, sha256=sha256, limit=max_bytes
+            )
         finally:
-            spool.unlink(missing_ok=True)
-        return SdkPackage(version=version, sha256=sha256, source=found, tree=into)
-    raise _sdk_unavailable(
-        version, sha256, searched, f"no source directory holds {SDK_PACKAGE_NAME} {version}"
+            shutil.rmtree(staging, ignore_errors=True)
+
+    raise _package_unavailable(
+        name, version, sha256, searched, f"no source directory holds {name} {version}"
     )
 
 
-def _sdk_candidate(
-    directory: Path, *, version: str, sha256: str, searched: Sequence[str]
+def acquire_sdk(
+    *,
+    version: str,
+    sha256: str,
+    sources: Sequence[Path],
+    into: Path,
+    registry: PackageRegistry | None = None,
+) -> AcquiredPackage:
+    """:func:`acquire_package` for the SDK — the one package with a name of its own.
+
+    The SDK is what a context pins and what ``trees.sdk`` is filled from,
+    and it is the package a backend acquires on every build, so it keeps
+    a call of its own rather than making that path repeat the two
+    constants that never vary for it.
+    """
+    return acquire_package(
+        kind=SDK_SOURCE,
+        name=SDK_PACKAGE_NAME,
+        version=version,
+        sha256=sha256,
+        sources=sources,
+        into=into,
+        registry=registry,
+    )
+
+
+def _unpack(
+    archive: Path, *, into: Path, name: str, version: str, sha256: str, limit: int
+) -> AcquiredPackage:
+    """The archive on disk, expanded into *into* under the safe-extraction rules."""
+    into.mkdir(parents=True, exist_ok=True)
+    spool = into.parent / f"{into.name}.tar"
+    try:
+        _decompress(archive, spool, limit=limit)
+        _safe_extract(spool, into=into, quota_bytes=limit)
+    finally:
+        spool.unlink(missing_ok=True)
+    return AcquiredPackage(version=version, sha256=sha256, source=archive, tree=into, name=name)
+
+
+def _local_candidate(
+    directory: Path, *, name: str, version: str, sha256: str, searched: Sequence[str]
 ) -> Path | None:
     """The file in *directory* that claims to be this version, or ``None``.
 
@@ -1415,11 +1511,12 @@ def _sdk_candidate(
             index = json.loads(index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             index = None
-        resolved = None if index is None else _exact_index_entry(index, version)
+        resolved = None if index is None else _exact_index_entry(index, name, version)
         if resolved is not None:
             resolved_file, resolved_sha256 = resolved
             if resolved_sha256 != sha256:
-                raise _sdk_unavailable(
+                raise _package_unavailable(
+                    name,
                     version,
                     sha256,
                     list(searched),
@@ -1429,7 +1526,7 @@ def _sdk_candidate(
             candidate = directory / resolved_file
             if candidate.is_file():
                 return candidate
-    named = directory / f"{SDK_PACKAGE_NAME}-{version}.tar.zst"
+    named = directory / f"{name}-{version}.tar.zst"
     return named if named.is_file() else None
 
 
@@ -1622,6 +1719,7 @@ class LocalBackend:
             sha256=manifest.sdk.sha256,
             sources=self.config.sdk_sources,
             into=sdk_tree,
+            registry=self.config.registry,
         )
 
         # §9.1: `work` is "the session's persistent working area", and a
@@ -1766,7 +1864,7 @@ class LocalBackend:
     def _arrange_trees(
         self,
         profile: ImageProfile,
-        package: SdkPackage,
+        package: AcquiredPackage,
         patched: tuple[str, ...],
         *,
         context: Path,
@@ -2574,25 +2672,27 @@ def _image_unusable(reference: str, problem: str) -> EnvironmentUnusable:
     )
 
 
-def _sdk_unavailable(
-    version: str, sha256: str, searched: Sequence[str], problem: str
+def _package_unavailable(
+    name: str, version: str, sha256: str, searched: Sequence[str], problem: str
 ) -> SdkUnavailable:
-    """The SDK pin names a package this host has not — the ``sdk.unavailable`` spirit.
+    """The pin names bytes this host cannot get — the ``sdk.unavailable`` spirit.
 
-    Not retryable in spirit: contract v1's first source tier is local
-    directories and fetches nothing, so the same command a second later
-    searches the same directories and finds the same nothing. What changes
-    the answer is an operator putting the package where the backend looks.
+    Not retryable in spirit. The local tier fetches nothing, so the same
+    command a second later searches the same directories and finds the
+    same nothing; and where a registry was asked, it answered with an
+    index that does not carry these bytes, which a retry does not change
+    either. What changes the answer is the package being put where the
+    backend looks, or the pin naming what is actually published.
     """
     listed = ", ".join(searched) or "none"
     return SdkUnavailable(
-        f"MCUHome cannot supply the SDK package this context pins ({problem}).",
+        f"MCUHome cannot supply the package this context pins ({problem}).",
         version=version,
         sha256=sha256,
         searched=tuple(searched),
         hint=(
-            f"the local build method reads the SDK from configured source directories only "
-            f"and never from the url in the context — add {SDK_PACKAGE_NAME} {version} "
-            f"(sha256 {sha256}) to one of: {listed}"
+            f"the bytes are taken from configured source directories and from the "
+            f"package registry, never from the url in the context — add {name} "
+            f"{version} (sha256 {sha256}) to one of: {listed}"
         ),
     )

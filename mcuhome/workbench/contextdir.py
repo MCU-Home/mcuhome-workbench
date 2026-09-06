@@ -60,7 +60,8 @@ from mcuhome.model.model import DeviceModel
 from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench import __version__
-from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk
+from mcuhome.workbench.packageregistry import PackageRegistry
+from mcuhome.workbench.resolve_pins import resolve_sdk, sdk_constraint
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
 __all__ = [
@@ -337,7 +338,8 @@ def create_build_context(
     build_environment: EnvironmentPin,
     signing_pub: str,
     created: datetime | None = None,
-    constraint: str = SDK_ANY,
+    constraint: str | None = None,
+    registry: PackageRegistry | None = None,
 ) -> ContextRequest:
     """Resolve the SDK pin and write a fresh base context at *out_dir*.
 
@@ -359,6 +361,16 @@ def create_build_context(
     same inputs may differ in (ADR 0018) and it is outside the identity,
     so a caller that wants byte-identical output states it.
 
+    *constraint* left unstated is not "any version": it is what the
+    device itself says, through
+    :func:`~mcuhome.workbench.resolve_pins.sdk_constraint` over its
+    ``sources.sdk`` reference — the version it named, or the SDK minor
+    this workbench was released alongside when it named none. A device is
+    therefore neither frozen onto whatever was current the day it was
+    created nor carried forward onto an SDK this workbench has never
+    seen. *registry* is the second tier the resolution may fall through
+    to; without one, only the operator's directories are searched.
+
     The two never-hashed fields of the pin — the intent and the location
     hint — are rendered by :class:`~mcuhome.workbench.resolve_pins.SdkResolution`
     rather than here, and both are legitimately empty for a locally
@@ -368,7 +380,9 @@ def create_build_context(
     server. The server accepts both empty; absence, not emptiness, is
     what a reader refuses as malformed.
     """
-    found = resolve_sdk(sdk_sources, constraint=constraint)
+    if constraint is None:
+        constraint = sdk_constraint(model.sources.sdk)
+    found = resolve_sdk(sdk_sources, constraint=constraint, registry=registry)
     out_dir = Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)

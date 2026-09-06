@@ -1,0 +1,19 @@
+{
+  "keys": [
+    {
+      "keyid": "945895b828f1978dcfe7df1f227e25929ed923567e92425c5838683f5d3d4251",
+      "public": "piewmjzCMtySC3BzNG4hJAsZ22NNAg9KQCfFa0opl44="
+    },
+    {
+      "keyid": "524d5b387abd0f1e2e7a9a5c275a8e18b5dde84af9df43518c4a6d942becb62c",
+      "public": "f7/yt+ylReNo1eBKVXo2POvtBfIJ9/5MPtM0Q+WpOkc="
+    },
+    {
+      "keyid": "1090a80cdaf91acdab65e525104c7b931082683ebf992bee728e7bd91868e091",
+      "public": "bx37gWGQvHv0y4IfR8J1Sd6UBwtmqw+CRw/7okG0AFM="
+    }
+  ],
+  "note": "Trust anchor. Configure it out of band and compare it against what your tool ships; downloading it at verification time is not verification.",
+  "threshold": 2,
+  "version": 1
+}

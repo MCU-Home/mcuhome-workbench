@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Lint gate for the workbench: one job per wrapper in scripts/lint.d/,
-# plus a pre-check that every wrapper has a job here.
+# Lint gate for the workbench: one job per wrapper in scripts/lint.d/, a
+# pre-check that every wrapper has a job here, and one check that cannot
+# be a wrapper because what it compares against does not live in this
+# repository — the trust anchor shipped with the package, held against
+# the organisation variable that states it.
 #
 # The lint tools are a PEP 735 dependency group ([dependency-groups] dev
 # in pyproject.toml), not a [project.optional-dependencies] extra: a
@@ -37,6 +40,68 @@ jobs:
 
       - name: scripts/lint check-ci
         run: scripts/lint check-ci
+
+
+  # The trust anchor this package ships is what a fresh project starts
+  # verifying the package registry with. It is public material, and it is
+  # also the one file in this repository whose contents nobody should be
+  # able to change quietly: an anchor swapped in a pull request would
+  # redirect every new project's trust to whoever swapped it, and the
+  # diff would look like three lines of base64.
+  #
+  # So the reference value is kept OUTSIDE the repository, as an
+  # organisation variable only an administrator can set, and this job
+  # fails on any difference. Changing the shipped anchor is then two
+  # deliberate acts by two kinds of authority instead of one commit.
+  #
+  # Compared as parsed JSON, not as bytes: what an anchor *is* is its key
+  # set and its threshold, and a differently indented copy of the same
+  # keys is the same anchor. A missing variable is a misconfiguration and
+  # is reported as one, never passed over.
+  check-trust-anchor:
+    name: Check trust anchor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The shipped anchor is the one the organisation states
+        env:
+          ANCHOR: ${{ vars.MCUHOME_REGISTRY_ANCHOR }}
+        run: |
+          set -euo pipefail
+          test -n "${ANCHOR:-}" || {
+            echo "::error::the organisation variable MCUHOME_REGISTRY_ANCHOR is unset or empty. It carries the package registry's trust anchor, and this job exists to hold the copy shipped in mcuhome/workbench/trust-anchor/ against it. Set it under Organisation settings, Actions, Variables." >&2
+            exit 1
+          }
+          printf '%s' "$ANCHOR" > "$RUNNER_TEMP/expected.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          shipped = Path("mcuhome/workbench/trust-anchor/packages.mcuhome.org.json")
+          expected = Path(os.environ["RUNNER_TEMP"]) / "expected.json"
+
+          try:
+              stated = json.loads(expected.read_text(encoding="utf-8"))
+          except ValueError as unreadable:
+              sys.exit(f"MCUHOME_REGISTRY_ANCHOR is not readable JSON: {unreadable}")
+          try:
+              carried = json.loads(shipped.read_text(encoding="utf-8"))
+          except (OSError, ValueError) as unreadable:
+              sys.exit(f"{shipped} is not readable JSON: {unreadable}")
+
+          if carried != stated:
+              sys.exit(
+                  f"{shipped} is not the anchor MCUHOME_REGISTRY_ANCHOR states. "
+                  "Either the shipped copy was changed without the variable, or the "
+                  "variable was changed without the shipped copy — and a root "
+                  "rotation is both, in that order."
+              )
+          print(f"anchor: {len(carried['keys'])} root keys, threshold {carried['threshold']}")
+          PY
 
   lint-ruff:
     name: Lint (ruff)

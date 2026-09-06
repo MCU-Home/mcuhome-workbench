@@ -14,12 +14,16 @@ wrong. (This is *not* ADR 0013, which is binary-blob policy and per-device
 *Zephyr* pinning; the SDK-constraint grammar is recorded in ADR 0018's
 PEP 440 amendment.)
 
-**Local, never networked.** The input is a set of versions the caller
-already has in hand — for the SDK, the keys of the static ``index.json``
-a source directory carries (``scripts/build_sdk_archive.py``). Nothing
-here fetches anything: resolution picks among versions that already
-exist, and "where the bytes come from" is the operator's source-list
-configuration, never a URL this module follows (ADR 0019 §8).
+**Resolution picks; it does not follow.** The input is a set of versions
+that already exist somewhere the caller can name — the keys of the static
+``index.json`` a source directory carries
+(``scripts/build_sdk_archive.py``), or of the index a registry mirror
+served and the project's trust anchor accepted
+(:mod:`mcuhome.workbench.packageregistry`). Operator directories are
+always asked first, so a machine that already has the package resolves
+without a network at all; and a package's ``url`` stays a hint that no
+backend follows (ADR 0019 §8) either way — the sha256 is what decides
+which bytes are the right ones.
 
 **Reusable.** :func:`resolve_version` knows nothing about the SDK — it
 resolves any constraint against any set of version strings, so the same
@@ -59,7 +63,7 @@ passing it through — which is exactly the rule above.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,22 +72,35 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 __all__ = [
+    "DEFAULT_SDK_CONSTRAINT",
     "INDEX_FILE",
     "SDK_ANY",
     "SDK_PACKAGE_NAME",
     "ResolvedPackage",
     "SdkResolution",
+    "resolve_from_entries",
     "resolve_from_index",
     "resolve_sdk",
     "resolve_sdk_pin",
     "resolve_version",
+    "sdk_constraint",
 ]
 
 # The index file and package name are shared vocabulary — a backend
 # re-reads the same directory to fetch the bytes (contract §9.1) and may
 # not import this module to know the names, so both live in the model
 # and are re-exported here under the names this module always offered.
-from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
+from mcuhome.model.sdkindex import DEFAULT_SDK, INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
+
+#: The source the SDK is published under inside a registry — the first
+#: component of the reference every device carries by default.
+SDK_SOURCE = DEFAULT_SDK.split("/")[0]
+
+from mcuhome.workbench.packageregistry import (  # noqa: E402
+    PackageRegistry,
+    VerifiedIndex,
+    resolve_entry,
+)
 
 #: The SDK constraint a build resolves with when the caller states none:
 #: "the newest the configured sources offer". A device configuration can
@@ -92,6 +109,35 @@ from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
 #: ``--sdk-sources`` directories hold, exactly as the empty
 #: :class:`~packaging.specifiers.SpecifierSet` matches every version.
 SDK_ANY = ""
+
+#: Which SDK a device that names none is built with: the newest patch of
+#: the minor this workbench was released alongside.
+#:
+#: The workbench follows the SDK at release time. It can guarantee it
+#: works with the SDK version published when it was released and with
+#: older ones; it cannot guarantee anything about SDK versions that did
+#: not exist yet, and a default of "the newest there is" would make every
+#: build a bet on that. Pinning the *minor* keeps patch releases — fixes
+#: — flowing in automatically while a feature release waits for a
+#: workbench that knows about it. Maintained per workbench release.
+DEFAULT_SDK_CONSTRAINT = "==0.1.*"
+
+
+def sdk_constraint(reference: str = "") -> str:
+    """The constraint a device's ``sources.sdk`` reference resolves under.
+
+    A reference is ``[registry/]path[:version]``. Naming a version is a
+    device *pinning* itself and is honoured exactly: ``:0.1.9`` resolves
+    under ``==0.1.9``. Naming none — which is the default, and what is
+    written into a device unless somebody asks otherwise — resolves under
+    :data:`DEFAULT_SDK_CONSTRAINT`, so a device is not frozen onto
+    whatever version happened to be current on the day it was created.
+    """
+    tag = reference.rsplit("@", 1)[0].rsplit("/", 1)[-1]
+    _, separator, version = tag.partition(":")
+    if separator and version:
+        return f"=={version}"
+    return DEFAULT_SDK_CONSTRAINT
 
 
 def resolve_version(
@@ -185,21 +231,63 @@ def resolve_from_index(
     constraint: str,
     *,
     prereleases: bool | None = None,
+    platform: str | None = None,
 ) -> ResolvedPackage:
     """Resolve *constraint* against a static package *index* for *name*.
 
-    *index* is the ``{"packages": {<name>: {<version>: {"file", "sha256",
-    "size"}}}}`` document ``scripts/build_sdk_archive.py`` writes. The
-    available versions are that map's keys; :func:`resolve_version` picks
-    the winner and this returns its entry as a :class:`ResolvedPackage`.
+    *index* is the ``{"packages": {<name>: {<version>: …}}}`` document a
+    source directory or a registry source carries. The available versions
+    are that map's keys; :func:`resolve_version` picks the winner and
+    this answers with the package that version *is*.
+
+    **A meta entry is followed, not returned.** An index published across
+    architectures carries one name standing for a set of concrete
+    packages — no ``file``, no ``size``, a ``meta`` map and a hash over
+    it. Asking for that name answers with this host's concrete package,
+    after the hash has been recomputed from the members it points at, so
+    resolving the family really does pin one package's bytes. *platform*
+    overrides which host that is; it is only consulted where an answer
+    depends on it.
 
     Raises :class:`~mcuhome.model.errors.BuildError` when the index does
-    not describe *name*, when its selected entry is malformed, or for any
-    reason :func:`resolve_version` refuses.
+    not describe *name*, when its selected entry is malformed or does not
+    describe what it points at, when nothing is published for this
+    platform, or for any reason :func:`resolve_version` refuses.
     """
     packages = index.get("packages") if isinstance(index, dict) else None
-    entries = packages.get(name) if isinstance(packages, dict) else None
-    if not isinstance(entries, dict) or not entries:
+    if not isinstance(packages, dict):
+        packages = {}
+    return resolve_from_entries(
+        {
+            str(package): versions
+            for package, versions in packages.items()
+            if isinstance(versions, dict)
+        },
+        name,
+        constraint,
+        prereleases=prereleases,
+        platform=platform,
+    )
+
+
+def resolve_from_entries(
+    entries: Mapping[str, Mapping[str, Mapping[str, object]]],
+    name: str,
+    constraint: str,
+    *,
+    prereleases: bool | None = None,
+    platform: str | None = None,
+) -> ResolvedPackage:
+    """:func:`resolve_from_index` over an already-merged package map.
+
+    The registry hands its callers one map of every package in a source,
+    head document and index parts together, because a source that has
+    outgrown one file keeps most of its packages in the parts. This is
+    the same resolution over that shape, and the reason a local directory
+    and a registry source resolve by one rule rather than two.
+    """
+    versions = entries.get(name)
+    if not isinstance(versions, dict) or not versions:
         raise BuildError(
             f'The package index lists no versions of "{name}".',
             hint=(
@@ -207,21 +295,15 @@ def resolve_from_index(
                 f'that carries a "{name}" package'
             ),
         )
-    version = resolve_version(constraint, entries.keys(), prereleases=prereleases, name=name)
-    entry = entries[version]
-    try:
-        return ResolvedPackage(
-            name=name,
-            version=version,
-            file=str(entry["file"]),
-            sha256=str(entry["sha256"]),
-            size=int(entry["size"]),
-        )
-    except (KeyError, TypeError, ValueError) as error:
-        raise BuildError(
-            f"The package index entry for {name} {version} is missing something: {error}.",
-            hint="each entry carries file, sha256 and size — the index is malformed",
-        ) from error
+    version = resolve_version(constraint, versions.keys(), prereleases=prereleases, name=name)
+    found = resolve_entry(entries, name, version, platform=platform)
+    return ResolvedPackage(
+        name=found.name,
+        version=found.version,
+        file=found.file,
+        sha256=found.sha256,
+        size=found.size,
+    )
 
 
 @dataclass(frozen=True)
@@ -229,10 +311,12 @@ class SdkResolution:
     """One SDK package a constraint resolved to, and where it was found.
 
     :attr:`stated` is what the caller asked for, verbatim — ``SDK_ANY``
-    when it asked for nothing. :attr:`package` is what that selected, and
-    :attr:`source` is the directory whose index selected it, which is the
-    directory whose bytes :func:`~mcuhome.workbench.orchestrator.acquire_sdk`
-    then reads.
+    when it asked for nothing. :attr:`package` is what that selected.
+    Where it came from is one of two: :attr:`source`, an operator
+    directory whose index selected it, or :attr:`base`, the registry
+    mirror that served the index — and
+    :func:`~mcuhome.workbench.orchestrator.acquire_package` searches the
+    directories again before it touches the network either way.
 
     It exists because a :class:`~mcuhome.model.context.SdkPin` needs more
     than the three values a pin *is*: ``context.yaml`` also records the
@@ -242,7 +326,13 @@ class SdkResolution:
 
     stated: str
     package: ResolvedPackage
-    source: Path
+    #: The operator directory the package was found in, or ``None`` when
+    #: the registry answered.
+    source: Path | None = None
+    #: The mirror base the registry answered from — an https URL ending
+    #: in ``/``, or a local mirror's directory path. Empty for a local
+    #: source directory.
+    base: str = ""
 
     @property
     def intent(self) -> str:
@@ -262,31 +352,46 @@ class SdkResolution:
 
     @property
     def url(self) -> str:
-        """The location hint to record — empty for a local source.
+        """The location hint to record — empty unless a public one exists.
 
         ``mcuhome.package.url`` is a hint only ("never hashed", and ADR
         0019 §8 forbids any backend to follow it). A package resolved
         from a local directory has no URL worth recording: a ``file://``
         URI of the source would carry the creator's local filesystem
         layout — home directory, username — into a document that is
-        uploaded to a build server and archivable there. The field stays
-        empty until a resolution actually comes from a registry with a
-        public location.
+        uploaded to a build server and archivable there. A resolution
+        that came from a registry over https does have one, and records
+        it; a local mirror is a local directory again and does not.
         """
+        if self.base.startswith("https://"):
+            return f"{self.base}{self.package.file}"
         return ""
 
 
-def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkResolution:
-    """Resolve *constraint* to one SDK package out of *sources*.
+def resolve_sdk(
+    sources: Sequence[Path],
+    *,
+    constraint: str = SDK_ANY,
+    registry: PackageRegistry | None = None,
+    source_name: str = SDK_SOURCE,
+    platform: str | None = None,
+) -> SdkResolution:
+    """Resolve *constraint* to one SDK package: local sources, then *registry*.
 
     The pin has to exist *before* a context can be created — a context is
-    content-addressed over the resolved ``sha256`` — so this resolves it
-    from the static :data:`INDEX_FILE` a source directory carries
-    (``scripts/build_sdk_archive.py``), never from a network. Sources are
-    searched in order and the first that holds a matching package wins,
-    which is the same "first source wins" rule
-    :func:`~mcuhome.workbench.orchestrator.acquire_sdk` then fetches the
-    bytes by.
+    content-addressed over the resolved ``sha256`` — so it is resolved
+    from an index, never from whatever a host happens to hand over.
+
+    **Two tiers, in this order.** The operator's own directories first:
+    each carries the static :data:`INDEX_FILE`
+    (``scripts/build_sdk_archive.py``), they are searched in order, and
+    the first that holds a matching package wins — the same "first source
+    wins" rule :func:`~mcuhome.workbench.orchestrator.acquire_package`
+    then fetches the bytes by. Only when none of them holds one is
+    *registry* asked, and what it answers with is an index a mirror
+    served and the project's trust anchor accepted. A machine that has
+    the package locally therefore never touches the network, which is
+    what makes an air-gapped build a configuration rather than a mode.
 
     **Both halves of the answer are load-bearing, and differently so**
     (E65). The *version* is a resolution key: whoever fetches the package
@@ -300,10 +405,12 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
     claims, so a mismatch there is a typed refusal rather than a fallback.
 
     Raises a typed :class:`~mcuhome.model.errors.BuildError` — the
-    ``sdk.unavailable`` spirit — when no source is configured or none holds
-    the package, so a command line can render it as a clean refusal.
+    ``sdk.unavailable`` spirit — when neither a source nor a registry is
+    configured, when none of them holds the package, and for every way a
+    registry can fail to answer, so a command line can render any of it
+    as a clean refusal.
     """
-    if not sources:
+    if not sources and registry is None:
         raise BuildError(
             "The build needs the MCUHome SDK package, and no SDK source is configured.",
             hint=(
@@ -349,15 +456,44 @@ def resolve_sdk(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> SdkRes
         except BuildError:
             continue
         return SdkResolution(stated=constraint, package=resolved, source=source)
+
+    if registry is not None:
+        return _from_registry(
+            registry, constraint=constraint, source_name=source_name, platform=platform
+        )
+
     listed = ", ".join(searched) or "none"
     raise BuildError(
         f"No configured SDK source holds the {SDK_PACKAGE_NAME} package.",
         hint=(
-            f"the pin is resolved from source directories only, never from a URL — "
-            f"put a {SDK_PACKAGE_NAME} package and its {INDEX_FILE} "
+            f"the pin is resolved from source directories only when no registry is "
+            f"configured — put a {SDK_PACKAGE_NAME} package and its {INDEX_FILE} "
             f"(scripts/build_sdk_archive.py) in one of: {listed}"
         ),
     )
+
+
+def _from_registry(
+    registry: PackageRegistry,
+    *,
+    constraint: str,
+    source_name: str,
+    platform: str | None,
+) -> SdkResolution:
+    """The same resolution against a registry's verified index.
+
+    Same rule, other shelf: the versions come from the index a mirror
+    served and the anchor accepted, and the PEP 440 arithmetic over them
+    is the one the local sources went through a moment ago. What differs
+    is only that the answer records the mirror it came from, so the
+    location hint in a context can say something true.
+    """
+    index: VerifiedIndex = registry.index(source_name)
+    allow = True if constraint == SDK_ANY else None
+    resolved = resolve_from_entries(
+        index.entries, SDK_PACKAGE_NAME, constraint, prereleases=allow, platform=platform
+    )
+    return SdkResolution(stated=constraint, package=resolved, source=None, base=index.base)
 
 
 def resolve_sdk_pin(sources: Sequence[Path], *, constraint: str = SDK_ANY) -> tuple[str, str, str]:

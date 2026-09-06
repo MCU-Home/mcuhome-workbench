@@ -143,7 +143,11 @@ BUILD_REPORT = {
     },
 }
 
-SDK_VERSION = "2.4.0"
+#: In the SDK minor the workbench pins by default
+#: (:data:`~mcuhome.workbench.resolve_pins.DEFAULT_SDK_CONSTRAINT`), so
+#: these tests exercise the resolution a device with no `sources.sdk`
+#: really gets rather than one nothing would ever pick.
+SDK_VERSION = "0.1.0"
 
 
 # --------------------------------------------------------------------------
@@ -2721,10 +2725,12 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
     the same bytes.
 
     The two never-hashed fields are checked as well, against the
-    resolution: ``constraint`` is the verbatim intent (here empty —
-    nothing was stated) and ``url`` is empty for a local source, because
-    a ``file://`` hint would leak this machine's filesystem layout into
-    the uploaded document. Neither value is anybody's invention.
+    resolution: ``constraint`` is the verbatim intent, which for a device
+    that names no version is the workbench's own default — the SDK minor
+    it was released alongside — and ``url`` is empty for a local source,
+    because a ``file://`` hint would leak this machine's filesystem
+    layout into the uploaded document. Neither value is anybody's
+    invention.
     """
     sources = tmp_path / "packages"
     real_sha256 = write_sdk_package(sources)
@@ -2736,7 +2742,8 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
             )
 
     run(scenario())
-    found = resolve_pins.resolve_sdk((sources,))
+    stated = resolve_pins.sdk_constraint(_model().sources.sdk)
+    found = resolve_pins.resolve_sdk((sources,), constraint=stated)
     written = read_context_request(
         tmp_path / "build" / ".mcuhome-remote" / "context" / "context.yaml"
     )
@@ -2746,14 +2753,18 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
     )
     assert written.sdk.sha256 == real_sha256
     assert (written.sdk.constraint, written.sdk.url) == (found.intent, found.url)
-    # Both informational fields are honestly empty for a local source:
-    # no constraint was stated, and a file:// hint would leak the local
-    # filesystem layout into an uploaded document.
-    assert (written.sdk.constraint, written.sdk.url) == ("", "")
+    # The constraint is the workbench's default, because the device named
+    # no version; the url is honestly empty for a local source, where a
+    # file:// hint would leak the local filesystem layout into an
+    # uploaded document.
+    assert (written.sdk.constraint, written.sdk.url) == (
+        resolve_pins.DEFAULT_SDK_CONSTRAINT,
+        "",
+    )
     # And the three-value helper the `local` method reads answers the same
     # package, with the constraint as *stated*.
-    assert resolve_pins.resolve_sdk_pin((sources,)) == (
-        resolve_pins.SDK_ANY,
+    assert resolve_pins.resolve_sdk_pin((sources,), constraint=stated) == (
+        stated,
         found.package.version,
         real_sha256,
     )
