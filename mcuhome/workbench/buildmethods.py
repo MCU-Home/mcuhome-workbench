@@ -82,7 +82,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import CONTEXT_FILE
@@ -109,6 +109,12 @@ from mcuhome.workbench.contextdir import (
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.resolve_env import resolve_environment
+
+if TYPE_CHECKING:  # pragma: no cover - types only
+    # Imported for the annotations alone. The registry client is reached
+    # at call time (see `_package_registry`), and importing it here for a
+    # type would put it in the import path of every build method.
+    from mcuhome.workbench.packageregistry import RegistrySettings, RegistrySource
 
 __all__ = [
     "DEFAULT_MAX_WAIT_SECONDS",
@@ -326,7 +332,7 @@ class BuildRequest:
     #: configuration (the ``registry`` option): mirror overrides per
     #: source, and which registries are marked untrusted. Empty means the
     #: defaults — the official registry, its own mirror list, verified.
-    registries: Sequence[Any] = ()
+    registries: Sequence[RegistrySettings] = ()
 
     # -- local ---------------------------------------------------------
     #: Build-container reference to compile in; ``None`` takes the default.
@@ -421,10 +427,10 @@ def _package_registry(
     model: DeviceModel,
     *,
     project_root: Path | None,
-    registries: Sequence[Any],
+    registries: Sequence[RegistrySettings],
     work_root: Path,
     on_line: LineSink | None,
-) -> Any:
+) -> RegistrySource | None:
     """The registry this device's SDK would come from, promised not built.
 
     Which registry is the device's own statement: ``sources.sdk`` is a
@@ -546,8 +552,7 @@ def compose_local_build(
     work_root: Path,
     env: dict[str, str],
     project_root: Path | None = None,
-    registries: Sequence[Any] = (),
-    package_registry: Any = None,
+    registries: Sequence[RegistrySettings] = (),
     image: str | None = None,
     jobs: int = 1,
     mode: str = "clean",
@@ -587,16 +592,12 @@ def compose_local_build(
     """
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
-    packages = (
-        package_registry
-        if package_registry is not None
-        else _package_registry(
-            model,
-            project_root=project_root,
-            registries=registries,
-            work_root=work_root,
-            on_line=on_line,
-        )
+    packages = _package_registry(
+        model,
+        project_root=project_root,
+        registries=registries,
+        work_root=work_root,
+        on_line=on_line,
     )
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"

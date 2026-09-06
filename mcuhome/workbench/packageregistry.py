@@ -79,6 +79,7 @@ from mcuhome.packagetool.verify import (
     load_anchor,
     verify_source,
 )
+from packaging.version import InvalidVersion, Version
 
 from mcuhome.workbench.project import SECRETS_DIR, check_secret_file, ensure_secrets_dir
 
@@ -97,6 +98,8 @@ __all__ = [
     "host_platform",
     "install_trust_anchors",
     "load_trust_anchor",
+    "check_platform",
+    "matching_version",
     "merge_registries",
     "opened",
     "parse_registries",
@@ -509,6 +512,40 @@ class ResolvedEntry:
     through_meta: bool = False
 
 
+def matching_version(
+    entries: Mapping[str, Mapping[str, Mapping[str, Any]]], name: str, version: str
+) -> str | None:
+    """The key *entries* spells *version* under, or ``None`` if it has none.
+
+    Version **equality is PEP 440's**, not string equality: an index that
+    records ``0.1`` and a pin that says ``0.1.0`` are the same release,
+    and a client that compared the two spellings as text would call a
+    package it is looking straight at absent. The exact spelling is tried
+    first, because that is the overwhelmingly common case and it costs a
+    dictionary lookup.
+
+    An unparseable version — on either side — is not an error here: it
+    simply does not match, and the caller's own "carries no such version"
+    refusal is the one a user should read.
+    """
+    versions = entries.get(name)
+    if not versions:
+        return None
+    if version in versions:
+        return version
+    try:
+        wanted = Version(version)
+    except InvalidVersion:
+        return None
+    for candidate in versions:
+        try:
+            if Version(str(candidate)) == wanted:
+                return str(candidate)
+        except InvalidVersion:
+            continue
+    return None
+
+
 def resolve_entry(
     entries: Mapping[str, Mapping[str, Mapping[str, Any]]],
     name: str,
@@ -517,6 +554,10 @@ def resolve_entry(
     platform: str | None = None,
 ) -> ResolvedEntry:
     """The concrete package *name* at *version* is, on *platform*.
+
+    The version is matched by PEP 440 equality
+    (:func:`matching_version`), so an index that spells a release ``0.1``
+    answers a pin of ``0.1.0``.
 
     *platform* defaults to this host and is resolved only where it is
     actually needed — following a meta entry, or holding a name's
@@ -538,12 +579,18 @@ def resolve_entry(
     * **Anything else** is a malformed index, refused as one.
     """
     versions = entries.get(name)
-    if not versions or version not in versions:
+    key = matching_version(entries, name, version)
+    if key is None:
         offered = ", ".join(sorted(versions or ())) or "no version at all"
         raise PackageRegistryError(
             f"The package index carries no {name} {version}; it carries {offered}.",
             hint="the version is not published (yet) — pick one the index names",
         )
+    # From here on the *index's* spelling of the version is used, not the
+    # caller's: a meta entry's members are recorded under the same key it
+    # is, and looking them up under another spelling of the same release
+    # would call them missing.
+    version = key
     entry = versions[version]
 
     if "meta" in entry:
@@ -580,7 +627,7 @@ def resolve_entry(
             )
         return _concrete(concrete, version, member, through_meta=True)
 
-    _check_platform(name, platform=platform)
+    check_platform(name, platform=platform)
     return _concrete(name, version, entry, through_meta=False)
 
 
@@ -603,7 +650,7 @@ def _concrete(
         ) from broken
 
 
-def _check_platform(name: str, *, platform: str | None) -> None:
+def check_platform(name: str, *, platform: str | None) -> None:
     """A concrete package named for another architecture, refused by its name.
 
     A package name may carry an architecture suffix after its first
@@ -1022,11 +1069,11 @@ def registry_for(
     """A registry ready to read *base_domain*, from a project and its settings.
 
     The one place the four decisions come together: what the project
-    configured for this domain, which anchor file backs it (created from
-    the shipped copy the first time, for the official domain only),
-    whether the project accepts an unsigned source, and which mirrors to
-    ask. Everything below is mechanical; everything above it just needs a
-    registry it can read.
+    configured for this domain, which anchor file backs it — read, never
+    written, because a project's trust roots are installed when the
+    project is created and by nothing else — whether the project accepts
+    an unsigned source, and which mirrors to ask. Everything below is
+    mechanical; everything above it just needs a registry it can read.
     """
     configured = settings_for(settings, base_domain)
     anchor_path = trust_anchor_for(

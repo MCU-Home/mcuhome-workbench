@@ -115,10 +115,12 @@ dev = [
 packages = ["mcuhome.workbench", "mcuhome.workbench.migrations"]
 
 # The trust anchors shipped with the workbench. They are data, not code:
-# one JSON file per package-registry base domain, used only to create a
-# project's `secrets/trust-anchor/<base-domain>.json` the first time.
-# An anchor that failed to install would leave a fresh project unable to
-# verify anything it downloads, so it is declared rather than assumed.
+# one JSON file per package-registry base domain, written into a project's
+# `secrets/trust-anchor/` when the project is created and never after —
+# a build that finds one missing refuses rather than installing a trust
+# root of its own. An anchor that failed to make it into the wheel would
+# leave every new project unable to verify what it downloads, so it is
+# declared rather than assumed.
 [tool.setuptools.package-data]
 "mcuhome.workbench" = ["trust-anchor/*.json"]
 

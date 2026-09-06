@@ -51,6 +51,7 @@ from mcuhome.workbench.packageregistry import (
     anchor_file,
     host_platform,
     install_trust_anchors,
+    matching_version,
     merge_registries,
     parse_registries,
     registry_factory,
@@ -964,6 +965,118 @@ def test_a_family_in_a_local_index_resolves_without_the_registry(tmp_path: Path,
     )
     assert package.name == AMD64
     assert (package.tree / "bin" / "tool").read_bytes() == b"local\n"
+
+
+def test_a_version_is_matched_the_way_pep_440_reads_it(tmp_path: Path) -> None:
+    """`0.1` and `0.1.0` are one release, and an index may spell either.
+
+    A lookup by text would walk past a package it is looking straight at,
+    and the failure would read as "not published" — the one message
+    guaranteed to send somebody looking in the wrong place.
+    """
+    directory = tmp_path / "operator"
+    directory.mkdir()
+    filename = f"{SDK}-0.1.tar.zst"
+    (directory / filename).write_bytes(SDK_ARCHIVE)
+    digest = orchestrator.sha256_file(directory / filename)
+    (directory / INDEX_FILE).write_text(
+        json.dumps(
+            {
+                "packages": {
+                    SDK: {"0.1": {"file": filename, "sha256": digest, "size": len(SDK_ARCHIVE)}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    package = orchestrator.acquire_package(
+        name=SDK,
+        version="0.1.0",
+        sha256=digest,
+        sources=(directory,),
+        into=tmp_path / "tree",
+    )
+    assert (package.tree / "mcuhome-sdk.json").is_file()
+    assert matching_version({SDK: {"0.1": {}}}, SDK, "0.1.0") == "0.1"
+    assert matching_version({SDK: {"0.1": {}}}, SDK, "0.2") is None
+
+
+def test_a_local_index_with_a_broken_meta_hash_refuses_rather_than_skips(
+    tmp_path: Path, keys
+) -> None:
+    """A source the operator named on purpose is never silently demoted.
+
+    The directory says it publishes this package and cannot describe what
+    it points at. Walking on to the next source would turn a damaged
+    source into a build against something else entirely.
+    """
+    directory = build_source(
+        tmp_path / "operator",
+        keys,
+        packages=((AMD64, VERSION, b"amd64"), (ARM64, VERSION, b"arm64")),
+        meta=(TOOLS, VERSION, {"arch": {"linux-amd64": AMD64, "linux-arm64": ARM64}}),
+    )
+    index = json.loads((directory / INDEX_FILE).read_text())
+    index["packages"][TOOLS][VERSION]["sha256"] = "f" * 64
+    (directory / INDEX_FILE).write_text(json.dumps(index), encoding="utf-8")
+
+    second = tmp_path / "second"
+    second.mkdir()
+    with pytest.raises(BuildError) as refusal:
+        orchestrator.acquire_package(
+            kind="build-tools",
+            name=TOOLS,
+            version=VERSION,
+            sha256="a" * 64,
+            sources=(directory, second),
+            into=tmp_path / "tree",
+            platform="linux-amd64",
+        )
+    assert "does not describe the packages it points at" in refusal.value.message
+
+
+def test_a_local_index_that_names_no_package_for_this_host_refuses(tmp_path: Path, keys) -> None:
+    directory = build_source(
+        tmp_path / "operator",
+        keys,
+        packages=((ARM64, VERSION, b"arm64"),),
+        meta=(TOOLS, VERSION, {"arch": {"linux-arm64": ARM64}}),
+    )
+    with pytest.raises(BuildError) as refusal:
+        orchestrator.acquire_package(
+            kind="build-tools",
+            name=TOOLS,
+            version=VERSION,
+            sha256="a" * 64,
+            sources=(directory,),
+            into=tmp_path / "tree",
+            platform="linux-amd64",
+        )
+    assert "not published for linux-amd64" in refusal.value.message
+
+
+def test_a_directory_without_an_index_refuses_a_foreign_architecture(
+    tmp_path: Path,
+) -> None:
+    """The conventional filename is held to the platform check too.
+
+    Nothing else would catch it there, and the alternative is finding out
+    after the archive has been fetched, hashed and unpacked.
+    """
+    directory = tmp_path / "operator"
+    directory.mkdir()
+    (directory / f"{ARM64}-{VERSION}.tar.zst").write_bytes(SDK_ARCHIVE)
+    with pytest.raises(BuildError) as refusal:
+        orchestrator.acquire_package(
+            kind="build-tools",
+            name=ARM64,
+            version=VERSION,
+            sha256=orchestrator.sha256_file(directory / f"{ARM64}-{VERSION}.tar.zst"),
+            sources=(directory,),
+            into=tmp_path / "tree",
+            platform="linux-amd64",
+        )
+    assert "is built for linux-arm64, and this machine is linux-amd64" in refusal.value.message
 
 
 def test_a_directory_without_an_index_does_not_guess_a_family_filename(

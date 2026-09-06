@@ -96,7 +96,13 @@ from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME
 from mcuhome.workbench import programevents
 from mcuhome.workbench.buildenv import local_address
 from mcuhome.workbench.contextdir import read_context_manifest
-from mcuhome.workbench.packageregistry import RegistrySource, opened, resolve_entry
+from mcuhome.workbench.packageregistry import (
+    RegistrySource,
+    check_platform,
+    matching_version,
+    opened,
+    resolve_entry,
+)
 from mcuhome.workbench.resolve_pins import SDK_SOURCE
 
 __all__ = [
@@ -1500,10 +1506,18 @@ def _local_candidate(
     name back: it may not be the one that was asked for.
 
     A directory with **no index** is searched by the conventional
-    filename, ``<name>-<version>.tar.zst``. A family name has no
-    conventional filename — a family is not bytes — so such a directory
-    simply does not answer for one, and the search moves on rather than
-    guessing at a file no publisher ever wrote.
+    filename, ``<name>-<version>.tar.zst``, and the name is held against
+    *platform* first. That check is what keeps the convention honest: a
+    package built for another architecture says so in its name, and a
+    directory with no index is the one place nothing else would catch it
+    before the bytes were fetched, hashed and unpacked.
+
+    A **family** has no conventional filename at all — a family is not
+    bytes, and no publisher ever wrote ``<family>-<version>.tar.zst``. So
+    a directory with no index cannot answer for one; what it can do is
+    fail to find the file, which is what happens, and the search moves
+    on. Learning that a name *is* a family needs an index, which is
+    exactly what such a directory does not have.
     """
     index_path = directory / INDEX_FILE
     if index_path.is_file():
@@ -1512,7 +1526,10 @@ def _local_candidate(
         except (OSError, ValueError):
             index = None
         entries = _index_entries(index)
-        if entries and name in entries and version in entries.get(name, {}):
+        # PEP 440 equality, not string equality: an index that spells a
+        # release `0.1` holds the package a pin of `0.1.0` names, and a
+        # lookup by text would walk past it.
+        if matching_version(entries, name, version) is not None:
             try:
                 resolved = resolve_entry(entries, name, version, platform=platform)
             except BuildError as unusable:
@@ -1535,6 +1552,10 @@ def _local_candidate(
             candidate = directory / resolved.file
             if candidate.is_file():
                 return candidate, resolved.name
+    # Refused rather than skipped: a package built for another
+    # architecture is not "not here", and finding that out after half a
+    # gigabyte has been fetched and unpacked helps nobody.
+    check_platform(name, platform=platform)
     named = directory / f"{name}-{version}.tar.zst"
     return (named, name) if named.is_file() else None
 
