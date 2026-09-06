@@ -30,14 +30,18 @@ from the network is the anchor itself.
 
 **Trust anchors are per base domain**, in
 ``<project>/secrets/trust-anchor/<base-domain>.json``. MCUHome's own
-anchor ships with this package and is used for exactly one thing:
-creating that file the first time, for the official domain. An existing
-file is never read for comparison and never rewritten — a person who
-edited theirs did so deliberately, and a tool that silently restored its
-own copy would be overruling them. A foreign base domain with no file is
-refused with the two commands that fix it, unless the project has marked
-that registry as untrusted, which trades every guarantee here for the
-ability to run against something unsigned.
+anchor ships with this package and is written into a project at exactly
+one moment: when the project is created (:func:`install_trust_anchors`,
+called by ``mcuhome project init``). Never afterwards. A build that finds
+the file missing refuses and says which file to create, and it does so
+for MCUHome's own registry exactly as it does for anybody else's —
+because "the tool put a key set there because it was not there" is not a
+trust decision a user ever made, and a build that quietly acquired its
+own trust root is the one failure mode this whole file exists to
+prevent. An existing file is likewise never rewritten: a person who
+edited theirs did so deliberately. The one way out is marking the
+registry untrusted, which trades every guarantee here for the ability to
+run against something unsigned, loudly.
 
 **Local mirrors are first-class.** A mirror location may be a directory
 path instead of a URL, and an operator who synchronises a mirror out of
@@ -49,6 +53,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import urllib.error
@@ -87,15 +92,19 @@ __all__ = [
     "ResolvedEntry",
     "TrustAnchorMissing",
     "VerifiedIndex",
+    "RegistrySource",
     "anchor_file",
-    "ensure_trust_anchor",
     "host_platform",
+    "install_trust_anchors",
     "load_trust_anchor",
     "merge_registries",
+    "opened",
     "parse_registries",
+    "registry_factory",
     "registry_for",
     "resolve_entry",
     "settings_for",
+    "trust_anchor_for",
 ]
 
 #: The base domain a reference that names none is understood against.
@@ -129,6 +138,9 @@ _BLOCK = 1 << 20
 #: than a registry will do in a decade, and a client that followed an
 #: unbounded chain would fetch whatever a mirror felt like serving.
 _MAX_KEY_GENERATIONS = 10
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class PackageRegistryError(BuildError):
@@ -213,53 +225,83 @@ def anchor_file(project_root: Path, base_domain: str) -> Path:
     )
 
 
-def ensure_trust_anchor(
+def install_trust_anchors(project_root: Path) -> tuple[Path, ...]:
+    """Write the anchors this workbench ships into a project being created.
+
+    Called once, by ``mcuhome project init``, and by nothing else. That
+    is the whole point: a project's trust roots are decided when the
+    project comes into existence, by whoever created it, and never later
+    by a build that noticed a file was missing. A build acquiring its own
+    trust root would be trusting whatever happened to be installed at the
+    moment it looked.
+
+    An anchor that is already there is left exactly as it is — including
+    on a re-run of init over an existing project, where an edited file is
+    somebody's decision and not a gap to fill. Returns the files it
+    actually wrote, so init can report them with everything else it
+    created.
+    """
+    project_root = Path(project_root)
+    written: list[Path] = []
+    for bundled in sorted(BUNDLED_ANCHOR_DIR.glob("*.json")):
+        path = anchor_file(project_root, bundled.stem)
+        if path.is_file():
+            continue
+        ensure_secrets_dir(project_root, TRUST_ANCHOR_DIR)
+        path.write_bytes(bundled.read_bytes())
+        if os.name == "posix":
+            path.chmod(0o600)
+        written.append(path)
+    return tuple(written)
+
+
+def trust_anchor_for(
     project_root: Path,
     base_domain: str,
     *,
     untrusted: bool = False,
     on_warning: Callable[[str], None] | None = None,
 ) -> Path | None:
-    """The project's trust anchor for *base_domain*, created if this is the first time.
+    """The project's trust anchor for *base_domain*, or a refusal.
 
-    Three outcomes, and the order matters:
+    Reading only. Nothing is created here, for MCUHome's own registry as
+    little as for anybody else's: the file is written when a project is
+    created (:func:`install_trust_anchors`) and is a statement by whoever
+    created it. A build that found it missing and wrote one would be
+    deciding what to trust on the user's behalf, at the worst possible
+    moment — while it is about to download something.
 
-    * The file exists — it is used, exactly as it is. It is never
-      compared against the copy shipped here and never rewritten. A
-      person who changed theirs meant to, and a tool that restored its
-      own copy over the top would be quietly overruling them.
-    * The file is absent and this workbench ships an anchor for the
-      domain — the shipped copy is written there once. That is the only
-      thing the shipped anchor is for.
-    * The file is absent and nothing ships for that domain — a refusal
-      naming the file to create, unless *untrusted* says the project
-      accepts an unsigned source, in which case this answers ``None``.
+    So: the file is there and is used as it is, or *untrusted* says the
+    project accepts an unsigned source and this answers ``None``, or the
+    build refuses with the path to create.
     """
     path = anchor_file(project_root, base_domain)
     if path.is_file():
         check_secret_file(path, key_material=False, on_warning=on_warning)
         return path
-
-    bundled = BUNDLED_ANCHOR_DIR / f"{_usable_domain(base_domain)}.json"
-    if bundled.is_file():
-        ensure_secrets_dir(Path(project_root), TRUST_ANCHOR_DIR)
-        path.write_bytes(bundled.read_bytes())
-        if os.name == "posix":
-            path.chmod(0o600)
-        return path
-
     if untrusted:
         return None
 
+    bundled = BUNDLED_ANCHOR_DIR / f"{_usable_domain(base_domain)}.json"
+    where = (
+        "MCUHome writes this file when a project is created, so this project "
+        "either predates that or the file was removed. Restore it by running "
+        "init over the project again:\n"
+        "    mcuhome project init . --force\n"
+        if bundled.is_file()
+        else (
+            f"a registry is only worth what its signatures are checked against, and "
+            f"that key set has to reach this project from somewhere other than the "
+            f"registry itself. Ask whoever runs {base_domain} for it and save it as:\n"
+            f"    {path}\n"
+        )
+    )
     raise TrustAnchorMissing(
         f"MCUHome has no trust anchor for the registry {base_domain}.",
         hint=(
-            f"a registry is only worth what its signatures are checked against, and "
-            f"that key set has to reach this project from somewhere other than the "
-            f"registry. Ask whoever runs {base_domain} for it and save it as:\n"
-            f"    {path}\n"
+            f"{where}"
             f"To build against this registry without checking anything — which "
-            f"means trusting whatever it serves — set it as untrusted in "
+            f"means trusting whatever it serves — mark it untrusted in "
             f"mcuhome.yaml:\n"
             f"    registry:\n"
             f"      {base_domain}:\n"
@@ -732,6 +774,10 @@ class PackageRegistry:
         """
         held = self._indexes.get(source)
         if held is not None:
+            # Memoized, but not quieter for it: an unverified registry
+            # says so at every read, so the sentence cannot scroll away
+            # once and never come back.
+            self._loudly_unverified(source, held.base)
             return held
 
         problems: list[str] = []
@@ -870,13 +916,30 @@ class PackageRegistry:
             ) from unreachable
 
     def _loudly_unverified(self, source: str, mirror: str) -> None:
-        if self._warn is None:
+        """Say it, every time, for as long as the setting stands.
+
+        Once at the top of a build would be a footnote. This is not a
+        footnote: nothing in the chain below it means anything while the
+        setting is on, and the person reading the log is the only
+        remaining check.
+        """
+        if not self.untrusted and self._anchor is not None:
             return
-        self._warn(
+        ignored = (
+            " The trust anchor configured for it is deliberately ignored."
+            if self._anchor is not None
+            else ""
+        )
+        message = (
             f"NOTHING IS VERIFIED: {source} is being read from {mirror} without "
             f"checking any signature, because {self.base_domain} is configured as "
-            f"untrusted. Whatever that host serves is what this build will use."
+            f"untrusted.{ignored} Whatever that host serves is what this build "
+            f"will use."
         )
+        if self._warn is None:
+            _LOG.warning(message)
+        else:
+            self._warn(message)
 
     # -- the bytes -----------------------------------------------------
 
@@ -890,6 +953,7 @@ class PackageRegistry:
         it is why a local mirror is read exactly as a remote one is
         fetched, through the same arithmetic.
         """
+        self._loudly_unverified(index.source, index.base)
         into = Path(into)
         into.mkdir(parents=True, exist_ok=True)
         target = into / _usable_name(entry.file, f"{entry.name} {entry.version}")
@@ -965,9 +1029,13 @@ def registry_for(
     registry it can read.
     """
     configured = settings_for(settings, base_domain)
-    anchor_path = ensure_trust_anchor(
+    anchor_path = trust_anchor_for(
         project_root, base_domain, untrusted=configured.untrusted, on_warning=on_warning
     )
+    # An anchor next to `untrusted: true` is read but never used: the
+    # project said it does not want this registry checked, and honouring
+    # a file over that statement would make the setting mean two things.
+    # It is loaded anyway so the warning can say it is being ignored.
     anchor = None if anchor_path is None else load_trust_anchor(anchor_path)
     return PackageRegistry(
         base_domain,
@@ -979,6 +1047,63 @@ def registry_for(
         on_warning=on_warning,
         now=now,
     )
+
+
+def registry_factory(
+    base_domain: str,
+    *,
+    project_root: Path,
+    settings: Sequence[RegistrySettings] = (),
+    into: Path,
+    opener: Callable[[str, float], IO[bytes]] | None = None,
+    on_warning: Callable[[str], None] | None = None,
+    now: datetime | None = None,
+) -> RegistrySource:
+    """:func:`registry_for`, deferred until something actually needs it.
+
+    A build that finds its packages in the operator's own directories
+    never reads a registry, and it must not be stopped by one either:
+    refusing it for a missing trust anchor would turn "you have not
+    decided who to trust" into "you cannot build offline", which is the
+    opposite of what an anchor is for. So the anchor is read, and a
+    missing one refused, at the first question actually asked of the
+    registry — and never on a build that had no question.
+
+    The registry is built once and reused, so a build that asks twice
+    gets one anchor read and one set of documents.
+    """
+    held: list[PackageRegistry] = []
+
+    def build() -> PackageRegistry:
+        if not held:
+            held.append(
+                registry_for(
+                    base_domain,
+                    project_root=project_root,
+                    settings=settings,
+                    into=into,
+                    opener=opener,
+                    on_warning=on_warning,
+                    now=now,
+                )
+            )
+        return held[0]
+
+    return build
+
+
+def opened(source: RegistrySource | None) -> PackageRegistry | None:
+    """A registry, built now if it was only promised. ``None`` stays ``None``."""
+    if source is None or isinstance(source, PackageRegistry):
+        return source
+    return source()
+
+
+#: What a caller may hand to anything that *might* need a registry: one,
+#: or a promise of one (:func:`registry_factory`). The promise is the
+#: ordinary case — see there for why a build that needs no registry must
+#: not pay for one.
+RegistrySource = PackageRegistry | Callable[[], PackageRegistry]
 
 
 def _http_open(url: str, timeout: float) -> IO[bytes]:

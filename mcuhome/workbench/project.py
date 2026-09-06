@@ -479,8 +479,10 @@ class InitResult:
 def init_project(target: Path, *, force: bool = False) -> InitResult:
     """Create the durable part of a project in *target* (ADR 0022 §1).
 
-    The marker, ``mcuhome.yaml``, ``devices/``, ``secrets/`` (mode 700)
-    and a ``.gitignore`` keeping ``secrets/`` and ``build/`` out of git.
+    The marker, ``mcuhome.yaml``, ``devices/``, ``secrets/`` (mode 700),
+    the trust anchors of the package registries this workbench ships one
+    for, and a ``.gitignore`` keeping ``secrets/`` and ``build/`` out of
+    git.
     A non-empty directory draws a refusal that lists what is there;
     *force* proceeds anyway. Even under *force* an existing
     ``mcuhome.yaml`` is left alone — it is the user's configuration —
@@ -493,6 +495,15 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
     marker is left exactly as it is, whatever version it states: making
     an old project current is the upgrade's job, and init must not do it
     silently on a directory a user pointed ``--force`` at.
+
+    **The trust anchors are written here and nowhere else.** A project's
+    trust roots are part of what a project *is*, decided once by whoever
+    creates it and visible in ``secrets/trust-anchor/`` from that moment
+    on. A build that found one missing and wrote it would be deciding
+    what to trust on the user's behalf, while about to download
+    something; it refuses instead and points back here. An anchor file
+    that already exists is left alone, on a first run and on a
+    ``--force`` re-run alike.
     """
     target = target.resolve()
     if target.exists() and not target.is_dir():
@@ -547,6 +558,13 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
     _mkdir_private(secrets)
     if not existed:
         created.append(secrets)
+
+    # Imported here rather than at the top: the registry client knows
+    # about the project layout, so the arrow points that way, and one at
+    # module level pointing back would be a cycle.
+    from mcuhome.workbench.packageregistry import install_trust_anchors
+
+    created.extend(install_trust_anchors(target))
 
     gitignore = target / ".gitignore"
     if gitignore.is_file():

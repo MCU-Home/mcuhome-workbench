@@ -41,6 +41,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.context import MANIFEST_FILE, EnvironmentPin
 from mcuhome.model.errors import ConfigError
@@ -205,6 +206,7 @@ def run_locked_build(
     jobs: int = 1,
     mode: str = "clean",
     ccache_dir: Path | None = None,
+    registry: Any = None,
     on_line: lb.LineSink | None = None,
     docker: lb.Docker | None = None,
 ) -> LocalBuildResult:
@@ -213,8 +215,9 @@ def run_locked_build(
     The backend role and nothing else: *context_dir* was created and
     locked by the workbench, *sdk_sources* are the operator's local
     package directories the backend acquires the pinned SDK from (§9.1 —
-    a backend duty, the hash decides), and *work_root* is the backend's
-    own scratch area.
+    a backend duty, the hash decides), *registry* is the second tier it
+    falls through to when none of them holds the package, and *work_root*
+    is the backend's own scratch area.
 
     **Which image is not a parameter.** The locked context names it,
     pinned to a digest, and it is the only thing that may: a build
@@ -237,6 +240,7 @@ def run_locked_build(
         lb.BackendConfig(
             sdk_sources=tuple(Path(source) for source in sdk_sources),
             jobs=jobs,
+            registry=registry,
             ccache_dir=_cache_root(env, ccache_dir),
         ),
         docker=seam,

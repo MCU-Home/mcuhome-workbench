@@ -87,6 +87,7 @@ from typing import Any
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import CONTEXT_FILE
 from mcuhome.model.errors import BuildError
+from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenv as container
@@ -314,6 +315,18 @@ class BuildRequest:
     #: ``local``, the build server out of its operator's own sources for
     #: ``remote``, which then verifies them against this pin.
     sdk_sources: Sequence[Path] = ()
+    #: The project directory, which is where the trust anchors are:
+    #: ``secrets/trust-anchor/<base-domain>.json``, written when the
+    #: project was created. Left ``None`` the build has no project to
+    #: read them from and therefore no registry — it then builds from
+    #: :attr:`sdk_sources` alone, which is exactly what an embedder
+    #: driving a bare model wants.
+    project_root: Path | None = None
+    #: What the project says about package registries, resolved from
+    #: configuration (the ``registry`` option): mirror overrides per
+    #: source, and which registries are marked untrusted. Empty means the
+    #: defaults — the official registry, its own mirror list, verified.
+    registries: Sequence[Any] = ()
 
     # -- local ---------------------------------------------------------
     #: Build-container reference to compile in; ``None`` takes the default.
@@ -404,6 +417,46 @@ def _work_root(request: BuildRequest, name: str) -> Path:
     return Path(request.work_root) if request.work_root else Path(request.out_dir) / name
 
 
+def _package_registry(
+    model: DeviceModel,
+    *,
+    project_root: Path | None,
+    registries: Sequence[Any],
+    work_root: Path,
+    on_line: LineSink | None,
+) -> Any:
+    """The registry this device's SDK would come from, promised not built.
+
+    Which registry is the device's own statement: ``sources.sdk`` is a
+    reference, and the registry is the domain in it — the official one
+    where it names none. Nothing here reads a trust anchor or opens a
+    socket; :func:`~mcuhome.workbench.packageregistry.registry_factory`
+    defers all of it to the first question actually asked, so a build
+    whose packages are already in the operator's directories neither
+    needs an anchor nor is stopped by a missing one.
+
+    Without a *project_root* there is no ``secrets/trust-anchor/`` to
+    read and therefore no registry — an embedder driving a bare model
+    builds from its own source directories, which is what it asked for.
+
+    The warning channel is the build log, deliberately: an unverified
+    registry has to say so where the person watching the build is
+    looking, not in a stream nobody attached to.
+    """
+    if project_root is None:
+        return None
+    from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, registry_factory
+
+    reference = parse_reference(model.sources.sdk, default_registry=OFFICIAL_BASE_DOMAIN)
+    return registry_factory(
+        reference.registry,
+        project_root=Path(project_root),
+        settings=tuple(registries),
+        into=Path(work_root) / "registry",
+        on_warning=on_line,
+    )
+
+
 def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     """The build target a method *name* and a request describe together.
 
@@ -492,6 +545,9 @@ def compose_local_build(
     sdk_sources: Sequence[Path],
     work_root: Path,
     env: dict[str, str],
+    project_root: Path | None = None,
+    registries: Sequence[Any] = (),
+    package_registry: Any = None,
     image: str | None = None,
     jobs: int = 1,
     mode: str = "clean",
@@ -531,6 +587,17 @@ def compose_local_build(
     """
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
+    packages = (
+        package_registry
+        if package_registry is not None
+        else _package_registry(
+            model,
+            project_root=project_root,
+            registries=registries,
+            work_root=work_root,
+            on_line=on_line,
+        )
+    )
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
 
@@ -576,6 +643,7 @@ def compose_local_build(
             build_environment=pinned,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
+            registry=packages,
         )
     lock_context(context_dir)
     if on_step is not None:
@@ -593,6 +661,7 @@ def compose_local_build(
         jobs=jobs,
         mode=mode,
         ccache_dir=ccache_dir,
+        registry=packages,
         on_line=on_line,
         docker=docker,
     )
@@ -613,6 +682,8 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),
         work_root=_work_root(request, ".mcuhome-local"),
         env=dict(request.env),
+        project_root=request.project_root,
+        registries=request.registries,
         image=execution.image,
         jobs=request.jobs,
         mode=request.mode,
@@ -674,6 +745,13 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),
         build_environment=resolved.pin,
         signing_pub=request.signing_pub,
+        registry=_package_registry(
+            request.model,
+            project_root=request.project_root,
+            registries=request.registries,
+            work_root=Path(work_root),
+            on_line=request.on_line,
+        ),
     )
     return context_dir
 

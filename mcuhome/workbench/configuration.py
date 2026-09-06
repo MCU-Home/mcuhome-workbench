@@ -33,11 +33,12 @@ environment too; a layer whose directory the environment cannot name
 simply does not exist for that resolution.
 
 Merge semantics: scalars are nearest-wins, whole value per layer.
-Structured values define their own rule where they are introduced —
-builder lists merge by name (ADR 0023 §3), package registries by base
-domain. ``mcuhome config print``
-falls out of the same registry: :meth:`Settings.print_data` answers
-with every effective value and the layer it came from.
+Structured values define their own rule where they are introduced, and
+both of the ones that exist merge by the name their entries are keyed on
+rather than replacing each other wholesale: builder lists by builder
+name, package registries by base domain. ``mcuhome config print`` falls
+out of the same registry: :meth:`Settings.print_data` answers with every
+effective value and the layer it came from.
 """
 
 from __future__ import annotations
@@ -486,10 +487,10 @@ def resolve_settings(
 
     def apply(layer_settings: dict[str, Setting]) -> None:
         # Scalars are whole-value nearest-wins; the structured kinds
-        # merge by the name they are keyed on (ADR 0023 §3 for builders,
-        # the base domain for registries), so a machine can ship site
+        # merge by the name their entries are keyed on — the builder
+        # name, the registry's base domain — so a machine can ship site
         # entries, a user can add their own, and a project can pin one
-        # without any layer repeating the others.
+        # without any layer having to repeat the others.
         for name, setting in layer_settings.items():
             below = resolved.get(name)
             merge = _MERGERS.get(setting.option.kind)

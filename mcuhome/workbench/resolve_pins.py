@@ -22,8 +22,8 @@ served and the project's trust anchor accepted
 (:mod:`mcuhome.workbench.packageregistry`). Operator directories are
 always asked first, so a machine that already has the package resolves
 without a network at all; and a package's ``url`` stays a hint that no
-backend follows (ADR 0019 §8) either way — the sha256 is what decides
-which bytes are the right ones.
+backend ever follows either way — a location cannot make bytes correct,
+and the sha256 is what decides which bytes are the right ones.
 
 **Reusable.** :func:`resolve_version` knows nothing about the SDK — it
 resolves any constraint against any set of version strings, so the same
@@ -98,7 +98,9 @@ SDK_SOURCE = DEFAULT_SDK.split("/")[0]
 
 from mcuhome.workbench.packageregistry import (  # noqa: E402
     PackageRegistry,
+    RegistrySource,
     VerifiedIndex,
+    opened,
     resolve_entry,
 )
 
@@ -372,7 +374,7 @@ def resolve_sdk(
     sources: Sequence[Path],
     *,
     constraint: str = SDK_ANY,
-    registry: PackageRegistry | None = None,
+    registry: RegistrySource | None = None,
     source_name: str = SDK_SOURCE,
     platform: str | None = None,
 ) -> SdkResolution:
@@ -457,9 +459,10 @@ def resolve_sdk(
             continue
         return SdkResolution(stated=constraint, package=resolved, source=source)
 
-    if registry is not None:
+    client = opened(registry)
+    if client is not None:
         return _from_registry(
-            registry, constraint=constraint, source_name=source_name, platform=platform
+            client, constraint=constraint, source_name=source_name, platform=platform
         )
 
     listed = ", ".join(searched) or "none"

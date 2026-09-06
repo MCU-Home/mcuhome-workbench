@@ -92,12 +92,11 @@ from mcuhome.model.invocation import ACTIONS, CONTRACT_VERSION, REQUEST_VERSIONS
 # is the workbench's job (E65) and by the time a context exists its pin
 # is one version, not a range.
 from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME
-from packaging.version import InvalidVersion, Version
 
 from mcuhome.workbench import programevents
 from mcuhome.workbench.buildenv import local_address
 from mcuhome.workbench.contextdir import read_context_manifest
-from mcuhome.workbench.packageregistry import PackageRegistry
+from mcuhome.workbench.packageregistry import RegistrySource, opened, resolve_entry
 from mcuhome.workbench.resolve_pins import SDK_SOURCE
 
 __all__ = [
@@ -430,11 +429,13 @@ class LocalOutcome:
 class BackendConfig:
     """Everything the ``local`` method needs that is not the context.
 
-    ``sdk_sources`` are operator-configured local directories, searched in
-    order (ADR 0019 §8, the first tier — E48), and ``registry`` is the
-    second: a package registry whose index this project's trust anchor
-    accepted. A backend with no registry is the offline case and is not
-    an error — a directory that holds the package answers without one.
+    ``sdk_sources`` are operator-configured local directories, searched
+    in order and asked first, and ``registry`` is the second tier: a
+    package registry whose index this project's trust anchor accepted.
+    The order is the point — a machine that already has the package never
+    opens a socket. A backend with no registry is the offline case and is
+    not an error, because a directory that holds the package answers
+    without one.
     Everything else is the resource shape of the one container this
     backend starts.
 
@@ -447,9 +448,10 @@ class BackendConfig:
     sdk_sources: tuple[Path, ...]
     jobs: int
     #: The package registry to fall back to when no source directory
-    #: holds the pinned package. ``None`` means the local tier is all
+    #: holds the pinned package — ordinarily a promise of one, built only
+    #: if it is actually needed. ``None`` means the local tier is all
     #: there is.
-    registry: PackageRegistry | None = None
+    registry: RegistrySource | None = None
     #: Root of the host's compiler cache — the parent of the two role
     #: directories, from :func:`mcuhome.workbench.buildenv.ccache_directory`.
     #: ``None`` mounts nothing, and the cache then lives in the container
@@ -1333,36 +1335,6 @@ def _lstat(path: Path) -> os.stat_result | None:
 # --------------------------------------------------------------------------
 
 
-def _exact_index_entry(index: object, name: str, version: str) -> tuple[str, str] | None:
-    """The ``(file, sha256)`` the index states for exactly *version*, else ``None``.
-
-    The backend's own reading of the index the workbench also writes and
-    reads — independent on purpose (§9.1: the hash decides, never the
-    resolver), and exact-only: by the time a context exists its pin is
-    one version, not a range. Version equality is PEP 440 equality, so
-    an index that spells ``2.4`` still answers a pin of ``2.4.0``.
-    """
-    packages = index.get("packages") if isinstance(index, dict) else None
-    entries = packages.get(name) if isinstance(packages, dict) else None
-    if not isinstance(entries, dict):
-        return None
-    try:
-        wanted = Version(version)
-    except InvalidVersion:
-        return None
-    for candidate, entry in entries.items():
-        try:
-            if Version(str(candidate)) != wanted:
-                continue
-        except InvalidVersion:
-            continue
-        try:
-            return str(entry["file"]), str(entry["sha256"])
-        except (KeyError, TypeError):
-            return None
-    return None
-
-
 def acquire_package(
     *,
     kind: str = SDK_SOURCE,
@@ -1371,7 +1343,8 @@ def acquire_package(
     sha256: str,
     sources: Sequence[Path],
     into: Path,
-    registry: PackageRegistry | None = None,
+    registry: RegistrySource | None = None,
+    platform: str | None = None,
     max_bytes: int = SDK_MAX_BYTES,
 ) -> AcquiredPackage:
     """Find the pinned package, verify its bytes, unpack it safely.
@@ -1391,7 +1364,9 @@ def acquire_package(
     the project's trust anchor accepted. *kind* names the source within
     that registry (``sdk``, ``build-workspace``, ``build-tools``); *name*
     is the concrete package, a family published per architecture having
-    been resolved to this host's member before a pin ever existed.
+    ordinarily been resolved to this host's member before a pin ever
+    existed — *platform* overrides which host that is, and is only
+    consulted where an answer depends on it.
 
     **The hash decides, not the name — on every path.** A local
     directory's ``index.json`` maps the version to a file; that file's
@@ -1415,24 +1390,33 @@ def acquire_package(
     searched = [str(directory) for directory in sources]
     for directory in sources:
         found = _local_candidate(
-            directory, name=name, version=version, sha256=sha256, searched=searched
+            directory,
+            name=name,
+            version=version,
+            sha256=sha256,
+            searched=searched,
+            platform=platform,
         )
         if found is None:
             continue
-        measured = sha256_file(found)
+        archive, concrete = found
+        measured = sha256_file(archive)
         if measured != sha256:
             raise _package_unavailable(
                 name,
                 version,
                 sha256,
                 searched,
-                f"{found} is named for this version and hashes to {measured}",
+                f"{archive} is named for this version and hashes to {measured}",
             )
-        return _unpack(found, into=into, name=name, version=version, sha256=sha256, limit=max_bytes)
+        return _unpack(
+            archive, into=into, name=concrete, version=version, sha256=sha256, limit=max_bytes
+        )
 
-    if registry is not None:
-        index = registry.index(kind)
-        entry = index.resolve(name, version)
+    client = opened(registry)
+    if client is not None:
+        index = client.index(kind)
+        entry = index.resolve(name, version, platform=platform)
         if entry.sha256 != sha256:
             raise _package_unavailable(
                 name,
@@ -1443,7 +1427,7 @@ def acquire_package(
             )
         staging = into.parent / f"{into.name}.download"
         try:
-            archive = registry.fetch_package(index, entry, into=staging)
+            archive = client.fetch_package(index, entry, into=staging)
             return _unpack(
                 archive, into=into, name=entry.name, version=version, sha256=sha256, limit=max_bytes
             )
@@ -1461,7 +1445,7 @@ def acquire_sdk(
     sha256: str,
     sources: Sequence[Path],
     into: Path,
-    registry: PackageRegistry | None = None,
+    registry: RegistrySource | None = None,
 ) -> AcquiredPackage:
     """:func:`acquire_package` for the SDK — the one package with a name of its own.
 
@@ -1496,14 +1480,30 @@ def _unpack(
 
 
 def _local_candidate(
-    directory: Path, *, name: str, version: str, sha256: str, searched: Sequence[str]
-) -> Path | None:
-    """The file in *directory* that claims to be this version, or ``None``.
+    directory: Path,
+    *,
+    name: str,
+    version: str,
+    sha256: str,
+    searched: Sequence[str],
+    platform: str | None = None,
+) -> tuple[Path, str] | None:
+    """The file in *directory* that is this package, and the name it is under.
 
-    The index is consulted first because it can say something a
-    filename cannot: that this source holds the version and holds it
-    with *other bytes*, which is a different situation from not having
-    it and is worth a different refusal.
+    The index is consulted first because it can say two things a filename
+    cannot. One: that this source holds the version and holds it with
+    *other bytes*, which is a different situation from not having it and
+    is worth a different refusal. Two: what a **family** name stands for
+    here — an index published across architectures carries one name for a
+    set of concrete packages, and following it is the only way to learn
+    which file this host's member is. That is why the answer carries a
+    name back: it may not be the one that was asked for.
+
+    A directory with **no index** is searched by the conventional
+    filename, ``<name>-<version>.tar.zst``. A family name has no
+    conventional filename — a family is not bytes — so such a directory
+    simply does not answer for one, and the search moves on rather than
+    guessing at a file no publisher ever wrote.
     """
     index_path = directory / INDEX_FILE
     if index_path.is_file():
@@ -1511,23 +1511,42 @@ def _local_candidate(
             index = json.loads(index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             index = None
-        resolved = None if index is None else _exact_index_entry(index, name, version)
-        if resolved is not None:
-            resolved_file, resolved_sha256 = resolved
-            if resolved_sha256 != sha256:
+        entries = _index_entries(index)
+        if entries and name in entries and version in entries.get(name, {}):
+            try:
+                resolved = resolve_entry(entries, name, version, platform=platform)
+            except BuildError as unusable:
+                # The index names this package and cannot describe it —
+                # a broken meta hash, a foreign architecture. Skipping to
+                # the next source would silently demote a source the
+                # operator named on purpose.
+                raise _package_unavailable(
+                    name, version, sha256, list(searched), f"{index_path}: {unusable.message}"
+                ) from unusable
+            if resolved.sha256 != sha256:
                 raise _package_unavailable(
                     name,
                     version,
                     sha256,
                     list(searched),
-                    f"{index_path} lists {resolved_file} with sha256 {resolved_sha256}, "
+                    f"{index_path} lists {resolved.file} with sha256 {resolved.sha256}, "
                     f"and the context pins {sha256}",
                 )
-            candidate = directory / resolved_file
+            candidate = directory / resolved.file
             if candidate.is_file():
-                return candidate
+                return candidate, resolved.name
     named = directory / f"{name}-{version}.tar.zst"
-    return named if named.is_file() else None
+    return (named, name) if named.is_file() else None
+
+
+def _index_entries(index: object) -> dict[str, dict[str, dict]]:
+    """A local ``index.json``'s packages, in the shape a resolution takes."""
+    packages = index.get("packages") if isinstance(index, dict) else None
+    if not isinstance(packages, dict):
+        return {}
+    return {
+        str(name): versions for name, versions in packages.items() if isinstance(versions, dict)
+    }
 
 
 def _decompress(archive: Path, spool: Path, *, limit: int) -> None:

@@ -119,9 +119,18 @@ registry:
 entry may be a directory instead of a URL. That is the offline case: an operator
 who synchronises a mirror out of band points the workbench at the directory and
 builds with no network at all — a local mirror is verified in place, exactly as a
-fetched copy is. `untrusted: true` reads a registry without checking anything,
-which is only ever right for a registry you run yourself and would rather see
-loudly unverified than not at all; every read says so in the build output.
+fetched copy is.
+
+`untrusted: true` reads a registry without checking anything: no signature, no
+freshness, no key set. It is only ever right for a registry you run yourself and
+would rather see loudly unverified than not at all, and it says so in the build
+log at every read — once per index and once per package. A trust anchor sitting
+next to `untrusted: true` is **ignored**, and the warning says that too: the
+setting is the project's statement, and a file does not overrule it.
+
+Registries are only read when they are needed. A build whose packages are already
+in the operator's own directories asks nothing, needs no anchor, and cannot be
+stopped by a missing one.
 
 ### Trust anchors
 
@@ -130,11 +139,15 @@ configuration, never something downloaded: a client that fetched its anchor woul
 have reduced every signature below it to "the host said so". One file per base
 domain, in `<project>/secrets/trust-anchor/<base-domain>.json`.
 
-For MCUHome's own registry the workbench ships the anchor and writes it there the
-first time, so a new project needs no setup. An anchor file that already exists is
-never rewritten — if you edited yours, you meant to. For any other registry the
-file is yours to create, and a build against a registry without one is refused
-with the path to write.
+The anchors are written when a project is created — `mcuhome project init` puts
+the one this workbench ships for MCUHome's own registry into place — and at no
+other moment. A build that finds the file missing refuses and says which file to
+create; it does **not** install one, for MCUHome's registry as little as for
+anybody else's, because a tool that acquired its own trust root while about to
+download something has verified nothing. If yours went missing, run
+`mcuhome project init . --force` over the project again. An anchor file that
+already exists is never rewritten — if you edited yours, you meant to. For any
+other registry the file is yours to create.
 
 ### Which SDK a build uses
 
@@ -148,6 +161,9 @@ that one.
 Packages are looked for in the operator's own directories first (`sdk_sources`)
 and only then on the registry, and their bytes are checked against the pinned
 hash on every path. A machine that already has the package never opens a socket.
+A package published per architecture is named once — the index says which
+concrete package that name stands for on this host, and the mapping is checked
+against the members it points at before anything is fetched.
 
 ## Security
 

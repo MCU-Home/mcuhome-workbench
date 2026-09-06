@@ -60,7 +60,7 @@ from mcuhome.model.model import DeviceModel
 from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench import __version__
-from mcuhome.workbench.packageregistry import PackageRegistry
+from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_pins import resolve_sdk, sdk_constraint
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
@@ -339,7 +339,7 @@ def create_build_context(
     signing_pub: str,
     created: datetime | None = None,
     constraint: str | None = None,
-    registry: PackageRegistry | None = None,
+    registry: RegistrySource | None = None,
 ) -> ContextRequest:
     """Resolve the SDK pin and write a fresh base context at *out_dir*.
 

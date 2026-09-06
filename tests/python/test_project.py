@@ -250,8 +250,22 @@ def test_init_creates_the_durable_layout(tmp_path: Path) -> None:
     assert (target / "secrets").is_dir()
     assert mode_of(target / "secrets") == 0o700
     assert (target / ".gitignore").read_text(encoding="utf-8") == "secrets/\nbuild/\n"
+    # The trust anchors of the package registries this workbench ships one
+    # for. Written here and only here: a build that found one missing
+    # refuses rather than installing a trust root of its own, so this is
+    # the moment a project decides what it verifies downloads against.
+    anchor = target / "secrets" / "trust-anchor" / "packages.mcuhome.org.json"
+    assert anchor.is_file()
+    assert mode_of(anchor) == 0o600
     names = [path.name for path in result.created]
-    assert names == [MARKER_FILE, "mcuhome.yaml", "devices", "secrets", ".gitignore"]
+    assert names == [
+        MARKER_FILE,
+        "mcuhome.yaml",
+        "devices",
+        "secrets",
+        anchor.name,
+        ".gitignore",
+    ]
 
 
 def test_init_refuses_a_non_empty_directory_listing_what_is_there(tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ from mcuhome.packagetool.documents import dump, write_signed
 from mcuhome.packagetool.keys import SigningKey, generate, key_id, public_b64
 from mcuhome.packagetool.source import (
     INDEX_FILE,
+    KEYS_FILE,
     MIRRORS_FILE,
     PublicKey,
     add_meta_package,
@@ -48,14 +49,16 @@ from mcuhome.workbench.packageregistry import (
     RegistrySettings,
     TrustAnchorMissing,
     anchor_file,
-    ensure_trust_anchor,
     host_platform,
+    install_trust_anchors,
     merge_registries,
     parse_registries,
+    registry_factory,
     registry_for,
     resolve_entry,
+    trust_anchor_for,
 )
-from mcuhome.workbench.project import MARKER_FILE
+from mcuhome.workbench.project import init_project
 from mcuhome.workbench.resolve_pins import (
     DEFAULT_SDK_CONSTRAINT,
     SDK_ANY,
@@ -237,6 +240,11 @@ def build_source(
 @pytest.fixture
 def source(tmp_path: Path, keys: dict[str, SigningKey]) -> Path:
     return build_source(tmp_path / "served" / SOURCE, keys)
+
+
+def _write_anchor(path: Path, keys: dict[str, SigningKey]) -> Path:
+    path.write_bytes(dump(anchor_document(keys, ("root-a", "root-b", "root-c"))))
+    return path
 
 
 @pytest.fixture
@@ -486,51 +494,73 @@ def test_the_host_platform_is_the_name_packages_are_published_under() -> None:
 
 
 def project(tmp_path: Path) -> Path:
-    root = tmp_path / "project"
+    """A project created the way a user creates one."""
+    return init_project(tmp_path / "project").project.root
+
+
+def bare(tmp_path: Path) -> Path:
+    """A directory that is not a project: no init has run over it."""
+    root = tmp_path / "bare"
     root.mkdir(parents=True, exist_ok=True)
-    (root / MARKER_FILE).write_text("", encoding="utf-8")
     return root
 
 
-def test_the_official_anchor_is_created_from_the_one_that_ships(tmp_path: Path) -> None:
-    root = project(tmp_path)
-    path = ensure_trust_anchor(root, packageregistry.OFFICIAL_BASE_DOMAIN)
-    assert path == anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN)
+def test_creating_a_project_writes_the_anchors_that_ship(tmp_path: Path) -> None:
+    """The one moment a trust root is installed: when the project is made."""
+    result = init_project(tmp_path / "project")
+    path = anchor_file(result.project.root, packageregistry.OFFICIAL_BASE_DOMAIN)
+    assert path in result.created
     assert (
         path.read_bytes()
         == (
             packageregistry.BUNDLED_ANCHOR_DIR / f"{packageregistry.OFFICIAL_BASE_DOMAIN}.json"
         ).read_bytes()
     )
+    assert trust_anchor_for(result.project.root, packageregistry.OFFICIAL_BASE_DOMAIN) == path
 
 
 def test_an_anchor_that_is_there_is_never_touched(tmp_path: Path) -> None:
     """A person who edited theirs meant to; restoring our copy would overrule them."""
-    root = project(tmp_path)
+    root = bare(tmp_path)
     path = anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN)
     path.parent.mkdir(parents=True)
     edited = b'{"keys": [], "threshold": 1, "note": "mine"}\n'
     path.write_bytes(edited)
 
-    assert ensure_trust_anchor(root, packageregistry.OFFICIAL_BASE_DOMAIN) == path
+    assert install_trust_anchors(root) == ()
+    assert trust_anchor_for(root, packageregistry.OFFICIAL_BASE_DOMAIN) == path
     assert path.read_bytes() == edited
+
+
+def test_a_missing_official_anchor_is_refused_and_never_written(tmp_path: Path) -> None:
+    """The rule changed here on purpose: a build does not install trust.
+
+    A project whose anchor is gone is told to run init again. Writing the
+    shipped copy at this moment would be the tool deciding what to trust,
+    while about to download something.
+    """
+    root = bare(tmp_path)
+    with pytest.raises(TrustAnchorMissing) as refusal:
+        trust_anchor_for(root, packageregistry.OFFICIAL_BASE_DOMAIN)
+    assert "mcuhome project init" in (refusal.value.hint or "")
+    assert not anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN).exists()
 
 
 def test_a_foreign_registry_without_an_anchor_is_refused(tmp_path: Path) -> None:
     root = project(tmp_path)
     with pytest.raises(TrustAnchorMissing) as refusal:
-        ensure_trust_anchor(root, DOMAIN)
+        trust_anchor_for(root, DOMAIN)
     assert str(anchor_file(root, DOMAIN)) in (refusal.value.hint or "")
     assert not anchor_file(root, DOMAIN).exists()
 
 
-def test_a_foreign_registry_marked_untrusted_needs_no_anchor(tmp_path: Path) -> None:
-    assert ensure_trust_anchor(project(tmp_path), DOMAIN, untrusted=True) is None
+def test_a_registry_marked_untrusted_needs_no_anchor(tmp_path: Path) -> None:
+    assert trust_anchor_for(project(tmp_path), DOMAIN, untrusted=True) is None
 
 
 def test_a_domain_that_is_a_path_is_not_a_domain(tmp_path: Path) -> None:
     with pytest.raises(PackageRegistryError, match="is not a registry domain"):
-        anchor_file(project(tmp_path), "../../etc/shadow")
+        anchor_file(bare(tmp_path), "../../etc/shadow")
 
 
 def test_an_untrusted_source_is_read_and_says_so_loudly(
@@ -599,10 +629,8 @@ def test_a_registry_without_an_anchor_and_without_untrusted_is_refused(tmp_path:
         PackageRegistry(DOMAIN, anchor=None, into=tmp_path / "fetched")
 
 
-def test_registry_for_ties_the_project_and_its_settings_together(
-    tmp_path: Path, source: Path
-) -> None:
-    """The official domain, a fresh project: the shipped anchor lands and is used."""
+def test_registry_for_ties_the_project_and_its_settings_together(tmp_path: Path) -> None:
+    """The official domain in a project that was created properly."""
     root = project(tmp_path)
     client = registry_for(
         packageregistry.OFFICIAL_BASE_DOMAIN,
@@ -613,7 +641,83 @@ def test_registry_for_ties_the_project_and_its_settings_together(
     )
     assert client.base_domain == packageregistry.OFFICIAL_BASE_DOMAIN
     assert not client.untrusted
-    assert anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN).is_file()
+
+
+def test_a_promised_registry_costs_nothing_until_something_asks(tmp_path: Path) -> None:
+    """A build that finds its packages locally must not need an anchor.
+
+    Refusing at construction would turn "you have not decided who to
+    trust" into "you cannot build offline", which is the opposite of what
+    an anchor is for.
+    """
+    root = bare(tmp_path)
+    promised = registry_factory(
+        packageregistry.OFFICIAL_BASE_DOMAIN,
+        project_root=root,
+        into=tmp_path / "fetched",
+        opener=Offline(),
+    )
+    with pytest.raises(TrustAnchorMissing):
+        packageregistry.opened(promised)
+
+
+def test_a_promised_registry_is_built_once(tmp_path: Path) -> None:
+    promised = registry_factory(
+        packageregistry.OFFICIAL_BASE_DOMAIN,
+        project_root=project(tmp_path),
+        into=tmp_path / "fetched",
+        opener=Offline(),
+    )
+    assert packageregistry.opened(promised) is packageregistry.opened(promised)
+
+
+def test_an_anchor_beside_untrusted_is_ignored_and_said_so(
+    tmp_path: Path, source: Path, keys: dict[str, SigningKey]
+) -> None:
+    """`untrusted` is the project's word, and a file does not overrule it."""
+    root = project(tmp_path)
+    path = anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN)
+    path.write_bytes(dump(anchor_document(keys, ("root-a", "root-b", "root-c"))))
+
+    warnings: list[str] = []
+    served = Served().publish(MIRROR, source)
+    client = registry_for(
+        packageregistry.OFFICIAL_BASE_DOMAIN,
+        project_root=root,
+        settings=(
+            RegistrySettings(
+                packageregistry.OFFICIAL_BASE_DOMAIN,
+                untrusted=True,
+                mirrors={SOURCE: (str(source),)},
+            ),
+        ),
+        into=tmp_path / "fetched",
+        opener=served,
+        on_warning=warnings.append,
+        now=NOW,
+    )
+    assert client.untrusted
+    assert not client.index(SOURCE).verified
+    assert any("deliberately ignored" in warning for warning in warnings)
+
+
+def test_an_untrusted_registry_says_so_at_every_read(tmp_path: Path, source: Path) -> None:
+    """Once at the top of a build would be a footnote; this is not one."""
+    warnings: list[str] = []
+    client = PackageRegistry(
+        DOMAIN,
+        anchor=None,
+        into=tmp_path / "fetched",
+        untrusted=True,
+        mirrors={SOURCE: (str(source),)},
+        opener=Offline(),
+        on_warning=warnings.append,
+        now=NOW,
+    )
+    index = client.index(SOURCE)
+    client.index(SOURCE)
+    client.fetch_package(index, index.resolve(SDK, VERSION), into=tmp_path / "packages")
+    assert len(warnings) == 3
 
 
 # --------------------------------------------------------------------------
@@ -796,6 +900,98 @@ def test_a_package_missing_locally_comes_off_the_registry(
     assert not (tmp_path / "tree.download").exists()
 
 
+def test_a_family_is_acquired_through_its_meta_entry(tmp_path: Path, keys) -> None:
+    """The whole meta path end to end: family name in, this host's bytes out.
+
+    The registry is asked for `mcuhome-build-tools`, which is not bytes
+    at all; what comes back and is unpacked is the concrete member for
+    this platform, hash-checked against the pin the meta entry's members
+    state.
+    """
+    amd64 = build_sdk_archive({"bin/tool": (b"#!/bin/sh\n", True)})
+    arm64 = build_sdk_archive({"bin/tool": (b"#!/bin/sh\n# arm\n", True)})
+    tools = build_source(
+        tmp_path / "served" / "build-tools",
+        keys,
+        packages=((AMD64, VERSION, amd64), (ARM64, VERSION, arm64)),
+        meta=(TOOLS, VERSION, {"arch": {"linux-amd64": AMD64, "linux-arm64": ARM64}}),
+    )
+    client = PackageRegistry(
+        DOMAIN,
+        anchor=packageregistry.load_trust_anchor(
+            _write_anchor(tmp_path / "tools-anchor.json", keys)
+        ),
+        into=tmp_path / "fetched",
+        mirrors={"build-tools": (str(tools),)},
+        opener=Offline(),
+        now=NOW,
+    )
+    pinned = orchestrator.sha256_file(tools / f"{AMD64}-{VERSION}.tar.zst")
+    empty = tmp_path / "operator"
+    empty.mkdir()
+    package = orchestrator.acquire_package(
+        kind="build-tools",
+        name=TOOLS,
+        version=VERSION,
+        sha256=pinned,
+        sources=(empty,),
+        into=tmp_path / "tree",
+        registry=client,
+        platform="linux-amd64",
+    )
+    assert package.name == AMD64
+    assert (package.tree / "bin" / "tool").read_bytes() == b"#!/bin/sh\n"
+
+
+def test_a_family_in_a_local_index_resolves_without_the_registry(tmp_path: Path, keys) -> None:
+    """An operator directory that carries the index can answer for a family."""
+    amd64 = build_sdk_archive({"bin/tool": (b"local\n", False)})
+    arm64 = build_sdk_archive({"bin/tool": (b"local arm\n", False)})
+    directory = build_source(
+        tmp_path / "operator",
+        keys,
+        packages=((AMD64, VERSION, amd64), (ARM64, VERSION, arm64)),
+        meta=(TOOLS, VERSION, {"arch": {"linux-amd64": AMD64, "linux-arm64": ARM64}}),
+    )
+    package = orchestrator.acquire_package(
+        kind="build-tools",
+        name=TOOLS,
+        version=VERSION,
+        sha256=orchestrator.sha256_file(directory / f"{AMD64}-{VERSION}.tar.zst"),
+        sources=(directory,),
+        into=tmp_path / "tree",
+        platform="linux-amd64",
+    )
+    assert package.name == AMD64
+    assert (package.tree / "bin" / "tool").read_bytes() == b"local\n"
+
+
+def test_a_directory_without_an_index_does_not_guess_a_family_filename(
+    tmp_path: Path,
+) -> None:
+    """A family is not bytes, so no filename convention can name one.
+
+    The directory holds this host's concrete archive and no index. What
+    must not happen is a lookup for `mcuhome-build-tools-<version>.tar.zst`,
+    which no publisher ever wrote; what happens instead is an honest
+    "not here", naming the family.
+    """
+    directory = tmp_path / "operator"
+    directory.mkdir()
+    (directory / f"{AMD64}-{VERSION}.tar.zst").write_bytes(SDK_ARCHIVE)
+    with pytest.raises(BuildError) as refusal:
+        orchestrator.acquire_package(
+            kind="build-tools",
+            name=TOOLS,
+            version=VERSION,
+            sha256=orchestrator.sha256_file(directory / f"{AMD64}-{VERSION}.tar.zst"),
+            sources=(directory,),
+            into=tmp_path / "tree",
+            platform="linux-amd64",
+        )
+    assert TOOLS in refusal.value.message
+
+
 def test_a_registry_entry_that_is_not_the_pinned_bytes_is_refused(
     tmp_path: Path, source: Path, anchor: Path
 ) -> None:
@@ -878,3 +1074,105 @@ def test_write_signed_is_what_the_fixtures_use(source: Path, keys) -> None:
     envelope = json.loads((source / (INDEX_FILE + ".sig")).read_text())
     assert envelope["signatures"][0]["keyid"] == key_id(keys["publisher"].public)
     write_signed(source / INDEX_FILE, read_document(source / INDEX_FILE), [keys["publisher"]])
+
+
+# --------------------------------------------------------------------------
+# The production path: a `registry:` block has to actually do something
+# --------------------------------------------------------------------------
+
+
+def test_a_configured_local_mirror_reaches_the_composition(tmp_path: Path, keys) -> None:
+    """From `mcuhome.yaml` to the bytes, without the parts in between.
+
+    A `registry:` block that parsed and then changed nothing would be
+    configuration theatre. This drives the composition's own helper with
+    what the configuration layer produces, and asserts the package the
+    build would use came off the configured local mirror — offline, with
+    an opener that fails the test if it is touched.
+    """
+    from mcuhome.workbench import buildmethods
+
+    # Issued now rather than at the suite's fixed moment: this path goes
+    # through the composition, which verifies against the real clock
+    # exactly as a build does.
+    source = build_source(
+        tmp_path / "served" / SOURCE, keys, issued=datetime.now(UTC) - timedelta(minutes=5)
+    )
+    root = project(tmp_path)
+    path = anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN)
+    served_keys = json.loads((source / KEYS_FILE).read_text())
+    path.write_bytes(
+        dump(
+            {
+                "version": 1,
+                "threshold": served_keys["roots"]["threshold"],
+                "keys": [
+                    {"keyid": entry["keyid"], "public": entry["public"]}
+                    for entry in served_keys["roots"]["keys"]
+                ],
+            }
+        )
+    )
+
+    file = root / "mcuhome.yaml"
+    file.write_text("", encoding="utf-8")
+    settings = parse_registries(
+        {
+            packageregistry.OFFICIAL_BASE_DOMAIN: {
+                "mirrors": {SOURCE: [str(source)]},
+            }
+        },
+        file=file,
+        origin="project",
+        env={},
+    )
+
+    lines: list[str] = []
+    promised = buildmethods._package_registry(  # noqa: SLF001 - the seam under test
+        _model_with_default_sdk(),
+        project_root=root,
+        registries=settings,
+        work_root=tmp_path / "wr",
+        on_line=lines.append,
+    )
+    assert promised is not None
+
+    empty = tmp_path / "operator"
+    empty.mkdir()
+    package = orchestrator.acquire_package(
+        name=SDK,
+        version=VERSION,
+        sha256=orchestrator.sha256_file(source / f"{SDK}-{VERSION}.tar.zst"),
+        sources=(empty,),
+        into=tmp_path / "tree",
+        registry=promised,
+    )
+    assert (package.tree / "mcuhome-sdk.json").is_file()
+    # Verified, so nothing was warned about.
+    assert lines == []
+
+
+def test_a_build_without_a_project_has_no_registry(tmp_path: Path) -> None:
+    """An embedder driving a bare model builds from its own directories."""
+    from mcuhome.workbench import buildmethods
+
+    assert (
+        buildmethods._package_registry(  # noqa: SLF001 - the seam under test
+            _model_with_default_sdk(),
+            project_root=None,
+            registries=(),
+            work_root=tmp_path / "wr",
+            on_line=None,
+        )
+        is None
+    )
+
+
+def _model_with_default_sdk():
+    """The smallest thing `_package_registry` reads: `model.sources.sdk`."""
+    from mcuhome.model.model import SourcesModel
+
+    class _Model:
+        sources = SourcesModel()
+
+    return _Model()

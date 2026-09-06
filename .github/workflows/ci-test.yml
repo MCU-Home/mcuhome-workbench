@@ -5,8 +5,8 @@
 # (today just pytest), plus a pre-check that every wrapper has a job
 # here.
 #
-# test-pytest needs mcuhome-model and mcuhome-compiler from
-# mcu-home/mcuhome-sdk (ADR 0024 split), a live mcuhome-buildserver peer
+# test-pytest needs mcuhome-model and mcuhome-compiler, which are
+# published from mcu-home/mcuhome-sdk, a live mcuhome-buildserver peer
 # for the `remote` build method's own suite (test_sessionclient.py), and
 # mcuhome-packagetool for the package registry's reference verifier —
 # four public siblings, plain checkouts, no deploy keys. Once the
