@@ -1,23 +1,24 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Detached signing: ``imgtool`` over a finished image (ADR 0015 §8).
+"""Detached signing: ``imgtool`` over a finished image.
 
 MCUboot signing is a post-build step over the linked binary — the image
 does not know it is going to be signed, and nothing about it changes
 except a header that was already reserved and a trailer that is appended.
-That is what makes ADR 0015 decision 8 possible at all: *the key lives
-where the user's controlling instance runs, never on a build server*, so
-a remote builder returns an unsigned image and the signature happens
-somewhere else entirely.
+That is what makes it possible for the key to live where the user's
+controlling instance runs, never on a build server: a remote builder
+returns an unsigned image and the signature happens somewhere else
+entirely.
 
-**One signing path, whatever built the image (E56).** Zephyr's
+**One signing path, whatever built the image.** Zephyr's
 ``cmake/mcuboot.cmake`` *can* sign inline, deriving the arguments from
 Kconfig and devicetree — but no MCUHome build uses that any more: every
 build produces an **unsigned** image and states those same arguments in
-its §7.2.1 ``build-report.json``. This module is the one place they are
+its ``build-report.json`` (mcuhome-sdk ``docs/spec/build-actions.md``
+§2.2). This module is the one place they are
 turned back into a command — run right after the build by ``mcuhome device build``, or later
 by ``mcuhome device sign-firmware`` on another machine — so the private key lives in no
-build at all (ADR 0015 decision 8). The argument order below is Zephyr's,
+build at all. The argument order below is Zephyr's,
 verbatim, so a signature made here is comparable line by line with the
 inline one Zephyr would have produced.
 
@@ -39,7 +40,7 @@ interpreter first, then ``PATH``). Nothing here runs the west
 workspace's checkout script any more: that script's requirements
 (click, cryptography, …) belong to the Zephyr build environment, not to
 whatever venv the workbench happens to run in — an inherited-environment
-accident, not a contract (PO 2026-08-15). Signing does not run in the
+accident, not a contract. Signing does not run in the
 build container either: handing a private key to a container to save a
 dependency is the wrong trade, and this step needs no toolchain.
 """
@@ -78,10 +79,11 @@ __all__ = [
     "sign_report",
 ]
 
-#: The §7.2.1 build report a build container delivers next to its unsigned
-#: firmware (the ``report`` artifact, ADR 0018 / build-container-contract
-#: §7.2). It exists for one consumer — the client that signs detached —
-#: and carries only what that client needs. The name mirrors
+#: The build report a build container delivers next to its unsigned
+#: firmware (the ``report`` artifact; mcuhome-sdk
+#: ``docs/spec/build-actions.md`` §2.1/§2.2). It exists for one consumer —
+#: the client that signs detached — and carries only what that client
+#: needs. The name mirrors
 #: ``mcuhome.compiler.abi.REPORT_ARTIFACT``,
 #: restated here because this package must not import the compiler (it is
 #: what the compiler imports).
@@ -89,12 +91,12 @@ BUILD_REPORT_FILE = "build-report.json"
 
 #: The report format version this signer implements. "A consumer that does
 #: not implement the version it finds MUST NOT sign from the document"
-#: (§7.2.1), so a mismatch is a refusal that names both numbers.
+#: (§2.2), so a mismatch is a refusal that names both numbers.
 REPORT_VERSION = 1
 
 #: ``<unsigned firmware in out> -> <signed name beside it>`` for the two
-#: encodings a build container delivers with role ``firmware`` (§7.2:
-#: ``firmware.hex`` to flash, ``firmware.bin`` to sign). The §7.2.1
+#: encodings a build container delivers with role ``firmware`` (§2.1:
+#: ``firmware.hex`` to flash, ``firmware.bin`` to sign). The §2.2
 #: signing parameters "apply to **every** artifact declared with role
 #: ``firmware``", so both are signed with the one set of arguments.
 REPORT_FIRMWARE = (("firmware.bin", "firmware.signed.bin"), ("firmware.hex", "firmware.signed.hex"))
@@ -223,17 +225,17 @@ def _resolve_report(target: Path) -> Path:
 
 
 def read_build_report(path: Path) -> dict:
-    """Load a §7.2.1 ``build-report.json``, or refuse in plain language.
+    """Load a §2.2 ``build-report.json``, or refuse in plain language.
 
     The report is what a build environment delivers beside the unsigned
-    firmware (ADR 0018): it carries the ``report`` format version and the
+    firmware: it carries the ``report`` format version and the
     mandatory ``signing`` block, and nothing a signer does not need.
     This checks exactly what has to hold before a signature can
     be planned from it — that it parses, that the version is one this
     signer implements, that a ``signing.arguments`` object is there to turn
     into an ``imgtool sign`` command, and that ``signing.signature_type`` is
     the one algorithm MCUHome signs with. That last field is mandatory in
-    §7.2.1 for a reason a signer feels directly: it lets the client refuse a
+    §2.2 for a reason a signer feels directly: it lets the client refuse a
     key whose algorithm the bootloader would not verify, here, instead of
     producing an image the device silently will not boot.
     """
@@ -266,8 +268,8 @@ def read_build_report(path: Path) -> dict:
             f"The build report {path} is report format version {found!r}, and this "
             f"signer implements version {REPORT_VERSION}.",
             hint=(
-                "the report format is a versioned contract (§7.2.1): a mismatch is a "
-                "refusal that names both numbers. Sign with a matching mcuhome version."
+                "the report format is a versioned contract: a mismatch is a refusal "
+                "that names both numbers. Sign with a matching mcuhome version."
             ),
         )
     signing_block = data.get("signing")
@@ -276,7 +278,7 @@ def read_build_report(path: Path) -> dict:
             f"The build report {path} carries no signing parameters.",
             hint=(
                 "a build report states the four imgtool arguments its image is "
-                "signed with (§7.2.1) — a report without them is truncated. Build again."
+                "signed with — a report without them is truncated. Build again."
             ),
         )
     signature_type = signing_block.get("signature_type")
@@ -285,9 +287,9 @@ def read_build_report(path: Path) -> dict:
             f"The build report {path} signs with signature_type {signature_type!r}, and "
             f"MCUHome images are {SIGNATURE_TYPE}.",
             hint=(
-                "signature_type is mandatory in a §7.2.1 build report so a client can refuse "
-                "a key whose algorithm the bootloader would not verify, instead of producing "
-                "an image the device cannot boot. Build again with a matching mcuhome."
+                "a build report states its signature type so a client can refuse a key "
+                "whose algorithm the bootloader would not verify, instead of producing an "
+                "image the device cannot boot. Build again with a matching mcuhome."
             ),
         )
     return data
@@ -299,7 +301,7 @@ def plan_report_signing(
     key: Path,
     env: dict[str, str],
 ) -> SignPlan:
-    """Read a §7.2.1 build report and decide how to sign the firmware beside it.
+    """Read a §2.2 build report and decide how to sign the firmware beside it.
 
     *target* is the build directory the build delivered into (or the report file
         itself); the unsigned ``firmware.bin``/``firmware.hex`` sit next to the
@@ -358,7 +360,7 @@ def sign_report(
     project: Project | None = None,
     runner: Runner | None = None,
 ) -> SignPlan:
-    """Sign the firmware a build container delivered, from its §7.2.1 report.
+    """Sign the firmware a build container delivered, from its §2.2 report.
 
     The key is resolved exactly as a build resolves it (``--signing-key``, then
     :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s

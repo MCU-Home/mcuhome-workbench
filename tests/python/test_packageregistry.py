@@ -1340,3 +1340,46 @@ def _model_with_default_sdk():
         sources = SourcesModel()
 
     return _Model()
+
+
+def test_a_meta_entry_whose_hash_is_wrong_is_refused_when_it_is_pinned() -> None:
+    """A pin over an unverified meta hash would be an identity over nothing.
+
+    ``pin_entry`` is the only place a meta hash is recomputed on the
+    context-creation path: the family entry is *kept* rather than
+    followed, so its own hash is what a build context ends up naming and
+    what the context ID is computed over. An entry whose hash does not
+    match the members it points at is a damaged or tampered index, and it
+    is refused before it can reach a document.
+    """
+    from mcuhome.workbench.packageregistry import PackageRegistryError, pin_entry
+
+    entries = {
+        "tools_linux-amd64": {"0.1.0": {"file": "a.tar.zst", "sha256": "a" * 64, "size": 1}},
+        "tools": {
+            "0.1.0": {"meta": {"arch": {"linux-amd64": "tools_linux-amd64"}}, "sha256": "f" * 64}
+        },
+    }
+    with pytest.raises(PackageRegistryError) as caught:
+        pin_entry(entries, "tools", "0.1.0")
+    assert "does not describe the packages" in caught.value.message
+
+
+def test_a_meta_entry_whose_hash_is_right_is_pinned_as_the_family() -> None:
+    """The other half of the same rule: a correct entry answers as itself."""
+    import hashlib
+
+    from mcuhome.packagetool.verify import canonical_json
+
+    from mcuhome.workbench.packageregistry import pin_entry
+
+    entries = {
+        "tools_linux-amd64": {"0.1.0": {"file": "a.tar.zst", "sha256": "a" * 64, "size": 1}},
+    }
+    expanded = {"arch": {"linux-amd64": {"name": "tools_linux-amd64", "sha256": "a" * 64}}}
+    digest = hashlib.sha256(canonical_json(expanded)).hexdigest()
+    entries["tools"] = {
+        "0.1.0": {"meta": {"arch": {"linux-amd64": "tools_linux-amd64"}}, "sha256": digest}
+    }
+    found = pin_entry(entries, "tools", "0.1.0")
+    assert (found.name, found.sha256, found.meta, found.file) == ("tools", digest, True, "")

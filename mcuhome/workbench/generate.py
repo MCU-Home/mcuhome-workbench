@@ -4,8 +4,9 @@
 
 A build does not need this. Code generation happens *inside* the build
 environment, out of the device model the build context carries
-(build-container-contract §6.1), which is what keeps the private signing
-key and the toolchain on opposite sides of one boundary.
+(mcuhome-sdk ``docs/spec/build-context-format.md`` §7), which is what
+keeps the private signing key and the toolchain on opposite sides of one
+boundary.
 
 What needs it is the caller who wants the generated tree and nothing
 else: ``mcuhome device build --generate-only``, and any embedder asking
@@ -13,11 +14,10 @@ the same question. So this is a seam and not a build step — one function,
 resolved at call time against a distribution this package deliberately
 does not depend on.
 
-**Why the import is written this way.** ADR 0020 decision 3 forbids
-``mcuhome-workbench`` a dependency on ``mcuhome-compiler`` (a dashboard
-install must not carry a toolchain, ADR 0017 §2), and
-``tests/python/test_packaging_workbench.py`` reads the dependency arrows out
-of the syntax tree — an ``import`` statement here would be
+**Why the import is written this way.** The workbench must not depend on
+``mcuhome-compiler`` — a dashboard install must not carry a toolchain —
+and ``tests/python/test_packaging_workbench.py`` reads the dependency
+arrows out of the syntax tree — an ``import`` statement here would be
 indistinguishable from the hard edge that is forbidden. So the edge is
 resolved through :func:`importlib.import_module` and refuses in words
 when the distribution is absent, the same shape

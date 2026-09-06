@@ -85,12 +85,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.context import CONTEXT_FILE
+from mcuhome.model.context import BUILD_CONTEXT_FILE, CONTEXT_FILE, format_generator_chain
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
-from mcuhome.workbench import buildenv as container
 from mcuhome.workbench import containerbuild, subprocessbuild
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
@@ -107,10 +106,11 @@ from mcuhome.workbench.contextdir import (
     create_build_context,
     lock_context,
     read_context_request,
+    read_generator_chain,
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.orchestrator import EnvironmentUnavailable
-from mcuhome.workbench.resolve_env import resolve_environment
+from mcuhome.workbench.resolve_pins import package_reference
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     # Imported for the annotations alone. The registry client is reached
@@ -662,11 +662,14 @@ def compose_local_build(
     *context_dir* is the caller that already holds a **base** context and
     wants this one built — an embedder that assembled one elsewhere, a
     build server that received one over a socket. It is used as it is:
-    nothing is resolved, nothing is written into it but the lock, and no
-    context step is announced, because this composition did not create
-    one. **Its own pin then decides the environment**, not this model's,
-    which is what makes a received context a complete statement rather
-    than half of one.
+    nothing is written into it but the lock, and no context step is
+    announced, because this composition did not create one. The image is
+    still resolved from the model, because a context pins the
+    environment's *packages* and not a container: finding the image whose
+    labels state exactly those packages is what the container profile
+    does at switchover
+    (:func:`~mcuhome.workbench.resolve_image.image_for_packages`), and
+    until then this profile resolves the image the way it always has.
 
     *build_mode* is the other execution axis and is dispatched here
     rather than by the caller, so that a name a configuration produced
@@ -681,9 +684,11 @@ def compose_local_build(
             sdk_sources=sdk_sources,
             work_root=work_root,
             env=env,
+            signing_pub=signing_pub,
             project_root=project_root,
             registries=registries,
             environment=environment,
+            created=created,
             jobs=jobs,
             ccache_dir=ccache_dir,
             context_dir=context_dir,
@@ -705,33 +710,22 @@ def compose_local_build(
 
     if on_step is not None:
         on_step("environment")
-    if supplied:
-        # Nothing is resolved: the context already decided, and its pin is
-        # part of its identity. What is left is getting those bytes here,
-        # which is the same call the other branch ends with — through the
-        # same seam, so a caller that replaced docker replaced all of it.
-        pinned = read_context_request(context_dir / CONTEXT_FILE).build_environment
-        resolved = None
-        _, fetched = containerbuild.fetch_environment(
-            pinned, env=dict(env), docker_seam=docker, on_line=on_line
-        )
-    else:
-        resolved, fetched = containerbuild.prepare_environment(
-            model.sources.build_environment,
-            constraint=model.toolchain.zephyr_constraint,
-            env=dict(env),
-            override=image,
-            registry=registry,
-            docker_seam=docker,
-            on_line=on_line,
-        )
-        pinned = resolved.pin
+    resolved, fetched = containerbuild.prepare_environment(
+        model.sources.build_environment,
+        constraint=model.toolchain.zephyr_constraint,
+        env=dict(env),
+        override=image,
+        registry=registry,
+        docker_seam=docker,
+        on_line=on_line,
+    )
+    pinned = resolved.pin
     if on_step is not None:
         on_step(
             "environment",
             build_environment=pinned.reference,
-            zephyr=resolved.zephyr if resolved is not None else "",
-            found_under=resolved.found_under if resolved is not None else "",
+            zephyr=resolved.zephyr,
+            found_under=resolved.found_under,
             fetched=fetched,
         )
 
@@ -741,8 +735,8 @@ def compose_local_build(
         create_build_context(
             model,
             out_dir=context_dir,
+            work_root=work_root,
             sdk_sources=sources,
-            build_environment=pinned,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
@@ -757,6 +751,7 @@ def compose_local_build(
         on_step("compile", image=pinned.reference, jobs=jobs)
     return containerbuild.run_locked_build(
         context_dir,
+        image=pinned.reference,
         sdk_sources=sources,
         work_root=work_root / "backend",
         env=dict(env),
@@ -775,9 +770,11 @@ def compose_subprocess_build(
     sdk_sources: Sequence[Path],
     work_root: Path,
     env: dict[str, str],
+    signing_pub: str = "",
     environment: Any = None,
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
+    created: datetime | None = None,
     jobs: int = 1,
     ccache_dir: Path | None = None,
     context_dir: Path | None = None,
@@ -796,42 +793,34 @@ def compose_subprocess_build(
     **compile** hands the two to
     :func:`mcuhome.workbench.subprocessbuild.run_locked_build`.
 
-    Two things this composition does **not** do yet, and it says so
-    rather than guessing at either: resolve which packages a device's
-    build environment is made of, and create a build context that states
-    them. Both are properties of the build context format — a context
-    names its environment, and today it names a container image — so a
-    caller that has neither is told to build in a container instead of
-    being handed a build against an environment nobody chose.
+    **The context comes first here, and that is the profile's own
+    order.** A container build resolves an image and then writes a
+    context; this one has nothing to resolve until the context exists,
+    because the context is what pins the packages the environment is
+    provisioned from. So the steps are announced context, environment,
+    compile — the same three names, in the order the decisions actually
+    happen in.
 
-    One refusal happens before any of the three steps: a context that
-    carries patches against a build environment the developer maintains
-    themselves
-    (:func:`~mcuhome.workbench.subprocessbuild.refuse_patched_context`).
-    It is placed ahead of the environment step rather than inside the
-    backend because locking the context writes into a directory the user
-    keeps, and a build that is going to be refused must not have changed
-    anything first.
+    *environment* is the development-mode entrance: a caller that already
+    holds two trees hands them over and nothing is provisioned. Left
+    ``None``, the store answers — the pinned packages are acquired,
+    verified, unpacked and frozen
+    (:func:`~mcuhome.workbench.subprocessbuild.environment_from_pins`),
+    which is a no-op for anything already there.
+
+    Two refusals happen before the context is locked, because locking
+    writes into a directory the user keeps and a build that is going to
+    be refused must not have changed anything first: a context that
+    carries patches against developer-maintained trees
+    (:func:`~mcuhome.workbench.subprocessbuild.refuse_patched_context`),
+    and an environment that does not agree with what it is being asked to
+    build (:func:`~mcuhome.workbench.subprocessbuild.check_environment` —
+    the specification generation it implements, the build contexts it
+    accepts, the packages it consists of and the Zephyr release it builds
+    against).
     """
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
-    if environment is None:
-        raise EnvironmentUnavailable(
-            f"MCUHome cannot build {model.device.name} outside a container yet: nothing "
-            "states which build environment packages to use.",
-            hint="build in a container: set build.mode to container",
-        )
-    if context_dir is None:
-        raise EnvironmentUnavailable(
-            "MCUHome cannot create a build context for a build outside a container yet.",
-            hint="build in a container: set build.mode to container, or build a context "
-            "you already have",
-        )
-    context_dir = Path(context_dir)
-    # Before the registry is consulted and before the context is locked:
-    # locking writes into a directory the user keeps, and a build that is
-    # going to be refused must not have changed anything first.
-    subprocessbuild.refuse_patched_context(context_dir, environment)
     packages = _package_registry(
         model,
         project_root=project_root,
@@ -839,8 +828,50 @@ def compose_subprocess_build(
         work_root=work_root,
         on_line=on_line,
     )
+    supplied = context_dir is not None
+    context_dir = Path(context_dir) if supplied else work_root / "context"
+    if not supplied:
+        if on_step is not None:
+            on_step("context")
+        create_build_context(
+            model,
+            out_dir=context_dir,
+            work_root=work_root,
+            sdk_sources=sources,
+            signing_pub=signing_pub,
+            created=created or datetime.now(UTC),
+            registry=packages,
+        )
+        if on_step is not None:
+            on_step("context", **context_facts(context_dir))
+
+    if environment is not None:
+        # Development mode's refusal, before this composition has read or
+        # written anything else: a context that carries patches cannot be
+        # built against trees the developer maintains, and the person has
+        # to hear that before a lock lands in a directory they keep.
+        subprocessbuild.refuse_patched_context(context_dir, environment)
+    pin = read_context_request(context_dir / CONTEXT_FILE).build_environment
     if on_step is not None:
         on_step("environment")
+    if environment is None:
+        environment = subprocessbuild.environment_from_pins(
+            pin,
+            env=dict(env),
+            workspace_source=package_reference(model.sources.build_workspace).source,
+            tools_source=package_reference(model.sources.build_tools).source,
+            sources=sources,
+            registry=packages,
+            on_line=on_line,
+        )
+    subprocessbuild.refuse_patched_context(context_dir, environment)
+    subprocessbuild.check_environment(
+        environment,
+        pin=pin,
+        generator=format_generator_chain(read_generator_chain(context_dir / BUILD_CONTEXT_FILE)),
+        zephyr_constraint=model.toolchain.zephyr_constraint,
+    )
+    if on_step is not None:
         on_step("environment", build_environment=environment.described(), fetched=False)
     lock_context(context_dir)
     if on_step is not None:
@@ -980,37 +1011,22 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     by the same function, so the two methods differ in where the context
     goes and in nothing about what it is.
 
-    **The build environment is resolved here too, and by the same code**
-    — which is the point of pinning on the client. It needs a registry
-    and nothing else: no container runtime, no image on this machine, and
-    no round trip to the build server. A laptop with no docker at all can
-    therefore state which container its firmware must be compiled in, and
-    the server's part shrinks to running it.
+    **Every pin is resolved here, and by the same code** — which is the
+    point of pinning on the client. It needs a package index and nothing
+    else: no container runtime, no image on this machine, and no round
+    trip to the build server. A laptop with no docker at all can
+    therefore state which SDK and which build-environment packages its
+    firmware must be compiled with, and the server's part shrinks to
+    finding an environment that delivers them.
     """
     context_dir = Path(work_root) / "context"
     if request.on_step is not None:
         request.on_step("environment")
-    resolved = resolve_environment(
-        container.environment_reference(
-            dict(request.env),
-            stated=request.model.sources.build_environment,
-            override=request.image,
-        ),
-        constraint=request.model.toolchain.zephyr_constraint,
-    )
-    if request.on_step is not None:
-        request.on_step(
-            "environment",
-            build_environment=resolved.pin.reference,
-            zephyr=resolved.zephyr,
-            found_under=resolved.found_under,
-            fetched=False,
-        )
     create_build_context(
         request.model,
         out_dir=context_dir,
+        work_root=Path(work_root),
         sdk_sources=tuple(Path(source) for source in request.sdk_sources),
-        build_environment=resolved.pin,
         signing_pub=request.signing_pub,
         registry=_package_registry(
             request.model,
@@ -1020,6 +1036,14 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
             on_line=request.on_line,
         ),
     )
+    if request.on_step is not None:
+        request.on_step(
+            "environment",
+            build_environment=context_facts(context_dir)["build_environment"],
+            zephyr="",
+            found_under="",
+            fetched=False,
+        )
     return context_dir
 
 

@@ -90,6 +90,7 @@ __all__ = [
     "PackageRegistry",
     "PackageRegistryError",
     "RegistrySettings",
+    "PinnedEntry",
     "ResolvedEntry",
     "TrustAnchorMissing",
     "VerifiedIndex",
@@ -102,6 +103,7 @@ __all__ = [
     "matching_version",
     "merge_registries",
     "opened",
+    "pin_entry",
     "parse_registries",
     "registry_factory",
     "registry_for",
@@ -631,6 +633,84 @@ def resolve_entry(
     return _concrete(name, version, entry, through_meta=False)
 
 
+@dataclass(frozen=True)
+class PinnedEntry:
+    """One package **as a pin names it** — which may be a family.
+
+    The difference to :class:`ResolvedEntry` is the whole point of it. A
+    resolution answers with bytes this host can run, so it follows a meta
+    entry to the concrete package of the platform. A *pin* is written
+    into a build context and read on other machines, so it keeps the name
+    that was pinned: a family name says "resolve this per platform" and
+    is the normal case, because that is what lets one context build the
+    same firmware on an amd64 host and on an arm64 one.
+
+    :attr:`sha256` is what the index states for that name — a concrete
+    package's archive hash, or a meta entry's hash over the members it
+    points at, which has been recomputed and checked before this value is
+    handed out. Either way the hash pins bytes: a meta hash covers every
+    platform's archive.
+    """
+
+    name: str
+    version: str
+    sha256: str
+    #: ``True`` when the name stands for a set of per-platform packages.
+    meta: bool = False
+    #: The archive this name maps to on a mirror — empty for a meta
+    #: entry, which maps to a package per platform and to no file at all.
+    file: str = ""
+
+
+def pin_entry(
+    entries: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    name: str,
+    version: str,
+    *,
+    platform: str | None = None,
+) -> PinnedEntry:
+    """What a pin for *name* at *version* says — meta entry kept as one.
+
+    Same lookup as :func:`resolve_entry` and the same PEP 440 version
+    equality, stopping one step earlier: a meta entry is **verified** —
+    its hash recomputed from the members it points at — and then answered
+    with, rather than followed. A concrete name is answered with after
+    its architecture suffix has been held against *platform*, because a
+    pin naming a foreign platform's package is a mistake worth catching
+    where it is written rather than where it is fetched.
+    """
+    versions = entries.get(name)
+    key = matching_version(entries, name, version)
+    if key is None:
+        offered = ", ".join(sorted(versions or ())) or "no version at all"
+        raise PackageRegistryError(
+            f"The package index carries no {name} {version}; it carries {offered}.",
+            hint="the version is not published (yet) — pick one the index names",
+        )
+    entry = versions[key]  # type: ignore[index]
+    if "meta" in entry:
+        try:
+            check_meta_entry(entries, name, key, entry)
+        except Refused as broken:
+            raise PackageRegistryError(
+                f"The index entry for {name} {key} does not describe the packages "
+                f"it points at: {broken}.",
+                hint=(
+                    "the index is damaged or was tampered with. Try another mirror, "
+                    "and report it to the registry's operator."
+                ),
+            ) from broken
+        return PinnedEntry(name=name, version=key, sha256=str(entry["sha256"]), meta=True)
+    check_platform(name, platform=platform)
+    concrete = _concrete(name, key, entry, through_meta=False)
+    return PinnedEntry(
+        name=concrete.name,
+        version=concrete.version,
+        sha256=concrete.sha256,
+        file=concrete.file,
+    )
+
+
 def _concrete(
     name: str, version: str, entry: Mapping[str, Any], *, through_meta: bool
 ) -> ResolvedEntry:
@@ -703,8 +783,19 @@ class VerifiedIndex:
         """:func:`resolve_entry` against this index."""
         return resolve_entry(self.entries, name, version, platform=platform)
 
-    def url_for(self, entry: ResolvedEntry) -> str:
-        """Where this package's bytes are, on the mirror this index came from."""
+    def pin(self, name: str, version: str, *, platform: str | None = None) -> PinnedEntry:
+        """:func:`pin_entry` against this index."""
+        return pin_entry(self.entries, name, version, platform=platform)
+
+    def url_for(self, entry: ResolvedEntry | PinnedEntry) -> str:
+        """Where this package's bytes are, on the mirror this index came from.
+
+        Empty for an entry that maps to no single file — a meta entry
+        names a package per platform, and a location that pointed at one
+        of them would be a hint about the wrong bytes.
+        """
+        if not entry.file:
+            return ""
         if _is_url(self.base):
             return f"{self.base}{entry.file}"
         return str(Path(self.base) / entry.file)

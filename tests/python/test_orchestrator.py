@@ -26,8 +26,9 @@ from typing import Any
 
 import pytest
 import zstandard
+from conftest import ENVIRONMENT_VERSION, TOOLS_PACKAGE, WORKSPACE_PACKAGE, sdk_members
 from mcuhome.model import buildimage, containerpaths
-from mcuhome.model.context import ContextRequest, EnvironmentPin, SdkPin
+from mcuhome.model.context import ContextRequest, EnvironmentPin, PackagePin, SdkPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
@@ -45,6 +46,19 @@ TAG = "zephyr-4.4.0-r9"
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 ZEPHYR = "4.4"
 CONTAINER_ID = "c" * 64
+
+#: What every context here pins its build environment to. The image the
+#: backend runs is a separate value now — a context names packages, and
+#: an image that delivers them is handed to the backend by whoever
+#: composed the build.
+ENVIRONMENT = EnvironmentPin(
+    workspace=PackagePin(name=WORKSPACE_PACKAGE, version=ENVIRONMENT_VERSION, sha256="2a" * 32),
+    tools=PackagePin(name=TOOLS_PACKAGE, version=ENVIRONMENT_VERSION, sha256="2b" * 32),
+)
+
+#: The image the backend is told to run, pinned to the digest the
+#: scripted docker reports for it.
+IMAGE_REFERENCE = f"{IMAGE}:{TAG}@{DIGEST}"
 
 PROGRAM_BLOCK = {
     "id": "org.mcuhome.build-container",
@@ -82,16 +96,7 @@ def make_sdk_source(directory: Path, *, index_sha: str | None = None) -> str:
     so a test can make the index disagree with the pin.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    archive = build_sdk_archive(
-        {
-            "mcuhome-sdk.json": (
-                b'{"sdk": 1, "generate": {"program": "bin/generate", "runtime": "python3"}}',
-                False,
-            ),
-            "bin/generate": (b"#!/usr/bin/env python3\n", True),
-            "mcuhome/model/__init__.py": (b'__version__ = "0.1.0"\n', False),
-        }
-    )
+    archive = build_sdk_archive(sdk_members(SDK_VERSION))
     filename = f"mcuhome-sdk-{SDK_VERSION}.tar.zst"
     (directory / filename).write_bytes(archive)
     real = sha256_file(directory / filename)
@@ -121,7 +126,7 @@ def make_context(
     root: Path,
     *,
     sdk_sha: str,
-    digest: str | None = DIGEST,
+    environment: EnvironmentPin = ENVIRONMENT,
     zephyr: str = ZEPHYR,
     patches: dict[str, str] | None = None,
 ) -> Path:
@@ -134,18 +139,15 @@ def make_context(
         layer_dir = root / "patches" / layer
         layer_dir.mkdir(parents=True)
         (layer_dir / name).write_text("--- a\n+++ b\n", "utf-8")
-    # Build the environment reference with digest
-    env_ref = f"{IMAGE}:{TAG}@{digest}" if digest else f"{IMAGE}:{TAG}"
     request = ContextRequest(
         sdk=SdkPin(constraint=f"=={SDK_VERSION}", version=SDK_VERSION, url="", sha256=sdk_sha),
-        build_environment=EnvironmentPin(reference=env_ref),
+        build_environment=environment,
         board=BOARD,
         created="2026-01-01T00:00:00Z",
     )
     write_context_request(request, out_dir=root)
-    # Format 3: the request carries the pinned environment, written by the
-    # client. The lock reads it back and includes it in the manifest
-    # unchanged (ADR 0018 amendment).
+    # The request carries the pinned environment, written by the client;
+    # the lock reads it back and restates it unchanged.
     lock_context(root)
     return root
 
@@ -464,7 +466,9 @@ def scenario(
         **seam_kwargs,
     )
     backend = lb.LocalBackend(
-        lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=4, ccache_dir=ccache_dir),
+        lb.BackendConfig(
+            image=IMAGE_REFERENCE, sdk_sources=(tmp_path / "src",), jobs=4, ccache_dir=ccache_dir
+        ),
         docker=lb.Docker(runner=seam, spawner=seam.spawn),
     )
     return backend, context, seam
@@ -996,7 +1000,8 @@ def test_a_missing_image_refuses_before_a_container_starts(tmp_path) -> None:
         raise AssertionError("nothing else is asked once the image is missing")
 
     backend = lb.LocalBackend(
-        lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=4), docker=lb.Docker(runner=runner)
+        lb.BackendConfig(image=IMAGE_REFERENCE, sdk_sources=(tmp_path / "src",), jobs=4),
+        docker=lb.Docker(runner=runner),
     )
     real = sha256_file(next((tmp_path / "src").glob("*.tar.zst")))
     context = make_context(tmp_path / "ctx", sdk_sha=real)
@@ -1593,6 +1598,7 @@ def test_the_build_method_hands_the_backend_the_users_own_cache(tmp_path, monkey
     make_context(tmp_path / "ctx", sdk_sha="ab" * 32)
     containerbuild.run_locked_build(
         tmp_path / "ctx",
+        image=IMAGE_REFERENCE,
         sdk_sources=(),
         work_root=tmp_path / "work",
         env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
@@ -1628,6 +1634,7 @@ def test_a_caller_whose_environment_names_no_home_still_builds(tmp_path, monkeyp
     make_context(tmp_path / "ctx", sdk_sha="ab" * 32)
     containerbuild.run_locked_build(
         tmp_path / "ctx",
+        image=IMAGE_REFERENCE,
         sdk_sources=(),
         work_root=tmp_path / "work",
         env={},
@@ -2025,6 +2032,7 @@ def test_a_caller_can_label_the_containers_it_starts(tmp_path) -> None:
     )
     backend = lb.LocalBackend(
         lb.BackendConfig(
+            image=IMAGE_REFERENCE,
             sdk_sources=(tmp_path / "src",),
             jobs=1,
             labels={"org.mcuhome.build-server.session": "s-7"},
@@ -2064,7 +2072,10 @@ def test_a_shared_store_is_offered_read_only_and_keyed_by_program_id(tmp_path) -
     )
     backend = lb.LocalBackend(
         lb.BackendConfig(
-            sdk_sources=(tmp_path / "src",), jobs=1, shared_ccache_dir=tmp_path / "store"
+            image=IMAGE_REFERENCE,
+            sdk_sources=(tmp_path / "src",),
+            jobs=1,
+            shared_ccache_dir=tmp_path / "store",
         ),
         docker=lb.Docker(runner=seam, spawner=seam.spawn),
     )
@@ -2086,7 +2097,10 @@ def test_a_store_this_program_has_no_subdirectory_in_is_no_cache(tmp_path) -> No
     )
     backend = lb.LocalBackend(
         lb.BackendConfig(
-            sdk_sources=(tmp_path / "src",), jobs=1, shared_ccache_dir=tmp_path / "store"
+            image=IMAGE_REFERENCE,
+            sdk_sources=(tmp_path / "src",),
+            jobs=1,
+            shared_ccache_dir=tmp_path / "store",
         ),
         docker=lb.Docker(runner=seam, spawner=seam.spawn),
     )
@@ -2112,7 +2126,10 @@ def test_a_program_id_that_is_not_a_path_segment_gets_no_cache(tmp_path) -> None
     )
     backend = lb.LocalBackend(
         lb.BackendConfig(
-            sdk_sources=(tmp_path / "src",), jobs=1, shared_ccache_dir=tmp_path / "store"
+            image=IMAGE_REFERENCE,
+            sdk_sources=(tmp_path / "src",),
+            jobs=1,
+            shared_ccache_dir=tmp_path / "store",
         ),
         docker=lb.Docker(runner=seam, spawner=seam.spawn),
     )
@@ -2188,7 +2205,7 @@ def test_a_container_that_does_not_start_is_a_typed_refusal(tmp_path) -> None:
         start_status=1,
     )
     backend = lb.LocalBackend(
-        lb.BackendConfig(sdk_sources=(tmp_path / "src",), jobs=1),
+        lb.BackendConfig(image=IMAGE_REFERENCE, sdk_sources=(tmp_path / "src",), jobs=1),
         docker=lb.Docker(runner=seam, spawner=seam.spawn),
     )
     with pytest.raises(BuildError) as caught:

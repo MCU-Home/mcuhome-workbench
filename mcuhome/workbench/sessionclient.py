@@ -1882,10 +1882,10 @@ class SessionClient:
         """The context ID of the bytes this client sent, by the frozen rule.
 
         The rule lives in ``mcuhome-model`` and is called over *values*
-        rather than over a directory (ADR 0020 decision 4), which is what
-        lets both sides of the contract compute it from what they each
-        hold: the server from the bytes it received off a socket, this
-        client from the integrity list it built while packing.
+        rather than over a directory, which is what lets both sides of a
+        build compute it from what they each hold: the server from the
+        bytes it received off a socket, this client from the integrity
+        list it built while packing.
         """
         if self._pins is None:
             raise RemoteError(
@@ -1898,7 +1898,7 @@ class SessionClient:
         )
         return context_id(
             sdk_sha256=self._pins.sdk.sha256,
-            environment_digest=self._pins.build_environment.digest,
+            environment=self._pins.build_environment,
             board=self._pins.board,
             files=files,
         )

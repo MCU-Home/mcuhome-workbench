@@ -70,8 +70,8 @@ from mcuhome.model.buildimage import (
     LATEST_SUFFIX,
     TOOLCHAIN_LABEL,
     ZEPHYR_LABEL,
+    ImagePin,
 )
-from mcuhome.model.context import EnvironmentPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 from mcuhome.model.invocation import CONTRACT_VERSION
@@ -99,7 +99,9 @@ LocalLookup = Callable[[str], Any]
 class ResolvedEnvironment:
     """One build environment, pinned and vouched for.
 
-    :attr:`pin` is what a build context records and what a build runs.
+    :attr:`pin` is the image a build runs in. It is **not** what a build
+    context records: a context pins the environment's packages, and an
+    image that declares them is one delivery of that set.
     :attr:`zephyr` and :attr:`toolchain` are the image's own declarations,
     kept because a build report that cannot say what compiled the bytes is
     worth less than carrying two strings costs. :attr:`found_under` is the
@@ -114,8 +116,8 @@ class ResolvedEnvironment:
     found_under: str = ""
 
     @property
-    def pin(self) -> EnvironmentPin:
-        return EnvironmentPin(reference=str(self.reference))
+    def pin(self) -> ImagePin:
+        return ImagePin(reference=str(self.reference))
 
     @property
     def digest(self) -> str:

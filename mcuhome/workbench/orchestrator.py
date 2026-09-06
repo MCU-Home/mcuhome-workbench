@@ -78,8 +78,7 @@ from mcuhome.model.artifacts import Artifact
 # end of it: this repository reads them off an image, the repository that
 # builds the image writes them, and a build server checks them. They are
 # stated once, beside the image they describe.
-from mcuhome.model.buildimage import CONTRACT_LABEL, TOOLCHAIN_LABEL, ZEPHYR_LABEL
-from mcuhome.model.context import ContextManifest
+from mcuhome.model.buildimage import CONTRACT_LABEL, TOOLCHAIN_LABEL, ZEPHYR_LABEL, ImagePin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.invocation import ACTIONS, CONTRACT_VERSION, REQUEST_VERSIONS, RESULT_VERSION
@@ -448,14 +447,19 @@ class BackendConfig:
     Everything else is the resource shape of the one container this
     backend starts.
 
-    **Which image is not here.** The context names it, pinned to a
-    digest, and a backend that could be told a different one would be a
-    way to build a context in an environment its identity does not
-    claim.
+    **Which image is here, and pinned to a digest.** A build context
+    pins the build environment's *packages*; a container image that
+    delivers them is one way to run it, and choosing that delivery is
+    the composing caller's act
+    (:func:`~mcuhome.workbench.containerbuild.prepare_environment`), not
+    this backend's. What this backend refuses is running without one.
     """
 
     sdk_sources: tuple[Path, ...]
     jobs: int
+    #: The image to run, ``repository:tag@sha256:…``. Empty is a
+    #: programming error rather than a default, and refused as one.
+    image: str = ""
     #: The package registry to fall back to when no source directory
     #: holds the pinned package — ordinarily a promise of one, built only
     #: if it is actually needed. ``None`` means the local tier is all
@@ -1914,7 +1918,7 @@ class LocalBackend:
         context_id = manifest.compute_id()
         patched = derive_patch_layers(context_dir)
         user = current_user()
-        profile = self._resolve_image(manifest)
+        profile = self._resolve_image()
 
         work_root = Path(work_root).resolve()
         work_root.mkdir(parents=True, exist_ok=True)
@@ -1977,37 +1981,45 @@ class LocalBackend:
             session=session or f"local-{uuid.uuid4().hex[:12]}",
         )
 
-    def _resolve_image(self, manifest: ContextManifest) -> ImageProfile:
-        """The image the context pins, found on this host and cross-checked.
+    def _resolve_image(self) -> ImageProfile:
+        """The image this backend was given, found on this host and cross-checked.
 
-        The context names one environment, pinned to a digest, and that is
-        what runs — there is no reference for this backend to choose and
-        none for a caller to override. The image is addressed **by its
-        digest**, which is what makes the check below a formality rather
-        than a hope: docker resolves `repo@sha256:…` to those bytes or to
-        nothing.
+        The image was decided before the build started and is pinned to a
+        digest; this backend runs those bytes or refuses. Addressing it
+        **by its digest** is what makes the check below a formality
+        rather than a hope: docker resolves ``repo@sha256:…`` to those
+        bytes or to nothing.
 
-        It is resolved by this backend's own ``docker image inspect``
-        (E51: the workbench runs its own inspect; there is no
-        capabilities verb, which is the remote method's), and what the
-        inspect answers is cross-checked against the pin. The check
-        catches the one thing addressing by digest cannot: an image that
-        is present under those bytes but reports a *repository* digest of
-        its own that differs — a locally built image tagged over a pulled
-        one, which is the ordinary way a developer ends up building
-        against something the manifest does not describe.
+        It is resolved by this backend's own ``docker image inspect`` —
+        the workbench asks its own host rather than a capabilities verb,
+        which is the remote method's answer to the same question — and
+        what the inspect answers is cross-checked against the pin. The
+        check catches the one thing addressing by digest cannot: an image
+        that is present under those bytes but reports a *repository*
+        digest of its own that differs — a locally built image tagged
+        over a pulled one, which is the ordinary way a developer ends up
+        building against something else entirely.
 
         A ``None`` repo digest is tolerated, and only there: an image
         built locally and never pushed is pinned by its own ID instead,
         which :func:`local_address` is what recognizes.
         """
-        pin = manifest.build_environment
+        if not self.config.image:
+            raise EnvironmentUnavailable(
+                "This build was started without naming a build container.",
+                hint=(
+                    "the environment is resolved before the build runs — build "
+                    "through `mcuhome device build` rather than driving the backend "
+                    "directly"
+                ),
+            )
+        pin = ImagePin(reference=self.config.image)
         reference, facts = local_address(self.docker.inspect, pin)
         if facts is None:
             raise EnvironmentUnavailable(
                 f"No build container on this host answers to {pin.reference}.",
                 hint=(
-                    "the context names the exact image it is built in; this host does "
+                    "the build names the exact image it compiles in; this host does "
                     "not have it. It is fetched before a build starts, so this means "
                     "the fetch was skipped or the image was removed since"
                 ),
@@ -2015,9 +2027,9 @@ class LocalBackend:
         if facts.digest is not None and facts.digest != pin.digest and facts.image_id != pin.digest:
             raise EnvironmentUnavailable(
                 f"The image {reference} reports digest {facts.digest}, and this "
-                f"context is pinned to {pin.digest}.",
+                f"build is pinned to {pin.digest}.",
                 hint=(
-                    "the context names which bytes its firmware is compiled from, and "
+                    "the build names which bytes its firmware is compiled from, and "
                     "this host answers that name with different ones"
                 ),
             )

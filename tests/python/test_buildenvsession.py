@@ -123,7 +123,7 @@ def environment(tmp_path: Path) -> Path:
 def make_session(tmp_path: Path, entry: Path, **kwargs) -> BuilderSession:
     context = tmp_path / "context"
     context.mkdir(exist_ok=True)
-    (context / "context.yaml").write_text("context: 3\n", encoding="utf-8")
+    (context / "context.yaml").write_text("context: 4\n", encoding="utf-8")
     sdk = tmp_path / "sdk"
     sdk.mkdir(exist_ok=True)
     (sdk / "mcuhome-sdk.json").write_text("{}", encoding="utf-8")

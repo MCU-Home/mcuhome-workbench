@@ -20,10 +20,12 @@ import json
 import os
 import tarfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import zstandard
+from mcuhome.model.context import EnvironmentPin, PackagePin
 from mcuhome.model.hashes import sha256_file
 from test_buildenvsession import DELIVERS, entry_point
 
@@ -110,6 +112,32 @@ def store(tmp_path: Path):
             thaw(entry)
 
 
+#: What the workspace entry declares about the whole set — the §5
+#: self-description, the file an orchestrator reads before it starts
+#: anything.
+#:
+#: This is the **abstract** shape, which is the one a real package
+#: carries: the carrier states no hash of its own (the declaration is
+#: inside the archive it would be describing) and the architecture-
+#: specific package is named by its FAMILY at version level only. A
+#: fixture that declared the concrete package with a hash would be a
+#: delivery's declaration — what an image writes — and no MCUHome package
+#: ever writes one, so a check tested only against it would be tested
+#: against a shape it never meets.
+DECLARATION = {
+    "spec-generation": "3",
+    "zephyr.version": "4.4.0",
+    "build-context.generator-constraint": "mcuhome-workbench:",
+    "packages.mcuhome-build-workspace": "0.1.0",
+    "packages.mcuhome-build-tools": "0.1.0",
+}
+
+#: The hash ``put_entry`` records for the workspace entry, restated here
+#: because a build context has to pin exactly the bytes the store holds
+#: and the check compares the two.
+WORKSPACE_SHA = hashlib.sha256(b"mcuhome-build-workspace0.1.0").hexdigest()
+
+
 @pytest.fixture
 def environment(store: Path) -> Environment:
     """The two entries a subprocess build runs against."""
@@ -120,6 +148,7 @@ def environment(store: Path) -> Environment:
         version="0.1.0",
         files={
             "build-workspace.json": ('{"workspace": "workspace"}', False),
+            "build-environment.json": (json.dumps(DECLARATION), False),
             "workspace/.west/config": ("[zephyr]\n\tbase = zephyr\n", False),
             GIT_CONFIG_FILE: ("[safe]\n\tdirectory = /nowhere/*\n", False),
         },
@@ -217,18 +246,34 @@ def make_context(directory: Path, sdk_sha256: str) -> Path:
     """
     directory.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "context": 3,
+        "context": 4,
         "mcuhome": {
             "constraint": f"=={SDK_VERSION}",
             "version": SDK_VERSION,
             "package": {"url": f"mcuhome-sdk-{SDK_VERSION}.tar.zst", "sha256": sdk_sha256},
         },
-        "build_environment": ENVIRONMENT_REFERENCE,
+        # The packages the ``environment`` fixture's store actually holds:
+        # the workspace by name and hash, the tools by its family, which
+        # is what a context ordinarily pins.
+        "build_environment": {
+            "workspace": {
+                "name": "mcuhome-build-workspace",
+                "version": "0.1.0",
+                "sha256": WORKSPACE_SHA,
+            },
+            "tools": {"name": "mcuhome-build-tools", "version": "0.1.0", "sha256": "ba" * 32},
+        },
         "target": {"board": BOARD},
         "files": [],
         "id": "sha256:" + "d" * 64,
     }
     (directory / "manifest.yaml").write_text(json.dumps(manifest), encoding="utf-8")
+    # The one file the build environment specification names itself: the
+    # environment's generator constraint is checked against it before a
+    # step, so a context without it is not one.
+    (directory / "build-context.json").write_text(
+        json.dumps({"generator": "mcuhome-workbench:0.1.0.dev0"}), encoding="utf-8"
+    )
     return directory
 
 
@@ -680,3 +725,252 @@ def test_an_empty_patch_directory_is_not_a_patched_context(tmp_path, developer) 
         env=CALLER_ENV,
     )
     assert result.outcome.successful
+
+
+# --------------------------------------------------------------------------
+# What the environment says about itself, checked before a step
+# --------------------------------------------------------------------------
+
+
+def _declared(store: Path, **overrides) -> None:
+    """Rewrite the workspace entry's declaration, frozen store and all."""
+    entry = store / "mcuhome-build-workspace-0.1.0"
+    thaw(entry)
+    document = {**DECLARATION, **overrides}
+    for key, value in list(document.items()):
+        if value is None:
+            del document[key]
+    (entry / "build-environment.json").write_text(json.dumps(document), encoding="utf-8")
+    freeze(entry)
+
+
+def _pin(**overrides) -> EnvironmentPin:
+    pin = EnvironmentPin(
+        workspace=PackagePin(name="mcuhome-build-workspace", version="0.1.0", sha256=WORKSPACE_SHA),
+        tools=PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="a" * 64),
+    )
+    return replace(pin, **overrides)
+
+
+def test_the_environments_declaration_is_read_off_the_store(environment) -> None:
+    """The cheapest verified route: the entry, not a sidecar nobody signed.
+
+    The bytes in a provisioned entry came out of an archive whose hash was
+    checked against the pin, so what the environment claims about itself
+    cannot have been substituted between the package host and this file.
+    """
+    declaration = subprocessbuild.declaration_of(environment)
+    assert declaration.spec_generation == "3"
+    assert declaration.zephyr_version == "4.4.0"
+    assert set(declaration.packages) == {
+        "mcuhome-build-workspace",
+        "mcuhome-build-tools",
+    }
+
+
+def test_an_environment_that_agrees_with_everything_passes(environment) -> None:
+    """All four questions answered, and the declaration handed back."""
+    declaration = subprocessbuild.check_environment(
+        environment,
+        pin=_pin(),
+        generator="mcuhome-workbench:0.1.0.dev0",
+        zephyr_constraint="~=4.4.0",
+    )
+    assert declaration.zephyr_version == "4.4.0"
+
+
+def test_an_environment_of_another_specification_generation_is_refused(store, environment) -> None:
+    """An orchestrator does not start an environment it cannot speak to.
+
+    The generation is the one number that says whether the two sides mean
+    the same thing by a request document — so it is checked before a
+    process is started, not discovered from a confused answer afterwards.
+    """
+    _declared(store, **{"spec-generation": "4"})
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment)
+    assert "generation 4" in caught.value.message
+    assert "generation 3" in caught.value.message
+
+
+def test_an_environment_assembled_from_other_packages_is_refused(store, environment) -> None:
+    """The store has to be the environment the context pinned."""
+    _declared(
+        store,
+        **{
+            "packages.mcuhome-build-workspace": None,
+            "packages.mcuhome-build-elsewhere": "0.1.0",
+        },
+    )
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, pin=_pin())
+    assert "mcuhome-build-workspace" in caught.value.message
+
+
+def test_a_declared_version_that_is_not_the_unpacked_one_is_refused(store, environment) -> None:
+    """A tree that says it is one version while the entry is another."""
+    _declared(store, **{"packages.mcuhome-build-workspace": "0.2.0"})
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, pin=_pin())
+    assert "0.2.0" in caught.value.message
+
+
+def test_a_declared_hash_that_is_not_the_unpacked_one_is_refused(store, environment) -> None:
+    """Where the declaration states bytes, they have to be the bytes present.
+
+    Only a *delivery* states them — an image, or anything else assembled
+    from exact archives — so this is the shape that reaches the check
+    through the container profile rather than through the store.
+    """
+    _declared(
+        store,
+        **{
+            "packages.mcuhome-build-tools": None,
+            "packages.mcuhome-build-tools_linux-amd64": "0.1.0@sha256:" + "d" * 64,
+        },
+    )
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, pin=_pin())
+    assert "d" * 64 in caught.value.message
+
+
+def test_a_concrete_tools_pin_is_accepted_by_an_abstract_declaration(environment) -> None:
+    """A device may pin one platform's package, and the environment still fits.
+
+    The declaration a real workspace package carries names the tools
+    **family**; a device that pinned
+    ``mcuhome-build-tools_linux-amd64`` outright names the concrete
+    package, and the specification is explicit that the abstract
+    declaration matches every delivery of that set. A check that probed
+    only for exact names would refuse the one case the format calls an
+    explicitly architecture-targeted build.
+    """
+    subprocessbuild.check_environment(
+        environment,
+        pin=_pin(
+            tools=PackagePin(
+                name="mcuhome-build-tools_linux-amd64", version="0.1.0", sha256="c" * 64
+            )
+        ),
+    )
+
+
+def test_a_delivery_declaration_naming_the_concrete_package_also_fits(store, environment) -> None:
+    """The other shape §5.1 defines: an image completes the family entry."""
+    _declared(
+        store,
+        **{
+            "packages.mcuhome-build-tools": None,
+            "packages.mcuhome-build-tools_linux-amd64": "0.1.0@sha256:" + "c" * 64,
+        },
+    )
+    subprocessbuild.check_environment(environment, pin=_pin())
+
+
+def test_a_zephyr_release_outside_the_devices_constraint_is_refused(environment) -> None:
+    """The device asks for a Zephyr line; the environment states a release.
+
+    This is where the two meet — against the workspace package's own
+    declaration, out of bytes that were verified, rather than against a
+    label or a sidecar.
+    """
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, zephyr_constraint="~=4.5.0")
+    assert "4.4.0" in caught.value.message
+    assert "4.5.0" in caught.value.message
+
+
+def test_a_generator_the_environment_does_not_accept_is_refused(store, environment) -> None:
+    """The check the specification runs before every step."""
+    _declared(store, **{"build-context.generator-constraint": "mcuhome-workbench:~=9.0"})
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, generator="mcuhome-workbench:0.1.0")
+    assert "~=9.0" in caught.value.hint
+
+
+def test_a_developer_environment_is_exempt_from_the_package_check_only(store, environment) -> None:
+    """Nothing published a developer's trees, so no hash can agree with one.
+
+    Everything else is still checked: a tree a developer maintains has to
+    implement the specification this side speaks, or the build fails
+    somewhere less legible.
+    """
+    developer = replace(environment, developer=True)
+    subprocessbuild.check_environment(
+        developer,
+        pin=_pin(workspace=PackagePin(name="something-else", version="9.9.9", sha256="e" * 64)),
+    )
+    _declared(store, **{"spec-generation": "2"})
+    with pytest.raises(BuildEnvironmentError):
+        subprocessbuild.check_environment(developer, pin=_pin())
+
+
+def test_an_environment_without_a_declaration_is_refused(store, environment) -> None:
+    """A build environment that does not say what it is cannot be checked."""
+    entry = store / "mcuhome-build-workspace-0.1.0"
+    thaw(entry)
+    (entry / "build-environment.json").unlink()
+    freeze(entry)
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment)
+    assert "does not say what it is" in caught.value.message
+
+
+def test_a_developer_tree_that_carries_no_declaration_is_not_refused(environment) -> None:
+    """Nothing published those bytes, so no statement about them exists.
+
+    The mode's whole point is that the trees are the developer's own; a
+    workspace assembled by hand has no ``build-environment.json``, and
+    demanding one would be demanding that a developer package their work
+    before they can build it.
+    """
+    developer = replace(environment, developer=True)
+    thaw(environment.workspace.path)
+    (environment.workspace.path / "build-environment.json").unlink()
+    freeze(environment.workspace.path)
+    assert subprocessbuild.check_environment(developer, pin=_pin()) is None
+
+
+def test_a_developer_tree_that_does_carry_one_is_held_to_it(store, environment) -> None:
+    """Anything unpacked from a real package states a generation, and it counts."""
+    _declared(store, **{"spec-generation": "9"})
+    developer = replace(environment, developer=True)
+    with pytest.raises(BuildEnvironmentError):
+        subprocessbuild.check_environment(developer)
+
+
+def test_the_pin_and_the_unpacked_package_have_to_be_the_same_bytes(environment) -> None:
+    """The check that makes an environment the one the context asked for.
+
+    The declaration says what the environment claims to be; this says the
+    environment is what the **context** named. Both are needed: an
+    environment can agree with itself perfectly and still be a different
+    one than the build was pinned to.
+    """
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(
+            environment,
+            pin=_pin(
+                workspace=PackagePin(
+                    name="mcuhome-build-workspace", version="0.1.0", sha256="f" * 64
+                )
+            ),
+        )
+    assert "f" * 64 in caught.value.message
+
+
+def test_a_family_pin_is_compared_by_version_and_not_by_hash(environment) -> None:
+    """A family's hash covers every platform; the entry holds one platform's.
+
+    Comparing the two would refuse every correct build. What is left to
+    compare here is the version, and that is compared.
+    """
+    subprocessbuild.check_environment(environment, pin=_pin())
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(
+            environment,
+            pin=_pin(
+                tools=PackagePin(name="mcuhome-build-tools", version="0.2.0", sha256="a" * 64)
+            ),
+        )
+    assert "0.2.0" in caught.value.message

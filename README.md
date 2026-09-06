@@ -171,6 +171,45 @@ A package published per architecture is named once — the index says which
 concrete package that name stands for on this host, and the mapping is checked
 against the members it points at before anything is fetched.
 
+### Which build environment a build uses
+
+The same rule, one step further along: a device that names no version in
+`sources.build_workspace` or `sources.build_tools` is built with the environment
+the **resolved SDK release** was built and tested with. Every SDK release carries
+a `build-environment.lock.json` stating those two versions, and their hashes come
+from the same package index the SDK came from — so a device without any
+`sources.*` entry gets an SDK and an environment that were released together, and
+neither is written into the device.
+
+Each entry overrides its own package and nothing else:
+
+```yaml
+sources:
+  build_tools: build-tools/mcuhome-build-tools:0.1.10.dev1
+```
+
+The tools package is published per architecture and the bare family name is the
+normal pin: it resolves to this host's package, and pinning the family still
+pins every platform's bytes, which is what lets one build context produce the
+same firmware on an amd64 host and on an arm64 one. Naming one platform's
+package outright (`mcuhome-build-tools_linux-amd64`) is allowed and means exactly
+that — a host of another architecture refuses rather than substituting something.
+
+A reference may state a hash as well as a version:
+
+```yaml
+sources:
+  build_workspace: build-workspace/mcuhome-build-workspace:0.1.10.dev1@sha256:7c31…
+```
+
+That decides the whole pin, and nothing is looked up at all — no release lock, no
+index. It is what an air-gapped machine states when it has the archives but no
+package index for them.
+
+Everything else needs an index that lists the two packages, because a hash can
+come from nowhere else: put them in one of the operator's own package
+directories, or configure the registry.
+
 ### The build environment store
 
 A build that does not run in a container needs its build environment as files on

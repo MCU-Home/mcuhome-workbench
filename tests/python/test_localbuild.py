@@ -6,12 +6,12 @@
 scripted stand-in dispatches on the argv the real
 :class:`~mcuhome.workbench.orchestrator.Docker` composed and writes the
 result document a real container would. What is asserted is the
-composition above the backend — since the ADR 0024 inversion it lives in
+composition above the backend — it lives in
 the workbench (:func:`mcuhome.workbench.buildmethods.compose_local_build`)
 over the compiler's two halves: that a device model becomes a locked
-context and one ``build`` invocation, that the two typed refusals E54 asks
-for (a missing image, a missing SDK source) land before a container
-starts, and — the E55 security invariant — that the **private** key never
+context and one ``build`` invocation, that the two typed refusals a local
+build must surface cleanly (a missing image, a missing SDK source) land
+before a container starts, and that the **private** key never
 appears in any docker argv and the context carries only the public half.
 
 The seam and the SDK-source fixture used to be imported from
@@ -29,6 +29,7 @@ from __future__ import annotations
 import io
 import json
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -36,13 +37,13 @@ import pytest
 import zstandard
 from conftest import (
     ENVIRONMENT_DIGEST,
-    ENVIRONMENT_PIN,
     EXAMPLES_DIR,
     ScriptedRegistry,
     resolve_file,
+    sdk_members,
+    write_environment_packages,
 )
 from mcuhome.model import buildimage, containerpaths
-from mcuhome.model.context import EnvironmentPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
@@ -69,9 +70,10 @@ SDK_VERSION = "0.1.0"
 IMAGE = "ghcr.io/mcu-home/build-container"
 CONTAINER_ID = "c" * 64
 
-#: The ``program`` block a conforming image answers ``describe`` with
-#: (build-container-contract.md §7.1). Only the fields the preflight
-#: judges are load-bearing here.
+#: The ``program`` block a conforming image answers ``describe`` with,
+#: from the legacy container invocation this backend still drives (the
+#: container backend has not moved to the current invocation yet). Only
+#: the fields the preflight judges are load-bearing here.
 PROGRAM_BLOCK = {
     "id": "org.mcuhome.build-container",
     "version": "0.1.0",
@@ -107,16 +109,7 @@ def make_sdk_source(directory: Path) -> str:
     reads out of the index and writes into the context it creates.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    archive = build_sdk_archive(
-        {
-            "mcuhome-sdk.json": (
-                b'{"sdk": 1, "generate": {"program": "bin/generate", "runtime": "python3"}}',
-                False,
-            ),
-            "bin/generate": (b"#!/usr/bin/env python3\n", True),
-            "mcuhome/model/__init__.py": (b'__version__ = "0.1.0"\n', False),
-        }
-    )
+    archive = build_sdk_archive(sdk_members(SDK_VERSION))
     filename = f"mcuhome-sdk-{SDK_VERSION}.tar.zst"
     (directory / filename).write_bytes(archive)
     real = sha256_file(directory / filename)
@@ -125,6 +118,7 @@ def make_sdk_source(directory: Path) -> str:
             "mcuhome-sdk": {SDK_VERSION: {"file": filename, "sha256": real, "size": len(archive)}}
         }
     }
+    write_environment_packages(directory, index)
     (directory / "index.json").write_text(json.dumps(index), "utf-8")
     return real
 
@@ -441,10 +435,10 @@ def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model
 def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
     """``context`` before one exists, ``compile`` before the drive.
 
-    The honest-progress seam of cli ADR 0004: a caller renders steps it
+    The honest-progress seam: a caller renders steps it
     was told about, and these two are the ones this composition owns.
     The context reports itself twice — once on entry, once with what it
-    turned out to be (PO 2026-08-16) — and the facts are read back off
+    turned out to be — and the facts are read back off
     the locked directory rather than remembered here, so what a caller
     renders is what the build environment receives.
     """
@@ -476,7 +470,10 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
     assert chosen["zephyr"] == "4.4.0"
     assert steps[2][1] == {}
     facts = steps[3][1]
-    assert facts["build_environment"] == chosen["build_environment"]
+    # What the context says its environment is: the two packages it
+    # pins, never the image. The image is a delivery of that set and is
+    # reported by the environment step above.
+    assert facts["build_environment"] == "mcuhome-build-workspace 0.1.0, mcuhome-build-tools 0.1.0"
     assert facts["board"] == model.device.board
     assert facts["patches"] == []
     assert facts["files"] >= 2  # the model and the public key, at least
@@ -489,7 +486,7 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
 
 
 # --------------------------------------------------------------------------
-# E55: the private key is never passed, never mounted, never in an argv
+# The private key is never passed, never mounted, never in an argv
 # --------------------------------------------------------------------------
 
 
@@ -542,7 +539,7 @@ def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
 
 
 # --------------------------------------------------------------------------
-# The two typed refusals E54 asks be surfaced cleanly (image, SDK source)
+# The two typed refusals a local build must surface cleanly (image, SDK source)
 # --------------------------------------------------------------------------
 
 
@@ -710,6 +707,33 @@ def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public
 # --------------------------------------------------------------------------
 
 
+def test_creating_a_context_twice_in_one_work_root_is_the_same_context(tmp_path, model, public_pem):
+    """A build directory is reused, so context creation has to survive itself.
+
+    Resolving the environment pins reads the SDK release's lock, which
+    means the SDK package is unpacked into the work root every time a
+    context is created — and a work root is a **stable** path a user keeps
+    (`<build dir>/.mcuhome-local`). A second creation therefore lands on
+    the first one's unpacked tree, and it has to answer with the same
+    context rather than with a refusal or with something else.
+    """
+    make_sdk_source(tmp_path / "src")
+    created = datetime(2026, 8, 10, 9, 0, 0, tzinfo=UTC)
+    requests = [
+        create_build_context(
+            model,
+            out_dir=tmp_path / "work" / "context",
+            work_root=tmp_path / "work",
+            sdk_sources=(tmp_path / "src",),
+            signing_pub=public_pem,
+            created=created,
+        )
+        for _ in range(3)
+    ]
+    assert requests[0] == requests[1] == requests[2]
+    assert requests[0].build_environment.workspace.sha256
+
+
 def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     """The other half of the seam: what to build can arrive already made.
 
@@ -731,8 +755,8 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     create_build_context(
         model,
         out_dir=context,
+        work_root=tmp_path / "held-wr",
         sdk_sources=(tmp_path / "src",),
-        build_environment=EnvironmentPin(reference=ENVIRONMENT_PIN),
         signing_pub=public_pem,
     )
     before = sorted(path.name for path in context.iterdir())
@@ -742,13 +766,14 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
         model,
         signing_pub=public_pem,
         # Still needed, and for the other of the two things a source is
-        # for: the pin is already in the supplied context and is not
+        # for: the SDK pin is already in the supplied context and is not
         # resolved again, but the bytes it pins still have to be found
         # and mounted.
         sdk_sources=(tmp_path / "src",),
         work_root=tmp_path / "wr",
         env={},
         image=IMAGE,
+        registry=ScriptedRegistry(),
         context_dir=context,
         on_step=lambda stage, **facts: steps.append(stage),
         docker=_docker(seam),
@@ -761,14 +786,15 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     assert sorted(path.name for path in context.iterdir()) == sorted([*before, "manifest.yaml"])
     # No context step: this composition did not create one, and a step
     # bar that claimed otherwise would be showing work nobody did. The
-    # environment step is still there — the image the supplied context
-    # pins still has to be here, and getting it here is work.
+    # environment step is still there — an image that delivers the
+    # environment still has to be here, and getting it here is work.
     assert steps == ["environment", "environment", "compile"]
-    # And it is the *supplied* context's pin that decided the image, not
-    # the model's: no registry was needed at all.
-    assert read_context_manifest(context / "manifest.yaml").build_environment.reference == (
-        ENVIRONMENT_PIN
-    )
+    # The supplied context's own pins are what it is locked under: nothing
+    # about it was re-resolved, and the packages it names are the ones its
+    # SDK's environment lock states.
+    pinned = read_context_manifest(context / "manifest.yaml").build_environment
+    assert pinned.workspace.name == "mcuhome-build-workspace"
+    assert pinned.tools.version == "0.1.0"
 
 
 # --------------------------------------------------------------------------
@@ -781,9 +807,10 @@ def test_an_image_built_here_is_pinned_by_its_own_id_and_still_builds(tmp_path, 
 
     The registry has no such tag — nobody published it — so the image is
     found on this host and pinned by the only identity it has, docker's
-    own image ID. The pin is honest rather than portable: a build server
-    handed this context will say it does not have the image, which is
-    true.
+    own image ID. That is honest rather than portable, and it is why the
+    reference stays with the build instead of travelling in the context:
+    those bytes are fetchable nowhere, and a context that named them
+    would describe an environment nobody else can obtain.
     """
     make_sdk_source(tmp_path / "src")
     identity = "sha256:" + "f" * 64
@@ -807,9 +834,10 @@ def test_an_image_built_here_is_pinned_by_its_own_id_and_still_builds(tmp_path, 
         docker=_docker(seam),
     )
     assert result.outcome.successful, result.outcome.problems
-    manifest = read_context_manifest(result.context_dir / "manifest.yaml")
-    assert manifest.build_environment.reference == f"localhost/builder:wip@{identity}"
-    assert manifest.build_environment.digest == identity
+    # The image is what this build ran in, and it is reported rather than
+    # written into the context: a context pins packages, and an image
+    # nobody can fetch is a location that only means something here.
+    assert result.image == f"localhost/builder:wip@{identity}"
 
 
 # --------------------------------------------------------------------------
@@ -828,7 +856,7 @@ def test_resolve_sdk_pin_reads_the_source_index(tmp_path):
 def test_resolve_sdk_pin_resolves_a_dev_only_source_under_any(tmp_path):
     """SDK_ANY means the newest, and during development that is a dev release.
 
-    The regression this pins: the E52 pre-release rule (a dev version
+    The regression this pins: the pre-release rule (a dev version
     satisfies only a pre-release constraint) is right for a real pin like
     ``~=2.3`` and wrong for "any" — SDK_ANY is literally any, including a
     ``0.1.0.dev0``. An earlier version resolved SDK_ANY as a stable

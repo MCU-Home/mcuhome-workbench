@@ -79,7 +79,17 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from mcuhome.model.buildenvironment import (
+    LOCK_FILE,
+    TOOLS_SOURCE,
+    WORKSPACE_SOURCE,
+    EnvironmentLock,
+    family_of,
+    parse_lock,
+)
+from mcuhome.model.context import EnvironmentPin, PackagePin
 from mcuhome.model.errors import BuildError
+from mcuhome.model.imageref import parse_reference
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
@@ -88,8 +98,13 @@ __all__ = [
     "INDEX_FILE",
     "SDK_ANY",
     "SDK_PACKAGE_NAME",
+    "PackageReference",
     "ResolvedPackage",
     "SdkResolution",
+    "concrete_package",
+    "environment_lock",
+    "package_reference",
+    "resolve_environment",
     "resolve_from_entries",
     "resolve_from_index",
     "resolve_sdk",
@@ -109,10 +124,13 @@ from mcuhome.model.sdkindex import DEFAULT_SDK, INDEX_FILE, SDK_PACKAGE_NAME  # 
 SDK_SOURCE = DEFAULT_SDK.split("/")[0]
 
 from mcuhome.workbench.packageregistry import (  # noqa: E402
+    OFFICIAL_BASE_DOMAIN,
     PackageRegistry,
+    PackageRegistryError,
     RegistrySource,
     VerifiedIndex,
     opened,
+    pin_entry,
     resolve_entry,
 )
 
@@ -137,17 +155,87 @@ SDK_ANY = ""
 DEFAULT_SDK_CONSTRAINT = "==0.1.*"
 
 
+@dataclass(frozen=True)
+class PackageReference:
+    """A ``sources.*`` reference, taken apart once.
+
+    Every one of them is spelled the same way —
+    ``[base-domain/]<source>/<package>[:version][@sha256:…]`` — and every
+    part of it is read by somebody: the base domain selects the registry
+    and its trust anchor, the source is the shelf inside that registry,
+    the package name is the index key, and the two optional halves are
+    what a device pinned itself to.
+
+    It exists because those parts used to be read in three places with
+    three partial parsers, and the one that resolved the version dropped
+    the base domain — which meant a device pointing at a foreign registry
+    resolved its constraint correctly and then looked the answer up
+    somewhere else.
+    """
+
+    #: The registry's base domain — the official one where the reference
+    #: named none.
+    base_domain: str
+    #: The source within the registry (``sdk``, ``build-workspace``, …).
+    source: str
+    #: The package name, architecture suffix and all.
+    name: str
+    #: The version the reference stated, or ``""``.
+    version: str = ""
+    #: The content hash the reference stated, or ``""``.
+    sha256: str = ""
+
+    @property
+    def pinned(self) -> bool:
+        """Does this reference decide everything on its own?
+
+        A reference stating both a version and a hash needs no index at
+        all: it *is* the pin. That is the offline case — an operator who
+        has the bytes and wants them, with nothing to look up.
+        """
+        return bool(self.version and self.sha256)
+
+
+def package_reference(reference: str, *, what: str = "package") -> PackageReference:
+    """Take a ``sources.*`` reference apart, or refuse in plain language.
+
+    The path is split at its first component: that is the source, and
+    what follows is the package. A reference naming only a package —
+    without a source — cannot be resolved, because a registry has no
+    single shelf and no default one.
+    """
+    parsed = parse_reference(reference, default_registry=OFFICIAL_BASE_DOMAIN, what=what)
+    source, separator, name = parsed.path.partition("/")
+    if not separator or not name or "/" in name:
+        raise BuildError(
+            f'"{reference}" does not name a {what} MCUHome can resolve.',
+            hint=(
+                "the form is <source>/<package>, optionally with a registry in "
+                "front, a :version and an @sha256: — for example "
+                "sdk/mcuhome-sdk:0.1.10"
+            ),
+        )
+    digest = parsed.digest or ""
+    return PackageReference(
+        base_domain=parsed.registry,
+        source=source,
+        name=name,
+        version=parsed.tag or "",
+        sha256=digest.removeprefix("sha256:"),
+    )
+
+
 def sdk_constraint(reference: str = "") -> tuple[str, bool | None]:
     """How a device's ``sources.sdk`` reference resolves: constraint, and pre-releases.
 
-    A reference is ``[registry/]path[:version]``. Naming a version is a
-    device *pinning* itself and is honoured exactly: ``:0.1.9`` resolves
-    under ``==0.1.9`` — a **stated** constraint, so the E52 pre-release
-    rule applies to it unchanged and a dev version satisfies it only if
-    the pin itself names one. Naming none — the default, and what a
-    device carries unless somebody asks otherwise — resolves under
-    :data:`DEFAULT_SDK_CONSTRAINT`, so a device is not frozen onto
-    whatever version happened to be current on the day it was created.
+    Naming a version is a device *pinning* itself and is honoured
+    exactly: ``:0.1.9`` resolves under ``==0.1.9`` — a **stated**
+    constraint, so the pre-release rule applies to it unchanged and a dev
+    version satisfies it only if the pin itself names one. Naming none —
+    the default, and what a device carries unless somebody asks otherwise
+    — resolves under :data:`DEFAULT_SDK_CONSTRAINT`, so a device is not
+    frozen onto whatever version happened to be current on the day it was
+    created.
 
     **The default admits pre-releases**, and the second half of the
     answer is that decision. The default names MCUHome's own SDK line
@@ -158,10 +246,15 @@ def sdk_constraint(reference: str = "") -> tuple[str, bool | None]:
     pinned minor is acceptable and the newest wins, dev included — and
     the minor bound still holds, so a 0.2 release is refused exactly as a
     stable constraint would refuse it.
+
+    The reference is read by :func:`package_reference`, which is the
+    reader everything else about it goes through as well — including the
+    base domain this function used to drop on the floor.
     """
-    tag = reference.rsplit("@", 1)[0].rsplit("/", 1)[-1]
-    _, separator, version = tag.partition(":")
-    if separator and version:
+    if not reference:
+        return DEFAULT_SDK_CONSTRAINT, True
+    version = package_reference(reference, what="SDK package").version
+    if version:
         return f"=={version}", None
     return DEFAULT_SDK_CONSTRAINT, True
 
@@ -559,3 +652,354 @@ def resolve_sdk_pin(
     """
     found = resolve_sdk(sources, constraint=constraint, prereleases=prereleases)
     return found.stated, found.package.version, found.package.sha256
+
+
+# --------------------------------------------------------------------------
+# The build environment's packages
+# --------------------------------------------------------------------------
+
+
+def environment_lock(
+    *,
+    version: str,
+    sha256: str,
+    sources: Sequence[Path],
+    into: Path,
+    registry: RegistrySource | None = None,
+) -> EnvironmentLock:
+    """What the SDK release *version* states about its build environment.
+
+    Read out of the SDK package itself, and deliberately not from
+    anywhere else: the archive is acquired by ``(version, sha256)``
+    through the tiered, hash-checked path every package takes
+    (:func:`~mcuhome.workbench.orchestrator.acquire_package`), so the
+    lock a build derives its environment from comes out of bytes that
+    were already verified against the pin the context is identified by.
+    A sidecar beside the archive would be a second copy nobody checked.
+
+    *into* is a scratch directory the caller owns; the SDK is small and
+    the unpack costs milliseconds.
+
+    Raises a typed refusal when the release carries no lock at all — that
+    is an SDK this workbench cannot derive an environment for, and
+    guessing one would pin packages nobody tested together.
+    """
+    from mcuhome.workbench.orchestrator import acquire_package
+
+    acquired = acquire_package(
+        kind=SDK_SOURCE,
+        name=SDK_PACKAGE_NAME,
+        version=version,
+        sha256=sha256,
+        sources=sources,
+        into=Path(into),
+        registry=registry,
+    )
+    path = acquired.tree / LOCK_FILE
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as missing:
+        raise BuildError(
+            f"The SDK package {SDK_PACKAGE_NAME} {version} carries no {LOCK_FILE}.",
+            hint=(
+                "the SDK release states which build environment it was built and "
+                "tested with, and this one does not. Use an SDK release that does, "
+                "or name the packages in the device's sources.build_workspace and "
+                "sources.build_tools."
+            ),
+        ) from missing
+    except ValueError as broken:
+        raise BuildError(
+            f"The {LOCK_FILE} in {SDK_PACKAGE_NAME} {version} is not readable JSON: {broken}.",
+            hint="the package is damaged — remove it from the source directory and refetch it",
+        ) from broken
+    return parse_lock(document)
+
+
+def _entries_from_directory(directory: Path) -> Mapping[str, Mapping[str, Mapping[str, object]]]:
+    """The package map of a source directory's ``index.json``, or an empty one.
+
+    A directory without an index simply is not a package source — a
+    legitimate not-here. One that has an unreadable index is different:
+    the caller named it on purpose, and skipping it would silently demote
+    a higher-precedence source.
+    """
+    path = Path(directory) / INDEX_FILE
+    if not path.is_file():
+        return {}
+    try:
+        index = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as broken:
+        raise BuildError(
+            f"The package source {directory} has an unreadable {INDEX_FILE}: {broken}.",
+            hint=(
+                "the index is what the packaging scripts write next to the archive "
+                "— regenerate it, or drop the source from the configured directories"
+            ),
+        ) from broken
+    packages = index.get("packages") if isinstance(index, dict) else None
+    if not isinstance(packages, dict):
+        return {}
+    return {
+        str(name): versions for name, versions in packages.items() if isinstance(versions, dict)
+    }
+
+
+def _same_registry(reference: PackageReference, sdk: PackageReference, *, what: str) -> None:
+    """Both references have to name one registry, or the pin is refused.
+
+    A registry client is built for **one** base domain — that is what a
+    trust anchor is per — and a build resolves its packages through the
+    one its SDK reference names. A device that pointed its environment
+    packages at a second domain would have them looked up on the first,
+    which is a pin resolved against a registry nobody chose. Until a
+    build can hold two clients, that is a refusal rather than a silent
+    substitution.
+    """
+    if reference.base_domain == sdk.base_domain:
+        return
+    raise BuildError(
+        f"This device takes its SDK from {sdk.base_domain} and its {what} package "
+        f"from {reference.base_domain}, and a build reads one package host.",
+        hint=(
+            "point sources.sdk, sources.build_workspace and sources.build_tools at "
+            "the same registry, or state the version and the hash of the package "
+            "outright so that nothing has to be looked up"
+        ),
+    )
+
+
+def _pin_package(
+    reference: PackageReference,
+    version: str,
+    *,
+    sources: Sequence[Path],
+    registry: RegistrySource | None,
+    platform: str | None,
+    what: str,
+) -> PackagePin:
+    """One environment package as a context pins it: name, version, hash.
+
+    Two tiers in the order every other acquisition uses — the operator's
+    own directories first, the registry's verified index second — so a
+    machine that already holds the packages never opens a socket.
+
+    A **meta** entry is kept as one rather than followed: the family name
+    and its hash over every platform's package are what a context pins,
+    which is what lets one context build the same firmware on hosts of
+    two architectures. A concrete name is checked against this host's
+    platform, because a pin naming a foreign one is a mistake worth
+    catching where it is written.
+    """
+    if reference.sha256:
+        # The reference decided both halves; nothing to look up, and
+        # nothing that could disagree with it.
+        return PackagePin(name=reference.name, version=version, sha256=reference.sha256)
+    for directory in sources:
+        entries = _entries_from_directory(Path(directory))
+        if reference.name not in entries:
+            continue
+        try:
+            found = pin_entry(entries, reference.name, version, platform=platform)
+        except PackageRegistryError:
+            # The directory carries the package but not this version — a
+            # legitimate not-here, exactly as a directory without an index
+            # is. The search goes on, the same way the SDK's does; a
+            # stale mirror must not be able to stop a build that the
+            # registry could have answered.
+            continue
+        return PackagePin(name=found.name, version=found.version, sha256=found.sha256)
+
+    client = opened(registry)
+    if client is not None:
+        index = client.index(reference.source)
+        found = pin_entry(index.entries, reference.name, version, platform=platform)
+        return PackagePin(
+            name=found.name,
+            version=found.version,
+            sha256=found.sha256,
+            url=index.url_for(found) if index.base.startswith("https://") else "",
+        )
+
+    listed = ", ".join(str(directory) for directory in sources) or "none"
+    raise BuildError(
+        f"MCUHome cannot pin the {what} package {reference.name} {version}: "
+        "no configured source publishes it.",
+        hint=(
+            f"searched: {listed}. Put the package and its {INDEX_FILE} in one of "
+            "them, configure the registry, or state the hash in the device's "
+            f"sources reference as {reference.name}:{version}@sha256:<hash>."
+        ),
+    )
+
+
+def resolve_environment(
+    *,
+    workspace: str,
+    tools: str,
+    sdk_source: str,
+    sdk: SdkResolution,
+    sources: Sequence[Path],
+    work_root: Path,
+    registry: RegistrySource | None = None,
+    platform: str | None = None,
+) -> EnvironmentPin:
+    """The two packages a context pins its build environment to.
+
+    *workspace* and *tools* are the device's ``sources.build_workspace``
+    and ``sources.build_tools`` references, *sdk_source* is its
+    ``sources.sdk`` reference and *sdk* is what that already resolved to.
+
+    All three references have to name the same registry, because a build
+    reads one package host: the base domain is what a trust anchor is per,
+    and the client this resolution is handed was built for the SDK's. A
+    reference that states both a version and a hash is exempt — it needs
+    no host at all.
+
+    **The versions come from the SDK, the hashes from an index.** A
+    reference that names no version — the default every device carries —
+    is answered by the resolved SDK release's own
+    ``build-environment.lock.json``: the SDK and its environment are
+    released together, so the release states which environment it was
+    built and tested with, and a device that says nothing gets exactly
+    that pair. A reference that *does* name a version overrides that
+    derivation for its package alone; one that also names a hash decides
+    the whole pin and no index is consulted at all.
+
+    The lock cannot carry hashes — the workspace package is built from
+    the SDK's own tag, and the tools package's bytes differ per platform
+    — so the hash always comes from a package index: an operator
+    directory's, or the one a registry mirror served and the project's
+    trust anchor accepted.
+    """
+    workspace_reference = package_reference(workspace, what="build workspace package")
+    tools_reference = package_reference(tools, what="build tools package")
+    sdk_reference = package_reference(sdk_source, what="SDK package")
+    # A reference that decides its own pin needs no registry at all, so
+    # only the ones that will be looked up have to agree about where.
+    if not workspace_reference.pinned:
+        _same_registry(workspace_reference, sdk_reference, what="build workspace")
+    if not tools_reference.pinned:
+        _same_registry(tools_reference, sdk_reference, what="build tools")
+    lock: EnvironmentLock | None = None
+    if not (workspace_reference.version and tools_reference.version):
+        lock = environment_lock(
+            version=sdk.package.version,
+            sha256=sdk.package.sha256,
+            sources=sources,
+            into=Path(work_root) / "sdk-lock",
+            registry=registry,
+        )
+    return EnvironmentPin(
+        workspace=_pin_package(
+            workspace_reference,
+            workspace_reference.version or _locked(lock, workspace_reference.name),
+            sources=sources,
+            registry=registry,
+            platform=platform,
+            what="build workspace",
+        ),
+        tools=_pin_package(
+            tools_reference,
+            tools_reference.version or _locked(lock, family_of(tools_reference.name)),
+            sources=sources,
+            registry=registry,
+            platform=platform,
+            what="build tools",
+        ),
+    )
+
+
+def _locked(lock: EnvironmentLock | None, package: str) -> str:
+    """The version *lock* names for *package* — with the lock guaranteed present."""
+    if lock is None:  # pragma: no cover - the caller reads the lock whenever it needs one
+        raise BuildError(
+            f"MCUHome cannot say which version of {package} to build with.",
+            hint="name it in the device's sources, or use an SDK release that states one",
+        )
+    return lock.version_of(package)
+
+
+#: The registry sources the two environment packages are published under,
+#: re-exported here beside :data:`SDK_SOURCE` so a caller has one place
+#: to read the vocabulary from.
+BUILD_WORKSPACE_SOURCE = WORKSPACE_SOURCE
+BUILD_TOOLS_SOURCE = TOOLS_SOURCE
+
+
+def concrete_package(
+    pin: PackagePin,
+    *,
+    source: str,
+    sources: Sequence[Path] = (),
+    registry: RegistrySource | None = None,
+    platform: str | None = None,
+) -> ResolvedPackage:
+    """The package **this host** has to unpack for *pin*.
+
+    A pin that already names one platform's package is that package. A
+    pin that names a family is resolved through the index — and the
+    pinned hash is checked against the family's own entry **before** the
+    resolution is followed, so a meta pin really does pin the bytes every
+    platform gets rather than merely naming a set somebody may have
+    changed since.
+
+    Two tiers again, operator directories first, so a machine that holds
+    the packages resolves without a network.
+    """
+    for directory in sources:
+        entries = _entries_from_directory(Path(directory))
+        if pin.name not in entries:
+            continue
+        try:
+            return _concrete_from(entries, pin, platform=platform, where=str(directory))
+        except PackageRegistryError:
+            # "This source does not publish that version" — not here, so
+            # keep looking. A source that publishes it under a DIFFERENT
+            # hash is not this: that is a plain BuildError from
+            # `_concrete_from` and it propagates, because same version
+            # other bytes is the one thing that must never be shopped
+            # around for.
+            continue
+    client = opened(registry)
+    if client is not None:
+        index = client.index(source)
+        return _concrete_from(index.entries, pin, platform=platform, where=index.base)
+    listed = ", ".join(str(directory) for directory in sources) or "none"
+    raise BuildError(
+        f"MCUHome cannot find out which {pin.name} package this machine needs.",
+        hint=(
+            f"the pin names a family that an index resolves per platform, and none "
+            f"of the configured sources carries it (searched: {listed}). Configure "
+            "the registry, or point a source directory at the packages."
+        ),
+    )
+
+
+def _concrete_from(
+    entries: Mapping[str, Mapping[str, Mapping[str, object]]],
+    pin: PackagePin,
+    *,
+    platform: str | None,
+    where: str,
+) -> ResolvedPackage:
+    """*pin* resolved against one index, hash-checked as it was pinned."""
+    pinned = pin_entry(entries, pin.name, pin.version, platform=platform)
+    if pinned.sha256 != pin.sha256:
+        raise BuildError(
+            f"{where} publishes {pin.name} {pin.version} with hash {pinned.sha256}, "
+            f"and this build is pinned to {pin.sha256}.",
+            hint=(
+                "the same version names different bytes here than where the context "
+                "was created. Use the source the context was pinned against, or "
+                "recreate the context."
+            ),
+        )
+    found = resolve_entry(entries, pin.name, pin.version, platform=platform)
+    return ResolvedPackage(
+        name=found.name,
+        version=found.version,
+        file=found.file,
+        sha256=found.sha256,
+        size=found.size,
+    )

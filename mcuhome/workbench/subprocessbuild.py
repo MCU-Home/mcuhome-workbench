@@ -44,13 +44,33 @@ It is refused instead.
 
 from __future__ import annotations
 
+import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model import containerpaths
-from mcuhome.model.context import MANIFEST_FILE, PATCHES_DIR
+from mcuhome.model.buildenvironment import (
+    DECLARATION_FILE,
+    SPEC_GENERATION,
+    TOOLS_SOURCE,
+    WORKSPACE_SOURCE,
+    Declaration,
+    family_of,
+    member_name,
+    parse_declaration,
+)
+from mcuhome.model.context import (
+    BUILD_CONTEXT_FILE,
+    MANIFEST_FILE,
+    PATCHES_DIR,
+    EnvironmentPin,
+    PackagePin,
+    format_generator_chain,
+)
+from mcuhome.model.errors import BuildError
 from mcuhome.model.jobs import JOBS_VAR
 
 from mcuhome.workbench.buildenvsession import (
@@ -72,10 +92,11 @@ from mcuhome.workbench.buildenvstore import (
     StoreEntry,
     entry_directory,
     git_config_file,
+    provision,
     provisioned,
     require_manifest,
 )
-from mcuhome.workbench.contextdir import read_context_manifest
+from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
 from mcuhome.workbench.orchestrator import (
     LineSink,
     LocalOutcome,
@@ -84,6 +105,7 @@ from mcuhome.workbench.orchestrator import (
     spawn_process,
 )
 from mcuhome.workbench.packageregistry import RegistrySource
+from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
     "DEV_OPTIONS",
@@ -95,8 +117,11 @@ __all__ = [
     "Environment",
     "SubprocessBuildResult",
     "cache_tiers",
+    "check_environment",
+    "declaration_of",
     "entry_point_of",
     "environment_from_paths",
+    "environment_from_pins",
     "environment_from_store",
     "launcher",
     "refuse_patched_context",
@@ -282,6 +307,69 @@ def environment_from_paths(workspace: Path | str, tools: Path | str) -> Environm
         tools=_require_entry_point(_tree(Path(tools), kind=TOOLS_KIND, manifest=TOOLS_MANIFEST)),
         developer=True,
     )
+
+
+def environment_from_pins(
+    pin: EnvironmentPin,
+    *,
+    env: dict[str, str],
+    workspace_source: str = WORKSPACE_SOURCE,
+    tools_source: str = TOOLS_SOURCE,
+    sources: Sequence[Path] = (),
+    registry: Any = None,
+    store: Path | str | None = None,
+    platform: str | None = None,
+    interpreter: str | Path | None = None,
+    on_line: LineSink | None = None,
+) -> Environment:
+    """Provision what a context pins and answer with the two store entries.
+
+    The bridge between a build context and this profile: a context pins
+    the environment's packages, and this turns that pin into two frozen
+    trees on this machine.
+
+    **A family pin is resolved here and not earlier.** The tools entry of
+    a context ordinarily names the family — that is what makes one
+    context build the same firmware on hosts of two architectures — and
+    the store holds concrete packages, so the family is resolved through
+    the index for *this* host, with the pinned hash checked against the
+    family's own entry first. A pin that already names one platform's
+    package is used as it is, and refuses legibly on a host of another
+    platform.
+
+    Provisioning a package that is already in the store costs a marker
+    read: :func:`~mcuhome.workbench.buildenvstore.provision` answers
+    without touching the network, the disk or its lock.
+    """
+    entries = []
+    for package, kind, source in (
+        (pin.workspace, WORKSPACE_KIND, workspace_source),
+        (pin.tools, TOOLS_KIND, tools_source),
+    ):
+        found = concrete_package(
+            package,
+            source=source,
+            sources=sources,
+            registry=registry,
+            platform=platform,
+        )
+        entries.append(
+            provision(
+                kind=kind,
+                name=found.name,
+                version=found.version,
+                sha256=found.sha256,
+                env=env,
+                sources=sources,
+                registry=registry,
+                store=store,
+                platform=platform,
+                interpreter=interpreter,
+                on_line=on_line,
+            )
+        )
+    workspace, tools = entries
+    return Environment(workspace=workspace, tools=_require_entry_point(tools))
 
 
 def _tree(directory: Path, *, kind: str, manifest: str) -> StoreEntry:
@@ -509,6 +597,261 @@ def cache_tiers(
 # --------------------------------------------------------------------------
 
 
+def declaration_of(environment: Environment) -> Declaration | None:
+    """The environment's own §5 self-description, read off the store.
+
+    The declaration lives at the top of the package that carries it —
+    MCUHome's is the architecture-neutral workspace, because a set that
+    spans architectures needs a carrier that does not. ``None`` is the
+    answer for a **developer** tree that carries none — see below.
+    Reading it from the **provisioned entry** is the cheapest verified
+    route there is:
+    those bytes came out of an archive whose hash was checked against the
+    pin, so nothing between the package host and this file could have
+    changed what the environment claims. The copy a mirror serves beside
+    the archive is the same document, but nothing signs a sidecar, so it
+    is not the one a refusal may rest on.
+    """
+    path = environment.workspace.path / DECLARATION_FILE
+    if environment.developer and not path.is_file():
+        # Development mode, and the developer's trees carry no
+        # declaration. There is nothing to check against and nothing to
+        # complain about: these bytes were never published, so no
+        # statement about them exists for anybody to have made. A tree
+        # that *does* carry one — anything unpacked from a real package —
+        # is held to it exactly as a store entry is.
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as missing:
+        raise BuildEnvironmentError(
+            f"The build environment at {environment.workspace.path} does not say what it is.",
+            hint=(
+                f"every build environment carries a {DECLARATION_FILE} stating the "
+                "specification it implements and the packages it consists of. Delete "
+                "the entry and let MCUHome unpack it again."
+            ),
+        ) from missing
+    except ValueError as broken:
+        raise BuildEnvironmentError(
+            f"The {DECLARATION_FILE} at {environment.workspace.path} is not readable "
+            f"JSON: {broken}.",
+            hint=f"delete the entry and let MCUHome unpack it again — "
+            f"chmod -R u+w {environment.workspace.path} && rm -rf {environment.workspace.path}",
+        ) from broken
+    return parse_declaration(document, what=str(path))
+
+
+def check_environment(
+    environment: Environment,
+    *,
+    pin: EnvironmentPin | None = None,
+    generator: str = "",
+    zephyr_constraint: str = "",
+) -> Declaration | None:
+    """Everything that has to agree before a step is started, checked at once.
+
+    The build environment specification puts four questions to an
+    orchestrator before it starts anything, and until now nothing asked
+    any of them — the environment's ``unsupported`` answer was the only
+    guard, and it comes after the process has run.
+
+    * **The specification generation** (§12): an orchestrator does not
+      start an environment whose generation it does not implement. This
+      one implements :data:`~mcuhome.model.buildenvironment.SPEC_GENERATION`.
+    * **The generator constraint** (§9.1): the environment declares which
+      build contexts it accepts, as a chain of ``<product>:<specifier>``
+      entries, and the check runs before *every* step. ``strict`` — the
+      default — believes only the leftmost entry of the context's own
+      generator chain; ``chain`` walks it and accepts at the first match.
+    * **The package set** (§5): what the environment says it consists of
+      has to be what the context pinned. A store provisioned from other
+      packages than the ones the context names is a different
+      environment, whatever it is called.
+    * **The Zephyr version**: the device stated a constraint and the
+      environment states the release it builds against. This is where the
+      two meet — the resolved workspace package's own declaration, out of
+      verified bytes, rather than a sidecar nobody signed.
+
+    *pin*, *generator* and *zephyr_constraint* are each optional because
+    each is a separate question and a caller may legitimately hold only
+    some of them; what is given is checked, what is not is not invented.
+
+    **Development mode** is exempt twice over, and only where there is
+    genuinely nothing to check. Its trees were never published, so no hash
+    can agree with anything and the package check is skipped; and a tree
+    the developer assembled by hand carries no declaration at all, so
+    there is no statement to hold it to and this answers ``None``. A
+    developer tree that *does* carry a declaration — anything unpacked
+    from a real package, which is the ordinary case — is checked exactly
+    as a store entry is, because a build environment still has to
+    implement the specification this side speaks.
+    """
+    declaration = declaration_of(environment)
+    if declaration is None:
+        return None
+    if declaration.spec_generation != SPEC_GENERATION:
+        raise BuildEnvironmentError(
+            f"The build environment implements build-environment specification "
+            f"generation {declaration.spec_generation}, and this MCUHome speaks "
+            f"generation {SPEC_GENERATION}.",
+            hint=(
+                "use a build environment released with this MCUHome, or update "
+                "MCUHome to one that speaks the environment's generation"
+            ),
+        )
+    if pin is not None and not environment.developer:
+        _check_packages(declaration, pin, environment)
+    if zephyr_constraint:
+        _check_zephyr(declaration, zephyr_constraint, environment)
+    if generator:
+        _check_generator(declaration, generator, environment)
+    return declaration
+
+
+def _check_packages(
+    declaration: Declaration, pin: EnvironmentPin, environment: Environment
+) -> None:
+    """The environment consists of the packages the context pinned.
+
+    Two comparisons, and they answer different questions.
+
+    **The pin against the entry**: is this the package the context named?
+    A pin that names the entry outright must name its bytes as well. A pin
+    that names the entry's **family** — the normal case for the tools
+    package — cannot be compared by hash here, because a family's hash is
+    derived from every platform's package and only an index can recompute
+    it; that check happened where the family was resolved to this
+    platform's package, and what is left to compare is the version.
+
+    **The declaration against the entry**: does the environment agree
+    about what it is made of? The declaration is the abstract set — its
+    carrier cannot state its own hash and its tools member may name the
+    family — so a hash is compared only where the declaration states one.
+    """
+    for package, entry in ((pin.workspace, environment.workspace), (pin.tools, environment.tools)):
+        _check_pinned(package, entry)
+        # Two probes, and the order is the specification's: a *delivery*
+        # names the concrete package it actually contains, an abstract
+        # declaration names the family — and "the abstract declaration
+        # matches every delivery of that set". Both are looked up by what
+        # the STORE holds, never by what the pin says: the declaration
+        # describes the environment, and the pin is what the environment
+        # is then held against.
+        member = declaration.packages.get(entry.name) or declaration.packages.get(
+            family_of(entry.name)
+        )
+        if member is None:
+            named = declaration.described() or "nothing"
+            raise BuildEnvironmentError(
+                f"The build environment does not consist of {entry.name}; it consists of {named}.",
+                hint=(
+                    "the build context names the packages its firmware is compiled "
+                    "with, and this environment is assembled from others. Build in a "
+                    "container, or recreate the context."
+                ),
+            )
+        if member.version != entry.version:
+            raise BuildEnvironmentError(
+                f"The build environment states {member_name(entry.name)} "
+                f"{member.version} and the unpacked package is {entry.version}.",
+                hint=f"delete the entry and let MCUHome unpack it again — "
+                f"chmod -R u+w {entry.path} && rm -rf {entry.path}",
+            )
+        if member.sha256 is not None and member.sha256 != entry.sha256:
+            raise BuildEnvironmentError(
+                f"The build environment states {member_name(entry.name)} at hash "
+                f"{member.sha256} and the unpacked package is {entry.sha256}.",
+                hint=f"delete the entry and let MCUHome unpack it again — "
+                f"chmod -R u+w {entry.path} && rm -rf {entry.path}",
+            )
+
+
+def _check_pinned(package: PackagePin, entry: StoreEntry) -> None:
+    """One store entry against the pin it is supposed to be delivering."""
+    if package.name not in (entry.name, family_of(entry.name)):
+        raise BuildEnvironmentError(
+            f"The build context pins {package.name} and the unpacked package is {entry.name}.",
+            hint=(
+                "the environment this build was prepared with is not the one the "
+                "context names. Build in a container, or recreate the context."
+            ),
+        )
+    if package.version != entry.version:
+        raise BuildEnvironmentError(
+            f"The build context pins {package.name} {package.version} and the "
+            f"unpacked package is {entry.version}.",
+            hint=(
+                "the environment this build was prepared with is not the one the "
+                "context names. Build in a container, or recreate the context."
+            ),
+        )
+    if package.name == entry.name and package.sha256 != entry.sha256:
+        raise BuildEnvironmentError(
+            f"The build context pins {package.name} at hash {package.sha256} and the "
+            f"unpacked package is {entry.sha256}.",
+            hint=f"delete the entry and let MCUHome unpack it again — "
+            f"chmod -R u+w {entry.path} && rm -rf {entry.path}",
+        )
+
+
+def _check_zephyr(declaration: Declaration, constraint: str, environment: Environment) -> None:
+    """The environment's Zephyr release satisfies the device's constraint."""
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        specifier = SpecifierSet(constraint)
+    except InvalidSpecifier as broken:
+        raise BuildError(
+            f'The device asks for Zephyr "{constraint}", which is not a version constraint.',
+            hint=(
+                'constraints are PEP 440: "~=4.4.0", ">=4.4,<5" or "==4.4.0" — npm-style '
+                "carets and tildes are not"
+            ),
+        ) from broken
+    try:
+        # SemVer pre-releases (4.5.0-rc.1) are PEP 440's 4.5.0rc1; the
+        # parser accepts the spelling the specification uses.
+        version = Version(declaration.zephyr_version)
+    except InvalidVersion as broken:
+        raise BuildEnvironmentError(
+            f'The build environment states Zephyr "{declaration.zephyr_version}", '
+            "which is not a version.",
+            hint=f"the environment at {environment.workspace.path} is damaged — "
+            "delete the entry and let MCUHome unpack it again",
+        ) from broken
+    if not specifier.contains(version, prereleases=True):
+        raise BuildEnvironmentError(
+            f"This device needs Zephyr {constraint} and the build environment "
+            f"builds against {declaration.zephyr_version}.",
+            hint=(
+                "use a build environment for the Zephyr release the device asks for, "
+                "or loosen the device's Zephyr constraint"
+            ),
+        )
+
+
+def _check_generator(declaration: Declaration, generator: str, environment: Environment) -> None:
+    """The environment accepts a context this generator chain describes (§9.1)."""
+    from mcuhome.workbench.generatorconstraint import accepts
+
+    if accepts(
+        declaration.generator_constraint,
+        generator,
+        mode=declaration.generator_constraint_mode,
+    ):
+        return
+    raise BuildEnvironmentError(
+        f"The build environment does not accept build contexts from {generator}.",
+        hint=(
+            f"it accepts {declaration.generator_constraint or 'nothing'}. Use a build "
+            "environment released with this MCUHome, or recreate the context with a "
+            "matching version."
+        ),
+    )
+
+
 def refuse_patched_context(context_dir: Path, environment: Environment) -> None:
     """A build context with patches is refused against developer trees.
 
@@ -589,12 +932,29 @@ def run_locked_build(
     digest: it is a set of packages the caller resolved and provisioned,
     and what reaches this function is the two store entries that came out
     of it.
+
+    **The environment is checked here as well**, for the reason
+    :func:`refuse_patched_context` is called here as well: this is the
+    entry point an embedder or a test reaches directly, and a rule a
+    caller can go around by calling one function lower is not a rule.
+    Everything the context can answer on its own is checked — the
+    specification generation, the packages the environment consists of
+    against the ones the context pinned, and the build contexts the
+    environment accepts against this context's generator chain. The
+    device's Zephyr constraint is **not** among them: it is a property of
+    the device model, which a locked context does not carry, so
+    :func:`check_environment` is given it by the composition instead.
     """
     context_dir = Path(context_dir).resolve()
     work_root = Path(work_root).resolve()
     refuse_patched_context(context_dir, environment)
     work_root.mkdir(parents=True, exist_ok=True)
     manifest = read_context_manifest(context_dir / MANIFEST_FILE)
+    check_environment(
+        environment,
+        pin=manifest.build_environment,
+        generator=format_generator_chain(read_generator_chain(context_dir / BUILD_CONTEXT_FILE)),
+    )
     package = acquire_sdk(
         version=manifest.sdk.version,
         sha256=manifest.sdk.sha256,

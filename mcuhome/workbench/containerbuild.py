@@ -43,12 +43,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcuhome.model.context import MANIFEST_FILE, EnvironmentPin
+from mcuhome.model.buildimage import ImagePin
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import buildenv as container
 from mcuhome.workbench import orchestrator as lb
-from mcuhome.workbench.contextdir import read_context_manifest
 from mcuhome.workbench.ociregistry import Registry
 from mcuhome.workbench.resolve_env import ResolvedEnvironment, resolve_environment
 
@@ -121,7 +120,7 @@ def prepare_environment(
 
 
 def fetch_environment(
-    pin: EnvironmentPin,
+    pin: ImagePin,
     *,
     env: dict[str, str],
     docker_seam: lb.Docker | None = None,
@@ -130,9 +129,9 @@ def fetch_environment(
     """Get an already-decided environment onto this host.
 
     The second half of :func:`prepare_environment` on its own, for the
-    caller that has nothing to resolve: a context it received already
-    names the image, pinned, and that pin is part of the context's
-    identity — so the only question left is whether those bytes are here.
+    caller that has nothing to resolve: the image was already decided,
+    pinned to a digest, so the only question left is whether those bytes
+    are here.
     """
     docker = container.docker_program(env)
     seam = docker_seam if docker_seam is not None else lb.Docker(docker)
@@ -201,6 +200,7 @@ def cache_root(env: dict[str, str], stated: Path | None) -> Path | None:
 def run_locked_build(
     context_dir: Path,
     *,
+    image: str,
     sdk_sources: Sequence[Path],
     work_root: Path,
     env: dict[str, str],
@@ -220,10 +220,16 @@ def run_locked_build(
     falls through to when none of them holds the package, and *work_root*
     is the backend's own scratch area.
 
-    **Which image is not a parameter.** The locked context names it,
-    pinned to a digest, and it is the only thing that may: a build
-    driven into a different environment than the one its identity claims
-    is exactly what the pin exists to prevent.
+    *image* is the container this build runs in, pinned to a digest and
+    already resolved by whoever composed the build
+    (:func:`prepare_environment`). It is a parameter rather than
+    something read back out of the context, because a context pins the
+    environment's **packages** and an image is one delivery of that set:
+    the party that chose the delivery is the party that hands it over.
+    Finding an image *by* the packages a context pins is
+    :func:`~mcuhome.workbench.resolve_image.image_for_packages`, and this
+    backend switches to it when the container profile moves onto the
+    package-built image.
 
     *docker* is the one seam — left ``None`` it drives real docker; a
     caller (or a test) injects a scripted
@@ -232,10 +238,7 @@ def run_locked_build(
     """
     context_dir = Path(context_dir)
     work_root = Path(work_root)
-    # Read back rather than taken as an argument, for the reason above:
-    # the manifest is where the environment is decided, so the reference
-    # this reports is the one that ran by construction.
-    pinned = read_context_manifest(context_dir / MANIFEST_FILE).build_environment.reference
+    pinned = image
     seam = docker if docker is not None else lb.Docker(container.docker_program(env))
     backend = lb.LocalBackend(
         lb.BackendConfig(
@@ -243,6 +246,7 @@ def run_locked_build(
             jobs=jobs,
             registry=registry,
             ccache_dir=cache_root(env, ccache_dir),
+            image=image,
         ),
         docker=seam,
     )

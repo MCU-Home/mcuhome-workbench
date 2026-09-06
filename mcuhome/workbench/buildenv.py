@@ -50,8 +50,8 @@ from mcuhome.model.buildimage import (
     IMAGE_TAG,
     IMAGE_VAR,
     ZEPHYR_RELEASE,
+    ImagePin,
 )
-from mcuhome.model.context import EnvironmentPin
 from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand, home
 
@@ -267,7 +267,7 @@ def preflight(
 
 def ensure_image(
     docker: str,
-    pin: EnvironmentPin,
+    pin: ImagePin,
     *,
     env: dict[str, str],
     runner: Runner | None = None,
@@ -322,7 +322,7 @@ def _refuse_pull_failed(docker: str, reference: str) -> BuildError:
     )
 
 
-def local_address(inspect: Lookup, pin: EnvironmentPin) -> tuple[str, Any]:
+def local_address(inspect: Lookup, pin: ImagePin) -> tuple[str, Any]:
     """How **this host** names the pinned environment, and what it knows about it.
 
     A pin is one string, and there are two kinds of host it has to work

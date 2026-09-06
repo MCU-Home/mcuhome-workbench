@@ -196,6 +196,123 @@ ENVIRONMENT_TAG = "zephyr-4.4.0-r10"
 ENVIRONMENT_REPOSITORY = "ghcr.io/mcu-home/build-container"
 ENVIRONMENT_PIN = f"{ENVIRONMENT_REPOSITORY}:{ENVIRONMENT_TAG}@{ENVIRONMENT_DIGEST}"
 
+# --------------------------------------------------------------------------
+# The build-environment packages a context v4 pins
+# --------------------------------------------------------------------------
+#
+# Every context this suite creates pins two packages, and every pin has
+# to resolve to a hash out of an index — that is the format, and a test
+# that shortcut it would be testing a context nothing can build. So the
+# package sources these tests write carry three packages, not one: the
+# SDK, and the two the SDK's environment lock names.
+#
+# The tools package here is named WITHOUT an architecture suffix, which
+# makes it an ordinary concrete package on every host and keeps the
+# fixture free of this machine's architecture. The family-and-meta case
+# — the normal one in production — is exercised on purpose in
+# test_resolve_pins.py, where the platform is stated rather than
+# inherited from whoever runs the suite.
+
+#: The version the SDK archives in this suite carry, and the one their
+#: environment lock names for both environment packages.
+SDK_VERSION = "0.1.0"
+ENVIRONMENT_VERSION = "0.1.0"
+WORKSPACE_PACKAGE = "mcuhome-build-workspace"
+TOOLS_PACKAGE = "mcuhome-build-tools"
+
+#: The lock document an SDK archive carries — the abstract package set of
+#: the build environment specification §5.1, exactly as
+#: ``scripts/build_sdk_archive.py`` writes it.
+ENVIRONMENT_LOCK = {
+    f"packages.{TOOLS_PACKAGE}": ENVIRONMENT_VERSION,
+    f"packages.{WORKSPACE_PACKAGE}": ENVIRONMENT_VERSION,
+}
+
+
+def sdk_members(version: str = SDK_VERSION) -> dict[str, tuple[bytes, bool]]:
+    """What a minimal but complete SDK archive holds, lock included."""
+    import json as _json
+
+    return {
+        "mcuhome-sdk.json": (
+            b'{"sdk": 1, "generate": {"program": "bin/generate", "runtime": "python3"}}',
+            False,
+        ),
+        "bin/generate": (b"#!/usr/bin/env python3\n", True),
+        "mcuhome/model/__init__.py": (f'__version__ = "{version}"\n'.encode(), False),
+        "build-environment.lock.json": (
+            (_json.dumps(ENVIRONMENT_LOCK, indent=2, sort_keys=True) + "\n").encode(),
+            False,
+        ),
+    }
+
+
+def build_package_archive(members: dict[str, tuple[bytes, bool]]) -> bytes:
+    """A deterministic ``.tar.zst`` of *members* (path -> (bytes, executable))."""
+    import io
+    import tarfile
+
+    import zstandard
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for name, (content, executable) in sorted(members.items()):
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = 0o755 if executable else 0o644
+            tar.addfile(info, io.BytesIO(content))
+    return zstandard.ZstdCompressor(level=3).compress(buffer.getvalue())
+
+
+def make_package_source(directory: Path, *, version: str = SDK_VERSION) -> str:
+    """A source directory holding all three packages a context needs.
+
+    The SDK — whose archive carries the environment lock — and the two
+    environment packages its lock names. Answers the SDK archive's real
+    sha256, which is what a context created against this directory pins.
+    """
+    import hashlib
+    import json as _json
+
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = build_package_archive(sdk_members(version))
+    filename = f"mcuhome-sdk-{version}.tar.zst"
+    (directory / filename).write_bytes(archive)
+    digest = hashlib.sha256(archive).hexdigest()
+    index = {
+        "packages": {
+            "mcuhome-sdk": {version: {"file": filename, "sha256": digest, "size": len(archive)}}
+        }
+    }
+    write_environment_packages(directory, index)
+    (directory / "index.json").write_text(_json.dumps(index), encoding="utf-8")
+    return digest
+
+
+def write_environment_packages(
+    directory: Path, index: dict, *, version: str = ENVIRONMENT_VERSION
+) -> dict[str, str]:
+    """Put the two environment packages into *directory* and *index*.
+
+    The archives are one file each: nothing here unpacks them, the pin
+    resolution only ever reads the index, and a test that needs a real
+    unpacked tree builds one itself. Answers ``name -> sha256`` so a test
+    can assert against the hashes its own context will carry.
+    """
+    import hashlib
+
+    hashes: dict[str, str] = {}
+    for name in (WORKSPACE_PACKAGE, TOOLS_PACKAGE):
+        payload = f"{name} {version}\n".encode()
+        filename = f"{name}-{version}.tar.zst"
+        (directory / filename).write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        hashes[name] = digest
+        index.setdefault("packages", {})[name] = {
+            version: {"file": filename, "sha256": digest, "size": len(payload)}
+        }
+    return hashes
+
 
 class ScriptedRegistry:
     """A registry that answers one environment, and counts the asking.

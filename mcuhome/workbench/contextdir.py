@@ -10,16 +10,16 @@ filesystem: creating a base context (writing the generator declaration
 public signing key and the patches), locking it (hashing
 what is in it and writing the result ``manifest.yaml``), reading either
 document back, and the server-side integrity check. The two documents are
-the ``lock-context`` split of ADR 0018's amendment: the client writes the
-request, the locking party writes the result.
+the ``lock-context`` split: the client writes the request, the locking
+party writes the result.
 
-ADR 0020 puts the two in different packages, and the ID rule is the
-reason. The build server recomputes a context ID from bytes it received
-(ADR 0019 §8) and must not carry build logic to do it; a workbench
-creates contexts and needs all of this. Splitting here is what lets the
-first depend on the second's vocabulary without its machinery — and, as
-a side effect, keeps a YAML parser out of the package whose only job is
-to be identical everywhere.
+The two live in different packages, and the ID rule is the reason. A
+build server recomputes a context ID from bytes it received off a socket
+and must not carry build logic to do it; a workbench creates contexts and
+needs all of this. Splitting here is what lets the first depend on the
+second's vocabulary without its machinery — and, as a side effect, keeps
+a YAML parser out of the package whose only job is to be identical
+everywhere.
 """
 
 from __future__ import annotations
@@ -49,9 +49,9 @@ from mcuhome.model.context import (
     GeneratorEntry,
     SdkPin,
     context_id,
-    environment_digest,
     format_generator_chain,
     parse_generator_chain,
+    validate_environment,
     validate_manifest,
 )
 from mcuhome.model.errors import BuildError
@@ -61,7 +61,7 @@ from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench import __version__
 from mcuhome.workbench.packageregistry import RegistrySource
-from mcuhome.workbench.resolve_pins import resolve_sdk, sdk_constraint
+from mcuhome.workbench.resolve_pins import resolve_environment, resolve_sdk, sdk_constraint
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
 __all__ = [
@@ -90,16 +90,16 @@ _PATCH_NAME = re.compile(r"[0-9]{4}-[A-Za-z0-9._-]+\.patch\Z")
 class ContextFormatVersionError(BuildError):
     """The manifest states a ``context`` format version nothing here implements.
 
-    A type of its own, and for this one refusal only, because the build
-    container contract answers it differently from every other manifest
-    this package cannot read: "A program MUST check the ``context`` format
-    version and, for a version it does not implement, fail the invocation
-    with ``status: "unsupported"``, ``reason: "unsupported.context"`` …
-    and the version it found in ``error.details``"
-    (build-container-contract.md §3.2). ``unsupported`` and not
-    ``failure``, "because the program is refusing a document written to a
-    specification it does not have, which a backend can act on by choosing
-    another image — nothing about this context is broken".
+    A type of its own, and for this one refusal only, because a build
+    environment answers it differently from every other manifest this
+    package cannot read: the build context format
+    (mcuhome-sdk ``docs/spec/build-context-format.md`` §10) says a reader
+    that does not implement the version it finds **refuses**, and the
+    build environment specification calls that answer ``unsupported``
+    rather than ``failure`` — the environment is refusing a document
+    written to a specification it does not have, which an orchestrator can
+    act on by choosing a different environment, and nothing about the
+    context is broken.
 
     A caller that cannot tell this refusal from a truncated one cannot
     make that distinction, and would have to either re-parse the manifest
@@ -125,8 +125,8 @@ class ContextFormatVersionError(BuildError):
 # The hash itself is :func:`mcuhome.model.hashes.sha256_file`, one package
 # down. It is not defined here because the build server recomputes it
 # without carrying any of this module, and three private copies of it is
-# how the two sides of §3.3 start disagreeing about what "the hash of a
-# file" means.
+# how the two sides of a build start disagreeing about what "the hash of
+# a file" means.
 
 
 def _content_paths(root: Path) -> list[str]:
@@ -135,9 +135,9 @@ def _content_paths(root: Path) -> list[str]:
     Neither context document — ``manifest.yaml`` (the list itself) nor
     ``context.yaml`` (the request, whose never-hashed fields would leak
     into the identity through the back door) — is content, and neither is
-    the backend-written ``.mcuhome/`` runtime directory
-    (build-container-contract.md §3.2). So none of them is listed, and by
-    way of that none of them can influence the ID.
+    the backend-written ``.mcuhome/`` runtime directory of an earlier
+    design. So none of them is listed, and by way of that none of them can
+    influence the ID.
 
     ``build-context.json`` is not on that list and is content like any
     other file: it names the tool that wrote the context, which is what a
@@ -229,9 +229,9 @@ def _format_created(created: datetime) -> str:
 
     A naive datetime is read as UTC; an aware one is converted to it. The
     value is the caller's, never a clock this function reads — that is what
-    keeps two creations of the same request byte-identical (ADR 0018's
-    ``created`` is the only field allowed to differ, and only because it is
-    an explicit argument).
+    keeps two creations of the same request byte-identical — ``created``
+    is the only field allowed to differ, and only because it is an
+    explicit argument.
     """
     moment = created if created.tzinfo else created.replace(tzinfo=UTC)
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -250,16 +250,15 @@ def create_context(
     """Build a base context directory from a resolved device model.
 
     Writes the *request* — the client-owned half of a context after the
-    ``lock-context`` split (ADR 0018's 2026-08-09 amendment,
-    build-container-contract.md §3.2). Concretely, into *out_dir*:
+    ``lock-context`` split. Concretely, into *out_dir*:
 
     - ``build-context.json`` — the generator declaration, the one file
       of a context the build environment specification names itself;
     - ``model/device-model.json`` — the canonical model, verbatim;
     - ``keys/signing.pub`` — *signing_pub*, the **public** half of the
       user's MCUboot key, which became context content in the amendment
-      (the private half must never reach a build — ADR 0015 decision 8,
-      so a value that is not a P-256 *public* key in PEM form is refused);
+      (the private half must never reach a build, so a value that is not
+      a P-256 *public* key in PEM form is refused);
     - the patches under *patches_dir*, laid out as ``<layer>/NNNN-name.patch``;
     - ``context.yaml`` — the pins and the intent, written last.
 
@@ -334,23 +333,38 @@ def create_build_context(
     model: DeviceModel,
     *,
     out_dir: Path,
+    work_root: Path,
     sdk_sources: Sequence[Path],
-    build_environment: EnvironmentPin,
     signing_pub: str,
     created: datetime | None = None,
     constraint: str | None = None,
     registry: RegistrySource | None = None,
+    platform: str | None = None,
 ) -> ContextRequest:
-    """Resolve the SDK pin and write a fresh base context at *out_dir*.
+    """Resolve every pin and write a fresh base context at *out_dir*.
 
-    The seam **both** container-shaped build methods create a context
-    through (E65). ``local`` and ``remote`` differ in everything after
-    this point — one starts a container and locks the context itself, the
-    other sends the directory to a build server that locks it — and in
-    what a context *is* they do not differ at all: the resolved pin, the
+    The seam **every** build method creates a context through. They
+    differ in everything after this point — one starts a container and
+    locks the context itself, one sends the directory to a build server
+    that locks it, one runs an entry point from a store — and in what a
+    context *is* they do not differ at all: the resolved pins, the
     canonical model, the public signing key, the patches. Two callers
-    assembling that by hand is two places for the pin and the layout to
+    assembling that by hand is two places for the pins and the layout to
     drift apart, under an identity that claims they cannot have.
+
+    **Both pins are resolved here, and the second follows the first.**
+    The SDK constraint resolves to one release; that release states which
+    build-environment packages it was built and tested with, and those
+    versions resolve to hashes through the same package index the SDK
+    came from (:func:`~mcuhome.workbench.resolve_pins.resolve_environment`).
+    A device that says nothing therefore gets an SDK and an environment
+    that were released together, and one that pins either
+    (``sources.build_workspace``, ``sources.build_tools``) overrides that
+    package alone.
+
+    *work_root* is a directory this function may use as scratch; the SDK
+    package is unpacked there to read its environment lock out of bytes
+    that were verified against the pin.
 
     *out_dir* is **removed if it exists**, because :func:`create_context`
     requires an empty directory and a build method's context directory is
@@ -358,8 +372,8 @@ def create_build_context(
     (``<work root>/context``), never a directory a user named.
 
     *created* defaults to now. It is the one field two creations of the
-    same inputs may differ in (ADR 0018) and it is outside the identity,
-    so a caller that wants byte-identical output states it.
+    same inputs may differ in and it is outside the identity, so a caller
+    that wants byte-identical output states it.
 
     *constraint* left unstated is not "any version": it is what the
     device itself says, through
@@ -390,6 +404,16 @@ def create_build_context(
     found = resolve_sdk(
         sdk_sources, constraint=constraint, prereleases=prereleases, registry=registry
     )
+    build_environment = resolve_environment(
+        workspace=model.sources.build_workspace,
+        tools=model.sources.build_tools,
+        sdk_source=model.sources.sdk,
+        sdk=found,
+        sources=sdk_sources,
+        work_root=Path(work_root),
+        registry=registry,
+        platform=platform,
+    )
     out_dir = Path(out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -415,8 +439,7 @@ def lock_context(out_dir: Path) -> ContextManifest:
     The write-side counterpart of :func:`create_context`. Creating writes
     the request (``context.yaml``); locking turns that request and the
     now-final file set into the integrity *record* — the ``files`` list
-    and the context ``id`` (ADR 0018 amendment,
-    build-container-contract.md §3.2). It reads the request back out of
+    and the context ``id``. It reads the request back out of
     ``context.yaml`` rather than taking it again, so the manifest can
     only ever restate what the request already committed the session to.
 
@@ -430,23 +453,24 @@ def lock_context(out_dir: Path) -> ContextManifest:
 
     A remote build server does this from the bytes it received off a
     socket; a local build method does it over the directory the workbench
-    just created (ADR 0020 decision 6). Both compute the same ID over the
-    same files with :func:`mcuhome.model.context.context_id`, which is the
-    whole point of a content-addressed identity — so this function is the
-    local side of "both parties compute the same value at lock-context"
-    (build-container-contract.md §3.3).
+    just created. Both compute the same ID over the same files with
+    :func:`mcuhome.model.context.context_id`, which is the whole point of a
+    content-addressed identity — so this function is the local side of
+    "both parties compute the same value at lock-context".
     """
     out_dir = Path(out_dir)
     request = read_context_request(out_dir / CONTEXT_FILE)
     files = _context_files(out_dir)
     manifest = ContextManifest(
         sdk=request.sdk,
-        build_environment=request.build_environment,
+        # Without the location hints: the lock states what is in the
+        # context, and where the bytes were found is the request's.
+        build_environment=request.build_environment.without_urls(),
         board=request.board,
         files=files,
         id=context_id(
             sdk_sha256=request.sdk.sha256,
-            environment_digest=request.build_environment.digest,
+            environment=request.build_environment,
             board=request.board,
             files=files,
         ),
@@ -548,8 +572,8 @@ def write_context_request(request: ContextRequest, *, out_dir: Path) -> Path:
     reader re-parses the values rather than hashing the file. Line
     wrapping is switched off so a pin stays on one line: a 64-character
     ``sha256:`` value plus its key exceeds ruamel's default width and
-    would otherwise fold across two lines, which a stricter reader of
-    §3.3.1's lexical form should not have to reassemble.
+    would otherwise fold across two lines, which a stricter reader has no
+    reason to reassemble.
     """
     path = out_dir / CONTEXT_FILE
     yaml = YAML()
@@ -572,8 +596,7 @@ def read_context_request(path: Path) -> ContextRequest:
     Checks shape and the format version, the same way
     :func:`read_context_manifest` does for the lock result. It does not
     check truth — whether the pins match what a backend actually obtained
-    is the backend's cross-check (ADR 0018 amendment; ADR 0019 §8), not
-    this reader's.
+    is the backend's own cross-check, not this reader's.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -622,11 +645,11 @@ def read_context_request(path: Path) -> ContextRequest:
                 "context."
             ),
         ) from error
-    # The one field of the request a reader can get *wrong* rather than
-    # miss, and the one an identity is computed over: checked here so the
-    # request reader is as strict as read_context_manifest, which gets
-    # the same check through validate_manifest.
-    environment_digest(request.build_environment.reference)
+    # The fields of the request a reader can get *wrong* rather than
+    # miss, and the ones an identity is computed over: checked here so
+    # the request reader is as strict as read_context_manifest, which
+    # gets the same check through validate_manifest.
+    validate_environment(request.build_environment)
     return request
 
 
@@ -644,16 +667,16 @@ def write_context_manifest(manifest: ContextManifest, *, out_dir: Path) -> Path:
 
     Line wrapping is switched off for the same reason as in
     :func:`write_context_request`, and this is where it actually bit: a
-    ``sha256:`` digest is 71 characters, ``container.digest`` lands past
-    ruamel's default width, and the emitter folded it onto a second
-    line. That is legal YAML which every conforming parser folds back —
-    the round trip through this module never noticed — and it is still
-    the wrong thing to write. ``manifest.yaml`` is read by build
-    containers this project does not write, in languages it does not
-    choose (contract §1.1's third-party program), and §3.3.1 has them
-    **refuse** a hash rendered any other way rather than repair it. A
-    one-line value cannot be read as two. The build server's own emitter
-    has said so since it was written; the reference emitter did not.
+    64-character hash plus its key lands past ruamel's default width, and
+    the emitter folded it onto a second line. That is legal YAML which
+    every conforming parser folds back — the round trip through this
+    module never noticed — and it is still the wrong thing to write.
+    ``manifest.yaml`` is read by build environments this project does not
+    write, in languages it does not choose, and a strict reader is
+    entitled to **refuse** a hash rendered any other way rather than
+    repair it. A one-line value cannot be read as two. The build server's
+    own emitter has said so since it was written; the reference emitter
+    did not.
     """
     path = out_dir / MANIFEST_FILE
     yaml = YAML()
@@ -761,7 +784,13 @@ def context_facts(root: Path) -> dict[str, Any]:
     facts.update(
         sdk=pin.version,
         sdk_sha256=pin.sha256,
-        build_environment=environment.reference,
+        build_environment=environment.described(),
+        # The two halves apart as well as together, spelled the same way:
+        # a renderer that wants one line takes build_environment, one that
+        # wants a row per package takes these, and neither has to take the
+        # other one's shape apart.
+        build_workspace=f"{environment.workspace.name} {environment.workspace.version}",
+        build_tools=f"{environment.tools.name} {environment.tools.version}",
         board=board,
         files=len(paths),
         patches=[
@@ -861,7 +890,7 @@ def verify_context(root: Path) -> ContextVerification:
         manifest=manifest,
         actual_id=context_id(
             sdk_sha256=manifest.sdk.sha256,
-            environment_digest=manifest.build_environment.digest,
+            environment=manifest.build_environment,
             board=manifest.board,
             files=present,
         ),

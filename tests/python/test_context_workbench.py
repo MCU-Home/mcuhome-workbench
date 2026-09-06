@@ -32,6 +32,7 @@ from mcuhome.model.context import (
     ContextManifest,
     ContextRequest,
     EnvironmentPin,
+    PackagePin,
     SdkPin,
 )
 from mcuhome.model.errors import BuildError
@@ -61,24 +62,33 @@ EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 DIGEST = "sha256:" + "ab" * 32
 SDK_SHA = "cd" * 32
 
-#: Resolved pins for the create tests. The constraint is PEP 440 (ADR
-#: 0018's amendment, E52). The URL uses a reserved domain (RFC 2606): it
-#: is advisory data, and no test ever fetches it.
+#: Resolved pins for the create tests. The constraint is PEP 440. The
+#: URL uses a reserved domain (RFC 2606): it is advisory data, and no
+#: test ever fetches it.
 SDK = SdkPin(
     constraint="~=0.1.0",
     version="0.1.0",
     url="https://example.invalid/mcuhome-sdk-0.1.0.tar.zst",
     sha256=SDK_SHA,
 )
-#: The pinned build environment for the context. Written at the lock,
-#: recorded in ``manifest.yaml``, and part of the identity — hashing the
-#: digest alone, not the reference, so the same image fetched from a
-#: mirror is the same build.
-ENVIRONMENT = EnvironmentPin(reference="ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@" + DIGEST)
+#: The pinned build environment for the context: two packages, each a
+#: ``(name, version, sha256)`` triple, all three of them hashed into the
+#: identity. The tools entry is the **family** name, which is the normal
+#: case — it resolves per platform, and pinning the family still pins
+#: every platform's bytes through the index's meta hash.
+ENVIRONMENT = EnvironmentPin(
+    workspace=PackagePin(
+        name="mcuhome-build-workspace",
+        version="0.1.0",
+        sha256="ab" * 32,
+        url="https://example.invalid/mcuhome-build-workspace-0.1.0.tar.zst",
+    ),
+    tools=PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="ba" * 32),
+)
 
 #: The request timestamp, an explicit argument so two creations of the
-#: same inputs are byte-identical (ADR 0018: created is the one field
-#: allowed to differ, and only because the caller supplies it).
+#: same inputs are byte-identical — ``created`` is the one field allowed
+#: to differ, and only because the caller supplies it.
 CREATED = datetime(2026, 8, 10, 9, 0, 0, tzinfo=UTC)
 
 #: A fixed key pair so the public half is a constant — the context bytes
@@ -138,26 +148,27 @@ def _rewrite_manifest(out_dir: Path, **overrides) -> ContextManifest:
 
 
 @pytest.mark.parametrize(
-    "reference",
+    "broken",
     [
-        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1",  # missing digest
-        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@ab" + "ab" * 31,  # no algorithm prefix
-        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@sha256:" + "AB" * 32,  # uppercase
-        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@sha256:" + "ab" * 16,  # wrong length
-        "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r1@sha512:" + "ab" * 32,  # not sha256
+        PackagePin(name="", version="0.1.0", sha256="ab" * 32),  # no name
+        PackagePin(name="MCUHome-Build-Tools", version="0.1.0", sha256="ab" * 32),  # uppercase
+        PackagePin(name="a_b_c", version="0.1.0", sha256="ab" * 32),  # two suffixes
+        PackagePin(name="mcuhome-build-tools", version="", sha256="ab" * 32),  # no version
+        PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="AB" * 32),  # uppercase hash
+        PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="ab" * 16),  # wrong length
+        PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="sha256:" + "ab" * 32),
     ],
 )
-def test_a_malformed_build_environment_reference_is_refused(
-    model, tmp_path: Path, reference: str
-) -> None:
-    """The reference must carry a valid sha256 digest for the context ID.
+def test_a_malformed_environment_package_is_refused(model, tmp_path: Path, broken) -> None:
+    """Every hashed member of a pin has exactly one legal spelling.
 
-    Format 3 hashes the digest, so the pin must have exactly one spelling.
+    Name, version and hash are all inside the context ID, so an ID
+    computed over a mistyped one would be silently wrong forever. The
+    name matters as much as the hash: a family name and a per-platform
+    name mean different things.
     """
-    pin = EnvironmentPin(reference=reference)
     with pytest.raises(BuildError):
-        # The digest property checks the reference strictly
-        _ = pin.digest
+        _lock(model, tmp_path / "context", build_environment=replace(ENVIRONMENT, tools=broken))
 
 
 # --------------------------------------------------------------------------
@@ -203,8 +214,15 @@ def test_yaml_formatting_is_irrelevant_to_the_id(model, tmp_path: Path) -> None:
         f"target: {{board: {manifest.board}}}\n"
         "files:\n"
         + "".join(f"- {{sha256: {entry.sha256}, path: {entry.path}}}\n" for entry in manifest.files)
-        + f"build_environment: {manifest.build_environment.reference}\n"
-        "mcuhome:\n"
+        + "build_environment:\n"
+        + "".join(
+            f"  {half}: {{name: {entry.name}, version: {entry.version}, sha256: {entry.sha256}}}\n"
+            for half, entry in (
+                ("tools", manifest.build_environment.tools),
+                ("workspace", manifest.build_environment.workspace),
+            )
+        )
+        + "mcuhome:\n"
         f"  package: {{sha256: {SDK.sha256}, url: {SDK.url}}}\n"
         f"  version: {SDK.version}\n"
         f"  constraint: '{SDK.constraint}'\n"
@@ -327,13 +345,26 @@ def test_the_request_carries_pins_and_created_but_no_files_or_id(model, tmp_path
     )
     assert document["context"] == CONTEXT_VERSION
     assert document["created"] == "2026-08-10T09:00:00Z"
-    # Intent and resolution stand side by side (ADR 0018 decision 3).
+    # Intent and resolution stand side by side.
     assert document["mcuhome"]["constraint"] == SDK.constraint
     assert document["mcuhome"]["version"] == SDK.version
     assert document["mcuhome"]["package"] == {"url": SDK.url, "sha256": SDK.sha256}
     # The pinned build environment, resolved by the client before the
-    # request (E61, Format 3: the client resolves the environment).
-    assert document["build_environment"] == ENVIRONMENT.reference
+    # request. The request carries the location hints; the lock does not.
+    assert document["build_environment"] == {
+        "workspace": {
+            "name": ENVIRONMENT.workspace.name,
+            "version": ENVIRONMENT.workspace.version,
+            "sha256": ENVIRONMENT.workspace.sha256,
+            "url": ENVIRONMENT.workspace.url,
+        },
+        "tools": {
+            "name": ENVIRONMENT.tools.name,
+            "version": ENVIRONMENT.tools.version,
+            "sha256": ENVIRONMENT.tools.sha256,
+            "url": "",
+        },
+    }
     assert document["target"] == {"board": model.device.board}
     # The freeze's outputs cannot exist yet: no integrity list, no identity.
     assert "files" not in document
@@ -396,7 +427,7 @@ def test_the_facts_of_a_context_name_its_pins_and_its_patches(model, tmp_path: P
     facts = context_facts(out_dir)
     assert facts["sdk"] == SDK.version
     assert facts["sdk_sha256"] == SDK.sha256
-    assert facts["build_environment"] == ENVIRONMENT.reference
+    assert facts["build_environment"] == ENVIRONMENT.described()
     assert facts["board"] == model.device.board
     assert facts["files"] == len(manifest.files)
     assert facts["id"] == manifest.id
@@ -606,9 +637,13 @@ def test_the_manifest_carries_the_pinned_environment(model, tmp_path: Path) -> N
     """
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir)
-    assert manifest.build_environment == ENVIRONMENT
+    # The url hints are the request's alone: the lock states what is in
+    # the context, not where the bytes were found.
+    assert manifest.build_environment == replace(
+        ENVIRONMENT, workspace=replace(ENVIRONMENT.workspace, url="")
+    )
     document = YAML(typ="safe").load((out_dir / MANIFEST_FILE).read_text(encoding="utf-8"))
-    assert document["build_environment"] == ENVIRONMENT.reference
+    assert document["build_environment"] == ENVIRONMENT.to_dict(url=False)
 
 
 def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Path) -> None:
@@ -624,7 +659,8 @@ def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Pa
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir)
     text = (out_dir / MANIFEST_FILE).read_text(encoding="utf-8")
-    assert f"build_environment: {ENVIRONMENT.reference}" in text
+    assert f"sha256: {ENVIRONMENT.workspace.sha256}" in text
+    assert f"sha256: {ENVIRONMENT.tools.sha256}" in text
     assert f"id: {manifest.id}" in text
     assert f"sha256: {SDK.sha256}" in text
     for entry in manifest.files:

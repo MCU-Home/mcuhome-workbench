@@ -31,7 +31,9 @@
   },
   "sources": {
     "sdk": "sdk/mcuhome-sdk",
-    "build_environment": "ghcr.io/mcu-home/build-container"
+    "build_environment": "ghcr.io/mcu-home/build-container",
+    "build_workspace": "build-workspace/mcuhome-build-workspace",
+    "build_tools": "build-tools/mcuhome-build-tools"
   },
   "hardware": {
     "buses": [

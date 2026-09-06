@@ -34,14 +34,20 @@ import builtins
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES_DIR, resolve_file
+from conftest import EXAMPLES_DIR, make_package_source, resolve_file
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.errors import BuildError
 
 from mcuhome.workbench import buildmethods, containerbuild, sessionclient, subprocessbuild
 from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.buildlock import holder_of
+from mcuhome.workbench.contextdir import create_build_context
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.signing import generate_key_pem, public_key_pem
+
+#: A fixed public key, so nothing here draws one and every context this
+#: module creates is reproducible.
+_PUBLIC_PEM = public_key_pem(generate_key_pem(scalar=0x2233AABB))
 
 
 @pytest.fixture
@@ -187,24 +193,45 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
     assert seen["jobs"] == 2
 
 
-def test_a_subprocess_build_with_nothing_to_run_refuses_in_words(model, tmp_path) -> None:
-    """The environment is not derivable from a context that names an image."""
-    with pytest.raises(lb.EnvironmentUnavailable) as refusal:
+def test_a_subprocess_build_resolves_its_pins_like_every_other_build(model, tmp_path) -> None:
+    """The mode is no longer blocked, and the first thing it needs is a pin.
+
+    A subprocess build creates its own context now — that is what makes
+    it a build method rather than half of one — so a request with no
+    package source at all fails where every other build method fails: at
+    the SDK pin, naming the setting that supplies one. The old refusal
+    ("nothing states which packages to use") is gone, and this test is
+    what would notice it coming back.
+    """
+    with pytest.raises(BuildError) as refusal:
         asyncio.run(
             buildmethods.build_firmware(
                 buildmethods.BuildRequest(
-                    model=model, out_dir=tmp_path, build_mode=buildmethods.MODE_SUBPROCESS
+                    model=model,
+                    out_dir=tmp_path,
+                    signing_pub=_PUBLIC_PEM,
+                    build_mode=buildmethods.MODE_SUBPROCESS,
                 ),
                 target=buildmethods.LocalBuild(execution=buildmethods.SubprocessExecution()),
             )
         )
-    assert "build.mode to container" in refusal.value.hint
+    assert "sdk_sources" in refusal.value.hint
+    assert "build.mode" not in refusal.value.hint
 
 
 def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
     model, tmp_path, monkeypatch
 ) -> None:
-    """With an environment and a context, the composition drives the backend."""
+    """With an environment and a context, the composition drives the backend.
+
+    The context is a real one — created by the real creator against a
+    real package source — because the composition reads its pins now: an
+    environment is provisioned *from* what the context names, and a
+    hand-written directory would be testing a context nothing can build.
+    Here the environment is supplied, so nothing is provisioned; what the
+    checks are handed is recorded and their own behaviour is tested where
+    they live.
+    """
     driven: dict[str, object] = {}
 
     def fake_run(context_dir, **kwargs):
@@ -219,6 +246,12 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
 
     monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
     monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    checked: dict[str, object] = {}
+    monkeypatch.setattr(
+        subprocessbuild,
+        "check_environment",
+        lambda environment, **facts: checked.update(facts),
+    )
 
     class FakeEnvironment:
         developer = False
@@ -226,6 +259,14 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         def described(self) -> str:
             return "mcuhome-build-workspace 0.1.0"
 
+    make_package_source(tmp_path / "sdk")
+    create_build_context(
+        model,
+        out_dir=tmp_path / "context",
+        work_root=tmp_path / "made",
+        sdk_sources=(tmp_path / "sdk",),
+        signing_pub=_PUBLIC_PEM,
+    )
     steps: list[tuple] = []
     result = buildmethods.compose_subprocess_build(
         model,
@@ -239,12 +280,71 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
     )
     assert result.out_dir == tmp_path / "out"
     assert driven["jobs"] == 5
+    # The context's own pins are what the environment is checked against,
+    # and the device's Zephyr constraint travels with them.
+    assert checked["pin"].workspace.name == "mcuhome-build-workspace"
+    assert checked["zephyr_constraint"] == model.toolchain.zephyr_constraint
+    assert checked["generator"].startswith("mcuhome-workbench:")
     # Nobody configured a cache, so it is the user's cache directory —
     # the same answer a container build gets, from the same resolution.
     assert driven["ccache_dir"] == tmp_path / "cache" / "mcuhome" / "ccache"
     assert driven["context_dir"] == tmp_path / "context"
     assert [name for name, _ in steps] == ["environment", "environment", "compile"]
     assert steps[1][1]["build_environment"] == "mcuhome-build-workspace 0.1.0"
+
+
+def test_the_environment_is_checked_before_the_context_is_locked(
+    model, tmp_path, monkeypatch
+) -> None:
+    """Order, not merely presence: a refused build must change nothing first.
+
+    Locking writes ``manifest.yaml`` into a directory the user keeps. A
+    build that is going to be refused because its environment does not fit
+    must therefore be refused **before** the lock, and a test that only
+    asserted the check happens would still pass if somebody moved it one
+    line down.
+    """
+    order: list[str] = []
+    monkeypatch.setattr(
+        subprocessbuild,
+        "check_environment",
+        lambda environment, **facts: order.append("check"),
+    )
+    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: order.append("lock"))
+    monkeypatch.setattr(
+        subprocessbuild,
+        "run_locked_build",
+        lambda context_dir, **kwargs: subprocessbuild.SubprocessBuildResult(
+            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=kwargs["environment"],
+        ),
+    )
+
+    class FakeEnvironment:
+        developer = False
+
+        def described(self) -> str:
+            return "mcuhome-build-workspace 0.1.0"
+
+    make_package_source(tmp_path / "sdk")
+    create_build_context(
+        model,
+        out_dir=tmp_path / "context",
+        work_root=tmp_path / "made",
+        sdk_sources=(tmp_path / "sdk",),
+        signing_pub=_PUBLIC_PEM,
+    )
+    buildmethods.compose_subprocess_build(
+        model,
+        sdk_sources=(tmp_path / "sdk",),
+        work_root=tmp_path / "work",
+        env={},
+        environment=FakeEnvironment(),
+        context_dir=tmp_path / "context",
+    )
+    assert order == ["check", "lock"]
 
 
 # --------------------------------------------------------------------------
