@@ -44,6 +44,7 @@ from mcuhome.model.model import (
     PairingModel,
     PeripheralModel,
     SourceModel,
+    SourcesModel,
     ThreadModel,
     ToolchainModel,
 )
@@ -96,6 +97,7 @@ def resolve(config: RawConfig) -> DeviceModel:
     hardware = _resolve_hardware(config)
     endpoints, channels = _resolve_node(config, power_source)
     build = _resolve_build(board, network, endpoints, channels, version)
+    sources = _resolve_sources(config)
 
     return DeviceModel(
         device=DeviceMeta(
@@ -112,7 +114,34 @@ def resolve(config: RawConfig) -> DeviceModel:
         endpoints=endpoints,
         channels=channels,
         build=build,
+        sources=sources,
     )
+
+
+def _resolve_sources(config: RawConfig) -> SourcesModel:
+    """``sources:`` — the entries the device stated, and defaults for the rest.
+
+    An entry the device did not name keeps
+    :class:`~mcuhome.model.model.SourcesModel`'s own value, which names a
+    package and no version and is therefore resolved at build time. That
+    is the whole reason each entry is resolved on its own: a device that
+    pins one package must not be pinned to today's version of the other
+    two as a side effect, and nothing here is ever written back into the
+    device file.
+    """
+    raw = config.sources
+    if raw is None:
+        return SourcesModel()
+    stated = {
+        name: value
+        for name, value in (
+            ("sdk", raw.sdk),
+            ("build_workspace", raw.build_workspace),
+            ("build_tools", raw.build_tools),
+        )
+        if value is not None
+    }
+    return SourcesModel(**stated)
 
 
 # --------------------------------------------------------------------------

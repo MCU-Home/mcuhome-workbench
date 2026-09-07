@@ -186,6 +186,31 @@ than what you chose. It is stated per registry on purpose: one setting that
 moved every anchor at once would move MCUHome's own along with your private
 one.
 
+### Which packages a device is built from
+
+`sources:` is a top-level block of the **device** file, beside `device:` and
+`node:`, and it names the packages the build fetches:
+
+```yaml
+device:
+  name: bench-node
+  board: nrf7002dk/nrf5340/cpuapp
+
+sources:
+  sdk: sdk/mcuhome-sdk:0.1.9
+  build_workspace: build-workspace/mcuhome-build-workspace:0.1.10.dev1
+  build_tools: build-tools/mcuhome-build-tools
+```
+
+The block is optional, every entry in it is optional, and each entry overrides
+its own package and nothing else. **Nothing writes this block for you**: a
+device created by `mcuhome device new` carries no `sources:` at all, and a build
+never adds one. Write an entry when you want a device pinned; leave it out — the
+normal case — and the version is resolved at build time, as the next two
+sections describe. The form of a reference is
+`[registry/]<source>/<package>[:version][@sha256:…]`, the spelling you already
+know from docker.
+
 ### Which SDK a build uses
 
 A device that names no version in `sources.sdk` is built with the newest release

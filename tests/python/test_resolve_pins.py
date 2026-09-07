@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import build_package_archive
+from conftest import VALID_CONFIG, build_package_archive, resolve_file
 from mcuhome.model.buildenvironment import DEFAULT_BUILD_TOOLS, DEFAULT_BUILD_WORKSPACE
 from mcuhome.model.context import PackagePin
 from mcuhome.model.errors import BuildError
@@ -507,6 +507,108 @@ def test_a_device_override_replaces_one_derivation_only(tmp_path) -> None:
     # still comes from the release.
     assert pin.tools.sha256 == "cd" * 32
     assert pin.workspace.sha256 == hashes[WORKSPACE]
+
+
+def _source_with_environment(tmp_path: Path):
+    """A source directory holding the SDK release and the two packages."""
+    source = tmp_path / "src"
+    _sdk_with_lock(
+        source,
+        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
+    )
+    return source, _environment_index(source)
+
+
+def _pins_of(model, source: Path, work_root: Path):
+    """The two pins a device model resolves to, through the production path.
+
+    The same three model fields ``create_build_context`` hands over, in
+    the same order, so what this asserts is what a build would get.
+    """
+    constraint, prereleases = sdk_constraint(model.sources.sdk)
+    found = resolve_sdk((source,), constraint=constraint, prereleases=prereleases)
+    return (constraint, prereleases), resolve_environment(
+        workspace=model.sources.build_workspace,
+        tools=model.sources.build_tools,
+        sdk_source=model.sources.sdk,
+        sdk=found,
+        sources=(source,),
+        work_root=work_root,
+    )
+
+
+def test_a_device_without_sources_states_no_pin_and_gets_the_defaults(
+    tmp_path, write_config
+) -> None:
+    """The ordinary device: nothing written down, everything resolved.
+
+    A device file that names no ``sources:`` carries the three default
+    references — a package and no version — so the SDK resolves against
+    the minor this workbench was released alongside and the environment
+    against what that SDK release states. Nothing is written back into the
+    device, which is what keeps it from being frozen onto whatever was
+    current on the day it was created.
+    """
+    source, hashes = _source_with_environment(tmp_path)
+    model = resolve_file(write_config(VALID_CONFIG))
+
+    assert (model.sources.sdk, model.sources.build_workspace, model.sources.build_tools) == (
+        DEFAULT_SDK,
+        DEFAULT_BUILD_WORKSPACE,
+        DEFAULT_BUILD_TOOLS,
+    )
+    assert sdk_constraint(model.sources.sdk) == (DEFAULT_SDK_CONSTRAINT, True)
+    _, pin = _pins_of(model, source, tmp_path / "work")
+    assert pin.workspace.sha256 == hashes[WORKSPACE]
+    assert pin.tools.sha256 == hashes[TOOLS]
+
+
+def test_a_device_file_can_pin_the_sdk(tmp_path, write_config) -> None:
+    """``sources.sdk`` in a device file decides the SDK constraint.
+
+    The device names a version, so the default minor does not apply and
+    the pre-release rule goes back to the ordinary one — which is
+    :func:`sdk_constraint`'s answer, not this test's own arithmetic.
+    """
+    source, hashes = _source_with_environment(tmp_path)
+    model = resolve_file(write_config(VALID_CONFIG + f"\nsources:\n  sdk: {DEFAULT_SDK}:0.1.0\n"))
+
+    assert model.sources.sdk == f"{DEFAULT_SDK}:0.1.0"
+    stated, pin = _pins_of(model, source, tmp_path / "work")
+    assert stated == ("==0.1.0", None)
+    # The other two entries were not stated and still come from the release.
+    assert pin.workspace.sha256 == hashes[WORKSPACE]
+    assert pin.tools.sha256 == hashes[TOOLS]
+
+
+@pytest.mark.parametrize(
+    ("key", "package"),
+    [("build_workspace", WORKSPACE), ("build_tools", TOOLS)],
+)
+def test_a_device_file_can_pin_one_environment_package(
+    tmp_path, write_config, key: str, package: str
+) -> None:
+    """Each environment override reaches the resolution, and alone.
+
+    The stated package is the device's word — version and hash, so no
+    index is consulted for it at all — while the other one still comes
+    out of the SDK release's lock. That the two are independent is the
+    property: a device that pins one package must not silently pin the
+    other to today's version with it.
+    """
+    source, hashes = _source_with_environment(tmp_path)
+    kind = "build-workspace" if key == "build_workspace" else "build-tools"
+    reference = f"{kind}/{package}:{_LOCK_VERSION}@sha256:{'cd' * 32}"
+    model = resolve_file(write_config(VALID_CONFIG + f"\nsources:\n  {key}: {reference}\n"))
+
+    assert getattr(model.sources, key) == reference
+    _, pin = _pins_of(model, source, tmp_path / "work")
+    stated, derived = (
+        (pin.workspace, pin.tools) if key == "build_workspace" else (pin.tools, pin.workspace)
+    )
+    other = TOOLS if key == "build_workspace" else WORKSPACE
+    assert stated.sha256 == "cd" * 32
+    assert derived.sha256 == hashes[other]
 
 
 def test_a_release_without_a_lock_is_refused_legibly(tmp_path) -> None:

@@ -226,6 +226,24 @@ class RawNodeModel(RawBase):
 
 
 @dataclass(kw_only=True)
+class RawSources(RawBase):
+    """``sources:`` — where the packages a build needs are fetched from.
+
+    Every entry is optional and every one of them is an override: what a
+    device does not name is resolved at build time (the SDK against the
+    version this workbench was released alongside, the two environment
+    packages against what that SDK release states it was built with), and
+    nothing is ever written back into the device. So the absent value here
+    is ``None`` — "the device said nothing" — and not the default itself,
+    which is :class:`~mcuhome.model.model.SourcesModel`'s to state.
+    """
+
+    sdk: str | None = None
+    build_workspace: str | None = None
+    build_tools: str | None = None
+
+
+@dataclass(kw_only=True)
 class RawAutomation(RawBase):
     id: str | None = None
 
@@ -237,6 +255,7 @@ class RawConfig(RawBase):
     network: RawNetwork | None = None
     hardware: RawHardware | None = None
     node: RawNodeModel | None = None
+    sources: RawSources | None = None
     automations: list[RawAutomation] = field(default_factory=list)
     automations_loc: Location | None = None
 
@@ -597,6 +616,27 @@ def _parse_device(reader: MapReader) -> RawDevice:
     )
 
 
+def _parse_sources(reader: MapReader) -> RawSources:
+    """``sources:`` — three optional package references, as text.
+
+    The references are not taken apart here. Their grammar is
+    ``[registry/]<source>/<package>[:version][@sha256:…]``, and the one
+    place that knows it is the resolution that has to answer with a pin
+    (:mod:`mcuhome.workbench.resolve_pins`), which refuses a reference it
+    cannot resolve naming the part that is wrong. Splitting that
+    knowledge in two would give a device file two graders of the same
+    string.
+    """
+    reader.reject_unknown({"sdk", "build_workspace", "build_tools"})
+    return RawSources(
+        loc=reader.loc,
+        locs=reader.all_locs(),
+        sdk=reader.string("sdk"),
+        build_workspace=reader.string("build_workspace"),
+        build_tools=reader.string("build_tools"),
+    )
+
+
 def _parse_version(reader: MapReader) -> str | None:
     """``device.version``, as a string, or None when it is not written.
 
@@ -882,7 +922,7 @@ def parse_config(data: dict[str, Any], *, file: Path) -> RawConfig:
         errors=errors,
     )
     root.reject_unknown(
-        {"device", "network", "hardware", "node", "automations"},
+        {"device", "network", "hardware", "node", "sources", "automations"},
         planned=PLANNED_SECTIONS,
     )
 
@@ -903,6 +943,7 @@ def parse_config(data: dict[str, Any], *, file: Path) -> RawConfig:
     network_reader = root.mapping("network")
     hardware_reader = root.mapping("hardware")
     node_reader = root.mapping("node")
+    sources_reader = root.mapping("sources")
 
     automations: list[RawAutomation] = []
     automation_items = root.sequence("automations")
@@ -926,6 +967,7 @@ def parse_config(data: dict[str, Any], *, file: Path) -> RawConfig:
         network=_parse_network(network_reader) if network_reader is not None else None,
         hardware=_parse_hardware(hardware_reader) if hardware_reader is not None else None,
         node=_parse_node(node_reader) if node_reader is not None else None,
+        sources=_parse_sources(sources_reader) if sources_reader is not None else None,
         automations=automations,
         automations_loc=root.key_loc("automations") if root.has("automations") else None,
     )

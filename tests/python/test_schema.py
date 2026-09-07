@@ -13,7 +13,50 @@ def test_unknown_top_level_section(write_config) -> None:
     errors = expect_failure(write_config(text))
     error = find_error(errors, 'Unknown key "sensors"')
     assert error.location.line == line_of(text, "sensors:")
-    assert error.hint == ("keys allowed here: automations, device, hardware, network, node")
+    assert error.hint == (
+        "keys allowed here: automations, device, hardware, network, node, sources"
+    )
+
+
+def test_sources_takes_the_three_package_overrides(write_config) -> None:
+    """``sources:`` is optional and so is every entry in it."""
+    text = VALID_CONFIG + (
+        "\nsources:\n"
+        "  sdk: sdk/mcuhome-sdk:0.1.9\n"
+        "  build_workspace: build-workspace/mcuhome-build-workspace:0.1.10.dev1\n"
+        "  build_tools: build-tools/mcuhome-build-tools\n"
+    )
+    model = resolve_file(write_config(text))
+    assert model.sources.sdk == "sdk/mcuhome-sdk:0.1.9"
+    assert model.sources.build_workspace == "build-workspace/mcuhome-build-workspace:0.1.10.dev1"
+    assert model.sources.build_tools == "build-tools/mcuhome-build-tools"
+
+
+def test_sources_refuses_a_key_it_does_not_know(write_config) -> None:
+    """A typo in a package name is refused where it stands, not at build time.
+
+    ``build_environment`` is refused with it, deliberately: the block
+    names the three packages a device may choose, and the container image
+    a local build happens to run in is not a property of the device.
+    """
+    text = VALID_CONFIG + "\nsources:\n  build_workspaces: build-workspace/x\n"
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, 'Unknown key "build_workspaces"')
+    assert error.location.line == line_of(text, "build_workspaces:")
+    assert error.hint == "keys allowed here: build_tools, build_workspace, sdk"
+
+    other = VALID_CONFIG + "\nsources:\n  build_environment: mcu-home/build-environment\n"
+    assert find_error(expect_failure(write_config(other)), 'Unknown key "build_environment"')
+
+
+def test_sources_entries_must_be_text(write_config) -> None:
+    text = VALID_CONFIG + "\nsources:\n  sdk:\n    - sdk/mcuhome-sdk\n"
+    errors = expect_failure(write_config(text))
+    error = find_error(errors, '"sdk:" must be text')
+    # A value's location is the value's own line, which for a block
+    # sequence is its first item — the same rule everywhere in this file.
+    assert error.location.line == line_of(text, "- sdk/mcuhome-sdk")
+    assert error.location.key == "sources.sdk"
 
 
 def test_reserved_section_says_which_revision(write_config) -> None:
