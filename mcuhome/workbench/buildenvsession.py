@@ -23,9 +23,9 @@ mount the same directories and run the same entry point in a container.
 
 **What a session is here.** One sequence of steps that together produce
 one set of artifacts (§1), running strictly one after another (§3). Two
-things distinguish a step from an invocation of the retired
-build-container contract, and both are the reason this module exists
-beside :mod:`mcuhome.workbench.orchestrator` rather than inside it:
+things distinguish a step from the legacy container invocation (retired
+at the switchover), and both are the reason this module exists beside
+:mod:`mcuhome.workbench.orchestrator` rather than inside it:
 
 * **Every step gets a fresh ``mcuhome/`` tree.** ``work`` is empty at the
   start of every step, and nothing a step wrote outside ``out`` survives
@@ -45,8 +45,8 @@ them.
 
 The answer is :class:`~mcuhome.workbench.orchestrator.LocalOutcome` —
 the same type the legacy container invocation (retired at the switchover)
-produces — so that a caller
-which only wants a firmware never has to ask which profile ran.
+produces — so that a caller which only wants a firmware never has to ask
+which profile ran.
 """
 
 from __future__ import annotations

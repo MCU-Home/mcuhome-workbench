@@ -1123,8 +1123,9 @@ def _decompress(archive: Path, plain: Path, *, limit: int) -> None:
 # The client
 # --------------------------------------------------------------------------
 
-#: One line of an invocation's raw log, as it arrives. Contract §8 makes
-#: standard output and standard error "one raw, opaque log stream" that a
+#: One line of an invocation's raw log, as it arrives. The legacy
+#: container invocation (retired at the switchover) makes standard
+#: output and standard error "one raw, opaque log stream" that a
 #: consumer MUST NOT parse for machine decisions.
 LineSink = Callable[[str], None]
 
@@ -1920,9 +1921,10 @@ class SessionClient:
 
         ``clean`` is the default and the safe one: it never silently
         reuses state, and it is what a release artifact requires. The
-        build itself returns an **unsigned** image plus the build actions
-        document's report shape (E55, E56); signing is a host-side step afterwards and this
-        client never performs it and never carries a key for it.
+        build itself returns an **unsigned** image plus the build report
+        (the shape the build actions document defines) (E55, E56);
+        signing is a host-side step afterwards and this client never
+        performs it and never carries a key for it.
         """
         return await self._start("build", {"mode": mode})
 

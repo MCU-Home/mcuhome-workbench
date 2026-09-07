@@ -86,12 +86,12 @@ from mcuhome.model.invocation import ACTIONS, CONTRACT_VERSION, REQUEST_VERSIONS
 # The package name and the index file name are shared vocabulary and
 # live in the model (`mcuhome.model.sdkindex`); they are re-exported
 # here under the names this module always offered
-# (`localbackend.SDK_PACKAGE_NAME`). The resolution against the index is
-# deliberately this backend's own: the legacy container invocation
-# (retired at the switchover) makes acquiring the
-# pinned bytes a backend duty, by exact version — constraint resolution
-# is the workbench's job (E65) and by the time a context exists its pin
-# is one version, not a range.
+# (`localbackend.SDK_PACKAGE_NAME`). The resolution against the index
+# is deliberately this backend's own: under the legacy container
+# invocation, acquiring the pinned bytes is the backend's duty, by
+# exact version — constraint resolution is the workbench's job (E65)
+# and by the time a context exists its pin is one version, not a
+# range.
 from mcuhome.model.sdkindex import INDEX_FILE, SDK_PACKAGE_NAME
 
 from mcuhome.workbench import programevents
@@ -230,7 +230,8 @@ _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 #: puts this string in an argv.
 _CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}\Z")
 
-#: Every field §7.1.1 makes mandatory inside a ``program`` block, except
+#: Every field the legacy container invocation (retired at the
+#: switchover) makes mandatory inside a ``program`` block, except
 #: ``trees``, which is mandatory only in a ``describe`` result.
 PROGRAM_FIELDS = ("id", "version", "contract", "request", "result", "actions")
 
@@ -394,10 +395,11 @@ class ImageProfile:
     def tree_path(self, layer: str) -> Path | None:
         """Where the image keeps *layer*, or ``None`` if it names none.
 
-        §7.1.1: "``null`` asks, a path requires." A concrete path is where
-        the image keeps that tree **and**, for a tree the backend
-        supplies, the path the backend MUST supply it at; ``null`` means
-        "put it wherever you like and name it in ``trees``".
+        The legacy container invocation (retired at the switchover) drew
+        this line: ``null`` asks, a path requires. A concrete path is where
+        the image keeps that tree **and**, for a tree the backend supplies,
+        the path the backend MUST supply it at; ``null`` means "put it
+        wherever you like and name it in ``trees``".
         """
         trees = self.program.get("trees")
         entry = trees.get(layer) if isinstance(trees, dict) else None
@@ -476,12 +478,13 @@ class BackendConfig:
     #: and dies with it, which is a slow build rather than a broken one.
     ccache_dir: Path | None = None
     #: A cache to start warm from, offered **read-only** and with no
-    #: writable half at all. Contract §10: "shared backends MUST offer a
-    #: shared cache read-only for untrusted work" — which is the whole
-    #: difference between a backend building its operator's own projects
-    #: and one building whatever a stranger sent. Mutually exclusive with
-    #: :attr:`ccache_dir`, which is the two-role layout of a machine
-    #: whose builds are all its own.
+    #: writable half at all. The legacy container invocation (retired at
+    #: the switchover) required: "shared backends MUST offer a shared cache
+    #: read-only for untrusted work" — which is the whole difference
+    #: between a backend building its operator's own projects and one
+    #: building whatever a stranger sent. Mutually exclusive with
+    #: :attr:`ccache_dir`, which is the two-role layout of a machine whose
+    #: builds are all its own.
     shared_ccache_dir: Path | None = None
     #: Container labels for every container this backend starts. Backend
     #: policy rather than contract, and how a long-running caller finds
@@ -2059,22 +2062,23 @@ class LocalBackend:
     def _profile(
         self, reference: str, facts: ImageProfile, program: dict[str, Any]
     ) -> ImageProfile:
-        """Gate a ``describe`` answer against §7.1.1 before it becomes a profile.
+        """Gate a ``describe`` answer against contract rules before it becomes a profile.
 
         The pre-invocation gate, run on **both** the static ``describe.json``
-        path and the invoked-``describe`` path, because §7.1.1 makes the
-        check a precondition of invoking any working action rather than of
-        how the block was obtained: "A backend that does not implement the
-        value it finds here MUST NOT invoke a working action on this
-        program." Field presence alone is not that gate — a program block
-        can be complete and still name a contract, a request format or a
-        result format this backend cannot speak, and a build invoked on it
-        would read a result document described by a specification this side
-        does not have.
+        path and the invoked-``describe`` path, because the legacy container
+        invocation (retired at the switchover) makes the check a
+        precondition of invoking any working action rather than of how the
+        block was obtained: "A backend that does not implement the value it
+        finds here MUST NOT invoke a working action on this program." Field
+        presence alone is not that gate — a program block can be complete
+        and still name a contract, a request format or a result format
+        this backend cannot speak, and a build invoked on it would read a
+        result document described by a specification this side does not
+        have.
 
         The refusal is :func:`_image_unusable` and happens here, before
         ``acquire_sdk`` and before the container is started — the label
-        contradiction §7.1.1 calls "a contract violation against the image"
+        contradiction it calls "a contract violation against the image"
         included, which this backend surfaces as the same clean refusal
         rather than as a crash from inside a build.
         """
@@ -2707,7 +2711,8 @@ def _program_block_complete(program: dict[str, Any]) -> bool:
 
 
 def _program_problem(program: dict[str, Any], labels: dict[str, str]) -> str | None:
-    """Everything §7.1.1 makes hold about a ``describe`` before it is used.
+    """Everything the legacy container invocation (retired at the switchover)
+    makes hold about a ``describe`` before it is used.
 
     Every field of the block is mandatory in a ``describe`` result,
     ``trees`` included, and the gates that follow are the ones a backend
@@ -2741,11 +2746,12 @@ def _label_problem(program: dict[str, Any], labels: dict[str, str]) -> str | Non
     """The §2.1 cross-check: the image labels against what ``describe`` said.
 
     "A backend MUST verify them against ``describe`` and MUST NOT rely on a
-    label ``describe`` contradicts", and §7.1.1 goes further for the one
-    label with a counterpart in the block: ``program.contract`` "MUST equal
-    the ``org.mcuhome.build-environment.contract`` label; where the two disagree, ``describe``
-    is authoritative and the disagreement is a contract violation against
-    the image".
+    label ``describe`` contradicts", and the legacy container invocation
+    (retired at the switchover) goes further for the one label with a
+    counterpart in the block: the block's ``contract`` field "MUST equal the
+    ``org.mcuhome.build-environment.contract`` label; where the two
+    disagree, ``describe`` is authoritative and the disagreement is a
+    contract violation against the image".
 
     The other two labels have no counterpart to check against, so what is
     checked is that they are **present** — they are the coupling labels a
@@ -2882,8 +2888,8 @@ class EnvironmentUnusable(BuildError):
     """The environment is here and cannot be trusted with a build.
 
     ``describe`` did not answer, answered non-conformingly, or claimed
-    something this side does not implement — §7.1.1's pre-invocation
-    gate.
+    something this side does not implement — the legacy container
+    invocation's pre-invocation gate (retired at the switchover).
     """
 
 

@@ -111,9 +111,10 @@ IMAGE_LABELS = {
 #: The Zephyr line the pinned image carries, by its own label.
 ZEPHYR_LINE = "4.4"
 
-#: A conforming ``describe`` ``program`` block — every field §7.1.1 makes
-#: mandatory. ``sdk`` reports ``path: null``: "not in my image, mount it
-#: where you like".
+#: A conforming ``describe`` ``program`` block — every field the legacy
+#: container invocation (retired at the switchover) makes mandatory.
+#: ``sdk`` reports ``path: null``: "not in my image, mount it where you
+#: like".
 PROGRAM = {
     "id": "org.mcuhome.build-container",
     "version": "2.4.0",

@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """A container build, from the outside: which image, and one invocation.
 
-:mod:`mcuhome.workbench.orchestrator` speaks the build-container contract
-— given a *locked context directory* it drives one invocation through the
-ABI. This module is the thin surface above it:
+:mod:`mcuhome.workbench.orchestrator` drives the legacy container
+invocation (retired at the switchover) — given a *locked context
+directory* it drives one invocation through the ABI. This module is the
+thin surface above it:
 :func:`prepare_environment` turns what a device *says* about its build
 environment into one image sitting on this host, and
 :func:`run_locked_build` drives one ``build`` invocation over a context
@@ -22,8 +23,9 @@ context skip straight to here.
 takes a key at all: a locked context carries the **public** half as
 ``keys/signing.pub`` (ADR 0015 decision 8) and that is all a build ever
 sees of the key pair. The backend delivers an *unsigned* image plus the
-build actions document's report shape; the signature happens on the host afterwards, where
-the private key already is (:mod:`mcuhome.workbench.imgtool`).
+build report (the shape the build actions document defines); the signature
+happens on the host afterwards, where the private key already is
+(:mod:`mcuhome.workbench.imgtool`).
 
 **One network call, and it is the registry's.** Choosing an environment
 asks a registry which image it recommends

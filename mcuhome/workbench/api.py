@@ -452,11 +452,11 @@ def load_model(
 
 
 # read_model moved to mcuhome.model.modelfile (still re-exported here,
-# this module stays the supported surface): the SDK entry point reads
-# the model inside the build container, whose runtime is a bare
-# interpreter with no third-party packages available — so the reader lives in the package that
-# is dependency-free by construction, not behind this module's YAML
-# imports.
+# this module stays the supported surface): the SDK entry point reads the
+# model inside the build container, whose runtime is a bare interpreter
+# with no third-party packages available — so the reader lives in the
+# package that is dependency-free by construction, not behind this
+# module's YAML imports.
 
 
 @dataclass(frozen=True)

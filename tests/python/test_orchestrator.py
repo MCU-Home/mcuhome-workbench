@@ -1133,7 +1133,8 @@ def test_derive_patch_layers_reads_the_paths_not_a_declared_list(tmp_path) -> No
 
 
 # --------------------------------------------------------------------------
-# The §7.1.1 pre-invocation gate (contract/request/result versions, labels)
+# The legacy container invocation's pre-invocation gate (retired at the
+# switchover; contract/request/result versions, labels)
 # --------------------------------------------------------------------------
 #
 # Field presence alone is not the gate: a program block can be complete
@@ -1192,13 +1193,14 @@ def test_a_describe_that_cannot_write_our_result_version_is_refused(tmp_path) ->
 
 
 def test_a_contract_label_that_contradicts_describe_is_refused(tmp_path) -> None:
-    """§7.1.1: program.contract MUST equal the org.mcuhome.contract label;
-    a disagreement is a contract violation against the image, and this
-    backend refuses cleanly on it rather than building."""
+    """The legacy container invocation (retired at the switchover) requires
+    the block's ``contract`` field to equal the ``buildimage.CONTRACT_LABEL``
+    image label; a disagreement is a contract violation against the image,
+    and this backend refuses cleanly on it rather than building."""
     backend, context, seam = scenario(
         tmp_path,
         build=conforming,
-        describe_static=describe_result_document(),  # program.contract == 1
+        describe_static=describe_result_document(),  # the block's contract field == 1
         facts=image_facts(labels=_labels(**{buildimage.CONTRACT_LABEL: "9"})),
     )
     with pytest.raises(BuildError) as caught:
@@ -1796,7 +1798,8 @@ def test_a_closed_environment_refuses_to_invoke(tmp_path) -> None:
 
 
 def test_an_action_the_image_does_not_announce_is_refused_before_it_is_invoked(tmp_path) -> None:
-    """§7.1.1: "a backend MUST NOT invoke an action absent from the list"."""
+    """Under the legacy container invocation (retired at the switchover):
+    "a backend MUST NOT invoke an action absent from the list"."""
     program = json.loads(json.dumps(PROGRAM_BLOCK))
     program["actions"] = ["describe", "build"]
     backend, context, seam = scenario(

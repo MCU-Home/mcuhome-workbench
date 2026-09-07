@@ -47,7 +47,7 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_resolve_pins.py` | SDK pin resolution: index, directory, refusals |
 | `test_sessionclient.py` | the session protocol end to end against a live build server |
 | `test_signing.py` | the per-project signing key: where it is, what it is, how the refusals read (ADR 0015 §8) |
-| `test_imgtool.py` | detached signing over the build actions document's report shape |
+| `test_imgtool.py` | detached signing over the build report, whose shape the build actions document defines |
 | `test_context_workbench.py` | context creation/locking, the frozen context-ID rule (ADR 0018 §6) |
 | `test_export_workbench.py` | registry data and the `main.yaml` JSON schema as data |
 | `test_ota_workbench.py` | the Matter OTA image wrap around a freshly signed image |

@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Resolving a PEP 440 constraint to the one version that satisfies it.
 
-The constraint grammar is PEP 440 and the pre-release rule is ADR
-0018's amendment: a pre-release satisfies a constraint only when the
-constraint is itself a pre-release specifier or pre-releases are
-explicitly allowed. These tests pin both the happy path and every refusal
-the resolver owes a caller.
+The constraint grammar is PEP 440, amended so a pre-release satisfies a
+constraint only when the constraint is itself a pre-release specifier or
+pre-releases are explicitly allowed. These tests pin both the happy path
+and every refusal the resolver owes a caller.
 """
 
 from __future__ import annotations
