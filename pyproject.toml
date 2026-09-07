@@ -54,7 +54,7 @@ dependencies = [
   # ruamel.yaml keeps line/column information on the parsed tree; every
   # validation error in this package points at a line.
   "ruamel.yaml>=0.18",
-  # PEP 440 constraint resolution for the SDK and container pins (E52).
+  # PEP 440 constraint resolution for the SDK and container pins.
   "packaging>=23",
   # The project file is TOML: tomllib reads it (standard library since
   # 3.11), and this writes it. A tested writer over one of our own,

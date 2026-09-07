@@ -129,7 +129,7 @@ PROGRAM = {
     },
 }
 
-#: The one artifact whose content the contract fixes (§7.2.1), for the one
+#: The one artifact whose content the build actions document's report shape fixes, for the one
 #: consumer that needs it: the client that signs detached, on the host,
 #: after the unsigned image has come back (E55, E56).
 BUILD_REPORT = {
@@ -919,8 +919,8 @@ def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path
     """open → send-context → lock → build → get-artifact → close.
 
     The path the ``remote`` build method is: an unsigned image and the
-    §7.2.1 build report come back, attributed to a context ID both sides
-    computed independently.
+    build report in the build actions document's shape come back,
+    attributed to a context ID both sides computed independently.
     """
 
     async def scenario() -> None:
@@ -969,7 +969,7 @@ def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path
         assert not any("sign" in name for name in delivery.files)
         assert lines and any("build finished" in line for line in lines)
         # Two frames end an invocation and E58 gives them two names: the
-        # program's contract §8 announcement, numbered like every program
+        # program's own event-stream announcement, numbered like every program
         # event, and the server's verdict. Both reach the sink; only the
         # second is what `wait_finished` returned.
         seen = [name for name, _ in events]
@@ -1786,7 +1786,7 @@ def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
     assert second, "the second connection saw the replay"
     assert replayed == len(second), "the server replayed exactly what the caller received"
     assert set(first) & set(second) == set(), "nothing was delivered twice"
-    # The program emits seq 1..6 (contract §8 seeds them); together the
+    # The program emits seq 1..6 (its own event stream seeds them); together the
     # two connections saw exactly that, with no hole.
     assert sorted(first + second) == list(range(1, max(first + second) + 1))
 

@@ -53,7 +53,7 @@ pytest                           # the suite in ../tests/python/
 | `workbench/resolve_pins.py` | — | SDK pin resolution against an index or directory |
 | `workbench/buildmethods.py` | — | the three build methods behind `run_build` (E53/E64) |
 | `workbench/sessionclient.py` | — | the remote method's session-protocol client (ADR 0019) |
-| `workbench/imgtool.py` | — | detached signing over the §7.2.1 build report |
+| `workbench/imgtool.py` | — | detached signing over the build actions document's report shape |
 | `workbench/signing.py` | — | the per-project signing key and its refusals (ADR 0015 §8) |
 | `workbench/userpaths.py` | — | the process-boundary seam for `$HOME`-shaped lookups |
 

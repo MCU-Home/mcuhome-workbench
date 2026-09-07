@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Resolving a PEP 440 constraint to the one version that satisfies it.
 
-The constraint grammar is PEP 440 and the pre-release rule is E52's (ADR
-0018's amendment): a pre-release satisfies a constraint only when the
+The constraint grammar is PEP 440 and the pre-release rule is ADR
+0018's amendment: a pre-release satisfies a constraint only when the
 constraint is itself a pre-release specifier or pre-releases are
 explicitly allowed. These tests pin both the happy path and every refusal
 the resolver owes a caller.
@@ -63,7 +63,7 @@ def test_the_selected_string_is_returned_verbatim() -> None:
 
 
 def test_a_prerelease_is_excluded_from_a_stable_constraint() -> None:
-    """A stable constraint never resolves to a dev/pre-release (E52).
+    """A stable constraint never resolves to a dev/pre-release.
 
     ``2.5.0.dev0`` is the highest version in range, but ``>=2.4`` is not a
     pre-release specifier, so the pre-release is not a candidate at all and
@@ -73,7 +73,7 @@ def test_a_prerelease_is_excluded_from_a_stable_constraint() -> None:
 
 
 def test_a_prerelease_constraint_admits_the_prerelease() -> None:
-    """A pre-release specifier makes pre-releases candidates (E52).
+    """A pre-release specifier makes pre-releases candidates.
 
     ``>=2.5.0a1`` is itself a pre-release specifier, so ``2.5.0a1`` is in
     range — the other direction of the rule.

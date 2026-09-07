@@ -5,7 +5,7 @@
 A device configuration pins the SDK as a **constraint** — a range of
 acceptable versions — which something must resolve to a single exact
 version at context-creation time (ADR 0018 decision 3). This is that
-step. Product-owner decision E52 fixes the grammar: constraints are
+step. The constraint grammar is fixed: constraints are
 **PEP 440**, resolved with :class:`packaging.specifiers.SpecifierSet`,
 because ``packaging`` is already a dependency and PEP 440 is the one
 version grammar the Python ecosystem already agrees on — a caret/tilde
@@ -47,7 +47,7 @@ about the same rule; and it has to be in the workbench, because a
 workbench must not import the compiler (ADR 0020 decision 3) and
 ``remote`` is a workbench-only method.
 
-Pre-release rule (E52, stated so a reader need not reverse-engineer
+Pre-release rule (stated so a reader need not reverse-engineer
 ``packaging``): a dev or pre-release version (``2.5.0.dev0``, ``2.5.0a1``)
 satisfies a constraint **only** when the constraint is itself a
 pre-release specifier (``==2.5.0.dev0``, ``>=2.5.0a1`` — anything for
@@ -69,7 +69,8 @@ that resolution passes ``prereleases=True`` and takes the newest release
 of the minor, dev included. The minor bound does the work it was chosen
 for either way: 0.2 is refused. A constraint a **user** states, in a
 device's ``sources.sdk`` or on a command line, keeps the rule above
-untouched; somebody who wants a dev version says so, exactly as E52 asks.
+untouched; somebody who wants a dev version says so, exactly as the
+pre-release rule above asks.
 """
 
 from __future__ import annotations
@@ -114,8 +115,9 @@ __all__ = [
 ]
 
 # The index file and package name are shared vocabulary — a backend
-# re-reads the same directory to fetch the bytes (contract §9.1) and may
-# not import this module to know the names, so both live in the model
+# re-reads the same directory to fetch the bytes, a duty the legacy
+# container invocation (retired at the switchover) assigns to backends,
+# and may not import this module to know the names, so both live in the model
 # and are re-exported here under the names this module always offered.
 from mcuhome.model.sdkindex import DEFAULT_SDK, INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
 
@@ -268,7 +270,7 @@ def resolve_version(
 ) -> str:
     """The single highest version in *available* satisfying *constraint*.
 
-    *constraint* is PEP 440 (E52); *available* is a set of version
+    *constraint* is PEP 440; *available* is a set of version
     strings the caller already holds (never fetched). Returns the winning
     version as the exact string it appeared as in *available*, so a caller
     can map it straight back to whatever it keyed that version by (an
@@ -298,7 +300,8 @@ def resolve_version(
         ) from error
 
     # None means "follow the constraint" — but SpecifierSet.contains reads
-    # None as "admit pre-releases", the opposite of what E52 wants, so the
+    # None as "admit pre-releases", the opposite of what the pre-release
+    # rule above wants, so the
     # default is turned into the constraint's own pre-release nature here.
     allow = bool(specifier.prereleases) if prereleases is None else prereleases
 
@@ -566,7 +569,7 @@ def resolve_sdk(
         try:
             # SDK_ANY means "the newest package this source holds, whatever
             # it is" — and during development that is a dev release. The
-            # E52 pre-release rule (a dev version satisfies only a
+            # pre-release rule above (a dev version satisfies only a
             # pre-release constraint) is right for a real pin like ~=2.3
             # but wrong for "any", which is literally any: so an empty
             # constraint admits pre-releases, and a stated one keeps the
@@ -604,7 +607,7 @@ def _allow(constraint: str, prereleases: bool | None) -> bool | None:
 
     A caller that stated one is obeyed. Otherwise the empty specifier —
     "any version at all", which is literally any — admits pre-releases,
-    and every other constraint follows E52's own rule for itself.
+    and every other constraint follows the pre-release rule above for itself.
     """
     if prereleases is not None:
         return prereleases

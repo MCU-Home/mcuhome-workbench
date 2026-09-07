@@ -44,7 +44,8 @@ directory, an SDK tree and an entry point, and it drives steps against
 them.
 
 The answer is :class:`~mcuhome.workbench.orchestrator.LocalOutcome` —
-the same type the retired contract's path produces — so that a caller
+the same type the legacy container invocation (retired at the switchover)
+produces — so that a caller
 which only wants a firmware never has to ask which profile ran.
 """
 
@@ -211,8 +212,9 @@ def step_request(
     the specification's own example writes ``{}`` and an environment that
     reads ``parameters`` without checking for its absence is not wrong.
 
-    There is deliberately nothing else in it. The retired contract's
-    document carried the whole layout — every directory as an absolute
+    There is deliberately nothing else in it. The legacy container
+    invocation (retired at the switchover) carries the whole layout in
+    its request document — every directory as an absolute
     path, the trees, the limits — because the program was told where
     things were; here §4 fixes the tree relative to one environment
     variable, so a path in this document would be a second source of
@@ -350,7 +352,8 @@ def verify_step_artifacts(
 
     The walk under ``out`` is
     :func:`mcuhome.workbench.orchestrator.contained` — the same one the
-    retired contract's egress uses, because an egress check that exists
+    legacy container invocation (retired at the switchover) uses for its
+    egress, because an egress check that exists
     twice is an egress check that will differ once.
 
     §7 is what is enforced on the way: "Put only regular files and
@@ -603,8 +606,8 @@ class BuilderSession:
         # session starts") and which would let a stale `firmware.bin`
         # travel out of a build that never wrote one. `steps` is the same
         # question with disk attached: one build tree per build, kept
-        # forever. The retired contract's path clears its own for exactly
-        # these two reasons.
+        # forever. The legacy container invocation (retired at the
+        # switchover) clears its own for exactly these two reasons.
         self.out = _fresh(self.root / "out")
         self._steps = _fresh(self.root / "steps")
         self._control = _fresh(self.root / "control")

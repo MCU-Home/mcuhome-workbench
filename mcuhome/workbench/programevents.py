@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """An invocation's event stream: NDJSON on disk, read from the backend side.
 
-Build-container contract §8. The program appends one JSON object per
+The program appends one JSON object per
 line to the file the request document named — UTF-8, flushed after every
 line, append-only, never truncated — and every object carries an
 ``event`` name and a monotonic ``seq`` starting at 1.

@@ -255,7 +255,7 @@ def test_a_detached_signature_verifies_against_the_same_key(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# The §7.2.1 build report — the container backend's leaner report shape
+# The build report, in the build actions document's shape — leaner for the container backend
 # --------------------------------------------------------------------------
 
 
@@ -336,7 +336,9 @@ def test_read_build_report_refuses_malformed_arguments(tmp_path) -> None:
 
 
 def test_read_build_report_refuses_a_missing_signature_type(tmp_path) -> None:
-    """§7.2.1 makes signature_type mandatory so a client can refuse a mismatched key."""
+    """The build actions document's report shape makes signature_type
+    mandatory so a client can refuse a mismatched key.
+    """
     report = _report()
     del report["signing"]["signature_type"]
     out = _report_dir(tmp_path, report=report)
@@ -367,7 +369,9 @@ def test_read_build_report_refuses_a_wrong_signature_type(tmp_path) -> None:
 
 
 def test_plan_report_signing_signs_both_firmware_encodings(tmp_path) -> None:
-    """The §7.2.1 parameters apply to every firmware artifact: bin and hex."""
+    """The build actions document's report-shape parameters apply to every
+    firmware artifact: bin and hex.
+    """
     out = _report_dir(tmp_path)
     key = _key(tmp_path)
     plan = imgtool.plan_report_signing(out, key=key, env={imgtool.IMGTOOL_VAR: "imgtool"})

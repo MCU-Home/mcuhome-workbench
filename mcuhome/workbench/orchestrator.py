@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Driving a build container through the invocation ABI.
 
-The orchestrator. It does what the build-container contract §5 makes the
-driving party do — write the request document, exec
+The orchestrator. It drives the legacy container invocation (retired at
+the switchover) — write the request document, exec
 ``/mcuhome/run <action> <request>`` in a container, read the result
-document back and judge it against §5.3 — with **no server, no auth, no
+document back and judge it — with **no server, no auth, no
 sockets, no sessions**.
 
 **Why it lives in the workbench.** It used to be part of
@@ -87,7 +87,8 @@ from mcuhome.model.invocation import ACTIONS, CONTRACT_VERSION, REQUEST_VERSIONS
 # live in the model (`mcuhome.model.sdkindex`); they are re-exported
 # here under the names this module always offered
 # (`localbackend.SDK_PACKAGE_NAME`). The resolution against the index is
-# deliberately this backend's own: contract §9.1 makes acquiring the
+# deliberately this backend's own: the legacy container invocation
+# (retired at the switchover) makes acquiring the
 # pinned bytes a backend duty, by exact version — constraint resolution
 # is the workbench's job (E65) and by the time a context exists its pin
 # is one version, not a range.

@@ -12,8 +12,8 @@ takes the artifacts back.
 
 **The build always returns an unsigned image** (E55, E56). Signing is a
 single host-side step that happens after the artifacts are back, over the
-``build-report.json`` the build container declares (contract §7.2.1), and
-it is the same step for either method. Which leads to the one
+``build-report.json`` the build container declares, in the build actions
+document's report shape, and it is the same step for either method. Which leads to the one
 invariant this module is built around:
 
     **The private signing key never leaves the local machine.** It is a
@@ -35,8 +35,9 @@ both of them and deliberately not repeated here.
 compiler (ADR 0020 decision 3), so the two disciplines it shares with
 :mod:`mcuhome.workbench.orchestrator` — safe extraction and strict
 containment — are re-stated here rather than imported. Both copies name
-each other; the rule they implement is build-container contract §9.1,
-which states it once for "whatever transport delivered" an input.
+each other; the rule they implement is the one the legacy container
+invocation (retired at the switchover) states once for "whatever
+transport delivered" an input.
 
 **Optional dependencies.** ``aiohttp`` and ``zstandard`` are the
 transport and the archive codec, and neither is a base dependency of
@@ -377,7 +378,7 @@ class ContextIdMismatch(RemoteError):
             f"{local} here.",
             hint=(
                 "the context ID is content-addressed and both sides compute it from the "
-                "same frozen rule (build-container contract §3.3), so a disagreement "
+                "same frozen rule the build context format document states, so a disagreement "
                 "means the context on the server is not the context that was sent — the "
                 "session has been closed; open a new one and send it again"
             ),
@@ -1452,8 +1453,8 @@ class SessionClient:
             return
         if name == "invocation.verdict" and isinstance(invocation_id, str):
             # E46's *verdict*, and since E58 a name of its own. It used to
-            # share `invocation.finished` with the program's contract §8
-            # announcement and was told from it by the absence of `seq` —
+            # share `invocation.finished` with the program's own
+            # event-stream announcement and was told from it by the absence of `seq` —
             # so a program that omitted its counter had its own event read
             # as the server's judgement. The program's numbered
             # `invocation.finished` still arrives, and is delivered to the
@@ -1919,8 +1920,8 @@ class SessionClient:
 
         ``clean`` is the default and the safe one: it never silently
         reuses state, and it is what a release artifact requires. The
-        build itself returns an **unsigned** image plus the §7.2.1 build
-        report (E55, E56); signing is a host-side step afterwards and this
+        build itself returns an **unsigned** image plus the build actions
+        document's report shape (E55, E56); signing is a host-side step afterwards and this
         client never performs it and never carries a key for it.
         """
         return await self._start("build", {"mode": mode})
@@ -1970,7 +1971,7 @@ class SessionClient:
         survives a reconnect, and this is where a caller waits for it.
 
         **The verdict is the server's frame and has its own name.** The
-        program's contract §8 ``invocation.finished`` — numbered like
+        program's own ``invocation.finished`` event — numbered like
         every program event, emitted immediately before the result
         document is written — arrives first and is delivered as an
         ordinary event; it is not what this method returns. Only the

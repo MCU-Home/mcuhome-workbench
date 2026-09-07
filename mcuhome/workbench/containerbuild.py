@@ -22,7 +22,7 @@ context skip straight to here.
 takes a key at all: a locked context carries the **public** half as
 ``keys/signing.pub`` (ADR 0015 decision 8) and that is all a build ever
 sees of the key pair. The backend delivers an *unsigned* image plus the
-§7.2.1 build report; the signature happens on the host afterwards, where
+build actions document's report shape; the signature happens on the host afterwards, where
 the private key already is (:mod:`mcuhome.workbench.imgtool`).
 
 **One network call, and it is the registry's.** Choosing an environment
