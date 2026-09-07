@@ -85,7 +85,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.context import BUILD_CONTEXT_FILE, CONTEXT_FILE, format_generator_chain
+from mcuhome.model.context import (
+    BUILD_CONTEXT_FILE,
+    CONTEXT_FILE,
+    DeveloperEnvironment,
+    format_generator_chain,
+)
 from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
@@ -346,9 +351,9 @@ class BuildOptions:
     #: ``build.env_store``: the store's root. ``None`` is the user's
     #: cache home, which is where a machine nobody configured keeps it.
     env_store: Path | None = None
-    #: ``build.dev_workspace`` / ``build.dev_tools``: development mode.
+    #: ``build.dev_workspace``: a west workspace the developer maintains,
+    #: built against instead of the environment MCUHome provisions.
     dev_workspace: Path | None = None
-    dev_tools: Path | None = None
     #: ``build.python``: the interpreter that creates a build
     #: environment's virtual environment. ``None`` is the one MCUHome
     #: itself runs on, which is right whenever the host's Python is the
@@ -412,7 +417,6 @@ def build_options(settings: Settings) -> BuildOptions:
         mode_source=setting.source or setting.origin,
         env_store=path("build.env_store"),
         dev_workspace=path("build.dev_workspace"),
-        dev_tools=path("build.dev_tools"),
         python=settings.value("build.python") or None,
         workspace_sources=tuple(settings.value("build.workspace_sources")),
         tools_sources=tuple(settings.value("build.tools_sources")),
@@ -554,15 +558,13 @@ class BuildRequest:
     #: user's cache directory, which is what every build does unless
     #: somebody moved it — one cache per user, shared by every project.
     ccache_dir: Path | None = None
-    #: Development mode, for ``build.mode = subprocess`` only: an unpacked
-    #: build workspace and build tools the developer maintains, used
-    #: instead of the ones MCUHome provisions into its store. ``None`` —
-    #: the ordinary case — takes the ``build.dev_workspace`` /
-    #: ``build.dev_tools`` configuration keys, which are unset on a
-    #: machine that is not developing the build environment itself. Both
-    #: or neither.
+    #: A development build, for ``build.mode = subprocess`` only: a west
+    #: workspace the developer maintains, built against instead of the
+    #: environment MCUHome provisions into its store. ``None`` — the
+    #: ordinary case — takes the ``build.dev_workspace`` configuration
+    #: key, which is unset on a machine that is not developing the SDK
+    #: itself.
     dev_workspace: Path | None = None
-    dev_tools: Path | None = None
 
     # -- remote --------------------------------------------------------
     #: The build server's address, as a person writes it: a host, a
@@ -709,6 +711,52 @@ def _refuse_image_without_container(image: str, *, source: str) -> ConfigError:
     )
 
 
+def _refuse_developer_without_subprocess(workspace: Path, *, source: str) -> ConfigError:
+    """A development workspace was named for a build that runs in a container.
+
+    The two cannot be combined, and not for want of plumbing: a
+    development build runs the builder out of the workspace's own SDK
+    checkout with the tools on the person's ``PATH``, and a container
+    build runs a fixed image that has neither. Mounting the workspace
+    into the image would build it with the image's toolchain, which is
+    not what the setting asks for and not something anybody could tell
+    from the result.
+    """
+    return ConfigError(
+        f"This build is set to compile in a build container and to use the development "
+        f"workspace {workspace}.",
+        hint=(
+            f"the build mode is {MODE_CONTAINER} (from {source}). A development build "
+            f"runs on this machine with your own tools, so either build without a "
+            f"container:\n"
+            f"    mcuhome config set build.mode {MODE_SUBPROCESS}\n"
+            f"or unset {subprocessbuild.DEV_WORKSPACE_OPTION} to build in the container."
+        ),
+    )
+
+
+def _refuse_developer_remotely(workspace: Path) -> ConfigError:
+    """A development workspace was named for a build that happens elsewhere.
+
+    A development build compiles the workspace on this machine with the
+    tools on this ``PATH``; a build server has neither, and the context
+    such a build writes names no environment a server could resolve. So
+    the setting cannot be honoured there and cannot be quietly dropped
+    either — a build that ignored it would compile the pinned packages
+    and look exactly like the build the person meant.
+    """
+    return ConfigError(
+        f"This build is set to run on a build server and to use the development "
+        f"workspace {workspace}.",
+        hint=(
+            "a development build compiles that workspace here, with your own tools, so "
+            f"either build locally:\n"
+            f"    mcuhome device build <device> --build-method local\n"
+            f"or unset {subprocessbuild.DEV_WORKSPACE_OPTION} to build on the server."
+        ),
+    )
+
+
 def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     """The build target a method *name* and a request describe together.
 
@@ -723,12 +771,12 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     the empty string mean the default and an unknown name is the same
     refusal a caller would have got from ``run_build``.
 
-    **This is also where the configuration is consulted** for the three
-    values a request may leave open — the mode and the two development
-    trees (:func:`options_for`) — because they answer the same question
-    the method-specific fields answer and must be read in one place with
-    them. What the request states wins over what the machine is
-    configured to do: a caller that named a value meant it.
+    **This is also where the configuration is consulted** for the two
+    values a request may leave open — the mode and the development
+    workspace (:func:`options_for`) — because they answer the same
+    question the method-specific fields answer and must be read in one
+    place with them. What the request states wins over what the machine
+    is configured to do: a caller that named a value meant it.
     """
     chosen = resolve_method(method)
     if chosen == LOCAL:
@@ -751,14 +799,26 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
                         if request.dev_workspace is not None
                         else options.dev_workspace
                     ),
-                    dev_tools=(
-                        request.dev_tools if request.dev_tools is not None else options.dev_tools
-                    ),
                 )
+            )
+        developing = (
+            request.dev_workspace if request.dev_workspace is not None else options.dev_workspace
+        )
+        if developing is not None:
+            raise _refuse_developer_without_subprocess(
+                developing,
+                source="this build" if request.build_mode else options.mode_source,
             )
         return LocalBuild(
             execution=ContainerExecution(image=request.image, ccache_dir=request.ccache_dir)
         )
+    developing = (
+        request.dev_workspace
+        if request.dev_workspace is not None
+        else options_for(request).dev_workspace
+    )
+    if developing is not None:
+        raise _refuse_developer_remotely(developing)
     return RemoteBuild(
         server=request.server,
         token=request.token,
@@ -1040,6 +1100,7 @@ def compose_subprocess_build(
         work_root=work_root,
         on_line=on_line,
     )
+    developing = environment is not None and environment.developer
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
     if not supplied:
@@ -1056,17 +1117,33 @@ def compose_subprocess_build(
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
+            developer=developing,
         )
         if on_step is not None:
             on_step("context", **context_facts(context_dir))
 
     if environment is not None:
-        # Development mode's refusal, before this composition has read or
-        # written anything else: a context that carries patches cannot be
-        # built against trees the developer maintains, and the person has
-        # to hear that before a lock lands in a directory they keep.
+        # A development build's refusal, before this composition has read
+        # or written anything else: a context that carries patches cannot
+        # be built against a workspace the developer maintains, and the
+        # person has to hear that before a lock lands in a directory they
+        # keep.
         subprocessbuild.refuse_patched_context(context_dir, environment)
     pin = read_context_request(context_dir / CONTEXT_FILE).build_environment
+    if supplied and developing and not isinstance(pin, DeveloperEnvironment):
+        # A context somebody else created, pinning an environment, handed
+        # to a build that would compile a workspace instead. Building it
+        # anyway would produce firmware whose context claims it was
+        # compiled from packages it never saw — the one thing a pin is
+        # for. Neither half can be honoured, so neither is.
+        raise EnvironmentUnavailable(
+            f"This build context is pinned to {pin.described()} and this build compiles "
+            f"the workspace at {environment.workspace.path}.",
+            hint=(
+                f"unset {subprocessbuild.DEV_WORKSPACE_OPTION} to build the context as "
+                "it is pinned, or let this build create its own context from the device"
+            ),
+        )
     if on_step is not None:
         on_step("environment")
     if environment is None:
@@ -1089,12 +1166,15 @@ def compose_subprocess_build(
             on_line=on_line,
         )
     subprocessbuild.refuse_patched_context(context_dir, environment)
-    subprocessbuild.check_environment(
-        environment,
-        pin=pin,
-        generator=format_generator_chain(read_generator_chain(context_dir / BUILD_CONTEXT_FILE)),
-        zephyr_constraint=model.toolchain.zephyr_constraint,
-    )
+    if not developing:
+        subprocessbuild.check_environment(
+            environment,
+            pin=pin,
+            generator=format_generator_chain(
+                read_generator_chain(context_dir / BUILD_CONTEXT_FILE)
+            ),
+            zephyr_constraint=model.toolchain.zephyr_constraint,
+        )
     if on_step is not None:
         on_step("environment", build_environment=environment.described(), fetched=False)
     lock_context(context_dir)
@@ -1131,31 +1211,18 @@ def compose_subprocess_build(
 def _developer_environment(
     execution: SubprocessExecution,
 ) -> subprocessbuild.Environment | None:
-    """The build environment a developer stated, or ``None`` for the store.
+    """The developer's own workspace, or ``None`` for the store.
 
-    Development mode is all or nothing: an environment is a *set* of
-    packages, and half a set is not one — a workspace of one version
-    against tools of another is exactly the kind of build that fails
-    somewhere deep in a compile with nothing to point at. So one path
-    without the other is refused here, before anything is fetched or
-    written, and naming the one that is missing.
+    One setting decides it, and what it names is a *whole* environment
+    rather than half of one: a west workspace carries the sources, its
+    manifest repository is the SDK, and the tools are the ones on the
+    ``PATH`` the build was started from. There is nothing to state
+    alongside it and nothing to keep in step with it.
     """
-    workspace, tools = execution.dev_workspace, execution.dev_tools
-    if workspace is None and tools is None:
+    workspace = execution.dev_workspace
+    if workspace is None:
         return None
-    if workspace is None or tools is None:
-        missing = (
-            subprocessbuild.DEV_WORKSPACE_OPTION
-            if workspace is None
-            else subprocessbuild.DEV_TOOLS_OPTION
-        )
-        raise EnvironmentUnavailable(
-            f"MCUHome needs both halves of a build environment and {missing} is not set.",
-            hint=f"set {subprocessbuild.DEV_WORKSPACE_OPTION} and "
-            f"{subprocessbuild.DEV_TOOLS_OPTION} together, or unset both to build "
-            "against the build environment MCUHome unpacks itself",
-        )
-    return subprocessbuild.environment_from_paths(workspace, tools)
+    return subprocessbuild.environment_from_workspace(workspace)
 
 
 async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution) -> BuildOutcome:
@@ -1237,6 +1304,36 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         report=BUILD_REPORT_FILE,
         image=result.image,
         detail=result,
+    )
+
+
+def _refuse_developer_context(context_dir: Path) -> None:
+    """A context of a development build is never sent to a build server.
+
+    Such a context names no build environment — there is none to name:
+    its sources are somebody's checkout and its tools are whatever was on
+    their ``PATH``. A server finds an environment by the packages a
+    context pins, so it could only refuse this one, and it would refuse
+    it after the upload. Saying so here costs a directory read and saves
+    a gigabyte.
+
+    Read off the directory rather than taken from the caller, because a
+    caller that hands over a context is exactly the caller that did not
+    create it.
+    """
+    request_path = Path(context_dir) / CONTEXT_FILE
+    if not request_path.is_file():
+        return
+    if not isinstance(read_context_request(request_path).build_environment, DeveloperEnvironment):
+        return
+    raise RemoteNotConfigured(
+        "This build context was created for a development build and cannot be sent to "
+        "a build server.",
+        hint=(
+            "it names no build environment, because it compiles a workspace you "
+            "maintain on this machine — build it here (mcuhome build), or create a "
+            "context against MCUHome's own build environment and send that"
+        ),
     )
 
 
@@ -1341,6 +1438,8 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
     url = websocket_url(target.server)
     work_root = _work_root(request, ".mcuhome-remote")
     context_dir = Path(request.context_dir) if request.context_dir is not None else None
+    if context_dir is not None:
+        _refuse_developer_context(context_dir)
     if context_dir is None:
         if not request.sdk_sources:
             raise RemoteNotConfigured(

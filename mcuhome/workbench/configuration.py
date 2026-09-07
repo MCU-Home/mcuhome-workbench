@@ -281,19 +281,14 @@ OPTIONS: tuple[Option, ...] = (
         kind="path",
         help="where unpacked build environments are kept; unset means the user cache directory",
     ),
-    # Development mode. Both or neither — an environment is a set of
-    # packages and half a set is not one — which is refused where the
-    # two are read, because a refusal that can name the missing half is
-    # worth more than a declaration that can only say "required".
+    # A development build: one setting, because what it names is a whole
+    # environment. The workspace carries the sources, its manifest
+    # repository is the SDK that gets compiled, and the tools are the
+    # ones on the PATH the build was started from.
     Option(
         "build.dev_workspace",
         kind="path",
-        help="an unpacked build workspace to build against instead of a provisioned one",
-    ),
-    Option(
-        "build.dev_tools",
-        kind="path",
-        help="unpacked build tools to build against instead of a provisioned one",
+        help="a west workspace of your own to build against instead of a provisioned one",
     ),
     # A name, not a path option: `python3.13` is what an operator writes
     # and it is looked up on PATH like any other program, while a path

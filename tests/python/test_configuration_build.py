@@ -43,7 +43,6 @@ KEYS = {
     "build.mode": "MCUHOME_BUILD_MODE",
     "build.env_store": "MCUHOME_BUILD_ENV_STORE",
     "build.dev_workspace": "MCUHOME_BUILD_DEV_WORKSPACE",
-    "build.dev_tools": "MCUHOME_BUILD_DEV_TOOLS",
     "build.python": "MCUHOME_BUILD_PYTHON",
     "build.sdk_sources": "MCUHOME_BUILD_SDK_SOURCES",
     "build.workspace_sources": "MCUHOME_BUILD_WORKSPACE_SOURCES",
@@ -364,3 +363,19 @@ def test_a_registrys_configured_anchor_is_printed_as_a_string(project: Project) 
     write_project(project, "registry:\n  packages.example.org: {}\n")
     printed = resolve_settings(project=project, env={}).print_data()["registry"]["value"]
     assert printed[0]["anchor"] is None
+
+
+def test_the_retired_developer_tools_key_is_unknown(project: Project) -> None:
+    """``build.dev_tools`` is gone, and a file that still states it says so.
+
+    It named a second half that no longer exists: a development build is
+    pointed at one west workspace and takes its tools from the ``PATH``
+    it was started from. A key left behind in a configuration file would
+    otherwise read as configuring something, and configure nothing.
+    """
+    write_project(project, "build:\n  dev_tools: /somewhere/tools\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert caught.value.message == "There is no option called 'build.dev_tools'."
+    # The one that replaced it is in the list of what the section has.
+    assert "dev_workspace" in (caught.value.hint or "")

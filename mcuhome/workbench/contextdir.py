@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from mcuhome.model.buildenvironment import DEFAULT_BUILD_TOOLS, DEFAULT_BUILD_WORKSPACE
 from mcuhome.model.context import (
     BACKEND_DIR,
     BUILD_CONTEXT_FILE,
@@ -42,21 +43,23 @@ from mcuhome.model.context import (
     MODEL_FILE,
     PATCHES_DIR,
     SIGNING_KEY_FILE,
+    ContextEnvironment,
     ContextFile,
     ContextManifest,
     ContextRequest,
-    EnvironmentPin,
+    DeveloperEnvironment,
     GeneratorEntry,
     SdkPin,
     context_id,
     format_generator_chain,
     parse_generator_chain,
-    validate_environment,
     validate_manifest,
+    validate_request,
 )
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
+from mcuhome.model.sdkindex import DEFAULT_SDK
 from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench import __version__
@@ -65,6 +68,7 @@ from mcuhome.workbench.resolve_pins import resolve_environment, resolve_sdk, sdk
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
 __all__ = [
+    "DEVELOPER_SDK_FACT",
     "GENERATOR_PRODUCT",
     "ContextFormatVersionError",
     "ContextVerification",
@@ -82,6 +86,12 @@ __all__ = [
     "write_context_manifest",
     "write_context_request",
 ]
+
+#: What :func:`context_facts` reports as the SDK of a development build.
+#: The context states no version and no hash there, and a renderer that
+#: printed the empty string would say nothing where it means to say where
+#: the code came from.
+DEVELOPER_SDK_FACT = "from the workspace you are building in"
 
 _LAYER_NAME = re.compile(r"[a-z][a-z0-9_-]*\Z")
 _PATCH_NAME = re.compile(r"[0-9]{4}-[A-Za-z0-9._-]+\.patch\Z")
@@ -242,7 +252,7 @@ def create_context(
     *,
     out_dir: Path,
     sdk: SdkPin,
-    build_environment: EnvironmentPin,
+    build_environment: ContextEnvironment,
     signing_pub: str,
     created: datetime,
     patches_dir: Path | None = None,
@@ -343,6 +353,7 @@ def create_build_context(
     constraint: str | None = None,
     registry: RegistrySource | None = None,
     platform: str | None = None,
+    developer: bool = False,
 ) -> ContextRequest:
     """Resolve every pin and write a fresh base context at *out_dir*.
 
@@ -409,6 +420,46 @@ def create_build_context(
     server. The server accepts both empty; absence, not emptiness, is
     what a reader refuses as malformed.
     """
+    if developer:
+        # Nothing to resolve and nothing to fetch: this build compiles a
+        # checkout, and the format says so in the one way it can — the
+        # word, and the empty SDK hash that travels with it. Refusing an
+        # override here rather than ignoring it, because `sources.sdk`
+        # names a package to fetch and there is no package in this build.
+        # Every `sources.*` entry names a package to fetch, and a
+        # development build fetches nothing: the SDK is the workspace's
+        # manifest repository and the environment is the workspace and
+        # the person's own PATH. Honouring one would fetch a package
+        # nothing then builds; ignoring it would build something other
+        # than what the device says.
+        for key, stated, default in (
+            ("sdk", model.sources.sdk, DEFAULT_SDK),
+            ("build_workspace", model.sources.build_workspace, DEFAULT_BUILD_WORKSPACE),
+            ("build_tools", model.sources.build_tools, DEFAULT_BUILD_TOOLS),
+        ):
+            if stated != default:
+                raise BuildError(
+                    f'This device states sources.{key}: "{stated}", and this build '
+                    f"compiles a workspace you maintain.",
+                    hint=(
+                        "a development build compiles that workspace and the SDK "
+                        "checkout in it, and no package reference can name either — "
+                        f"remove sources.{key} from the device, or unset "
+                        "build.dev_workspace to build against the packages it names"
+                    ),
+                )
+        out_dir = Path(out_dir)
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        return create_context(
+            model,
+            out_dir=out_dir,
+            build_environment=DeveloperEnvironment(),
+            sdk=SdkPin(constraint="", version="", url="", sha256=""),
+            signing_pub=signing_pub,
+            created=created or datetime.now(UTC),
+        )
     prereleases = None
     if constraint is None:
         constraint, prereleases = sdk_constraint(model.sources.sdk)
@@ -662,8 +713,10 @@ def read_context_request(path: Path) -> ContextRequest:
     # The fields of the request a reader can get *wrong* rather than
     # miss, and the ones an identity is computed over: checked here so
     # the request reader is as strict as read_context_manifest, which
-    # gets the same check through validate_manifest.
-    validate_environment(request.build_environment)
+    # gets the same check through validate_manifest. The pair rule is
+    # among them — a document that names no environment and pins an SDK
+    # anyway is refused here rather than read and half-believed.
+    validate_request(request)
     return request
 
 
@@ -796,21 +849,27 @@ def context_facts(root: Path) -> dict[str, Any]:
         pin, environment, board = request.sdk, request.build_environment, request.board
     paths = _content_paths(root)
     facts.update(
-        sdk=pin.version,
+        # A developer context pins no SDK package and states no hash, so
+        # the version a renderer would print is empty. Saying where the
+        # SDK came from instead is the honest line and the one a person
+        # needs: this build compiles the checkout they are working in.
+        sdk=DEVELOPER_SDK_FACT if isinstance(environment, DeveloperEnvironment) else pin.version,
         sdk_sha256=pin.sha256,
         build_environment=environment.described(),
-        # The two halves apart as well as together, spelled the same way:
-        # a renderer that wants one line takes build_environment, one that
-        # wants a row per package takes these, and neither has to take the
-        # other one's shape apart.
-        build_workspace=f"{environment.workspace.name} {environment.workspace.version}",
-        build_tools=f"{environment.tools.name} {environment.tools.version}",
         board=board,
         files=len(paths),
         patches=[
             name[len(PATCHES_DIR) + 1 :] for name in paths if name.startswith(f"{PATCHES_DIR}/")
         ],
     )
+    if not isinstance(environment, DeveloperEnvironment):
+        # The two halves apart as well as together, spelled the same way:
+        # a renderer that wants one line takes build_environment, one that
+        # wants a row per package takes these, and neither has to take the
+        # other one's shape apart. A developer context has no packages to
+        # take apart, and an entry with empty members would be read as one.
+        facts["build_workspace"] = f"{environment.workspace.name} {environment.workspace.version}"
+        facts["build_tools"] = f"{environment.tools.name} {environment.tools.version}"
     return facts
 
 

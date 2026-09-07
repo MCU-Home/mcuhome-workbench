@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from mcuhome.model.context import (
     SIGNING_KEY_FILE,
     ContextManifest,
     ContextRequest,
+    DeveloperEnvironment,
     EnvironmentPin,
     PackagePin,
     SdkPin,
@@ -41,6 +43,7 @@ from ruamel.yaml import YAML
 
 from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench.contextdir import (
+    DEVELOPER_SDK_FACT,
     GENERATOR_PRODUCT,
     context_facts,
     create_context,
@@ -438,6 +441,33 @@ def test_the_facts_of_a_context_name_its_pins_and_its_patches(model, tmp_path: P
     ]
 
 
+def test_the_facts_of_a_development_context_say_where_the_code_came_from(
+    model, tmp_path: Path
+) -> None:
+    """A context that pins nothing still has to say something a person reads.
+
+    The version and the hash a renderer would print are empty in this
+    form — there is no package — so what the line says instead is where
+    the SDK came from. The two per-package facts are absent rather than
+    empty: an entry with empty members would be read as a package.
+    """
+    out_dir = tmp_path / "context"
+    manifest = _lock(
+        model,
+        out_dir,
+        build_environment=DeveloperEnvironment(),
+        sdk=SdkPin(constraint="", version="", url="", sha256=""),
+    )
+    facts = context_facts(out_dir)
+
+    assert facts["sdk"] == DEVELOPER_SDK_FACT
+    assert facts["sdk_sha256"] == ""
+    assert facts["build_environment"] == DeveloperEnvironment().described()
+    assert facts["id"] == manifest.id
+    assert "build_workspace" not in facts
+    assert "build_tools" not in facts
+
+
 def test_a_base_context_has_facts_but_no_identity_yet(model, tmp_path: Path) -> None:
     """Freezing is the locking party's act, so an unlocked context has no ID."""
     out_dir = tmp_path / "context"
@@ -665,3 +695,48 @@ def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Pa
     assert f"sha256: {SDK.sha256}" in text
     for entry in manifest.files:
         assert f"sha256: {entry.sha256}" in text
+
+
+def test_a_half_pinned_request_is_refused_on_read(model, tmp_path: Path) -> None:
+    """A context may not claim to be pinned by halves, and the reader says so.
+
+    The environment form and the SDK hash travel together: the word with
+    an empty hash, or the two package entries with a real one. A document
+    that mixes them would be read by one party as pinned and by another
+    as not, over the same bytes — so it is refused where it is read,
+    exactly as the lock is.
+    """
+    out_dir = tmp_path / "context"
+    _create(model, out_dir)
+    request = out_dir / CONTEXT_FILE
+    written = request.read_text(encoding="utf-8")
+
+    # The word, and the SDK package still pinned.
+    request.write_text(
+        re.sub(r"build_environment:\n(?:  .*\n)+", "build_environment: developer\n", written),
+        encoding="utf-8",
+    )
+    with pytest.raises(BuildError, match="empty package hash"):
+        read_context_request(request)
+
+    # The packages, and no SDK hash to go with them.
+    request.write_text(written.replace(SDK.sha256, ""), encoding="utf-8")
+    with pytest.raises(BuildError, match="not a SHA-256 hash"):
+        read_context_request(request)
+
+    # And the two forms, each whole, read back as themselves.
+    request.write_text(written, encoding="utf-8")
+    read = read_context_request(request)
+    assert read.sdk.sha256 == SDK.sha256
+    assert read.build_environment == ENVIRONMENT
+
+    developer = tmp_path / "developer"
+    _create(
+        model,
+        developer,
+        build_environment=DeveloperEnvironment(),
+        sdk=SdkPin(constraint="", version="", url="", sha256=""),
+    )
+    read = read_context_request(developer / CONTEXT_FILE)
+    assert read.build_environment == DeveloperEnvironment()
+    assert read.sdk.sha256 == ""

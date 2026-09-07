@@ -90,7 +90,6 @@ __all__ = [
     "git_config_file",
     "provision",
     "provisioned",
-    "require_manifest",
     "required_python",
     "store_root",
 ]
@@ -506,10 +505,12 @@ def _finalize(
 def require_manifest(tree: Path, manifest: str, name: str) -> dict:
     """The package's own statement of what it is, or a refusal.
 
-    Public because it is the one check a *developer-supplied* tree can
-    still be held to (:func:`mcuhome.workbench.subprocessbuild.environment_from_paths`):
-    nothing acquired those bytes, so there is no hash and no marker, and
-    what the tree says about itself is all there is.
+    Read once while an entry is unpacked and once more when it is
+    finalized, so an archive that is not the package it was acquired as
+    is caught before anything is created out of it. Module-level rather
+    than nested because both of those callers are, and not exported:
+    nothing outside this module has a package tree to hold to its own
+    manifest.
     """
     try:
         document = json.loads((tree / manifest).read_text(encoding="utf-8"))

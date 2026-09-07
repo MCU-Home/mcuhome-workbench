@@ -32,22 +32,38 @@ and the compiler cache lives in a cache tier the orchestrator provides.
 The one write this profile does outside its own session directory is the
 one ccache does inside the tier it was pointed at.
 
-**Development mode** is the same profile pointed at trees a developer
-maintains instead of at store entries
-(:func:`environment_from_paths`): a workspace they patch by hand, a
-tools tree they rebuilt. Nothing verified those bytes and nothing froze
-them, so the one thing that mode cannot do is take a build context's
-patches — applying them would edit somebody's own source trees and
-ignoring them would build firmware that is not what the context says.
-It is refused instead.
+**Development mode** is the same profile with a different *source* of
+the environment: a west workspace the developer maintains
+(:func:`environment_from_workspace`) instead of two provisioned store
+entries. Everything after that is the same machinery — the same session
+tree, the same request document, the same builder, the same view under
+``work`` — and the differences are exactly three. The SDK is the
+workspace's own manifest repository, delivered at ``mcuhome/sdk`` like
+any other; the tools are whatever is on the ``PATH`` the build was
+started from, so the child is the developer's own interpreter running
+the builder out of their checkout rather than an entry point out of a
+package; and nothing verified any of those bytes, so nothing is checked
+against a declaration, an interpreter or a package manifest.
+
+The one thing that mode cannot do is take a build context's patches —
+applying them would edit somebody's own source trees and ignoring them
+would build firmware that is not what the context says. It is refused
+instead.
+
+**Nothing is ever written into that workspace.** What the builder needs
+and a checked-out workspace does not carry — the two documents saying
+where its west workspace and its layers are — is written into the
+session, pointing at the workspace from outside
+(:mod:`mcuhome.workbench.devworkspace`).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +82,8 @@ from mcuhome.model.context import (
     BUILD_CONTEXT_FILE,
     MANIFEST_FILE,
     PATCHES_DIR,
+    ContextEnvironment,
+    DeveloperEnvironment,
     EnvironmentPin,
     PackagePin,
     format_generator_chain,
@@ -73,6 +91,7 @@ from mcuhome.model.context import (
 from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.jobs import JOBS_VAR
 
+from mcuhome.workbench import devworkspace
 from mcuhome.workbench.buildenvsession import (
     ACTION_BUILD,
     BASE_DIR_VAR,
@@ -85,16 +104,13 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.buildenvstore import (
     TOOLS_KIND,
-    TOOLS_MANIFEST,
     WORKSPACE_KIND,
-    WORKSPACE_MANIFEST,
     BuildEnvironmentError,
     StoreEntry,
     entry_directory,
     git_config_file,
     provision,
     provisioned,
-    require_manifest,
 )
 from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
 from mcuhome.workbench.orchestrator import (
@@ -108,8 +124,6 @@ from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
-    "DEV_OPTIONS",
-    "DEV_TOOLS_OPTION",
     "DEV_WORKSPACE_OPTION",
     "SHARED_CACHE_OPTION",
     "ENTRY_POINT_DIR",
@@ -120,27 +134,26 @@ __all__ = [
     "cache_tiers",
     "check_environment",
     "declaration_of",
+    "developer_launcher",
+    "developer_step_environment",
     "entry_point_of",
-    "environment_from_paths",
     "environment_from_pins",
     "environment_from_store",
+    "environment_from_workspace",
     "launcher",
     "refuse_patched_context",
     "run_locked_build",
     "step_environment",
 ]
 
-#: What points this profile at trees a developer maintains instead of at
-#: store entries. Named here because every refusal of development mode has
-#: to tell a person which setting to change; turning them into
-#: configuration is a separate piece of work.
 #: The configuration key that names a shared compiler cache, quoted in
 #: the refusal when the directory it names is not there.
 SHARED_CACHE_OPTION = "build.cache_shared"
 
+#: What points this profile at a west workspace the developer maintains
+#: instead of at the store. Named here because every refusal of a
+#: development build has to tell a person which setting to change.
 DEV_WORKSPACE_OPTION = "build.dev_workspace"
-DEV_TOOLS_OPTION = "build.dev_tools"
-DEV_OPTIONS = {WORKSPACE_KIND: DEV_WORKSPACE_OPTION, TOOLS_KIND: DEV_TOOLS_OPTION}
 
 #: Where the entry point sits inside the tools package. Not the
 #: specification's business — where an environment keeps its own content
@@ -211,50 +224,96 @@ CCACHE_IGNORE_OPTIONS = "-specs=*"
 #: is here.
 DEFAULT_PATH = "/usr/local/bin:/usr/bin:/bin"
 
+#: How a development build enters the builder: the interpreter on the
+#: person's own ``PATH``, running the module the SDK checkout carries.
+#: There is no entry point in that form — the entry point is the tools
+#: package's way of setting up an environment this build already has
+#: (:func:`developer_launcher`).
+BUILDER_INTERPRETER = "python3"
+BUILDER_MODULE = "mcuhome.compiler.abi"
+
 
 @dataclass(frozen=True)
 class Environment:
-    """The two package trees one subprocess build runs against.
+    """What one subprocess build runs against, in either of its two forms.
 
-    Two packages, and the entry point is in the tools one because the
-    interpreter it hands over to lives there too. Ordinarily both are
-    frozen store entries: this profile reads them and never writes into
-    either.
+    Ordinarily two frozen store entries: the workspace package carrying
+    the source world and the tools package carrying the toolchain, the
+    entry point among it because the interpreter it hands over to lives
+    there too. This profile reads both and writes into neither.
 
-    :attr:`developer` says they are not. **Development mode** is a
-    developer pointing the build at trees they maintain themselves —
-    a workspace they patch, a tools tree they rebuilt — instead of at
-    what the store provisioned. The bytes are then nobody's to vouch for:
-    they have no package hash, they are writable, and a build against
-    them is reproducible by nobody but the person who made them. That is
-    the point of the mode and also its one hard consequence, which
-    :func:`run_locked_build` enforces: a build context that carries
-    patches is refused rather than applied to somebody's own trees.
+    :attr:`tools` is ``None`` in the other form, and that absence *is*
+    the form: a **development build** runs against a west workspace the
+    developer maintains, with whatever tools are on the ``PATH`` it was
+    started from. There is no tools package, so there is no entry point
+    to run and no package manifest to check — the builder is started
+    directly out of the SDK the workspace carries
+    (:func:`developer_launcher`). Nobody published those bytes, so
+    nothing has a hash and a build against them is reproducible by nobody
+    but the person who made them. That is the point of the form and also
+    its one hard consequence, which :func:`run_locked_build` enforces: a
+    build context that carries patches is refused rather than applied to
+    somebody's own trees.
     """
 
+    #: The unpacked workspace package — or, for a development build, the
+    #: west workspace itself, with an empty name, version and hash
+    #: because nothing published it.
     workspace: StoreEntry
-    tools: StoreEntry
-    #: The trees were supplied by a developer rather than provisioned.
-    developer: bool = False
+    #: The unpacked tools package, or ``None`` for a development build.
+    #: **Stated always**, with no default, because it is what decides
+    #: which of the two forms this is: a caller that forgot it would
+    #: otherwise have assembled a development build by omission, and a
+    #: development build skips every check there is.
+    tools: StoreEntry | None
+    #: Development build: the workspace's manifest repository, which is
+    #: the SDK this build compiles and delivers at ``mcuhome/sdk``.
+    sdk: Path | None = None
+    #: What ``MCUHOME_BUILD_ENV_WORKSPACE`` names. ``None`` is the
+    #: workspace entry itself, which is what a package is; a development
+    #: build points it at the description written into the session
+    #: (:mod:`mcuhome.workbench.devworkspace`).
+    package_root: Path | None = None
 
     @property
-    def entry_point(self) -> Path:
-        return entry_point_of(self.tools)
+    def developer(self) -> bool:
+        """Whether this is a workspace the developer maintains.
+
+        Derived from the absence of a tools package rather than carried
+        beside it: the two could otherwise disagree, and every branch
+        that reads this asks it because there is no package to work with.
+        """
+        return self.tools is None
+
+    @property
+    def entry_point(self) -> Path | None:
+        """The entry point to place at the specification's path, if any.
+
+        ``None`` for a development build: the entry point is content of
+        the tools package — it puts that package's virtual environment,
+        CMake, Ninja and the Zephyr SDK on ``PATH`` — and a development
+        build has none of that to set up. Its tools are the ones the
+        person already has.
+        """
+        return None if self.tools is None else entry_point_of(self.tools)
+
+    @property
+    def workspace_root(self) -> Path:
+        """The directory ``MCUHOME_BUILD_ENV_WORKSPACE`` names."""
+        return self.package_root if self.package_root is not None else self.workspace.path
 
     def described(self) -> str:
-        """The package set, for a log line and for a build's own record."""
-        described = (
+        """The environment as one line, for a log and for a build's record."""
+        if self.tools is None:
+            # The path, because a development build has no version to
+            # name: two builds a week apart run against the same
+            # directory and different bytes, and a line stating anything
+            # else would be a line nobody can check afterwards.
+            return f"developer build from {self.workspace.path}"
+        return (
             f"{self.workspace.name} {self.workspace.version}, "
             f"{self.tools.name} {self.tools.version}"
         )
-        if not self.developer:
-            return described
-        # The paths, because in this mode the version is whatever the
-        # developer's trees say about themselves and two builds a week
-        # apart can state the same one over different bytes. A log line
-        # that names only the version would be a log line that cannot be
-        # trusted afterwards.
-        return f"{described} (developer trees at {self.workspace.path} and {self.tools.path})"
 
 
 def entry_point_of(tools: StoreEntry) -> Path:
@@ -284,38 +343,42 @@ def environment_from_store(
     )
 
 
-def environment_from_paths(workspace: Path | str, tools: Path | str) -> Environment:
-    """A build environment out of two directories a developer maintains.
+def environment_from_workspace(workspace: Path | str) -> Environment:
+    """A build environment out of a west workspace the developer maintains.
 
-    Development mode. The store's job — fetch, verify, unpack, finalize,
-    freeze — is skipped entirely, because there is nothing here that was
-    acquired: these are trees the person running the build made. What is
-    **not** skipped is every check that can still be made, and they are
-    the store's own, applied where the trees carry the answer:
+    A development build, and the **one** check it makes: that this is a
+    west workspace with a manifest repository checked out
+    (:func:`mcuhome.workbench.devworkspace.manifest_checkout`). Nothing
+    else is verified, and that is a decision rather than an omission —
+    everything the store checks is a statement somebody published about
+    bytes somebody published, and here nobody published anything. There
+    is no declaration to hold the environment to, no package manifest to
+    compare, no wheel set whose interpreter has to match, and no hash. A
+    tree the developer maintains is theirs, pristine or not.
 
-    * each directory exists and is a directory,
-    * each carries the package manifest of its kind — the same file the
-      entry point itself refuses to start without, and a different name
-      per kind, so a workspace handed in as the tools tree is caught
-      here rather than three minutes into a compile,
-    * that manifest states which package and version the tree is, so a
-      build log can say what it ran against,
-    * the tools tree carries an entry point this machine can execute.
+    The manifest repository **is** the SDK this build compiles: the
+    workspace's own checkout, delivered to the session at ``mcuhome/sdk``
+    like any other SDK, so a change the person makes in it is what gets
+    built. Nothing here writes into any of it — the description the
+    builder needs is written into the session instead
+    (:func:`mcuhome.workbench.devworkspace.write_environment`), when the
+    build actually starts and where it can be thrown away.
 
-    What cannot be checked is a hash: nothing published these bytes. The
-    environment is marked :attr:`Environment.developer` for that reason,
-    and everything downstream that has to behave differently reads that
-    flag rather than guessing from a path.
+    The name, version and hash of the workspace entry are empty on
+    purpose: they are what a package states about itself, and this is not
+    a package.
     """
+    path = Path(workspace).resolve()
+    checkout = devworkspace.manifest_checkout(path)
     return Environment(
-        workspace=_tree(Path(workspace), kind=WORKSPACE_KIND, manifest=WORKSPACE_MANIFEST),
-        tools=_require_entry_point(_tree(Path(tools), kind=TOOLS_KIND, manifest=TOOLS_MANIFEST)),
-        developer=True,
+        workspace=StoreEntry(kind=WORKSPACE_KIND, name="", version="", sha256="", path=path),
+        tools=None,
+        sdk=checkout,
     )
 
 
 def environment_from_pins(
-    pin: EnvironmentPin,
+    pin: ContextEnvironment,
     *,
     env: dict[str, str],
     workspace_source: str = WORKSPACE_SOURCE,
@@ -356,6 +419,20 @@ def environment_from_pins(
     kind may unpack to, by kind — a kind that is not in it takes the
     store's own bound.
     """
+    if isinstance(pin, DeveloperEnvironment):
+        # A context of a development build, handed to the store. There is
+        # nothing to provision — that context names no packages, on
+        # purpose — and the caller has lost track of which build this is,
+        # so it is said rather than crashed on.
+        raise BuildEnvironmentError(
+            "This build context was created for a development build and names no build "
+            "environment to unpack.",
+            hint=(
+                f"build it the way it was created — with {DEV_WORKSPACE_OPTION} pointing "
+                "at the workspace it belongs to — or create a context against MCUHome's "
+                "own build environment"
+            ),
+        )
     entries = []
     for package, kind, source, directories in (
         (pin.workspace, WORKSPACE_KIND, workspace_source, workspace_sources),
@@ -387,31 +464,6 @@ def environment_from_pins(
         )
     workspace, tools = entries
     return Environment(workspace=workspace, tools=_require_entry_point(tools))
-
-
-def _tree(directory: Path, *, kind: str, manifest: str) -> StoreEntry:
-    """One developer-supplied package tree, checked against what it claims.
-
-    ``sha256`` comes out empty and that is the honest value: these bytes
-    were never acquired from anywhere, so there is no hash anybody could
-    have checked them against.
-    """
-    if not directory.is_dir():
-        raise BuildEnvironmentError(
-            f"There is no directory at {directory} to build against.",
-            hint=f"point {DEV_OPTIONS[kind]} at an unpacked {kind} tree, or unset it "
-            "to build against the build environment MCUHome unpacks itself",
-        )
-    document = require_manifest(directory, manifest, str(directory))
-    name = document.get("package")
-    version = document.get("version")
-    if not isinstance(name, str) or not isinstance(version, str):
-        raise BuildEnvironmentError(
-            f"{directory / manifest} does not say which package and version it is.",
-            hint="a MCUHome build environment tree states both in its manifest — "
-            "rebuild the tree with the packaging scripts of the SDK it belongs to",
-        )
-    return StoreEntry(kind=kind, name=name, version=version, sha256="", path=directory)
 
 
 def _entry(store: Path, *, kind: str, name: str, version: str) -> StoreEntry:
@@ -491,15 +543,21 @@ def step_environment(
     insist on having — the session provides one when the caller states
     none, exactly as the image provides one for a container run under a
     UID it has no passwd entry for.
+
+    A **development build** is the exact opposite and is composed
+    elsewhere (:func:`developer_step_environment`): there the person's
+    own environment is the environment, and closing it would throw away
+    the tools the build is supposed to use.
     """
-    tools = environment.tools.path
-    workspace = environment.workspace.path
+    if environment.developer:
+        return developer_step_environment(step, environment=environment, env=env, jobs=jobs)
+    tools = environment.tools.path if environment.tools is not None else None
     values = {
         "PATH": env.get("PATH") or DEFAULT_PATH,
         "HOME": env.get("HOME") or str(step.session.home_dir),
         BASE_DIR_VAR: str(step.base_dir),
         TOOLS_ROOT_VAR: str(tools),
-        WORKSPACE_ROOT_VAR: str(workspace),
+        WORKSPACE_ROOT_VAR: str(environment.workspace_root),
         GIT_CONFIG_VAR: str(git_config_file(environment.workspace)),
         "CCACHE_BASEDIR": str(step.base_dir),
         "CCACHE_NOHASHDIR": "1",
@@ -521,6 +579,123 @@ def step_environment(
     if jobs is not None and jobs >= 1:
         values[JOBS_VAR] = str(jobs)
     return values
+
+
+def developer_step_environment(
+    step: Step,
+    *,
+    environment: Environment,
+    env: Mapping[str, str],
+    jobs: int | None = None,
+) -> dict[str, str]:
+    """What the builder is given in a development build: the person's own shell.
+
+    An **open** environment, inherited rather than composed, which is the
+    reverse of every other build MCUHome runs and is the whole point of
+    the mode. The tools are the ones on that ``PATH``: their west, their
+    CMake, their Zephyr SDK, their ``ZEPHYR_*``, their ccache
+    configuration. A build that closed the environment would be a build
+    against tools nobody installed.
+
+    Four things are added, and nothing is taken away except the one
+    variable that would be actively wrong:
+
+    ``MCUHOME_BUILDER_BASE_DIR`` and ``MCUHOME_BUILD_ENV_WORKSPACE``
+        Where this step's tree is, and where the description of the
+        workspace is — the two the builder cannot work out for itself.
+    ``PYTHONPATH``
+        The SDK checkout in front of whatever was there, because the
+        builder that runs is the one in the workspace being developed.
+    ``PYTHONDONTWRITEBYTECODE``
+        So that importing it leaves no ``__pycache__`` in somebody's
+        working tree. See the code below — this is the one write MCUHome
+        itself would otherwise make in there.
+    the job count
+        What the person asked for. It is a request about this build
+        rather than a property of their environment, so it is stated
+        even here.
+    ``MCUHOME_BUILD_ENV_TOOLS`` is **removed** when the caller's
+        environment carries one: it names a tools package, this build has
+        none, and a value left over from another build would put a
+        packaged toolchain in front of the developer's own.
+    """
+    values = dict(env)
+    values.pop(TOOLS_ROOT_VAR, None)
+    values[BASE_DIR_VAR] = str(step.base_dir)
+    values[WORKSPACE_ROOT_VAR] = str(environment.workspace_root)
+    # The one write MCUHome would otherwise make into the workspace, and
+    # it is this launcher's own doing: the builder is imported out of the
+    # SDK checkout, and CPython caches bytecode next to the source it
+    # imports. The checkout is reached through the view as a link, so
+    # those files land in the person's own tree — measured, on a real
+    # build: 24 `.pyc` files in three `__pycache__` directories under
+    # `mcuhome-sdk/`. A build that leaves
+    # nothing behind is worth more than the milliseconds a warm cache
+    # saves in front of a Zephyr compile.
+    values["PYTHONDONTWRITEBYTECODE"] = "1"
+    if environment.sdk is not None:
+        existing = values.get("PYTHONPATH")
+        values["PYTHONPATH"] = (
+            f"{environment.sdk}{os.pathsep}{existing}" if existing else str(environment.sdk)
+        )
+    if jobs is not None and jobs >= 1:
+        values[JOBS_VAR] = str(jobs)
+    return values
+
+
+def developer_launcher(
+    environment: Environment, *, env: Mapping[str, str], jobs: int | None = None
+) -> Launcher:
+    """How a step is entered in a development build: the builder, directly.
+
+    No entry point. That file is content of the **tools package** and its
+    whole job is to set an environment up — the package's virtual
+    environment first on ``PATH``, then its CMake, Ninja, gn and Zephyr
+    SDK — which in a development build is the developer's own job and
+    already done. What is left of the invocation is the part that is not
+    the package's: run ``mcuhome.compiler.abi`` with no arguments, in the
+    step's ``work``, with the base directory in the environment. That is
+    §6 exactly as the entry point would have handed it over, one process
+    earlier.
+
+    The interpreter is the ``python3`` on the ``PATH`` the build was
+    started from, resolved here rather than left to the child so that a
+    machine without one is a sentence instead of an exec failure inside a
+    supervisor's wait. The builder that runs is the SDK checkout's, put
+    on ``PYTHONPATH`` by :func:`developer_step_environment` — the same
+    thing the entry point does with the SDK the orchestrator delivers.
+    """
+
+    def launch(step: Step, on_line: LineSink | None) -> Running:
+        values = developer_step_environment(step, environment=environment, env=env, jobs=jobs)
+        interpreter = shutil.which(BUILDER_INTERPRETER, path=values.get("PATH"))
+        if interpreter is None:
+            raise BuildEnvironmentError(
+                f"There is no {BUILDER_INTERPRETER} on the PATH this build was started from.",
+                hint=(
+                    "a development build runs MCUHome's builder with your own Python, "
+                    "the way west does — start the build from the shell you develop "
+                    f"in, or unset {DEV_WORKSPACE_OPTION} to build against the build "
+                    "environment MCUHome unpacks itself"
+                ),
+            )
+        child = spawn_process(
+            [interpreter, "-m", BUILDER_MODULE],
+            env=values,
+            cwd=step.work,
+            on_line=on_line,
+        )
+        if not getattr(child, "started", True):
+            raise BuildEnvironmentError(
+                f"MCUHome could not start {interpreter} to run the build.",
+                hint=(
+                    "the interpreter on your PATH cannot be executed — check it with "
+                    f"{BUILDER_INTERPRETER} -V"
+                ),
+            )
+        return child
+
+    return launch
 
 
 def launcher(
@@ -661,15 +836,14 @@ def declaration_of(environment: Environment) -> Declaration | None:
     the archive is the same document, but nothing signs a sidecar, so it
     is not the one a refusal may rest on.
     """
-    path = environment.workspace.path / DECLARATION_FILE
-    if environment.developer and not path.is_file():
-        # Development mode, and the developer's trees carry no
-        # declaration. There is nothing to check against and nothing to
-        # complain about: these bytes were never published, so no
-        # statement about them exists for anybody to have made. A tree
-        # that *does* carry one — anything unpacked from a real package —
-        # is held to it exactly as a store entry is.
+    if environment.developer:
+        # A workspace the developer maintains says nothing about itself:
+        # a declaration is what a *package* carries, and nobody published
+        # these bytes. There is nothing to check against and nothing to
+        # complain about — which is why a development build asks none of
+        # the questions below.
         return None
+    path = environment.workspace.path / DECLARATION_FILE
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except OSError as missing:
@@ -694,7 +868,7 @@ def declaration_of(environment: Environment) -> Declaration | None:
 def check_environment(
     environment: Environment,
     *,
-    pin: EnvironmentPin | None = None,
+    pin: ContextEnvironment | None = None,
     generator: str = "",
     zephyr_constraint: str = "",
 ) -> Declaration | None:
@@ -726,15 +900,11 @@ def check_environment(
     each is a separate question and a caller may legitimately hold only
     some of them; what is given is checked, what is not is not invented.
 
-    **Development mode** is exempt twice over, and only where there is
-    genuinely nothing to check. Its trees were never published, so no hash
-    can agree with anything and the package check is skipped; and a tree
-    the developer assembled by hand carries no declaration at all, so
-    there is no statement to hold it to and this answers ``None``. A
-    developer tree that *does* carry a declaration — anything unpacked
-    from a real package, which is the ordinary case — is checked exactly
-    as a store entry is, because a build environment still has to
-    implement the specification this side speaks.
+    **A development build is exempt from all four**, and not by
+    concession: every one of them compares a statement somebody published
+    against bytes somebody published, and a west workspace the developer
+    checked out is neither. :func:`declaration_of` answers ``None`` for
+    it and this answers ``None`` with it.
     """
     declaration = declaration_of(environment)
     if declaration is None:
@@ -749,7 +919,7 @@ def check_environment(
                 "MCUHome to one that speaks the environment's generation"
             ),
         )
-    if pin is not None and not environment.developer:
+    if isinstance(pin, EnvironmentPin):
         _check_packages(declaration, pin, environment)
     if zephyr_constraint:
         _check_zephyr(declaration, zephyr_constraint, environment)
@@ -902,12 +1072,12 @@ def _check_generator(declaration: Declaration, generator: str, environment: Envi
 
 
 def refuse_patched_context(context_dir: Path, environment: Environment) -> None:
-    """A build context with patches is refused against developer trees.
+    """A build context with patches is refused against a developer's workspace.
 
     The two ways to be wrong here are both worse than refusing. **Applying**
-    the patches would edit source trees the developer maintains — the whole
-    point of the mode is that those trees are theirs, and a build that
-    leaves changes in them has broken the thing the person is working on.
+    the patches would change what is built out of a workspace the developer
+    maintains — the whole point of the mode is that the workspace is theirs
+    and is built exactly as it stands, patches of their own included.
     **Ignoring** them would produce firmware that does not contain what the
     build context says it contains, silently, and hand it to whoever the
     device goes to.
@@ -925,6 +1095,7 @@ def refuse_patched_context(context_dir: Path, environment: Environment) -> None:
     build environment specification asks for and what makes the store come
     out of the build unchanged.
     """
+
     patches = context_dir / PATCHES_DIR
     if not environment.developer or not patches.is_dir():
         return
@@ -934,9 +1105,9 @@ def refuse_patched_context(context_dir: Path, environment: Environment) -> None:
     raise BuildEnvironmentError(
         f"This build applies patches ({', '.join(carried)}) and cannot apply them to a "
         f"build environment you maintain yourself.",
-        hint=f"unset {DEV_WORKSPACE_OPTION} and {DEV_TOOLS_OPTION} and run the build "
-        "again — MCUHome then unpacks its own build environment, patches a copy of the "
-        "trees the patches name and leaves your own trees untouched",
+        hint=f"unset {DEV_WORKSPACE_OPTION} and run the build again — MCUHome then "
+        "unpacks its own build environment, patches a copy of the trees the patches "
+        "name and leaves your own workspace untouched",
     )
 
 
@@ -983,6 +1154,13 @@ def run_locked_build(
     and what reaches this function is the two store entries that came out
     of it.
 
+    **A development build takes neither of the two inputs above.** Its SDK
+    is the workspace's own manifest repository rather than a package, so
+    *sdk_sources* and *registry* are not consulted and nothing is fetched;
+    what is written is the description of that workspace, into
+    *work_root* and never into the workspace
+    (:mod:`mcuhome.workbench.devworkspace`).
+
     **The environment is checked here as well**, for the reason
     :func:`refuse_patched_context` is called here as well: this is the
     entry point an embedder or a test reaches directly, and a rule a
@@ -1000,25 +1178,45 @@ def run_locked_build(
     refuse_patched_context(context_dir, environment)
     work_root.mkdir(parents=True, exist_ok=True)
     manifest = read_context_manifest(context_dir / MANIFEST_FILE)
-    check_environment(
-        environment,
-        pin=manifest.build_environment,
-        generator=format_generator_chain(read_generator_chain(context_dir / BUILD_CONTEXT_FILE)),
-    )
-    package = acquire_sdk(
-        version=manifest.sdk.version,
-        sha256=manifest.sdk.sha256,
-        sources=tuple(Path(source) for source in sdk_sources),
-        into=work_root / "sdk",
-        registry=registry,
-        max_bytes=sdk_max_bytes,
-    )
+    if environment.developer:
+        # Nothing is acquired and nothing is checked. The SDK is the
+        # workspace's own manifest repository — that is what the mode
+        # means — and it is delivered at `mcuhome/sdk` exactly as an
+        # unpacked package would be, so everything below this line runs
+        # the same build as every other one. The description the builder
+        # reads its trees out of is written here, into the session, and
+        # never into the workspace it describes.
+        environment = replace(
+            environment,
+            package_root=devworkspace.write_environment(
+                environment.workspace.path, work_root / "environment", env=env
+            ),
+        )
+        sdk_tree = environment.sdk
+        launch = developer_launcher(environment, env=env, jobs=jobs)
+    else:
+        check_environment(
+            environment,
+            pin=manifest.build_environment,
+            generator=format_generator_chain(
+                read_generator_chain(context_dir / BUILD_CONTEXT_FILE)
+            ),
+        )
+        sdk_tree = acquire_sdk(
+            version=manifest.sdk.version,
+            sha256=manifest.sdk.sha256,
+            sources=tuple(Path(source) for source in sdk_sources),
+            into=work_root / "sdk",
+            registry=registry,
+            max_bytes=sdk_max_bytes,
+        ).tree
+        launch = launcher(environment, env=env, jobs=jobs)
     session = BuilderSession(
         root=work_root / "session",
         context_dir=context_dir,
-        sdk_tree=package.tree,
+        sdk_tree=sdk_tree,
         entry_point=environment.entry_point,
-        launcher=launcher(environment, env=env, jobs=jobs),
+        launcher=launch,
         context_id=manifest.compute_id(),
         tiers=tiers if tiers is not None else cache_tiers(ccache_dir=ccache_dir),
         deadline_seconds=deadline_seconds,

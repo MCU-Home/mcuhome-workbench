@@ -67,7 +67,6 @@ def test_every_key_reaches_its_field(project: Project) -> None:
         "  mode: subprocess\n"
         "  env_store: /srv/store\n"
         "  dev_workspace: /dev/workspace\n"
-        "  dev_tools: /dev/tools\n"
         "  python: python3.13\n"
         "  workspace_sources:\n    - /srv/workspaces\n"
         "  tools_sources:\n    - /srv/tools\n"
@@ -83,7 +82,6 @@ def test_every_key_reaches_its_field(project: Project) -> None:
     assert options.mode_source == str(project.config_file)
     assert options.env_store == Path("/srv/store")
     assert options.dev_workspace == Path("/dev/workspace")
-    assert options.dev_tools == Path("/dev/tools")
     assert options.python == "python3.13"
     assert options.workspace_sources == (Path("/srv/workspaces"),)
     assert options.tools_sources == (Path("/srv/tools"),)
@@ -178,12 +176,10 @@ def test_the_configured_developer_trees_reach_the_execution(model, tmp_path) -> 
             options=BuildOptions(
                 mode=buildmethods.MODE_SUBPROCESS,
                 dev_workspace=tmp_path / "workspace",
-                dev_tools=tmp_path / "tools",
             ),
         ),
     )
     assert target.execution.dev_workspace == tmp_path / "workspace"
-    assert target.execution.dev_tools == tmp_path / "tools"
 
 
 def test_a_stated_developer_tree_beats_the_configured_one(model, tmp_path) -> None:
@@ -196,12 +192,34 @@ def test_a_stated_developer_tree_beats_the_configured_one(model, tmp_path) -> No
             options=BuildOptions(
                 mode=buildmethods.MODE_SUBPROCESS,
                 dev_workspace=tmp_path / "configured",
-                dev_tools=tmp_path / "tools",
             ),
         ),
     )
     assert target.execution.dev_workspace == tmp_path / "stated"
-    assert target.execution.dev_tools == tmp_path / "tools"
+
+
+def test_a_configured_development_workspace_needs_the_configured_mode(model, tmp_path) -> None:
+    """The realistic shape of that mistake: both values in a file.
+
+    A person sets the workspace and forgets the mode, so nothing on the
+    command line says either — and the refusal has to name where the mode
+    came from, because that is the file they are not looking at.
+    """
+    with pytest.raises(ConfigError, match="development workspace") as refusal:
+        buildmethods.target_for_method(
+            buildmethods.LOCAL,
+            BuildRequest(
+                model=model,
+                out_dir=tmp_path,
+                options=BuildOptions(
+                    mode=buildmethods.MODE_CONTAINER,
+                    mode_source="the project's mcuhome.yaml",
+                    dev_workspace=tmp_path / "workspace",
+                ),
+            ),
+        )
+    assert "the project's mcuhome.yaml" in refusal.value.hint
+    assert str(tmp_path / "workspace") in refusal.value.message
 
 
 # --------------------------------------------------------------------------
@@ -488,7 +506,25 @@ def test_the_subprocess_backend_acquires_the_sdk_under_the_configured_bound(
     with pytest.raises(_Stop):
         subprocessbuild.run_locked_build(
             tmp_path / "context",
-            environment=None,
+            # A package-pinned environment: the bound is what the SDK
+            # archive may unpack to, and a development build acquires no
+            # archive at all.
+            environment=subprocessbuild.Environment(
+                workspace=buildenvstore.StoreEntry(
+                    kind="build-workspace",
+                    name="mcuhome-build-workspace",
+                    version="0.1.0",
+                    sha256="b" * 64,
+                    path=tmp_path / "workspace",
+                ),
+                tools=buildenvstore.StoreEntry(
+                    kind="build-tools",
+                    name="mcuhome-build-tools_linux-amd64",
+                    version="0.1.0",
+                    sha256="c" * 64,
+                    path=tmp_path / "tools",
+                ),
+            ),
             sdk_sources=(),
             work_root=tmp_path / "work",
             env={},

@@ -22,14 +22,16 @@ import tarfile
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import zstandard
-from mcuhome.model.context import EnvironmentPin, PackagePin
+from mcuhome.model.context import DeveloperEnvironment, EnvironmentPin, PackagePin
 from mcuhome.model.hashes import sha256_file
-from test_buildenvsession import DELIVERS, entry_point
+from mcuhome.model.jobs import JOBS_VAR
+from test_buildenvsession import _PREAMBLE, DELIVERS, entry_point
 
-from mcuhome.workbench import buildenvsession, subprocessbuild
+from mcuhome.workbench import buildenvsession, devworkspace, subprocessbuild
 from mcuhome.workbench.buildenvstore import (
     GIT_CONFIG_FILE,
     MARKER_FILE,
@@ -474,12 +476,12 @@ def run_one_step(
 ) -> subprocessbuild.SubprocessBuildResult:
     sdk_sha256 = make_sdk_source(tmp_path / "packages")
     context = make_context(tmp_path / "context", sdk_sha256)
+    kwargs.setdefault("env", CALLER_ENV)
     return run_locked_build(
         context,
         environment=environment,
         sdk_sources=(tmp_path / "packages",),
         work_root=tmp_path / "work",
-        env=CALLER_ENV,
         **kwargs,
     )
 
@@ -650,123 +652,309 @@ def test_the_frozen_store_denies_a_build_that_tries_to_write_into_it(
 
 
 @pytest.fixture
-def developer(tmp_path: Path) -> tuple[Path, Path]:
-    """A workspace and a tools tree as a developer keeps them: unfrozen.
+def developer(tmp_path: Path):
+    """A west workspace as a developer keeps one, and a ``python3`` for it.
 
-    Same shape as a store entry minus everything the store adds — no
-    completion marker, no package hash, and writable, because the whole
-    point is that the person running the build edits them.
+    Not a package and nothing like one: a top directory with
+    ``.west/config``, a manifest repository that is the SDK under
+    development, and the three layer trees. What stands in for west is a
+    script on the ``PATH`` the build is started from — which is what the
+    real thing is too, and the reason a development build can ask it
+    where the projects are.
+
+    The ``python3`` beside it is the fake builder: a development build
+    starts ``python3 -m mcuhome.compiler.abi`` out of the checkout, so a
+    test that wants to see the invocation puts a ``python3`` on the same
+    ``PATH`` that answers like the fake entry point everything else here
+    uses.
     """
-    workspace = tmp_path / "dev" / "workspace-tree"
-    (workspace / "workspace" / ".west").mkdir(parents=True)
-    (workspace / "workspace" / ".west" / "config").write_text(
-        "[zephyr]\n\tbase = zephyr\n", encoding="utf-8"
-    )
-    (workspace / "build-workspace.json").write_text(
-        json.dumps(
-            {
-                "package": "mcuhome-build-workspace",
-                "version": "0.1.0+dev",
-                "workspace": "workspace",
-            }
-        ),
+    workspace = tmp_path / "dev" / "west-workspace"
+    (workspace / ".west").mkdir(parents=True)
+    (workspace / ".west" / "config").write_text(
+        "[manifest]\npath = mcuhome-sdk\nfile = west.yml\n[zephyr]\nbase = zephyr\n",
         encoding="utf-8",
     )
-    tools = tmp_path / "dev" / "tools-tree"
+    layers = {
+        "zephyr": workspace / "zephyr",
+        "connectedhomeip": workspace / "modules" / "lib" / "connectedhomeip",
+        "mcuboot": workspace / "bootloader" / "mcuboot",
+    }
+    for path in (*layers.values(), workspace / "mcuhome-sdk"):
+        path.mkdir(parents=True)
+    (workspace / "mcuhome-sdk" / "west.yml").write_text("manifest:\n", encoding="utf-8")
+
+    tools = tmp_path / "dev" / "bin"
     tools.mkdir(parents=True)
-    entry_point(tools, DELIVERS)
-    (tools / "build-tools.json").write_text(
-        json.dumps({"package": "mcuhome-build-tools_linux-amd64", "version": "0.1.0+dev"}),
+    listing = "".join(f'echo "{name}\t{path}"\n' for name, path in layers.items())
+    west = tools / "west"
+    west.write_text(f"#!/bin/sh\nset -eu\n{listing}", encoding="utf-8")
+    west.chmod(0o755)
+    python = tools / "python3"
+    # The arguments as well as the environment: what makes this a
+    # development build is *which program* is started, and a fake that
+    # ignored its argv would let any of them pass.
+    python.write_text(
+        _PREAMBLE + 'printf "%s\n" "$@" > "$mc/out/argv-$id.txt"\n' + DELIVERS,
         encoding="utf-8",
     )
-    return workspace, tools
+    python.chmod(0o755)
+    return SimpleNamespace(workspace=workspace, bin=tools, layers=layers)
 
 
-def test_an_environment_can_be_two_directories_a_developer_maintains(developer) -> None:
-    """What the store would have said about the trees, read out of the trees."""
-    workspace, tools = developer
-    environment = subprocessbuild.environment_from_paths(workspace, tools)
+def developer_env(developer) -> dict[str, str]:
+    """The environment a person developing the SDK starts a build from."""
+    return {
+        "PATH": f"{developer.bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "SECRET_TOKEN": "do-not-leak",
+    }
+
+
+def test_an_environment_can_be_a_west_workspace_a_developer_maintains(developer) -> None:
+    """The one check the form makes, and what it answers with.
+
+    A west workspace with a manifest repository — and that manifest
+    repository *is* the SDK this build compiles, which is why there is
+    nothing else to state: no second path, no package name, no version.
+    """
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
 
     assert environment.developer is True
-    assert environment.workspace.path == workspace
-    assert environment.workspace.name == "mcuhome-build-workspace"
-    assert environment.workspace.version == "0.1.0+dev"
-    assert environment.tools.name == "mcuhome-build-tools_linux-amd64"
-    # No package published these bytes, so there is no hash to state.
+    assert environment.workspace.path == developer.workspace
+    assert environment.sdk == developer.workspace / "mcuhome-sdk"
+    assert environment.tools is None
+    # No entry point: that file is the tools package's way of setting up
+    # an environment, and this build has the developer's own.
+    assert environment.entry_point is None
+    # Nothing published these bytes, so there is nothing to state about
+    # them — an empty name is honest and an invented one would be read as
+    # a claim.
+    assert (environment.workspace.name, environment.workspace.version) == ("", "")
     assert environment.workspace.sha256 == ""
-    assert environment.entry_point == tools / "bin" / "build-environment-entry"
 
 
-def test_a_developer_environment_names_its_trees_where_it_is_described(developer) -> None:
-    """Two builds a week apart can state the same version over different
-    bytes, so the log line names the paths as well."""
-    workspace, tools = developer
-    described = subprocessbuild.environment_from_paths(workspace, tools).described()
+def test_a_developer_environment_names_the_workspace_where_it_is_described(developer) -> None:
+    """Two builds a week apart run against the same directory and
+    different bytes, so the line names the directory rather than a
+    version nobody could check afterwards."""
+    described = subprocessbuild.environment_from_workspace(developer.workspace).described()
 
-    assert str(workspace) in described
-    assert str(tools) in described
+    assert described == f"developer build from {developer.workspace}"
 
 
-def test_a_developer_directory_that_is_not_there_is_refused(tmp_path, developer) -> None:
-    workspace, tools = developer
-    with pytest.raises(BuildEnvironmentError, match="no directory at") as refused:
-        subprocessbuild.environment_from_paths(tmp_path / "absent", tools)
+def test_a_directory_that_is_not_a_west_workspace_is_refused(tmp_path, developer) -> None:
+    """The single check, and it names the setting to change."""
+    plain = tmp_path / "not-a-workspace"
+    plain.mkdir()
+    with pytest.raises(BuildEnvironmentError, match="no west workspace") as refused:
+        subprocessbuild.environment_from_workspace(plain)
     assert subprocessbuild.DEV_WORKSPACE_OPTION in refused.value.hint
 
-    with pytest.raises(BuildEnvironmentError, match="no directory at") as refused:
-        subprocessbuild.environment_from_paths(workspace, tmp_path / "absent")
-    assert subprocessbuild.DEV_TOOLS_OPTION in refused.value.hint
+
+def test_a_west_workspace_without_its_manifest_repository_is_refused(developer) -> None:
+    """The manifest repository is the SDK a development build compiles,
+    so a workspace that has not been updated yet is caught here rather
+    than by a code generator that is not there."""
+    (developer.workspace / "mcuhome-sdk" / "west.yml").unlink()
+    (developer.workspace / "mcuhome-sdk").rmdir()
+    with pytest.raises(BuildEnvironmentError, match="no manifest repository"):
+        subprocessbuild.environment_from_workspace(developer.workspace)
 
 
-def test_a_developer_tree_that_does_not_say_what_it_is_gets_refused(developer) -> None:
-    """The manifest is per kind, so the two trees swapped is caught here
-    rather than three minutes into a compile."""
-    workspace, tools = developer
-    with pytest.raises(BuildEnvironmentError, match="build-workspace.json"):
-        subprocessbuild.environment_from_paths(tools, tools)
-    with pytest.raises(BuildEnvironmentError, match="build-tools.json"):
-        subprocessbuild.environment_from_paths(workspace, workspace)
+def test_a_west_config_without_a_manifest_path_is_refused(developer) -> None:
+    (developer.workspace / ".west" / "config").write_text("[zephyr]\nbase = zephyr\n")
+    with pytest.raises(BuildEnvironmentError, match="does not say where the manifest"):
+        subprocessbuild.environment_from_workspace(developer.workspace)
 
 
-def test_a_developer_tree_without_a_package_and_version_is_refused(developer) -> None:
-    """A build log that cannot name what it built against is worth fixing
-    before the build, not after."""
-    workspace, tools = developer
-    (workspace / "build-workspace.json").write_text('{"workspace": "workspace"}', encoding="utf-8")
-    with pytest.raises(BuildEnvironmentError, match="which package and version"):
-        subprocessbuild.environment_from_paths(workspace, tools)
+def test_a_development_context_cannot_be_provisioned_from(tmp_path) -> None:
+    """The store, handed a context that names no packages.
+
+    It cannot mean anything there — a development context names no
+    environment on purpose — and the caller that got here has lost track
+    of which build this is. Said in a sentence rather than crashed on
+    while reaching for a package name that is not there.
+    """
+    with pytest.raises(BuildEnvironmentError, match="names no build environment") as refused:
+        subprocessbuild.environment_from_pins(DeveloperEnvironment(), env={}, store=tmp_path)
+    assert subprocessbuild.DEV_WORKSPACE_OPTION in refused.value.hint
 
 
-def test_a_developer_tools_tree_without_an_entry_point_is_refused(developer) -> None:
-    workspace, tools = developer
-    (tools / "bin" / "build-environment-entry").unlink()
-    with pytest.raises(BuildEnvironmentError, match="no entry point"):
-        subprocessbuild.environment_from_paths(workspace, tools)
+def test_a_developer_build_runs_the_builder_out_of_the_checkout(tmp_path, developer) -> None:
+    """The ordinary case, all the way to the child process.
 
-
-def test_a_developer_build_reaches_the_launcher_with_its_own_trees(tmp_path, developer) -> None:
-    """The ordinary case: no patches, and the build runs against the
-    developer's trees exactly as it runs against a store's."""
-    workspace, tools = developer
-    environment = subprocessbuild.environment_from_paths(workspace, tools)
-    result = run_one_step(tmp_path, environment)
+    No entry point is placed and none is run: the child is the
+    interpreter on the person's own ``PATH``, running the builder module
+    with the SDK checkout in front of ``PYTHONPATH``. The environment it
+    gets is the one the build was started from, plus the two variables
+    the builder cannot work out for itself — and minus the tools root,
+    which names a package this build does not have.
+    """
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+    env = developer_env(developer)
+    env["MCUHOME_BUILD_ENV_TOOLS"] = "/leftover/from/another/build"
+    result = run_one_step(tmp_path, environment, env=env)
     values = child_environment(result)
 
     assert result.outcome.successful
-    assert values["MCUHOME_BUILD_ENV_WORKSPACE"] == str(workspace)
-    assert values["MCUHOME_BUILD_ENV_TOOLS"] == str(tools)
+    # `python3 -m mcuhome.compiler.abi`, with no arguments after it —
+    # the specification's invocation, one process earlier than the entry
+    # point would have made it.
+    dumps = sorted(result.out_dir.glob("argv-*.txt"))
+    assert dumps[-1].read_text(encoding="utf-8").split() == ["-m", "mcuhome.compiler.abi"]
+    assert values["SECRET_TOKEN"] == "do-not-leak"
+    assert values["PYTHONPATH"].split(os.pathsep)[0] == str(developer.workspace / "mcuhome-sdk")
+    assert "MCUHOME_BUILD_ENV_TOOLS" not in values
+    assert "GIT_CONFIG_GLOBAL" not in values
+    assert "CCACHE_BASEDIR" not in values
+    # Importing the builder out of the checkout would otherwise leave a
+    # `__pycache__` in the person's own tree — measured on a real build
+    # before this was set.
+    assert values["PYTHONDONTWRITEBYTECODE"] == "1"
+    # No entry point was placed at the path the specification fixes:
+    # there is no tools package to take one from, and the child is the
+    # builder itself.
+    assert list((tmp_path / "work" / "session" / "steps").glob("*/mcuhome/bin/*")) == []
 
 
-def test_a_context_with_patches_is_refused_in_development_mode(tmp_path, developer) -> None:
+def test_a_developer_build_describes_its_workspace_inside_the_session(tmp_path, developer) -> None:
+    """What the builder reads its trees out of, written where it can be
+    thrown away.
+
+    A workspace somebody checked out carries neither of the two documents
+    the builder needs, and writing them into it is the one thing this
+    mode promises not to do. So they are written into the session, they
+    name the workspace from outside, and the workspace is byte-identical
+    afterwards.
+    """
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+    before = snapshot(developer.workspace)
+    result = run_one_step(tmp_path, environment, env=developer_env(developer))
+    values = child_environment(result)
+
+    assert snapshot(developer.workspace) == before
+    root = Path(values["MCUHOME_BUILD_ENV_WORKSPACE"])
+    assert not root.is_relative_to(developer.workspace)
+    manifest = json.loads((root / "build-workspace.json").read_text(encoding="utf-8"))
+    assert manifest["workspace"] == str(developer.workspace)
+    # A reader joins that value onto the directory it found it in, and
+    # joining an absolute path answers with the absolute path.
+    assert Path(root, manifest["workspace"]) == developer.workspace
+    record = json.loads((root / manifest["workspace-record"]).read_text(encoding="utf-8"))
+    assert record["topdir"] == str(developer.workspace)
+    assert record["layers"]["sdk"]["path"] == str(developer.workspace / "mcuhome-sdk")
+    assert record["layers"]["zephyr"]["path"] == str(developer.layers["zephyr"])
+    assert record["layers"]["chip"]["path"] == str(developer.layers["connectedhomeip"])
+    assert record["layers"]["mcuboot"]["path"] == str(developer.layers["mcuboot"])
+
+
+def test_the_description_is_what_the_builder_actually_reads(tmp_path, developer) -> None:
+    """The two documents, held against the reader they are written for.
+
+    Everything else about them is asserted against what this side
+    believes the builder wants. This asserts it against the builder: the
+    function that resolves an environment's workspace is given the
+    description and has to answer with the developer's own top directory
+    and all four layer paths. It is the one place the two repositories
+    have to agree, and the agreement is a shape rather than a call.
+
+    Skipped where the builder is not installed — it belongs to the SDK,
+    which the workbench depends on for the model alone.
+    """
+    abi = pytest.importorskip("mcuhome.compiler.abi")
+
+    root = devworkspace.write_environment(
+        developer.workspace, tmp_path / "session" / "environment", env=developer_env(developer)
+    )
+    carried = abi.environment_workspace(root)
+
+    assert carried.topdir == developer.workspace
+    paths = abi._tree_paths(carried.record_document)
+    assert sorted(paths) == sorted(abi.LAYERS)
+    assert paths["sdk"] == developer.workspace / "mcuhome-sdk"
+    assert paths["zephyr"] == developer.layers["zephyr"]
+    # A workspace somebody checked out carries no pre-generated Matter
+    # data model — that is a thing the package build produces — so the
+    # build generates it the ordinary way with the developer's own tools.
+    assert carried.pregen_chip_root is None
+
+
+def test_a_workspace_west_cannot_read_is_refused(tmp_path, developer) -> None:
+    """West is asked where the projects are, and what it says is the answer
+    — including when it says the workspace is broken."""
+    (developer.bin / "west").write_text(
+        '#!/bin/sh\necho "west: no such workspace" >&2\nexit 1\n', encoding="utf-8"
+    )
+    (developer.bin / "west").chmod(0o755)
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+    with pytest.raises(BuildEnvironmentError, match="cannot read the workspace"):
+        run_one_step(tmp_path, environment, env=developer_env(developer))
+
+
+def test_a_workspace_without_the_layers_is_refused(tmp_path, developer) -> None:
+    """A west workspace of some other manifest is a west workspace and
+    still not one MCUHome can build firmware out of."""
+    (developer.bin / "west").write_text(
+        f'#!/bin/sh\necho "zephyr\t{developer.layers["zephyr"]}"\n', encoding="utf-8"
+    )
+    (developer.bin / "west").chmod(0o755)
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+    with pytest.raises(BuildEnvironmentError, match="connectedhomeip, mcuboot"):
+        run_one_step(tmp_path, environment, env=developer_env(developer))
+
+
+def test_a_developer_build_without_an_interpreter_refuses_in_a_sentence(
+    tmp_path, developer
+) -> None:
+    """A program that cannot be started is not a process anybody can wait
+    for, so it is a refusal rather than a supervisor's full deadline."""
+    (developer.bin / "python3").unlink()
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+    env = developer_env(developer)
+    env["PATH"] = str(developer.bin)
+    with pytest.raises(BuildEnvironmentError, match="no python3 on the PATH") as refused:
+        run_one_step(tmp_path, environment, env=env)
+    assert subprocessbuild.DEV_WORKSPACE_OPTION in refused.value.hint
+
+
+def test_the_step_environment_of_a_development_build_is_the_callers_own(
+    tmp_path, developer
+) -> None:
+    """The composed environment is not what a development build gets.
+
+    :func:`subprocessbuild.step_environment` is the public answer to
+    "what does the child run in", and for every other build it composes a
+    closed environment from nothing. Asked about a development build it
+    has to answer with the open one instead — a caller that reached for
+    the general function must not get a build stripped of the tools it is
+    supposed to use.
+    """
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+    step = SimpleNamespace(base_dir=tmp_path / "base", session=None, writable_cache=None)
+
+    values = subprocessbuild.step_environment(
+        step, environment=environment, env=developer_env(developer), jobs=3
+    )
+
+    assert values["SECRET_TOKEN"] == "do-not-leak"
+    assert values["MCUHOME_BUILDER_BASE_DIR"] == str(tmp_path / "base")
+    assert values["MCUHOME_BUILD_ENV_WORKSPACE"] == str(developer.workspace)
+    assert values[JOBS_VAR] == "3"
+    assert values["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "MCUHOME_BUILD_ENV_TOOLS" not in values
+    assert "GIT_CONFIG_GLOBAL" not in values
+    assert "CCACHE_BASEDIR" not in values
+
+
+def test_a_context_with_patches_is_refused_in_a_development_build(tmp_path, developer) -> None:
     """Neither applied nor ignored.
 
-    Applying would edit source trees the developer maintains; ignoring
-    would build firmware that is not what the build context says it is.
-    The refusal is typed, and it happens before anything is fetched or
-    written — no SDK package, no session directory.
+    Applying would change what is built out of a workspace the developer
+    maintains; ignoring would build firmware that is not what the build
+    context says it is. The refusal is typed, and it happens before
+    anything is fetched or written — no session directory, no description
+    of the workspace.
     """
-    workspace, tools = developer
-    environment = subprocessbuild.environment_from_paths(workspace, tools)
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
     sdk_sha256 = make_sdk_source(tmp_path / "packages")
     context = make_context(tmp_path / "context", sdk_sha256)
     (context / "patches" / "zephyr").mkdir(parents=True)
@@ -778,7 +966,7 @@ def test_a_context_with_patches_is_refused_in_development_mode(tmp_path, develop
             environment=environment,
             sdk_sources=(tmp_path / "packages",),
             work_root=tmp_path / "work",
-            env=CALLER_ENV,
+            env=developer_env(developer),
         )
     assert "zephyr" in str(refused.value)
     assert subprocessbuild.DEV_WORKSPACE_OPTION in refused.value.hint
@@ -807,8 +995,7 @@ def test_a_context_with_patches_builds_against_a_store(tmp_path, environment) ->
 def test_an_empty_patch_directory_is_not_a_patched_context(tmp_path, developer) -> None:
     """A context that carries the directory and no patches is the ordinary
     case, not a refusal."""
-    workspace, tools = developer
-    environment = subprocessbuild.environment_from_paths(workspace, tools)
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
     sdk_sha256 = make_sdk_source(tmp_path / "packages")
     context = make_context(tmp_path / "context", sdk_sha256)
     (context / "patches").mkdir()
@@ -818,7 +1005,7 @@ def test_an_empty_patch_directory_is_not_a_patched_context(tmp_path, developer) 
         environment=environment,
         sdk_sources=(tmp_path / "packages",),
         work_root=tmp_path / "work",
-        env=CALLER_ENV,
+        env=developer_env(developer),
     )
     assert result.outcome.successful
 
@@ -984,23 +1171,6 @@ def test_a_generator_the_environment_does_not_accept_is_refused(store, environme
     assert "~=9.0" in caught.value.hint
 
 
-def test_a_developer_environment_is_exempt_from_the_package_check_only(store, environment) -> None:
-    """Nothing published a developer's trees, so no hash can agree with one.
-
-    Everything else is still checked: a tree a developer maintains has to
-    implement the specification this side speaks, or the build fails
-    somewhere less legible.
-    """
-    developer = replace(environment, developer=True)
-    subprocessbuild.check_environment(
-        developer,
-        pin=_pin(workspace=PackagePin(name="something-else", version="9.9.9", sha256="e" * 64)),
-    )
-    _declared(store, **{"spec-generation": "2"})
-    with pytest.raises(BuildEnvironmentError):
-        subprocessbuild.check_environment(developer, pin=_pin())
-
-
 def test_an_environment_without_a_declaration_is_refused(store, environment) -> None:
     """A build environment that does not say what it is cannot be checked."""
     entry = store / "mcuhome-build-workspace-0.1.0"
@@ -1012,27 +1182,46 @@ def test_an_environment_without_a_declaration_is_refused(store, environment) -> 
     assert "does not say what it is" in caught.value.message
 
 
-def test_a_developer_tree_that_carries_no_declaration_is_not_refused(environment) -> None:
-    """Nothing published those bytes, so no statement about them exists.
+def test_a_development_build_is_checked_against_nothing(developer) -> None:
+    """All four checks are skipped, and there is nothing left to skip.
 
-    The mode's whole point is that the trees are the developer's own; a
-    workspace assembled by hand has no ``build-environment.json``, and
-    demanding one would be demanding that a developer package their work
-    before they can build it.
+    Every one of them compares a statement somebody published against
+    bytes somebody published: the specification generation the
+    environment declares, the packages it consists of, its Zephyr
+    release, the contexts it accepts. A west workspace somebody checked
+    out publishes nothing and declares nothing, so there is no statement
+    to hold it to — demanding one would be demanding that a developer
+    package their work before they can build it.
     """
-    developer = replace(environment, developer=True)
-    thaw(environment.workspace.path)
-    (environment.workspace.path / "build-environment.json").unlink()
-    freeze(environment.workspace.path)
-    assert subprocessbuild.check_environment(developer, pin=_pin()) is None
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+
+    assert subprocessbuild.declaration_of(environment) is None
+    assert (
+        subprocessbuild.check_environment(
+            environment,
+            pin=_pin(workspace=PackagePin(name="something-else", version="9.9.9", sha256="e" * 64)),
+            generator="mcuhome-workbench:0.1.0",
+            zephyr_constraint="~=9.9.9",
+        )
+        is None
+    )
 
 
-def test_a_developer_tree_that_does_carry_one_is_held_to_it(store, environment) -> None:
-    """Anything unpacked from a real package states a generation, and it counts."""
-    _declared(store, **{"spec-generation": "9"})
-    developer = replace(environment, developer=True)
-    with pytest.raises(BuildEnvironmentError):
-        subprocessbuild.check_environment(developer)
+def test_a_declaration_left_in_a_developers_workspace_changes_nothing(developer) -> None:
+    """Not even a file that looks like one is read.
+
+    A workspace can hold anything — an unpacked package somebody kept, a
+    file copied out of one — and a build that started believing such a
+    file would hold the developer to a statement about somebody else's
+    bytes. The form is decided by what the build was pointed at, never by
+    what happens to lie in it.
+    """
+    (developer.workspace / "build-environment.json").write_text(
+        json.dumps({"spec-generation": "9"}), encoding="utf-8"
+    )
+    environment = subprocessbuild.environment_from_workspace(developer.workspace)
+
+    assert subprocessbuild.check_environment(environment, pin=_pin()) is None
 
 
 def test_the_pin_and_the_unpacked_package_have_to_be_the_same_bytes(environment) -> None:

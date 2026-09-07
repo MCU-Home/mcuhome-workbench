@@ -31,18 +31,26 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, make_package_source, resolve_file
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.errors import BuildError
+from mcuhome.model.context import DeveloperEnvironment
+from mcuhome.model.errors import BuildError, ConfigError
 
 from mcuhome.workbench import buildmethods, containerbuild, sessionclient, subprocessbuild
 from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.buildlock import holder_of
-from mcuhome.workbench.contextdir import create_build_context
+from mcuhome.workbench.contextdir import (
+    create_build_context,
+    read_context_manifest,
+    read_context_request,
+)
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.orchestrator import EnvironmentUnavailable
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
 #: A fixed public key, so nothing here draws one and every context this
@@ -695,59 +703,87 @@ def test_an_address_that_is_not_one_is_refused_in_words(address) -> None:
     assert "<host" in refusal.value.hint
 
 
-def test_the_developer_trees_reach_the_execution(model, tmp_path) -> None:
-    """``build.dev_workspace`` and ``build.dev_tools`` are read where every
-    other method-specific field is read, and land on the target."""
+def west_workspace(root: Path) -> Path:
+    """A west workspace as a developer keeps one, minus everything else.
+
+    Enough for the one check a development build makes: a
+    ``.west/config`` naming a manifest repository, and that repository
+    checked out. What west would answer about the layers is not asked
+    here — that happens when a build actually runs.
+    """
+    (root / ".west").mkdir(parents=True)
+    (root / ".west" / "config").write_text(
+        "[manifest]\npath = mcuhome-sdk\nfile = west.yml\n", encoding="utf-8"
+    )
+    (root / "mcuhome-sdk").mkdir()
+    return root
+
+
+def test_the_development_workspace_reaches_the_execution(model, tmp_path) -> None:
+    """``build.dev_workspace`` is read where every other method-specific
+    field is read, and lands on the target."""
     target = buildmethods.target_for_method(
         buildmethods.LOCAL,
         buildmethods.BuildRequest(
             model=model,
             out_dir=tmp_path,
             build_mode=buildmethods.MODE_SUBPROCESS,
-            dev_workspace=tmp_path / "workspace-tree",
-            dev_tools=tmp_path / "tools-tree",
+            dev_workspace=tmp_path / "west-workspace",
         ),
     )
-    assert target.execution.dev_workspace == tmp_path / "workspace-tree"
-    assert target.execution.dev_tools == tmp_path / "tools-tree"
+    assert target.execution.dev_workspace == tmp_path / "west-workspace"
 
 
-def test_half_a_developer_environment_is_refused(model, tmp_path) -> None:
-    """An environment is a set of packages, and half a set is not one: a
-    workspace of one version against tools of another fails deep inside a
-    compile with nothing to point at."""
-    for stated in ("dev_workspace", "dev_tools"):
-        with pytest.raises(lb.EnvironmentUnavailable, match="both halves") as refusal:
-            asyncio.run(
-                buildmethods.build_firmware(
-                    buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-                    target=buildmethods.LocalBuild(
-                        execution=buildmethods.SubprocessExecution(**{stated: tmp_path / "tree"})
-                    ),
-                )
-            )
-        assert "build.dev_workspace" in refusal.value.hint
-        assert "build.dev_tools" in refusal.value.hint
+def test_a_development_workspace_is_refused_for_a_container_build(model, tmp_path) -> None:
+    """The two settings contradict each other and neither can be honoured
+    halfway.
+
+    A development build runs on this machine with the person's own tools;
+    a container build runs a fixed image that has neither their tools nor
+    their workspace. The refusal names both settings and says which one
+    to change.
+    """
+    with pytest.raises(ConfigError, match="development workspace") as refusal:
+        buildmethods.target_for_method(
+            buildmethods.LOCAL,
+            buildmethods.BuildRequest(
+                model=model,
+                out_dir=tmp_path,
+                build_mode=buildmethods.MODE_CONTAINER,
+                dev_workspace=tmp_path / "west-workspace",
+            ),
+        )
+    assert "build.mode subprocess" in refusal.value.hint
+    assert "build.dev_workspace" in refusal.value.hint
 
 
-def test_a_developer_environment_reaches_the_composition(model, tmp_path, monkeypatch) -> None:
-    """The trees a developer stated become the environment the subprocess
-    composition runs against, in place of the store's entries."""
-    workspace = tmp_path / "workspace-tree"
-    (workspace / "workspace").mkdir(parents=True)
-    (workspace / "build-workspace.json").write_text(
-        '{"package": "mcuhome-build-workspace", "version": "0.1.0+dev", "workspace": "workspace"}',
-        encoding="utf-8",
-    )
-    tools = tmp_path / "tools-tree"
-    (tools / "bin").mkdir(parents=True)
-    entry = tools / "bin" / "build-environment-entry"
-    entry.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    entry.chmod(0o755)
-    (tools / "build-tools.json").write_text(
-        '{"package": "mcuhome-build-tools_linux-amd64", "version": "0.1.0+dev"}',
-        encoding="utf-8",
-    )
+def test_a_development_workspace_is_refused_for_a_remote_build(model, tmp_path) -> None:
+    """A build server has neither your workspace nor your tools.
+
+    And the context a development build writes names no environment a
+    server could resolve one from, so the setting cannot be honoured
+    there — nor quietly dropped, because a build that ignored it would
+    compile the pinned packages and look exactly like the build the
+    person meant.
+    """
+    with pytest.raises(ConfigError, match="development workspace") as refusal:
+        buildmethods.target_for_method(
+            buildmethods.REMOTE,
+            buildmethods.BuildRequest(
+                model=model,
+                out_dir=tmp_path,
+                server="build.example.org",
+                dev_workspace=tmp_path / "west-workspace",
+            ),
+        )
+    assert "build.dev_workspace" in refusal.value.hint
+    assert str(tmp_path / "west-workspace") in refusal.value.message
+
+
+def test_a_development_workspace_reaches_the_composition(model, tmp_path, monkeypatch) -> None:
+    """The workspace a developer stated becomes the environment the
+    subprocess composition runs against, in place of the store's entries."""
+    workspace = west_workspace(tmp_path / "west-workspace")
 
     seen: dict[str, object] = {}
 
@@ -765,14 +801,193 @@ def test_a_developer_environment_reaches_the_composition(model, tmp_path, monkey
         buildmethods.build_firmware(
             buildmethods.BuildRequest(model=model, out_dir=tmp_path),
             target=buildmethods.LocalBuild(
-                execution=buildmethods.SubprocessExecution(dev_workspace=workspace, dev_tools=tools)
+                execution=buildmethods.SubprocessExecution(dev_workspace=workspace)
             ),
         )
     )
     environment = seen["environment"]
     assert environment.developer is True
     assert environment.workspace.path == workspace
-    assert environment.tools.path == tools
+    assert environment.sdk == workspace / "mcuhome-sdk"
+    assert environment.tools is None
+
+
+def test_a_development_build_writes_a_context_that_names_no_environment(model, tmp_path) -> None:
+    """The context a development build creates, and the two fields that
+    make it one.
+
+    There is no package set to pin — the sources are a checkout and the
+    tools are whatever is on a ``PATH`` — so the format's second form is
+    written instead: the word, and the empty SDK hash that travels with
+    it. No index is read and no archive is fetched to write it, which is
+    why no source directory is given here.
+    """
+    create_build_context(
+        model,
+        out_dir=tmp_path / "context",
+        work_root=tmp_path / "made",
+        sdk_sources=(),
+        signing_pub=_PUBLIC_PEM,
+        developer=True,
+    )
+    written = (tmp_path / "context" / "context.yaml").read_text(encoding="utf-8")
+    assert "build_environment: developer" in written
+
+    request = read_context_request(tmp_path / "context" / "context.yaml")
+    assert isinstance(request.build_environment, DeveloperEnvironment)
+    assert request.sdk.sha256 == ""
+
+
+def test_a_development_context_has_the_same_id_from_two_workspaces(
+    model, tmp_path, monkeypatch
+) -> None:
+    """What such a context identifies, driven through the composition twice.
+
+    Its ID covers the files, the board and the word — never the bytes it
+    was compiled against, because there are none it could name. Two
+    developers building the same device out of two different workspaces
+    therefore end up with one identity over two firmware images, which is
+    exactly why the format calls this form neither reproducible nor
+    remote-buildable. Proven by building the contexts the way a build
+    builds them, from two workspaces, rather than by creating one twice.
+    """
+
+    def fake(context_dir, *, environment, **kwargs):
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=environment,
+        )
+
+    monkeypatch.setattr(subprocessbuild, "run_locked_build", fake)
+    identities = []
+    for name in ("first", "second"):
+        workspace = west_workspace(tmp_path / f"{name}-workspace")
+        buildmethods.compose_subprocess_build(
+            model,
+            sdk_sources=(),
+            work_root=tmp_path / name,
+            env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
+            signing_pub=_PUBLIC_PEM,
+            created=datetime(2026, 9, 7, tzinfo=UTC),
+            environment=subprocessbuild.environment_from_workspace(workspace),
+        )
+        identities.append(read_context_manifest(tmp_path / name / "context" / "manifest.yaml").id)
+    assert identities[0] == identities[1]
+
+
+def test_a_pinned_context_is_not_built_against_a_workspace(model, tmp_path, monkeypatch) -> None:
+    """A context somebody pinned, handed to a build that compiles a checkout.
+
+    Building it would produce firmware whose own context says it was
+    compiled from packages it never saw, which is the one thing a pin is
+    for. Neither half can be honoured, so the build stops and names both.
+    """
+    context = tmp_path / "context"
+    make_package_source(tmp_path / "sdk")
+    create_build_context(
+        model,
+        out_dir=context,
+        work_root=tmp_path / "made",
+        sdk_sources=(tmp_path / "sdk",),
+        signing_pub=_PUBLIC_PEM,
+    )
+    workspace = west_workspace(tmp_path / "west-workspace")
+    monkeypatch.setattr(
+        subprocessbuild,
+        "run_locked_build",
+        lambda *a, **k: pytest.fail("the backend must not be reached"),
+    )
+    with pytest.raises(EnvironmentUnavailable, match="pinned to") as refused:
+        buildmethods.compose_subprocess_build(
+            model,
+            sdk_sources=(tmp_path / "sdk",),
+            work_root=tmp_path / "work",
+            env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
+            signing_pub=_PUBLIC_PEM,
+            context_dir=context,
+            environment=subprocessbuild.environment_from_workspace(workspace),
+        )
+    assert str(workspace) in refused.value.message
+    assert "build.dev_workspace" in refused.value.hint
+    assert not (context / "manifest.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    ("key", "reference"),
+    [
+        ("sdk", "sdk/mcuhome-sdk:0.1.0"),
+        ("build_workspace", "build-workspace/mcuhome-build-workspace:0.1.0"),
+        ("build_tools", "build-tools/mcuhome-build-tools:0.1.0"),
+    ],
+)
+def test_a_device_that_pins_a_package_is_refused_in_a_development_build(
+    model, tmp_path, key, reference
+) -> None:
+    """Every ``sources.*`` entry names a package to fetch, and this build
+    fetches nothing.
+
+    Honouring one would fetch a package nothing then builds; ignoring it
+    would silently build something other than what the device says. So
+    the build stops, and says which of the two to drop.
+    """
+    pinned = replace(model, sources=replace(model.sources, **{key: reference}))
+    with pytest.raises(BuildError, match=f"sources.{key}") as refused:
+        create_build_context(
+            pinned,
+            out_dir=tmp_path / "context",
+            work_root=tmp_path / "made",
+            sdk_sources=(),
+            signing_pub=_PUBLIC_PEM,
+            developer=True,
+        )
+    assert "build.dev_workspace" in refused.value.hint
+    assert not (tmp_path / "context").exists()
+
+
+def test_a_development_context_is_not_sent_to_a_build_server(model, tmp_path) -> None:
+    """Refused before the upload, not after it.
+
+    A server finds an environment by the packages a context pins, and
+    this one pins none — so it could only refuse it, and it would refuse
+    it after a gigabyte had crossed the network.
+    """
+    context = tmp_path / "context"
+    create_build_context(
+        model,
+        out_dir=context,
+        work_root=tmp_path / "made",
+        sdk_sources=(),
+        signing_pub=_PUBLIC_PEM,
+        developer=True,
+    )
+    with pytest.raises(buildmethods.RemoteNotConfigured, match="development build") as refused:
+        asyncio.run(
+            buildmethods.build_firmware(
+                buildmethods.BuildRequest(
+                    model=model, out_dir=tmp_path, context_dir=context, server="build.example.org"
+                ),
+                target=buildmethods.RemoteBuild(server="build.example.org"),
+            )
+        )
+    assert "mcuhome build" in refused.value.hint
+
+
+def test_a_package_pinned_context_is_sent_as_before(model, tmp_path, monkeypatch) -> None:
+    """The other side of that refusal: an ordinary context still travels."""
+    context = tmp_path / "context"
+    make_package_source(tmp_path / "sdk")
+    create_build_context(
+        model,
+        out_dir=context,
+        work_root=tmp_path / "made",
+        sdk_sources=(tmp_path / "sdk",),
+        signing_pub=_PUBLIC_PEM,
+    )
+    # Reached: the refusal is about the form of the context and about
+    # nothing else, so a pinned one gets as far as the socket.
+    buildmethods._refuse_developer_context(context)
 
 
 def test_a_patched_context_is_refused_before_the_context_is_locked(
@@ -785,21 +1000,7 @@ def test_a_patched_context_is_refused_before_the_context_is_locked(
     lock into that directory first — nor fetched an SDK, nor talked to a
     registry.
     """
-    workspace = tmp_path / "workspace-tree"
-    (workspace / "workspace").mkdir(parents=True)
-    (workspace / "build-workspace.json").write_text(
-        '{"package": "mcuhome-build-workspace", "version": "0.1.0+dev", "workspace": "workspace"}',
-        encoding="utf-8",
-    )
-    tools = tmp_path / "tools-tree"
-    (tools / "bin").mkdir(parents=True)
-    entry = tools / "bin" / "build-environment-entry"
-    entry.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    entry.chmod(0o755)
-    (tools / "build-tools.json").write_text(
-        '{"package": "mcuhome-build-tools_linux-amd64", "version": "0.1.0+dev"}',
-        encoding="utf-8",
-    )
+    workspace = west_workspace(tmp_path / "west-workspace")
     context = tmp_path / "context"
     (context / "patches" / "zephyr").mkdir(parents=True)
     (context / "patches" / "zephyr" / "0001-fix.patch").write_text("--- a\n+++ b\n")
@@ -817,9 +1018,7 @@ def test_a_patched_context_is_refused_before_the_context_is_locked(
             buildmethods.build_firmware(
                 buildmethods.BuildRequest(model=model, out_dir=tmp_path, context_dir=context),
                 target=buildmethods.LocalBuild(
-                    execution=buildmethods.SubprocessExecution(
-                        dev_workspace=workspace, dev_tools=tools
-                    )
+                    execution=buildmethods.SubprocessExecution(dev_workspace=workspace)
                 ),
             )
         )

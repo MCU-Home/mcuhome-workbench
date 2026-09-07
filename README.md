@@ -392,37 +392,72 @@ MCUHome's own packages need:
 Raise a bound for a package of your own that is legitimately larger; a package
 whose contents exceed it is refused and leaves nothing behind.
 
-### Developing the build environment itself
+### Building against a west workspace of your own
 
-If you are changing the build workspace or the build tools, point a build at
-your own unpacked trees instead of at a published package:
+If you are working on the SDK itself — or on the sources the build environment
+carries — point the build at your own west workspace instead of at a
+provisioned environment:
 
 ```yaml
 build:
   mode: subprocess
-  dev_workspace: ~/work/build-workspace
-  dev_tools: ~/work/build-tools
+  dev_workspace: ~/work/mcuhome-west
 ```
 
-Both or neither: an environment is a set of packages, and a workspace of one
-version against tools of another fails deep inside a compile with nothing to
-point at. The trees are checked for what they claim to be — the package manifest
-of their kind, the version they state, an entry point that runs — but nothing
-else happens to them: **development mode does not finalize**, so a raw unpacked
-tools tree has no virtual environment and a workspace no git configuration, and
-a build against one fails at the entry point until you have created those the
-way the store would. Nothing is hashed either; nobody published these bytes.
+That one path names the **whole** environment. The workspace carries the
+sources, its manifest repository is the SDK that gets compiled, and the tools
+are the ones on the `PATH` the build was started from — your west, your CMake,
+your Zephyr SDK, your `ccache` configuration. Nothing is fetched, nothing is
+unpacked, nothing is finalized, and nothing is verified: MCUHome checks that
+the directory is a west workspace with its manifest repository checked out, and
+nothing else. Those bytes are yours.
 
-A build context that carries a **patch** is a hard error in this mode. A patch
-belongs to a tree MCUHome unpacked and may copy; your working tree is yours, and
-a build that quietly patched it — or quietly ignored the patch — would be wrong
-either way.
+The build runs the way every other build runs — the same per-step directories
+under the build directory, the same request document, the same view of the
+workspace under `work` — with two differences. The builder is started as
+`python3 -m mcuhome.compiler.abi` out of your own checkout rather than through
+the packaged entry point, because the entry point's whole job is to set up an
+environment you already have. And **MCUHome writes nothing into your
+workspace**: what the builder needs and a checkout does not carry — the record
+of where its layers are — is written into the build directory and points at
+your workspace from outside it. Neither the workbench nor the builder creates,
+moves or edits anything in there; the build directory holds the generated
+application, the build tree and the artifacts.
 
-One thing to know about the SDK: today a developer workspace that already holds
-an `mcuhome-sdk` checkout is built from *that* checkout, while the build context
-and the build report name the SDK version the device pinned — so in this mode the
-report does not describe everything that was compiled. Check what your workspace
-holds before you read a dev-mode report as the whole truth.
+One qualification, because it is the difference between a promise and a
+half-promise: the view the build compiles in reaches your files through **hard
+links**, so a tool the build drives that wrote to a source file in place would
+write through to your working tree — exactly as it would in a `west build` you
+ran yourself. Measured over a full real build of the reference device: every
+file in the workspace came out with the same content, the same mode and the
+same timestamp, and one directory did not — `modules/lib/openthread/.git`,
+because Zephyr's version stamping runs `git` in the projects it builds. That
+is the shape of what to expect here: MCUHome writes nothing, and the tools a
+Zephyr build runs are the tools a Zephyr build runs.
+
+What is refused rather than half-done:
+
+- a build context that carries a **patch**, because your workspace is yours and
+  a build that quietly patched it — or quietly ignored the patch — would be
+  wrong either way;
+- a device that states any `sources.*` entry, because every one of them names a
+  package to fetch and this build fetches nothing;
+- `build.mode: container` together with `build.dev_workspace`, because a
+  container has neither your workspace nor your tools;
+- a directory that is not a west workspace, or whose manifest repository is not
+  checked out — that repository is the SDK this build compiles;
+- a workspace `west` itself cannot read, or one whose manifest is not MCUHome's:
+  the build asks `west list` where the Zephyr, MCUboot and Matter trees are, and
+  says so when the answer does not have them;
+- an already-created context that pins a build environment, handed to a
+  development build — the firmware would then carry a context claiming packages
+  it never saw.
+
+The build context such a build writes says `build_environment: developer` and
+pins no SDK package. That is honest and it has two consequences: the context is
+**not reproducible** — its identity covers the files and the board, never the
+bytes it was compiled against — and it is **not remote-buildable**, so sending
+it to a build server is refused before the upload.
 
 ## Security
 
