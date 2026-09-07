@@ -296,8 +296,9 @@ class FakeDocker:
             status = 0 if len(lines) == len(references) else 1
             return bs_container.Completed(status=status, output="\n".join(lines))
         if rest[:1] == ["run"] and rest[-2:-1] == ["cat"]:
-            # §2.2.1's static self-description. This image carries none,
-            # so the backend falls back to invoking `describe`.
+            # The legacy container invocation's static self-description
+            # (retired at the switchover). This image carries none, so the
+            # backend falls back to invoking `describe`.
             return bs_container.Completed(status=1, output="")
         if rest[:1] == ["run"] and "--rm" in rest:
             return self._describe(rest)
@@ -332,7 +333,8 @@ class FakeDocker:
         return _Driven(process)
 
     #: The request-document fields that name a directory the program is
-    #: given (§5.2). Everything else that starts with a slash is not a
+    #: given, under the legacy container invocation (retired at the
+    #: switchover). Everything else that starts with a slash is not a
     #: path: ``required`` holds JSON pointers, and a ``trees`` entry may
     #: name a tree that lives in the image and is mounted by nobody.
     PATH_FIELDS = ("result", "out", "work", "tmp", "context", "events", "cancel")
@@ -483,8 +485,9 @@ def _finish_program(
         "artifacts": declared,
     }
     if action == "build":
-        # §5.4: `layers` is what a build reports about the trees it
-        # patched, and a `verify` result may not carry one at all.
+        # Under the legacy container invocation (retired at the
+        # switchover): `layers` is what a build reports about the trees
+        # it patched, and a `verify` result may not carry one at all.
         document["layers"] = {}
     Path(request["result"]).write_text(json.dumps(document))
     _emit(request, "invocation.finished", len(declared) + 3, status="success")
@@ -567,7 +570,8 @@ def gated_program(gate: Path):
 
 
 def poisoning_program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-    """A run whose own reason poisons the session (§6.2, E39).
+    """A run whose own reason poisons the session (E39; a rule from the
+    legacy container invocation, retired at the switchover).
 
     ``error.patch.incomplete`` is one of the two reasons the error
     registry maps to ``session.poisoned``: an interrupted patch
@@ -2067,7 +2071,8 @@ def test_a_poisoned_session_is_terminal_and_still_gives_up_its_artifacts(
 
 
 def test_a_verdict_that_poisons_the_session_is_terminal_at_once(tmp_path: Path) -> None:
-    """The *ordinary* way a session poisons is asynchronous (E39, §6.2).
+    """The *ordinary* way a session poisons is asynchronous (E39; under
+    the legacy container invocation, retired at the switchover).
 
     A refused command is the loud way, and the client marks the session
     terminal for it. But an interrupted patch application ends the

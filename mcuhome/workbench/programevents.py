@@ -21,7 +21,8 @@ nothing to size, and nothing a reconnect can find already evicted.
 Whether anybody reconnects is not this module's business: a local build
 never does, and a build server serves exactly that out of the same file.
 
-Two backend duties this module carries, both from §8:
+Two backend duties this module carries, both from the legacy container
+invocation (retired at the switchover):
 
 * **Lines longer than 8192 bytes and non-objects are discarded and
   counted, never treated as an abort.** A program that writes rubbish
@@ -41,10 +42,11 @@ MUST NOT infer anything from a name it did not receive" — an absent
 that an incremental build relinked nothing. The result document is
 where the question of what was produced is answered.
 
-It lives with the orchestrator because it is the *driving* half of §8
-and is the same duty wherever the driving happens: one implementation,
-whether the events go to a terminal, to a dashboard in the same process
-or through a build server's socket.
+It lives with the orchestrator because it is the *driving* half of
+the legacy container invocation (retired at the switchover) and is
+the same duty wherever the driving happens: one implementation,
+whether the events go to a terminal, to a dashboard in the same
+process or through a build server's socket.
 """
 
 from __future__ import annotations
@@ -63,7 +65,8 @@ __all__ = [
     "replay",
 ]
 
-#: §8, exactly: "Lines longer than 8192 bytes and non-objects are
+#: The legacy container invocation (retired at the switchover) said
+#: this exactly: "Lines longer than 8192 bytes and non-objects are
 #: discarded and counted by the backend, never treated as an abort."
 MAX_LINE_BYTES = 8192
 
@@ -93,9 +96,10 @@ def event_name(line: dict[str, Any]) -> str | None:
     """The relayable name of one parsed event object, or ``None``.
 
     ``None`` is "discard and count": an object with no ``event``, with a
-    non-string one, or with one outside the frozen grammar is not
-    something a backend can relay under a name, and §8 makes the answer
-    to unrelayable input a counter rather than an abort.
+    non-string one, or with one outside the frozen grammar is not something
+    a backend can relay under a name, and the legacy container invocation
+    (retired at the switchover) makes the answer to unrelayable input a
+    counter rather than an abort.
     """
     found = line.get("event")
     if not isinstance(found, str) or _NAME.fullmatch(found) is None:
@@ -110,7 +114,8 @@ class EventReader:
     The reader holds a byte offset and a partial-line buffer, which is
     what makes it correct against a file being appended to while it is
     read: a poll that lands mid-line keeps the fragment and finishes it
-    on the next one. The file is never truncated by the program (§8), so
+    on the next one. The file is never truncated by the program — a rule
+    from the legacy container invocation (retired at the switchover) — so
     an offset is a stable address into it.
     """
 
@@ -120,8 +125,9 @@ class EventReader:
     #: over one cursor — the replay makes its own reader.
     offset: int = 0
     #: How many lines were discarded for being too long or not objects.
-    #: Counted rather than reported per line, because §8 makes the count
-    #: the whole of the backend's duty about them.
+    #: Counted rather than reported per line, because the legacy container
+    #: invocation (retired at the switchover) makes the count the whole of
+    #: the backend's duty about them.
     dropped: int = 0
     _partial: bytes = field(default=b"", repr=False)
     #: True once a line was discarded for exceeding :data:`MAX_LINE_BYTES`
@@ -194,10 +200,10 @@ def replay(path: Path, *, from_seq: int) -> tuple[dict[str, Any], ...]:
 
     Served out of the file the program wrote rather than out of memory:
     there is no second buffer to size, and nothing a reconnect can find
-    already evicted. ``seq`` is only required to
-    be **monotonic**, not gapless — a dropped event leaves a gap, and
-    §8 says the gap is harmless — so the filter is ``>=`` and never
-    "the Nth line".
+    already evicted. ``seq`` is only required to be **monotonic**, not
+    gapless — a dropped event leaves a gap, and the legacy container
+    invocation (retired at the switchover) treats the gap as harmless — so
+    the filter is ``>=`` and never "the Nth line".
 
     An event whose ``seq`` is not a whole number is relayed rather than
     dropped: the name is what a consumer matches on, and refusing to

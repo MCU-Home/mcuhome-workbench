@@ -172,19 +172,21 @@ Inside = PurePosixPath | Path
 _INVOCATION_ID = "inv-1"
 
 #: The program every conforming image carries, at the one absolute path
-#: §2.2 fixes. Never looked up on ``PATH``: the invocation is resolved
-#: without a shell, ``docker exec`` inherits the environment fixed at
-#: container creation, and ``PATH`` inside the image is the image
-#: author's — so a bare name would be a promise about someone else's
-#: filesystem.
+#: the legacy container invocation (retired at the switchover) fixes.
+#: Never looked up on ``PATH``: the invocation is resolved without a
+#: shell, ``docker exec`` inherits the environment fixed at container
+#: creation, and ``PATH`` inside the image is the image author's — so a
+#: bare name would be a promise about someone else's filesystem.
 PROGRAM = "/mcuhome/run"
 
-#: The optional static self-description an image MAY carry (§2.2.1). Read
-#: with ``docker run --rm … cat`` before a container is arranged, because
-#: §6.1 splits MCUHome's own program in two — the launcher is image
-#: content, the body arrives with ``trees.sdk`` — so the ``program``
-#: block is otherwise unobtainable until the SDK mount point is known,
-#: which is exactly what the block would have told the backend.
+#: The optional static self-description an image MAY carry, under the
+#: legacy container invocation (retired at the switchover). Read with
+#: ``docker run --rm … cat`` before a container is arranged, because
+#: that invocation splits MCUHome's own program in two — the launcher
+#: is image content, the body arrives with ``trees.sdk`` — so the
+#: ``program`` block is otherwise unobtainable until the SDK mount
+#: point is known, which is exactly what the block would have told the
+#: backend.
 DESCRIBE_FILE = "/mcuhome/describe.json"
 
 ACTION_DESCRIBE = ACTIONS[0]
@@ -200,27 +202,31 @@ ACTION_BUILD = ACTIONS[2]
 REQUEST_VERSION = REQUEST_VERSIONS[0]
 
 
-#: What the session's container runs as its main process. §2.2 makes
-#: starting the container the backend's business — ``docker run``
-#: overrides both ``ENTRYPOINT`` and ``CMD``, and the image "MUST provide
-#: a POSIX shell at ``/bin/sh``" so there is always a command to name.
+#: What the session's container runs as its main process. The legacy
+#: container invocation (retired at the switchover) makes starting the
+#: container the backend's business — ``docker run`` overrides both
+#: ``ENTRYPOINT`` and ``CMD``, and the image "MUST provide a POSIX
+#: shell at ``/bin/sh``" so there is always a command to name.
 #: Deliberately POSIX rather than ``sleep infinity``: the contract
 #: promises a shell, not GNU coreutils.
 IDLE_COMMAND = ("/bin/sh", "-c", "while :; do sleep 86400; done")
 
-#: The one legal ``artifacts[].root`` value in v1 (§5.4). "A consumer
-#: that sees a ``root`` it does not know MUST skip that artifact and MUST
-#: NOT resolve it against ``out``."
+#: The one legal ``artifacts[].root`` value the legacy container
+#: invocation (retired at the switchover) allows. "A consumer that sees
+#: a ``root`` it does not know MUST skip that artifact and MUST NOT
+#: resolve it against ``out``."
 ROOT_OUT = "out"
 
-#: ``artifacts[].path`` segments, §5.4 / §9.2. The same shape §9.2
-#: forbids the program to leave ``out``, which is what makes egress a
-#: check rather than a repair.
+#: ``artifacts[].path`` segments, shaped by the legacy container
+#: invocation (retired at the switchover). That invocation forbids the
+#: program to leave ``out`` in any other shape, which is what makes
+#: egress a check rather than a repair.
 logger = logging.getLogger(__name__)
 
 _PATH_SEGMENT = re.compile(r"[A-Za-z0-9._-]+\Z")
 
-#: A bare hash in the one legal spelling of §3.3.1 — 64 lowercase hex
+#: A bare hash in the one legal spelling the legacy container
+#: invocation (retired at the switchover) allows — 64 lowercase hex
 #: digits, no prefix. "A declared hash in any other rendering is a
 #: mismatch, not a value to fold."
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
@@ -253,8 +259,9 @@ def current_user() -> str | None:
     Everything the program writes lands on a bind mount this backend
     reads back — ``out``, ``work``, the result document — so the
     container runs as the calling user and leaves nothing owned by root
-    behind (§9.1, the same reason the container path already runs as the
-    caller).
+    behind — the same reason, under the legacy container invocation
+    (retired at the switchover), the container path already runs as the
+    caller.
     """
     getuid = getattr(os, "getuid", None)
     getgid = getattr(os, "getgid", None)
@@ -272,7 +279,8 @@ def current_user() -> str | None:
 class Mount:
     """One bind mount, host source to container destination.
 
-    ``read_only`` is the whole of the mode. §9.1 requires the backend to
+    ``read_only`` is the whole of the mode. The legacy container
+    invocation (retired at the switchover) requires the backend to
     write-protect ``context`` and every non-``writable`` tree "with the
     strongest means its profile has", and for a container that means a
     read-only bind mount — kernel-enforced, not a promise the program is
@@ -292,10 +300,11 @@ class Mount:
 class ResourceLimits:
     """What the container may consume, as ``docker run`` flags.
 
-    §1.2 lists per-session resource limits among the ``container``
-    profile's guarantees and §9.1 makes them the backend's "to set and to
-    enforce". They go on the ``run`` that creates the container, because a
-    limit applied anywhere else is a limit a build can step around.
+    The legacy container invocation (retired at the switchover) lists
+    per-session resource limits among the ``container`` profile's
+    guarantees and makes them the backend's "to set and to enforce".
+    They go on the ``run`` that creates the container, because a limit
+    applied anywhere else is a limit a build can step around.
     """
 
     memory: str | None = None
@@ -318,7 +327,8 @@ class TreeEntry:
     """One ``trees`` entry: where a layer's source tree is, and its mode.
 
     ``writable`` is **asserted by the backend and never probed by the
-    program** (§4.1), so the flag has to be truthful.
+    program**, under the legacy container invocation (retired at the
+    switchover), so the flag has to be truthful.
     """
 
     path: Inside
@@ -411,11 +421,12 @@ class ImageProfile:
 class LocalOutcome:
     """What one ``local`` invocation produced, from the backend's side.
 
-    ``successful`` is the seven-part answer of §5.3 and nothing else;
-    ``violation`` is the contract violation §5.3 raises against the image
-    where the exit code and the document contradict each other, carried as
-    a value so a caller can log it and refuse to trust the image without
-    re-deriving it.
+    ``successful`` is the seven-part answer the legacy container
+    invocation (retired at the switchover) defines and nothing else;
+    ``violation`` is the contract violation that answer raises against
+    the image where the exit code and the document contradict each
+    other, carried as a value so a caller can log it and refuse to trust
+    the image without re-deriving it.
     """
 
     action: str
@@ -505,9 +516,10 @@ class BackendConfig:
 # --------------------------------------------------------------------------
 
 #: Where a docker command's merged output goes, line by line, as it
-#: arrives. Merged rather than split because §8 says the two streams
-#: **are** one stream: "standard output and standard error together are
-#: one raw, opaque log stream".
+#: arrives. Merged rather than split because the legacy container
+#: invocation (retired at the switchover) says the two streams **are**
+#: one stream: "standard output and standard error together are one
+#: raw, opaque log stream".
 LineSink = Callable[[str], None]
 
 #: The one impure operation, injectable so the suite never needs docker.
@@ -667,10 +679,11 @@ def spawn_process(
 ) -> Running:
     """Start *argv* and hand back a handle that streams its merged output.
 
-    Merged because §8 says the two streams **are** one stream: "standard
-    output and standard error together are one raw, opaque log stream" —
-    and because a build log with the two halves interleaved by anybody
-    but the build is a log nobody can read.
+    Merged because the legacy container invocation (retired at the
+    switchover) says the two streams **are** one stream: "standard output
+    and standard error together are one raw, opaque log stream" — and
+    because a build log with the two halves interleaved by anybody but the
+    build is a log nobody can read.
 
     *env* and *cwd* are stated rather than inherited, which matters for
     the caller this exists for: the subprocess profile of the build
@@ -730,7 +743,8 @@ class _Absent:
 
 @dataclass(frozen=True)
 class Liveness:
-    """The backend's half of §8: a sentinel, a deadline, and the hard path.
+    """The backend's half of the legacy container invocation (retired at
+    the switchover): a sentinel, a deadline, and the hard path.
 
     The ladder, in order and with the reason for each rung:
 
@@ -811,7 +825,8 @@ class Liveness:
 
 
 def inspect_command(docker: str, reference: str) -> list[str]:
-    """``docker image inspect``, one JSON object per image (§9.1 cross-check)."""
+    """``docker image inspect``, one JSON object per image (the legacy
+    container invocation's cross-check, retired at the switchover)."""
     return [docker, "image", "inspect", "--format", "{{json .}}", reference]
 
 
@@ -819,7 +834,8 @@ def read_file_command(docker: str, image: str, path: str) -> list[str]:
     """A throwaway ``--rm`` run whose command is ``cat`` — reading one file.
 
     The cheapest read an image allows a backend that must not depend on
-    the program being invocable yet (§2.2.1). ``--network=none`` and no
+    the program being invocable yet, under the legacy container
+    invocation (retired at the switchover). ``--network=none`` and no
     mounts: reading a file grants nothing.
     """
     return [docker, "run", "--rm", "--network=none", image, "cat", path]
@@ -840,7 +856,8 @@ def start_command(
       whole invocation — the invocation is a ``docker exec`` into it.
     * ``--init`` because a build spawns hundreds of short-lived children
       and PID 1 has to reap them.
-    * ``--network=none`` because §9.1 forbids the network during an
+    * ``--network=none`` because the legacy container invocation
+      (retired at the switchover) forbids the network during an
       invocation, and because it is the only way that statement can be
       checked rather than asserted.
     * ``--user`` because everything the program writes lands on a bind
@@ -849,11 +866,12 @@ def start_command(
       that creates the container, because a limit on the exec bounds one
       process tree and a limit on the container bounds the build.
     * ``--label`` for whatever the caller wants to find its containers
-      by later. **Container** labels, not image ones: §2.1 governs image
-      labels and this is backend policy, which §11 leaves free. A
-      long-running caller uses it so that an operator can find the
-      containers of a process that was killed outright; a command line
-      passes none, because it reaps its own before it exits.
+      by later. **Container** labels, not image ones: the legacy
+      container invocation (retired at the switchover) governs image
+      labels and this is backend policy, which it otherwise leaves
+      free. A long-running caller uses it so that an operator can find
+      the containers of a process that was killed outright; a command
+      line passes none, because it reaps its own before it exits.
     """
     argv = [docker, "run", "--detach", "--init", "--network=none"]
     if user is not None:
@@ -871,7 +889,8 @@ def start_command(
 def exec_command(
     *, docker: str, container: str, action: str, request: Path, user: str | None = None
 ) -> list[str]:
-    """``docker exec`` the program: the contract's whole invocation (§5.1).
+    """``docker exec`` the program: what the legacy container invocation
+    (retired at the switchover) called one whole invocation.
 
     Exactly two positional operands after the program — the action and an
     absolute path to the request document — and never a flag. This argv is
@@ -891,12 +910,13 @@ def describe_run_command(
 ) -> list[str]:
     """The throwaway ``docker run`` that asks an image what it is.
 
-    ``describe`` is an invocation, so §9.1's "no network during an
-    invocation" applies to it — ``--network=none`` is not a nicety here.
-    ``--rm`` because the container's only output is the result document on
-    the mount, ``--init`` for the same child-reaping reason a build needs
-    one, and one ``--volume`` per mount for the probe directory that holds
-    the request and result documents.
+    ``describe`` is an invocation, so the legacy container invocation's
+    rule (retired at the switchover) — "no network during an invocation"
+    — applies to it — ``--network=none`` is not a nicety here. ``--rm``
+    because the container's only output is the result document on the
+    mount, ``--init`` for the same child-reaping reason a build needs
+    one, and one ``--volume`` per mount for the probe directory that
+    holds the request and result documents.
     """
     argv = [docker, "run", "--rm", "--init", "--network=none"]
     if user is not None:
@@ -917,11 +937,12 @@ def _ordered(mounts: Sequence[Mount]) -> tuple[Mount, ...]:
 
     Docker applies bind mounts in the order it is given them, so a mount
     inside another has to come *after* it or the outer one buries it —
-    which, for a read-only SDK under a writable parent, is §9.1's
-    kernel-enforced write protection silently not happening. The backend
-    no longer relies on that nesting (it mounts pieces, not a tree with
-    holes), but the ordering costs nothing and keeps a mount set that
-    *does* nest correct regardless of caller order.
+    which, for a read-only SDK under a writable parent, is the
+    kernel-enforced write protection the legacy container invocation
+    (retired at the switchover) required, silently not happening. The
+    backend no longer relies on that nesting (it mounts pieces, not a
+    tree with holes), but the ordering costs nothing and keeps a mount
+    set that *does* nest correct regardless of caller order.
     """
     return tuple(sorted(mounts, key=lambda mount: len(mount.target.parts)))
 
@@ -963,8 +984,9 @@ class Docker:
     def inspect(self, reference: str) -> ImageProfile | None:
         """One image's facts as an :class:`ImageProfile`, or ``None`` when absent.
 
-        The ``program`` block is left empty here — this call resolves the
-        digest and labels (§9.1's cross-check, §2.1's pre-start hint); the
+        The ``program`` block is left empty here — this call resolves
+        the digest and labels (the legacy container invocation's
+        cross-check and pre-start hint, retired at the switchover); the
         block is filled by :meth:`describe` once a mount point is known.
         """
         completed = self._invoke(inspect_command(self.program, reference))
@@ -982,7 +1004,8 @@ class Docker:
         )
 
     def read_static_describe(self, image: str) -> dict[str, Any] | None:
-        """``/mcuhome/describe.json`` out of the image, or ``None`` (§2.2.1)."""
+        """``/mcuhome/describe.json`` out of the image, or ``None`` (the legacy
+        container invocation's optional file, retired at the switchover)."""
         completed = self._invoke(read_file_command(self.program, image, DESCRIBE_FILE))
         if not completed.ok:
             return None
@@ -991,11 +1014,12 @@ class Docker:
     def describe(self, *, image: str, probe: Path, user: str | None) -> dict[str, Any]:
         """Invoke ``describe`` in a throwaway container, and read the block.
 
-        The fallback of §2.2.1: where the static file is absent or
-        unreadable, the backend invokes ``describe`` "exactly as it does
-        today". Only the preamble is sent — ``describe`` "needs only
-        ``request`` and ``result``, never touches the context, writes
-        nothing but the result document".
+        The fallback the legacy container invocation (retired at the
+        switchover) allowed: where the static file is absent or unreadable,
+        the backend invokes ``describe`` "exactly as it does today". Only
+        the preamble is sent — ``describe`` "needs only ``request`` and
+        ``result``, never touches the context, writes nothing but the result
+        document".
         """
         request = probe / "request.json"
         result = probe / "result.json"
@@ -1090,7 +1114,8 @@ class Docker:
 
 
 # --------------------------------------------------------------------------
-# The request document (§5.2) — backend side
+# The request document (as the legacy container invocation, retired at
+# the switchover, defined it) — backend side
 # --------------------------------------------------------------------------
 
 
@@ -1111,12 +1136,13 @@ def request_document(
     events: Inside | None = None,
     cancel: Inside | None = None,
 ) -> dict[str, Any]:
-    """The document one working invocation is described by (§5.2).
+    """The document one working invocation is described by, under the
+    legacy container invocation (retired at the switchover).
 
-    Every field §5.2 makes mandatory for a working action is a required
-    argument, so a document missing one cannot be composed: ``session``,
-    ``out``, ``work``, ``tmp``, ``context``, ``trees.sdk`` and
-    ``limits.jobs`` on top of the immortal preamble.
+    Every field that invocation makes mandatory for a working action is
+    a required argument, so a document missing one cannot be composed:
+    ``session``, ``out``, ``work``, ``tmp``, ``context``, ``trees.sdk``
+    and ``limits.jobs`` on top of the immortal preamble.
 
     ``limits.jobs`` is resolved host-side and is authoritative — not a
     hint the program may improve on with ``nproc``, which sees the host
@@ -1126,7 +1152,7 @@ def request_document(
     nothing behind it keeps. ``params`` is omitted for an action that has
     none; on ``build`` this backend writes ``mode`` explicitly because it
     also demands the pointer through ``required`` — the value has to be
-    there to be honoured (§5.2).
+    there for that invocation to honour it.
 
     There is deliberately **no invocation id**: the backend addresses an
     invocation by the ``out``, ``result`` and ``events`` paths it chose,
@@ -1156,9 +1182,10 @@ def request_document(
         document["params"] = dict(params)
     if required:
         document["required"] = list(required)
-    # Both optional in §5.2 and omitted rather than written null: "absent
-    # ⇒ no events", and a `cancel` nobody will ever touch would promise a
-    # stop signal that does not exist.
+    # Both optional under the legacy container invocation (retired at the
+    # switchover) and omitted rather than written null: "absent ⇒ no
+    # events", and a `cancel` nobody will ever touch would promise a stop
+    # signal that does not exist.
     if events is not None:
         document["events"] = str(events)
     if cancel is not None:
@@ -1167,7 +1194,8 @@ def request_document(
 
 
 def write_request(document: dict[str, Any], path: Path) -> None:
-    """Place the request document atomically, and durably (§5.1 step 1).
+    """Place the request document atomically, and durably — step 1 of
+    the legacy container invocation (retired at the switchover).
 
     A temporary neighbour, an ``fsync``, a rename, and an ``fsync`` of the
     directory so the name itself survives. The program opens ``argv[2]``
@@ -1194,7 +1222,8 @@ def write_request(document: dict[str, Any], path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# The result document (§5.3, §5.4) — backend side
+# The result document (as the legacy container invocation, retired at
+# the switchover, defined it) — backend side
 # --------------------------------------------------------------------------
 
 
@@ -1207,31 +1236,34 @@ def judge_result(
     context_id: str | None,
     patched_layers: tuple[str, ...] = (),
 ) -> LocalOutcome:
-    """Read the result document if it exists, and judge it (§5.3).
+    """Read the result document if it exists, and judge it against the
+    legacy container invocation's rule (retired at the switchover).
 
     "The backend reads the result document **if it exists**, regardless of
     the exit code. An invocation is successful exactly when all of the
     following hold": the document parses and names an implemented
-    ``result`` version; it carries every §5.4-mandatory field for the
-    action; ``action`` echoes ``argv[1]`` and every echo field the request
-    supplied echoes correctly; ``status == "success"``; the observed exit
-    code is 0; every declared artifact exists and re-hashes; and, for a
-    working action, the backend's own context ID matches ``result.context``.
+    ``result`` version; it carries every field that invocation makes
+    mandatory for the action; ``action`` echoes ``argv[1]`` and every echo
+    field the request supplied echoes correctly; ``status == "success"``;
+    the observed exit code is 0; every declared artifact exists and
+    re-hashes; and, for a working action, the backend's own context ID
+    matches ``result.context``.
 
     This function settles everything the document alone can — conditions 1
-    to 5 and 7. Condition 6 is egress (§9.3), needs the filesystem, and is
-    :func:`verify_artifacts`; the caller folds it in. *context_id* is the
-    id **the backend computed itself**; ``result.context`` exists only to
-    be compared against it.
+    to 5 and 7. Condition 6 — egress, under that same invocation — needs
+    the filesystem, and is :func:`verify_artifacts`; the caller folds it
+    in. *context_id* is the id **the backend computed itself**;
+    ``result.context`` exists only to be compared against it.
     """
     outcome = LocalOutcome(
         action=action, context_id=context_id or "", exit_code=exit_code, result=None
     )
     data = _load(path)
     if data is None:
-        # No document at all. §9.1: "an `out` directory without a result
-        # document at `result` is a failed invocation" — the case a
-        # resource limit that aborted the program produces.
+        # No document at all. The legacy container invocation (retired at
+        # the switchover) said: "an `out` directory without a result
+        # document at `result` is a failed invocation" — the case a resource
+        # limit that aborted the program produces.
         outcome.problems = ("no result document was written at the path the request named",)
         outcome.status = _STATUS_FAILURE
         return outcome
@@ -1272,16 +1304,18 @@ def judge_result(
 
 
 def declared_artifacts(data: dict[str, Any]) -> tuple[tuple[Artifact, ...], tuple[str, ...]]:
-    """The declared artifacts, and what was wrong with the rest (§5.4, §9.3).
+    """The declared artifacts, and what was wrong with the rest, under
+    the legacy container invocation (retired at the switchover).
 
-    Returns ``(resolvable, problems)``. An entry that is "not resolvable"
-    — missing any of ``root``/``path``/``role``/``hashes``, or naming a
-    ``root`` this version does not know — is skipped silently, exactly as
-    §5.4 requires. An entry that carries all four and is still wrong about
-    itself — a ``path`` outside §9.2's charset, or a ``sha256`` in any
-    rendering other than 64 lowercase hex digits — is a *problem*: §5.3's
-    sixth condition failing, which fails the invocation rather than
-    quietly shrinking the delivery.
+    Returns ``(resolvable, problems)``. An entry that is "not
+    resolvable" — missing any of ``root``/``path``/``role``/``hashes``,
+    or naming a ``root`` this version does not know — is skipped
+    silently, exactly as that invocation requires. An entry that carries
+    all four and is still wrong about itself — a ``path`` outside its
+    allowed charset, or a ``sha256`` in any rendering other than 64
+    lowercase hex digits — is a *problem*: its sixth condition failing,
+    which fails the invocation rather than quietly shrinking the
+    delivery.
     """
     entries = data.get("artifacts")
     if not isinstance(entries, list):
@@ -1300,7 +1334,8 @@ def declared_artifacts(data: dict[str, Any]) -> tuple[tuple[Artifact, ...], tupl
 def verify_artifacts(
     out: Path, declared: Sequence[Artifact], *, max_bytes: int | None = None
 ) -> tuple[tuple[Artifact, ...], tuple[str, ...]]:
-    """§5.3 condition 6 and §9.3 egress: re-hash from disk, reject non-files.
+    """The legacy container invocation's condition 6 and egress rule
+    (retired at the switchover): re-hash from disk, reject non-files.
 
     Resolves each declared artifact under ``out`` "without following
     symlinks" — segment by segment with ``lstat`` and **never**
@@ -1309,9 +1344,9 @@ def verify_artifacts(
     that is a symlink to another file in ``out`` resolves to a
     contained-looking path only after the link has been followed, and the
     followed target would then be re-hashed and served under the declared
-    name. What §9.3 asks is that no segment of the path be a link at all,
-    which is what :func:`_contained` walks — an in-out symlink is
-    *rejected*, not served.
+    name. What that egress rule asks is that no segment of the path be a
+    link at all, which is what :func:`_contained` walks — an in-out
+    symlink is *rejected*, not served.
 
     On the unresolved final path it then rejects a non-regular file, a
     hardlink (``nlink > 1``, a second name for bytes that may live outside
@@ -1394,7 +1429,8 @@ def _lstat(path: Path) -> os.stat_result | None:
 
 
 # --------------------------------------------------------------------------
-# The SDK package (§6.1, §9.1) — found, verified, unpacked
+# The SDK package, per the legacy container invocation (retired at
+# the switchover) — found, verified, unpacked
 # --------------------------------------------------------------------------
 
 
@@ -1413,12 +1449,12 @@ def acquire_package(
 ) -> AcquiredPackage:
     """Find the pinned package, verify its bytes, unpack it safely.
 
-    §9.1 makes a verified SDK a backend duty, and the same rule serves
-    every package a build environment is assembled from: the content of
-    a tree matches the ``sha256`` that was pinned, and the package is
-    acquired "by (name, version, sha256) from operator-configured sources
-    only; the manifest's ``package.url`` is a hint, never an
-    instruction".
+    The legacy container invocation (retired at the switchover) made a
+    verified SDK a backend duty, and the same rule serves every package
+    a build environment is assembled from: the content of a tree matches
+    the ``sha256`` that was pinned, and the package is acquired "by
+    (name, version, sha256) from operator-configured sources only; the
+    manifest's ``package.url`` is a hint, never an instruction".
 
     **Two tiers, in this order.** The operator's own directories are
     searched first, in order, so a machine that already has the package
@@ -1439,10 +1475,12 @@ def acquire_package(
     verified. A file with the right name and the wrong bytes is refused
     exactly as loudly as one that is not there, and a registry entry
     whose sha256 is not the pinned one is refused before a byte is
-    fetched. The unpack is the safe extraction of §9.1: regular files and
-    directories only, and the executable bit preserved so ``bin/generate``
-    can be spawned (§6.1). *symlinks* widens that by exactly one member
-    type, for the packages a build environment is assembled from —
+    fetched. The unpack is the safe extraction the legacy container
+    invocation (retired at the switchover) required: regular files and
+    directories only, and the executable bit preserved so
+    ``bin/generate`` can be spawned. *symlinks* widens that by exactly
+    one member type, for the packages a build environment is assembled
+    from —
     a toolchain and a third party's source world cannot be delivered
     without links — and only for links that stay inside their own tree;
     see :func:`_safe_extract`.
@@ -1689,15 +1727,16 @@ def _safe_extract(
     what: str = SDK_PACKAGE_NAME,
     symlinks: bool = False,
 ) -> None:
-    """Safe extraction (§9.1): regular files and directories only.
+    """Safe extraction, under the legacy container invocation (retired
+    at the switchover): regular files and directories only.
 
     Absolute paths, ``..`` after normalization, symlinks, hardlinks and
-    device nodes are rejected — each of them is a way out of the directory
-    the tree is unpacked into. The archive's mode bits are discarded down
-    to two values: 0600, or 0700 for a file the archive marked executable,
-    because §6.1 spawns ``bin/generate`` as a child process and an SDK
-    unpacked without its exec bit answers exit 127 where code generation
-    should be.
+    device nodes are rejected — each of them is a way out of the
+    directory the tree is unpacked into. The archive's mode bits are
+    discarded down to two values: 0600, or 0700 for a file the archive
+    marked executable, because that invocation spawns ``bin/generate``
+    as a child process and an SDK unpacked without its exec bit answers
+    exit 127 where code generation should be.
 
     **Symlinks, for the packages that cannot be delivered without them.**
     The SDK package is unpacked with *symlinks* false and the rule above
@@ -1872,7 +1911,8 @@ class LocalBackend:
 
     Given a context directory (already created and locked by
     :mod:`mcuhome.workbench.contextdir`) and an action, :meth:`run` drives
-    the whole §5 lifecycle to its end and tears the container down
+    the whole lifecycle the legacy container invocation (retired at the
+    switchover) defined to its end and tears the container down
     whatever the end is. Everything expensive — the SDK fetch, the
     container — happens in :meth:`run`; the constructor holds only the
     config and the docker seam.
@@ -1914,14 +1954,15 @@ class LocalBackend:
         single invocation's state — that is :meth:`BuildEnvironment.invoke`,
         which may run more than once.
 
-        The split is the contract's own rather than a convenience. §6.2
-        applies a layer's patches **once per session** and records that
-        in ``work``; §6.3 makes ``work`` carry a session marker so that a
-        program handed a working area from a *dead* session refuses it.
-        Both statements are about something that outlives one invocation,
-        and a backend with no such thing could honour neither: a
-        ``verify`` followed by a ``build`` would be two sessions, patched
-        twice, and an incremental build would find its own tree foreign.
+        The split is the contract's own rather than a convenience. The
+        legacy container invocation (retired at the switchover) applies a
+        layer's patches **once per session** and records that in ``work``;
+        it also makes ``work`` carry a session marker so that a program
+        handed a working area from a *dead* session refuses it. Both
+        statements are about something that outlives one invocation, and a
+        backend with no such thing could honour neither: a ``verify``
+        followed by a ``build`` would be two sessions, patched twice, and an
+        incremental build would find its own tree foreign.
 
         The caller closes it (:meth:`BuildEnvironment.close`), or uses it
         as a context manager, which is what :meth:`run` does.
@@ -1945,15 +1986,15 @@ class LocalBackend:
             max_bytes=self.config.sdk_max_bytes,
         )
 
-        # §9.1: `work` is "the session's persistent working area", and a
-        # session begins here. A `work` left by an earlier one belongs to
-        # an environment that no longer exists — its container was
-        # reaped — and the program rightly refuses it
-        # (`error.work.foreign`: the marker never matches a freshly drawn
-        # session id, §6.3). So it is removed rather than inherited.
-        # Incremental builds ACROSS sessions would need a session
-        # identity persisted beside `work` and bound to the context ID —
-        # a named later step, not a by-product of leaking state.
+        # The legacy container invocation (retired at the switchover) says
+        # `work` is "the session's persistent working area", and a session
+        # begins here. A `work` left by an earlier one belongs to an
+        # environment that no longer exists — its container was reaped — and
+        # the program rightly refuses it (`error.work.foreign`: the marker
+        # never matches a freshly drawn session id). So it is removed rather
+        # than inherited. Incremental builds ACROSS sessions would need a
+        # session identity persisted beside `work` and bound to the context
+        # ID — a named later step, not a by-product of leaking state.
         work = work_root / "work"
         invocations = work_root / "inv"
         if work.exists():
@@ -1986,12 +2027,12 @@ class LocalBackend:
             invocations=invocations,
             user=user,
             # One session id, drawn once, for every invocation in this
-            # environment — §6.3's marker in `work` is what makes that
-            # load-bearing: a fresh id per invocation would make the
-            # second one find the first one's `work` foreign. A caller
-            # that already has a name for this session states it, so that
-            # the marker, its logs and its wire agree; one that does not
-            # gets a drawn one.
+            # environment — the legacy container invocation's marker in `work`
+            # (retired at the switchover) is what makes that load-bearing: a
+            # fresh id per invocation would make the second one find the first
+            # one's `work` foreign. A caller that already has a name for this
+            # session states it, so that the marker, its logs and its wire
+            # agree; one that does not gets a drawn one.
             session=session or f"local-{uuid.uuid4().hex[:12]}",
         )
 
@@ -2103,7 +2144,8 @@ class LocalBackend:
         work: Path,
         invocations: Path,
     ) -> tuple[dict[str, TreeEntry], list[Mount]]:
-        """Every ``trees`` entry and the mounts behind them (§4.1, E47).
+        """Every ``trees`` entry and the mounts behind them, under the
+        legacy container invocation (retired at the switchover; E47).
 
         The session tree is mounted **piece by piece and never wholesale**:
         ``context`` read-only, ``work`` writable, the directory the
@@ -2115,11 +2157,13 @@ class LocalBackend:
         backend's own choice when ``describe`` declared ``null``. A
         wholesale root mount would expose
         the SDK writable at its unpack path and make ``writable: false`` a
-        false claim, which §9.1 forbids.
+        false claim, which the legacy container invocation (retired at
+        the switchover) forbids.
 
         The SDK is mounted writable only when the ``sdk`` layer carries
         patches, in which case the per-session unpacked tree *is* the
-        writable view §6.2 asks for. Every other patched in-image layer is
+        writable view the legacy container invocation (retired at the
+        switchover) asks for. Every other patched in-image layer is
         asserted ``writable: true`` at the path ``describe`` reported, with
         **no mount** (E47): the container's own copy-on-write layer is the
         view, and the container is discarded when the build ends. A patched
@@ -2149,7 +2193,8 @@ class LocalBackend:
     def _shared_store(root: Path, profile: ImageProfile) -> Path | None:
         """One subdirectory of *root* per implementation, or nothing.
 
-        §10's own recommendation, and the reason is the shape this
+        The legacy container invocation's own recommendation (retired
+        at the switchover), and the reason is the shape this
         parameter exists for: "one subdirectory per implementation, named
         from ``describe``'s ``program.id``, so that two foreign images
         cannot corrupt each other's store". A backend that offers a
@@ -2210,8 +2255,9 @@ class LocalBackend:
         return mounts
 
 
-#: One parsed program event, handed on verbatim (§8: "unknown names are
-#: relayed opaquely … never rewrites it").
+#: One parsed program event, handed on verbatim (the legacy container
+#: invocation, retired at the switchover: "unknown names are relayed
+#: opaquely … never rewrites it").
 EventSink = Callable[[dict[str, Any]], None]
 
 
@@ -2238,7 +2284,8 @@ class Invocation:
 
     @property
     def cancel(self) -> Path:
-        """The sentinel. Touching it means stop (§8), from anywhere."""
+        """The sentinel. Touching it means stop, under the legacy
+        container invocation (retired at the switchover), from anywhere."""
         return self.directory / "cancel"
 
     @property
@@ -2287,13 +2334,14 @@ class Invocation:
     def _collect(self, exit_code: int | None) -> LocalOutcome:
         """Read the result, harden egress, and decide what it was worth.
 
-        §5.3's seventh condition and §9.3's re-hashing meet here: the
-        document is judged by :func:`judge_result` and the artifacts by
+        The legacy container invocation's seventh condition and its
+        re-hashing rule (retired at the switchover) meet here: the document
+        is judged by :func:`judge_result` and the artifacts by
         :func:`verify_artifacts`, and an invocation is successful only if
         both had nothing to say. A declared entry that is malformed, one
-        whose bytes do not survive re-hashing, and §7.2's delivery rule
-        (a successful build delivers one ``firmware`` and exactly one
-        ``report``) all fail the invocation.
+        whose bytes do not survive re-hashing, and that invocation's
+        delivery rule (a successful build delivers one ``firmware`` and
+        exactly one ``report``) all fail the invocation.
         """
         environment = self.environment
         outcome = judge_result(
@@ -2324,17 +2372,18 @@ class Invocation:
 class BuildEnvironment:
     """One materialized build environment, and the invocations run in it.
 
-    Created by :meth:`LocalBackend.open`. It holds what a *session* is in
-    contract terms — the container, its ``work`` area, the trees it was
-    given, the session id that marks that ``work`` (§6.3) — and nothing
-    about any one invocation, which :meth:`invoke` creates fresh each
-    time.
+    Created by :meth:`LocalBackend.open`. It holds what a *session* is
+    in contract terms — the container, its ``work`` area, the trees it
+    was given, the session id that marks that ``work``, under the legacy
+    container invocation (retired at the switchover) — and nothing about
+    any one invocation, which :meth:`invoke` creates fresh each time.
 
     An environment is single-threaded: one invocation at a time, because
     they share one ``work`` and two of them in it would build against
-    each other's tree (§9.1). Nothing here enforces that beyond saying
-    so; the callers that could produce two are the ones that also own
-    the queue that prevents it.
+    each other's tree — a rule from the legacy container invocation
+    (retired at the switchover). Nothing here enforces that beyond
+    saying so; the callers that could produce two are the ones that
+    also own the queue that prevents it.
     """
 
     docker: Docker
@@ -2363,10 +2412,11 @@ class BuildEnvironment:
         """Everything one invocation needs on disk, before it is started.
 
         Separate from running it because a caller that may want to
-        **cancel** needs the sentinel's path before the call that blocks
-        — the sentinel is a file whose existence means stop (§8), so
-        cancelling is touching it, and a handle that only came back at
-        the end could never be touched in time.
+        **cancel** needs the sentinel's path before the call that blocks —
+        the sentinel is a file whose existence means stop, under the legacy
+        container invocation (retired at the switchover), so cancelling is
+        touching it, and a handle that only came back at the end could never
+        be touched in time.
         """
         if self._closed:
             raise RuntimeError("this build environment has been closed")
@@ -2387,9 +2437,10 @@ class BuildEnvironment:
         directory.mkdir(mode=0o700, parents=True)
         out.mkdir(mode=0o700)
         tmp.mkdir(mode=0o700)
-        # §8: the events file is created empty by the backend, because a
-        # reader that had to tell "not created yet" from "no events yet"
-        # would be guessing at exactly the moment somebody is watching.
+        # The legacy container invocation (retired at the switchover) says the
+        # events file is created empty by the backend, because a reader that
+        # had to tell "not created yet" from "no events yet" would be guessing
+        # at exactly the moment somebody is watching.
         events = directory / "events.ndjson"
         events.touch(mode=0o600)
         # The container's own view of the same directory. It is the same
@@ -2430,18 +2481,20 @@ class BuildEnvironment:
     ) -> LocalOutcome:
         """Run one action to its end and judge what came back.
 
-        The §5 lifecycle minus everything the environment already did:
-        prepare this invocation's own directory (an empty ``out``, an
-        empty ``tmp``), write the request document atomically, exec the
-        program, read the result and judge it against the full §5.3
+        The legacy container invocation's lifecycle (retired at the
+        switchover) minus everything the environment already did: prepare
+        this invocation's own directory (an empty ``out``, an empty
+        ``tmp``), write the request document atomically, exec the program,
+        read the result and judge it against that invocation's full
         criteria.
 
-        **A fresh directory per invocation**, numbered, never reused.
-        §9.1 wants an empty ``out`` and an empty ``tmp`` every time, and
-        the reason is egress rather than tidiness: an old
-        ``out/firmware.hex`` that still matched a re-declared hash would
-        let a later non-conforming build slip through, and a stale
-        ``result.json`` would be judged as this run's answer.
+        **A fresh directory per invocation**, numbered, never reused. The
+        legacy container invocation (retired at the switchover) wants an
+        empty ``out`` and an empty ``tmp`` every time, and the reason is
+        egress rather than tidiness: an old ``out/firmware.hex`` that still
+        matched a re-declared hash would let a later non-conforming build
+        slip through, and a stale ``result.json`` would be judged as this
+        run's answer.
         """
         return self.prepare(action, mode=mode).run(on_line=on_line, on_event=on_event)
 
@@ -2463,7 +2516,8 @@ class BuildEnvironment:
         cancel: Inside,
         mode: str | None,
     ) -> dict[str, Any]:
-        """The request document for one invocation (§5.2).
+        """The request document for one invocation, under the legacy
+        container invocation (retired at the switchover).
 
         ``build`` demands ``/params/mode`` and ``/trees/<layer>`` for every
         patched layer through ``required``, and states ``mode`` explicitly
@@ -2471,7 +2525,8 @@ class BuildEnvironment:
         neither — it "applies no patches and touches no source tree", so
         demanding a tree pointer would ask a conforming program to refuse
         for not using something it is forbidden to use — but the tree
-        entries are still supplied (§7.3): "a view it never writes to is
+        entries are still supplied, per the legacy container invocation
+        (retired at the switchover): "a view it never writes to is
         indistinguishable from one it was not given".
         """
         params: dict[str, Any] | None = None
@@ -2555,7 +2610,8 @@ _MANIFEST_FILE = "manifest.yaml"
 
 
 def _status(data: dict[str, Any]) -> str:
-    """The status, treating an unknown value as failure (§5.4)."""
+    """The status, treating an unknown value as failure, per the legacy
+    container invocation (retired at the switchover)."""
     found = data.get("status")
     return found if found in _STATUSES else _STATUS_FAILURE
 
@@ -2576,7 +2632,8 @@ def _load(path: Path) -> dict[str, Any] | None:
 def _missing_mandatory(
     data: dict[str, Any], action: str, status: str, patched_layers: tuple[str, ...]
 ) -> tuple[str, ...]:
-    """§5.4's per-action table, as a list of what is wrong with a document."""
+    """The per-action table the legacy container invocation (retired
+    at the switchover) defined, as a list of what is wrong with a document."""
     missing: list[str] = []
     success = status == _STATUS_SUCCESS
     working = action in (ACTION_VERIFY, ACTION_BUILD)
@@ -2616,7 +2673,8 @@ def _missing_mandatory(
 
 
 def _layer_problems(layers: dict[str, Any], patched: tuple[str, ...]) -> tuple[str, ...]:
-    """``layers`` against the patch set the backend derived (§5.4)."""
+    """``layers`` against the patch set the backend derived, under the
+    legacy container invocation (retired at the switchover)."""
     problems: list[str] = []
     for layer in patched:
         if layer not in layers:
@@ -2634,7 +2692,8 @@ def _layer_problems(layers: dict[str, Any], patched: tuple[str, ...]) -> tuple[s
 
 
 def _violation(data: dict[str, Any], status: str, exit_code: int | None) -> str | None:
-    """The contract violation §5.3 raises against the image, if any."""
+    """The contract violation the legacy container invocation (retired
+    at the switchover) raises against the image, if any."""
     if exit_code is not None and exit_code not in (0, 1, 66):
         return f"the program exited {exit_code}, which is outside the frozen set 0, 1 and 66"
     if exit_code == 0 and status != _STATUS_SUCCESS:
@@ -2652,7 +2711,8 @@ def _violation(data: dict[str, Any], status: str, exit_code: int | None) -> str 
 def _delivery_problems(
     action: str, data: dict[str, Any], status: str, verified: Sequence[Artifact]
 ) -> tuple[str, ...]:
-    """§7.2's delivery rule, measured on what survived egress.
+    """The legacy container invocation's delivery rule (retired at the
+    switchover), measured on what survived egress.
 
     "A successful device build MUST declare at least two artifacts: the
     unsigned image with role ``firmware`` … and **exactly one artifact
@@ -2718,8 +2778,9 @@ def _program_problem(program: dict[str, Any], labels: dict[str, str]) -> str | N
     ``trees`` included, and the gates that follow are the ones a backend
     passes before it may invoke anything: a contract version it implements,
     a request format the program parses, a result format it writes, and —
-    §2.1 — labels that do not contradict what the block just said. ``None``
-    means the image can serve; a string is why it cannot.
+    under that same invocation — labels that do not contradict what the
+    block just said. ``None`` means the image can serve; a string is why
+    it cannot.
     """
     missing = [name for name in (*PROGRAM_FIELDS, "trees") if name not in program]
     if missing:
@@ -2743,7 +2804,8 @@ def _program_problem(program: dict[str, Any], labels: dict[str, str]) -> str | N
 
 
 def _label_problem(program: dict[str, Any], labels: dict[str, str]) -> str | None:
-    """The §2.1 cross-check: the image labels against what ``describe`` said.
+    """The legacy container invocation's cross-check (retired at the
+    switchover): the image labels against what ``describe`` said.
 
     "A backend MUST verify them against ``describe`` and MUST NOT rely on a
     label ``describe`` contradicts", and the legacy container invocation
@@ -2757,7 +2819,7 @@ def _label_problem(program: dict[str, Any], labels: dict[str, str]) -> str | Non
     checked is that they are **present** — they are the coupling labels a
     compatibility constraint is written over, and "a container that does
     not carry a named label does not qualify — absence is never read as
-    compatible" (§2.1.1).
+    compatible", under that same invocation.
     """
     coupling = (CONTRACT_LABEL, ZEPHYR_LABEL, TOOLCHAIN_LABEL)
     absent = [name for name in coupling if not labels.get(name)]
@@ -2784,7 +2846,8 @@ def _versions(value: Any) -> tuple[int, ...]:
 
 
 def _static_describe(text: str) -> dict[str, Any] | None:
-    """A static ``describe.json`` as a result document, or ``None`` (§2.2.1)."""
+    """A static ``describe.json`` as a result document, or ``None`` (the
+    legacy container invocation's optional file, retired at the switchover)."""
     try:
         data = json.loads(text)
     except ValueError:

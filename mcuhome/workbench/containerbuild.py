@@ -32,10 +32,9 @@ asks a registry which image it recommends
 (:mod:`mcuhome.workbench.resolve_env`) and then fetches those exact
 bytes if this host does not have them; everything after that is local.
 The SDK package is still acquired from the operator's own source
-directories and from nowhere else (contract v1's first tier, §9.1). A
-registry that cannot be reached, a repository offering nothing that
-fits, and a missing SDK package are typed refusals, not tracebacks ten
-minutes into a build.
+directories and from nowhere else. A registry that cannot be reached, a
+repository offering nothing that fits, and a missing SDK package are typed
+refusals, not tracebacks ten minutes into a build.
 """
 
 from __future__ import annotations
@@ -66,9 +65,10 @@ __all__ = [
 class LocalBuildResult:
     """What one :func:`run_locked_build` produced, from the caller's side.
 
-    :attr:`outcome` is the backend's own seven-part §5.3 answer — a caller
-    checks :attr:`~mcuhome.workbench.orchestrator.LocalOutcome.successful`
-    before trusting anything else. :attr:`out_dir` is where the delivered
+    :attr:`outcome` is the backend's own seven-part answer from the legacy
+    container invocation (retired at the switchover) — a caller checks
+    :attr:`~mcuhome.workbench.orchestrator.LocalOutcome.successful` before
+    trusting anything else. :attr:`out_dir` is where the delivered
     artifacts actually are (the unsigned ``firmware.*`` and the
     ``build-report.json`` a host signer consumes); :attr:`context_dir` is
     the locked context the build was attributed to; :attr:`image` is the
@@ -218,10 +218,11 @@ def run_locked_build(
 
     The backend role and nothing else: *context_dir* was created and
     locked by the workbench, *sdk_sources* are the operator's local
-    package directories the backend acquires the pinned SDK from (§9.1 —
-    a backend duty, the hash decides), *registry* is the second tier it
-    falls through to when none of them holds the package, and *work_root*
-    is the backend's own scratch area.
+    package directories the backend acquires the pinned SDK from — a
+    duty of the legacy container invocation (retired at the switchover),
+    the hash decides — *registry* is the second tier it falls through to
+    when none of them holds the package, and *work_root* is the
+    backend's own scratch area.
 
     *image* is the container this build runs in, pinned to a digest and
     already resolved by whoever composed the build

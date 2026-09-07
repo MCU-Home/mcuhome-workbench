@@ -682,9 +682,10 @@ def test_no_hash_in_the_manifest_is_wrapped_across_two_lines(model, tmp_path: Pa
     Legal YAML — and this module's own round-trip test never noticed,
     because ruamel folds it straight back. It is still the wrong thing to
     write: ``manifest.yaml`` is read by build containers this project
-    does not write, in languages it does not choose, and §3.3.1 has them
-    **refuse** a hash rendered any other way rather than repair it. A
-    one-line value cannot be read as two.
+    does not write, in languages it does not choose, and the legacy
+    container invocation (retired at the switchover) has them **refuse**
+    a hash rendered any other way rather than repair it. A one-line
+    value cannot be read as two.
     """
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir)

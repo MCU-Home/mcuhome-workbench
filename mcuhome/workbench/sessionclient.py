@@ -1980,8 +1980,9 @@ class SessionClient:
         verdict carries the status, the artifact list, the context ID the
         server computed and, on a failure, the error envelope. E46 first
         gave both frames one name and left ``seq`` to separate them, which
-        made a program's §8 violation readable as the server's judgement;
-        E58 replaced that with the name.
+        made a program's violation of the legacy container invocation's
+        event-stream rule (retired at the switchover) readable as the
+        server's judgement; E58 replaced that with the name.
         """
         future = self._finished.setdefault(
             invocation_id, asyncio.get_running_loop().create_future()

@@ -366,7 +366,8 @@ def test_the_environment_is_checked_before_the_context_is_locked(
 
 
 def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path, monkeypatch):
-    """``local``: the §5.3 outcome, unchanged, in the shared shape."""
+    """``local``: the legacy container invocation's outcome (retired at
+    the switchover), unchanged, in the shared shape."""
     seen: dict[str, object] = {}
 
     def fake(device_model, **kwargs):

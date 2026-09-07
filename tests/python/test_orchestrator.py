@@ -7,8 +7,9 @@ one impure operation is the seam, and every test either calls a pure
 argv/document composer directly or injects a scripted runner that writes
 the result document a real container would. What is asserted is the whole
 of what the backend decides before, around and after ``docker exec`` — the
-composed argv, the request document, the mount set, the §5.3 judgment on
-a stubbed success and on each failure it can see, and that the container
+composed argv, the request document, the mount set, the judgment the
+legacy container invocation (retired at the switchover) makes on a
+stubbed success and on each failure it can see, and that the container
 is torn down whatever happened.
 
 The end-to-end proof that the assembled invocation actually builds
@@ -273,7 +274,8 @@ class Seam:
         self.mounts: dict[PurePosixPath, Path] = {}
 
     #: The request-document fields that name a directory the program is
-    #: given (§5.2). Everything else that starts with a slash is not a
+    #: given, under the legacy container invocation (retired at the
+    #: switchover). Everything else that starts with a slash is not a
     #: path: ``required`` holds JSON pointers, and a ``trees`` entry may
     #: name a tree that lives in the image and is mounted by nobody.
     PATH_FIELDS = ("result", "out", "work", "tmp", "context", "events", "cancel")
@@ -493,12 +495,13 @@ def _no_nulls(value: Any) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Pure argv composers (§5.1, §2.2, §9.1)
+# Pure argv composers (legacy container invocation, retired at switchover)
 # --------------------------------------------------------------------------
 
 
 def test_the_invocation_argv_is_the_program_the_action_and_the_request() -> None:
-    """§5.1: exactly two operands after the program, and never a flag."""
+    """The legacy container invocation (retired at the switchover):
+    exactly two operands after the program, and never a flag."""
     argv = lb.exec_command(
         docker="docker",
         container=CONTAINER_ID,
@@ -527,7 +530,8 @@ def test_a_platform_without_uids_execs_without_a_user_flag() -> None:
 
 
 def test_the_container_starts_detached_isolated_and_limited() -> None:
-    """§2.2/§9.1: detached, no network, PID reaping, per-session limits."""
+    """The legacy container invocation (retired at the switchover):
+    detached, no network, PID reaping, per-session limits."""
     argv = lb.start_command(
         docker="docker",
         image="img:tag",
@@ -579,7 +583,7 @@ def test_inspect_asks_for_one_json_object() -> None:
 
 
 # --------------------------------------------------------------------------
-# The request document (§5.2)
+# The request document (legacy container invocation, retired at switchover)
 # --------------------------------------------------------------------------
 
 
@@ -631,7 +635,8 @@ def test_memory_bytes_is_not_written_because_no_number_is_enforced() -> None:
 
 
 # --------------------------------------------------------------------------
-# The SDK package: acquire, verify, unpack safely (§6.1, §9.1)
+# The SDK package: acquire, verify, unpack safely (legacy container
+# invocation, retired at the switchover)
 # --------------------------------------------------------------------------
 
 
@@ -647,8 +652,9 @@ def test_acquire_sdk_finds_verifies_and_unpacks(tmp_path) -> None:
 
 
 def test_the_entry_point_keeps_its_executable_bit(tmp_path) -> None:
-    """§6.1 spawns bin/generate as a child — an SDK without its exec bit
-    answers exit 127 where code generation should be."""
+    """The legacy container invocation (retired at the switchover) spawns
+    bin/generate as a child — an SDK without its exec bit answers exit 127
+    where code generation should be."""
     real = make_sdk_source(tmp_path / "src")
     into = tmp_path / "sdk"
     lb.acquire_sdk(version=SDK_VERSION, sha256=real, sources=(tmp_path / "src",), into=into)
@@ -720,7 +726,8 @@ def test_the_safe_extractor_refuses_a_symlink(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# describe: static file vs. invoked fallback (§2.2.1)
+# describe: static file vs. invoked fallback (legacy container invocation,
+# retired at the switchover)
 # --------------------------------------------------------------------------
 
 
@@ -741,7 +748,8 @@ def test_a_missing_static_describe_falls_back_to_invoking_it(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# The full lifecycle: mounts, request document, §5.3 judgment, teardown
+# The full lifecycle: mounts, request document, the legacy container
+# invocation's judgment (retired at the switchover), teardown
 # --------------------------------------------------------------------------
 
 
@@ -868,9 +876,10 @@ def test_a_context_id_mismatch_fails_the_judgment(tmp_path) -> None:
 
 
 def test_a_missing_artifact_fails_the_judgment(tmp_path) -> None:
-    """A build that declares firmware.hex but does not write it: §5.3
-    condition 6 fails, and success with an artifact silently absent is the
-    one delivery a client cannot detect."""
+    """A build that declares firmware.hex but does not write it: the
+    legacy container invocation's condition 6 (retired at the switchover)
+    fails, and success with an artifact silently absent is the one
+    delivery a client cannot detect."""
 
     def build(request, ctx):
         out = Path(request["out"])
@@ -961,7 +970,8 @@ def test_the_container_is_torn_down_even_when_the_build_fails(tmp_path) -> None:
 
 
 def test_the_recorded_digest_is_cross_checked_against_the_resolved_one(tmp_path) -> None:
-    """§9.1, as format 2 leaves it: the image found is the one recorded.
+    """Under the legacy container invocation (retired at the switchover),
+    as format 2 leaves it: the image found is the one recorded.
 
     A weaker statement than the digest-pinned format's, and deliberately
     so — the digest is this side's own record rather than a client's
@@ -1042,7 +1052,8 @@ def test_a_missing_image_refuses_before_a_container_starts(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# verify: no params, no required, tree entries still supplied (§7.3)
+# verify: no params, no required, tree entries still supplied (legacy
+# container invocation, retired at the switchover)
 # --------------------------------------------------------------------------
 
 
@@ -1067,11 +1078,11 @@ def test_verify_demands_no_mode_and_no_tree_pointer(tmp_path) -> None:
     document = seam.exec_request
     assert "params" not in document
     assert "required" not in document
-    assert "sdk" in document["trees"]  # supplied even though verify never writes it (§7.3)
+    assert "sdk" in document["trees"]  # supplied even though verify never writes it
 
 
 # --------------------------------------------------------------------------
-# Patched layers (§4.1, §6.2, E47)
+# Patched layers (legacy container invocation, retired at the switchover; E47)
 # --------------------------------------------------------------------------
 
 
@@ -1210,8 +1221,9 @@ def test_a_contract_label_that_contradicts_describe_is_refused(tmp_path) -> None
 
 
 def test_an_image_missing_a_coupling_label_is_refused(tmp_path) -> None:
-    """§2.1.1: a container that does not carry a named coupling label does
-    not qualify — absence is never read as compatible."""
+    """Under the legacy container invocation (retired at the switchover):
+    a container that does not carry a named coupling label does not
+    qualify — absence is never read as compatible."""
     backend, context, seam = scenario(
         tmp_path,
         build=conforming,
@@ -1243,7 +1255,8 @@ def test_the_invoked_describe_path_is_gated_too(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# verify_artifacts egress negatives (§9.3): links and special files rejected
+# verify_artifacts egress negatives (legacy container invocation, retired
+# at the switchover): links and special files rejected
 # --------------------------------------------------------------------------
 #
 # The security fix of the module: containment is checked segment by
@@ -1297,16 +1310,18 @@ def test_verify_artifacts_rejects_a_special_file(tmp_path) -> None:
 
 
 # --------------------------------------------------------------------------
-# A fresh out/tmp per invocation, and a fresh work per run (§9.1, §6.3)
+# A fresh out/tmp per invocation, and a fresh work per run (legacy
+# container invocation, retired at the switchover)
 # --------------------------------------------------------------------------
 
 
 def test_out_tmp_and_work_are_all_fresh_each_run(tmp_path) -> None:
-    """§9.1: a second run() on one work_root gets an empty out and tmp — a
+    """Under the legacy container invocation (retired at the switchover):
+    a second run() on one work_root gets an empty out and tmp — a
     stale out/firmware.hex must not survive into a later build. And work
     is fresh too: one run() is one session whose container dies with it,
     so a later run inheriting its work would be handed a directory the
-    program refuses as foreign (§6.3 — the marker can never match a
+    program refuses as foreign (the marker can never match a
     freshly drawn session ID)."""
     work_root = tmp_path / "work"
     out_seen: list[list[str]] = []
@@ -1352,7 +1367,8 @@ def test_the_container_is_torn_down_when_an_exception_propagates(tmp_path) -> No
 
 
 # --------------------------------------------------------------------------
-# The safe extractor's remaining negatives (§9.1)
+# The safe extractor's remaining negatives (legacy container invocation,
+# retired at the switchover)
 # --------------------------------------------------------------------------
 
 
@@ -1575,8 +1591,9 @@ def test_both_cache_roles_are_mounted_and_only_one_is_writable(tmp_path) -> None
     volumes = mounts_of(next(c for c in seam.calls if "--detach" in c))
     assert f"{cache / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in volumes
     assert f"{cache / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro" in volumes
-    # Never mentioned to the program: §10's request field stays unused,
-    # because the image configures both roles statically.
+    # Never mentioned to the program: the legacy container invocation's
+    # (retired at the switchover) request field stays unused, because the
+    # image configures both roles statically.
     assert "ccache" not in seam.exec_request
 
 
@@ -1685,11 +1702,12 @@ def test_an_environment_runs_several_invocations_in_one_container(tmp_path) -> N
     """What ``open`` exists for, and what ``run`` hides.
 
     A build server holds one environment per session and drives
-    ``verify`` and then ``build`` through it. Both statements the
-    contract makes about a *session* — patches applied once per session
-    (§6.2) and the session marker in ``work`` (§6.3) — are about
-    something that outlives one invocation, so an orchestrator that
-    started a container per action could honour neither.
+    ``verify`` and then ``build`` through it. Both statements the legacy
+    container invocation (retired at the switchover) makes about a
+    *session* — patches applied once per session and the session marker
+    in ``work`` — are about something that outlives one invocation, so an
+    orchestrator that started a container per action could honour
+    neither.
     """
     # The action is an argv argument and not a request-document field, so
     # the scripted program is told which answer to write the same way the
@@ -1712,11 +1730,12 @@ def test_an_environment_runs_several_invocations_in_one_container(tmp_path) -> N
 
 
 def test_every_invocation_of_one_environment_states_the_same_session(tmp_path) -> None:
-    """§6.3: ``work`` carries a session marker, and a session is the environment.
+    """Under the legacy container invocation (retired at the switchover):
+    ``work`` carries a session marker, and a session is the environment.
 
     A fresh id per invocation would make the second one find the first
-    one's working area foreign — which is precisely the refusal §6.3
-    exists to produce for a working area left by a *dead* session.
+    one's working area foreign — which is precisely the refusal that
+    marker exists to produce for a working area left by a *dead* session.
     """
     sessions = []
     backend, context, seam = scenario(
@@ -1752,7 +1771,8 @@ def test_two_environments_are_two_sessions(tmp_path) -> None:
 
 
 def test_each_invocation_gets_its_own_empty_directory(tmp_path) -> None:
-    """§9.1's fresh ``out`` and ``tmp``, and the reason is egress.
+    """The legacy container invocation's fresh ``out`` and ``tmp``
+    (retired at the switchover), and the reason is egress.
 
     A stale ``out/firmware.hex`` that still matched a re-declared hash
     would let a later non-conforming build slip through, and an old
@@ -1816,7 +1836,8 @@ def test_an_action_the_image_does_not_announce_is_refused_before_it_is_invoked(t
 
 
 # --------------------------------------------------------------------------
-# §8: the event stream, and the ladder that stops an invocation
+# The legacy container invocation's event stream (retired at the
+# switchover), and the ladder that stops an invocation
 # --------------------------------------------------------------------------
 
 
@@ -1829,7 +1850,8 @@ def emit(request: dict[str, Any], *events: dict[str, Any]) -> None:
 
 
 def test_the_request_document_offers_an_event_file_and_a_cancel_sentinel(tmp_path) -> None:
-    """Both are §5.2 optional and both are offered, for opposite reasons.
+    """Both are optional under the legacy container invocation (retired
+    at the switchover) and both are offered, for opposite reasons.
 
     Without ``events`` a program has nowhere to report its phases and
     ``describe``'s registry is decoration; without ``cancel`` there is no
@@ -1848,7 +1870,8 @@ def test_the_request_document_offers_an_event_file_and_a_cancel_sentinel(tmp_pat
 
 
 def test_the_event_file_exists_before_the_program_is_invoked(tmp_path) -> None:
-    """§8: created empty by the backend.
+    """The legacy container invocation (retired at the switchover):
+    created empty by the backend.
 
     A reader that had to tell "not created yet" from "no events yet"
     would be guessing at exactly the moment somebody is watching.
@@ -1867,7 +1890,8 @@ def test_the_event_file_exists_before_the_program_is_invoked(tmp_path) -> None:
 
 
 def test_every_event_the_program_writes_is_relayed_verbatim(tmp_path) -> None:
-    """§8: "unknown names are relayed opaquely … never rewrites it".
+    """The legacy container invocation (retired at the switchover):
+    "unknown names are relayed opaquely … never rewrites it".
 
     The third one carries a name no registry has, which is exactly the
     case that makes a third-party program's phases readable through a
@@ -1905,7 +1929,8 @@ def test_every_event_the_program_writes_is_relayed_verbatim(tmp_path) -> None:
 
 
 def test_rubbish_in_the_event_stream_is_dropped_and_not_an_abort(tmp_path) -> None:
-    """§8: discarded and counted, "never treated as an abort".
+    """The legacy container invocation (retired at the switchover):
+    discarded and counted, "never treated as an abort".
 
     A program that writes nonsense into its own event stream has not
     failed its build.
@@ -1950,7 +1975,8 @@ def test_a_caller_that_wants_no_events_is_offered_none(tmp_path) -> None:
 
 
 def test_touching_the_sentinel_is_how_an_invocation_is_stopped(tmp_path) -> None:
-    """§8: the *existence* of the file means stop, and that is the whole signal.
+    """Under the legacy container invocation (retired at the switchover),
+    the *existence* of the file means stop, and that is the whole signal.
 
     A caller holds the prepared invocation, so it has the path before
     the call that blocks — which is why ``prepare`` is a step of its own.
@@ -2051,7 +2077,8 @@ def test_events_are_drained_while_the_invocation_runs(tmp_path, brisk) -> None:
 
 
 def test_a_caller_can_label_the_containers_it_starts(tmp_path) -> None:
-    """Backend policy, not contract: §2.1 governs image labels and this is a container one.
+    """Backend policy, not contract: the legacy container invocation
+    (retired at the switchover) governs image labels and this is a container one.
 
     A long-running caller uses it so that an operator can find the
     containers of a process that was killed outright; a command line
@@ -2088,7 +2115,8 @@ def test_nothing_is_labelled_when_nobody_asked(tmp_path) -> None:
 
 
 def test_a_shared_store_is_offered_read_only_and_keyed_by_program_id(tmp_path) -> None:
-    """§10's recommendation, for the backend that has the problem it solves.
+    """The legacy container invocation's recommendation (retired at the
+    switchover), for the backend that has the problem it solves.
 
     "One subdirectory per implementation, named from ``describe``'s
     ``program.id``, so that two foreign images cannot corrupt each
@@ -2194,7 +2222,8 @@ def test_a_nested_mount_comes_after_the_parent_it_sits_inside() -> None:
 
     A mount inside another has to come *after* it, or the outer one
     buries it — and for a read-only tree under a writable parent that is
-    §9.1's kernel-enforced write protection silently not happening. The
+    the kernel-enforced write protection the legacy container invocation
+    (retired at the switchover) required, silently not happening. The
     backend no longer relies on the nesting, but a mount set that *does*
     nest must not depend on the caller's list order to be correct.
     """

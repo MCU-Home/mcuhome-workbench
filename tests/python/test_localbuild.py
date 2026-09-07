@@ -166,7 +166,8 @@ def build_result(
     """Write the artifacts under ``out`` and a conforming result document.
 
     Every written file is hashed from disk and declared with the one legal
-    hash spelling, so the §5.3 judgment the backend performs runs over a
+    hash spelling, so the judgment the backend performs, under the legacy
+    container invocation (retired at the switchover), runs over a
     document that really matches what is on disk.
     """
     out = Path(request["out"])
@@ -234,7 +235,8 @@ class Seam:
         self.mounts: dict[PurePosixPath, Path] = {}
 
     #: The request-document fields that name a directory the program is
-    #: given (§5.2). Everything else that starts with a slash is not a
+    #: given, under the legacy container invocation (retired at the
+    #: switchover). Everything else that starts with a slash is not a
     #: path: ``required`` holds JSON pointers, and a ``trees`` entry may
     #: name a tree that lives in the image and is mounted by nobody.
     PATH_FIELDS = ("result", "out", "work", "tmp", "context", "events", "cancel")
@@ -619,7 +621,8 @@ def test_an_environment_of_another_zephyr_release_refuses_before_anything_is_wri
 def test_an_environment_with_no_zephyr_label_refuses_before_anything_is_written(
     tmp_path, model, public_pem
 ):
-    """ "Absence is never read as compatible" (§2.1.1) — here too.
+    """ "Absence is never read as compatible" — a rule from the legacy
+    container invocation (retired at the switchover) — here too.
 
     An image that carries no Zephyr label states nothing about what it
     builds against, and there used to be a fallback that read the

@@ -617,9 +617,10 @@ class BuildOutcome:
     report's file name — the two together are what the one shared signing
     step needs, and they are the whole reason this class exists (E56).
 
-    :attr:`artifacts` is the declared artifact set, read out of a contract
-    §5.4 result in :class:`~mcuhome.model.artifacts.Artifact` — the same
-    type whichever method produced it.
+    :attr:`artifacts` is the declared artifact set, read out of the legacy
+    container invocation's result document (retired at the switchover) in
+    :class:`~mcuhome.model.artifacts.Artifact` — the same type whichever
+    method produced it.
     """
 
     #: Which of :data:`METHODS` ran.
