@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from conftest import VALID_CONFIG, expect_failure, find_error, line_of, resolve_file
 from mcuhome.model.errors import ConfigError, Location
+from mcuhome.model.model import SourcesModel
 
 
 def test_unknown_top_level_section(write_config) -> None:
@@ -30,6 +31,11 @@ def test_sources_takes_the_three_package_overrides(write_config) -> None:
     assert model.sources.sdk == "sdk/mcuhome-sdk:0.1.9"
     assert model.sources.build_workspace == "build-workspace/mcuhome-build-workspace:0.1.10.dev1"
     assert model.sources.build_tools == "build-tools/mcuhome-build-tools"
+    # The fourth field of the model is not a device key: the container
+    # image a local build happens to run in stays what MCUHome ships,
+    # whatever the block says. A device that could move it would change
+    # where the container backend fetches its image from.
+    assert model.sources.build_environment == SourcesModel().build_environment
 
 
 def test_sources_refuses_a_key_it_does_not_know(write_config) -> None:

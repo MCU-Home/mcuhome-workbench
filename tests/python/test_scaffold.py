@@ -125,6 +125,20 @@ def test_the_starter_carries_a_complete_commented_example() -> None:
     assert f"#       driver: {driver}" in text
 
 
+def test_the_starter_pins_no_package_version(tmp_path) -> None:
+    """A new device carries no ``sources:`` — not even a commented one.
+
+    Every entry of that block is an override, and the default is resolved
+    at build time on purpose: a device created today must not be frozen
+    onto the SDK and the build environment that happened to be current on
+    the day somebody ran ``device new``. Asserted on the written file and
+    not only on the rendered text, because the file is what a user keeps.
+    """
+    init_project(tmp_path)
+    created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
+    assert "sources" not in created.entry.read_text(encoding="utf-8")
+
+
 def test_the_starter_uses_the_boards_own_transport() -> None:
     text = scaffold.render_starter("bench-node", board=BOARD)
     assert "thread" in registry.BOARDS[BOARD].transports
