@@ -8,7 +8,8 @@ line, append-only, never truncated — and every object carries an
 ``event`` name and a monotonic ``seq`` starting at 1.
 
 **Why a named file rather than NDJSON on stdout**, which is what
-contract v1 said as first drafted: file descriptor 1 belongs to west,
+the legacy container invocation (retired at the switchover) said as
+first drafted: file descriptor 1 belongs to west,
 cmake, ninja, gn and zap, so a program whose events share it corrupts
 its own stream and never notices locally. A named file removes the
 failure mode structurally, survives an out-of-memory kill readably, and
@@ -75,7 +76,8 @@ MAX_LINE_BYTES = 8192
 #: so one expression covers both.
 _NAME = re.compile(r"[a-z][a-z0-9.-]*\Z")
 
-#: The names contract v1 seeds the append-only registry with, together
+#: The names the legacy container invocation (retired at the switchover)
+#: seeds the append-only registry with, together
 #: with the fields each carries beyond ``event`` and ``seq``. This
 #: module relays every event whatever its name, so the table is
 #: documentation and a test vector rather than a filter — but it is the

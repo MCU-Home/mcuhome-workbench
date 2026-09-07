@@ -15,11 +15,11 @@ be replaced by either half: a host driving a third-party build
 environment was installing MCUHome's own program in order to drive it,
 and a workbench that only wanted to compile in a container had to carry a
 code generator it never called. The two roles are on opposite sides of a
-boundary the contract draws precisely so they can be replaced
-independently, so they are in different distributions now. Nothing here
-imports :mod:`mcuhome.compiler`; the contract's frozen numbers and action
-names come from :mod:`mcuhome.model.invocation`, which belongs to
-neither end.
+boundary the legacy container invocation (retired at the switchover)
+draws precisely so they can be replaced independently, so they are in
+different distributions now. Nothing here imports :mod:`mcuhome.compiler`;
+that invocation's frozen numbers and action names come from
+:mod:`mcuhome.model.invocation`, which belongs to neither end.
 
 **Synchronous, on purpose.** A local build is one context, one container,
 one invocation, driven start to finish by the caller that asked for it —
@@ -74,8 +74,8 @@ import zstandard
 from mcuhome.model import containerpaths
 from mcuhome.model.artifacts import Artifact
 
-# The label names are the *contract's* vocabulary and belong to neither
-# end of it: this repository reads them off an image, the repository that
+# The label names are shared vocabulary belonging to neither
+# end: this repository reads them off an image, the repository that
 # builds the image writes them, and a build server checks them. They are
 # stated once, beside the image they describe.
 from mcuhome.model.buildimage import CONTRACT_LABEL, TOOLCHAIN_LABEL, ZEPHYR_LABEL, ImagePin
@@ -152,7 +152,8 @@ __all__ = [
 ]
 
 # --------------------------------------------------------------------------
-# The frozen names of the contract, from the backend's side
+# The frozen names the legacy container invocation (retired at the
+# switchover) fixes, from the backend's side
 # --------------------------------------------------------------------------
 
 #: A path as the **container** spells it: what goes into the request
@@ -164,8 +165,9 @@ Inside = PurePosixPath | Path
 
 #: This backend runs one invocation per container, so the session's one
 #: invocation directory can be numbered rather than drawn. The number
-#: exists at all because the *shape* is the contract's, not this
-#: backend's: a session may run several invocations over its life — the
+#: exists at all because the *shape* belongs to the legacy container
+#: invocation (retired at the switchover), not to this backend: a
+#: session may run several invocations over its life — the
 #: steps of one build — and each needs its own ``out``, ``tmp`` and
 #: documents. A container the build server started looks exactly the
 #: same from the inside, which is the point.
@@ -194,7 +196,7 @@ ACTION_VERIFY = ACTIONS[1]
 ACTION_BUILD = ACTIONS[2]
 
 #: The request format version this orchestrator writes. Read out of the
-#: contract's own vocabulary (:mod:`mcuhome.model.invocation`) rather
+#: legacy container invocation's own vocabulary (:mod:`mcuhome.model.invocation`) rather
 #: than out of any program, so that the numbers do not depend on which
 #: program answers — which is the whole reason a third party can write
 #: one. :data:`~mcuhome.model.invocation.RESULT_VERSION` is the result
@@ -207,8 +209,9 @@ REQUEST_VERSION = REQUEST_VERSIONS[0]
 #: container the backend's business — ``docker run`` overrides both
 #: ``ENTRYPOINT`` and ``CMD``, and the image "MUST provide a POSIX
 #: shell at ``/bin/sh``" so there is always a command to name.
-#: Deliberately POSIX rather than ``sleep infinity``: the contract
-#: promises a shell, not GNU coreutils.
+#: Deliberately POSIX rather than ``sleep infinity``: the legacy
+#: container invocation (retired at the switchover) promises a shell,
+#: not GNU coreutils.
 IDLE_COMMAND = ("/bin/sh", "-c", "while :; do sleep 86400; done")
 
 #: The one legal ``artifacts[].root`` value the legacy container
@@ -498,7 +501,8 @@ class BackendConfig:
     #: builds are all its own.
     shared_ccache_dir: Path | None = None
     #: Container labels for every container this backend starts. Backend
-    #: policy rather than contract, and how a long-running caller finds
+    #: policy, not something the legacy container invocation (retired at
+    #: the switchover) requires, and how a long-running caller finds
     #: the containers of a process that was killed outright.
     labels: Mapping[str, str] = field(default_factory=dict)
     memory: str | None = None
@@ -753,7 +757,8 @@ class Liveness:
        document — ``status: "cancelled"``, with ``reason`` and ``error``
        both null, because nothing was diagnosed. It is also the only one
        that works identically wherever the program runs, which is why
-       the contract has it: "killing a ``docker exec`` client does not
+       the legacy container invocation (retired at the switchover) has
+       it: "killing a ``docker exec`` client does not
        kill the process inside the container".
     2. **SIGTERM at** :attr:`cancel_grace_seconds`, to the client this
        side started. In a container that is the ``docker exec`` client
@@ -1954,8 +1959,8 @@ class LocalBackend:
         single invocation's state — that is :meth:`BuildEnvironment.invoke`,
         which may run more than once.
 
-        The split is the contract's own rather than a convenience. The
-        legacy container invocation (retired at the switchover) applies a
+        The split follows the legacy container invocation (retired at the
+        switchover) rather than being a convenience. That invocation applies a
         layer's patches **once per session** and records that in ``work``;
         it also makes ``work`` carry a session marker so that a program
         handed a working area from a *dead* session refuses it. Both
@@ -2295,7 +2300,8 @@ class Invocation:
     def stop(self) -> None:
         """Ask the program to stop, and never raise for having asked twice.
 
-        Cooperative on purpose, and the contract's own reason is worth
+        Cooperative on purpose, and the reason the legacy container
+        invocation (retired at the switchover) gives is worth
         repeating: killing a ``docker exec`` client does not kill the
         process inside the container, so a signal would stop the wrong
         process. What follows if the program ignores it is

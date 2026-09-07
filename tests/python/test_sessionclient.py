@@ -494,7 +494,8 @@ def _finish_program(
 
 
 def conforming_program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-    """A build container that does everything contract v1 asks of it."""
+    """A build container that does everything the legacy container
+    invocation (retired at the switchover) asks of it."""
     identity = _start_program(action, request, on_line)
     _finish_program(action, request, on_line, identity=identity)
     return FakeProcess(0)
@@ -2351,7 +2352,8 @@ def test_a_nested_artifact_path_is_delivered_not_refused(tmp_path: Path) -> None
     ``zephyr/zephyr.hex`` with no ``zephyr/`` before it. Containment that
     answered "not contained" for a missing intermediate segment would
     report an honest server — precisely the third-party build container
-    the contract exists for — as an escape attempt.
+    the legacy container invocation (retired at the switchover) exists
+    for — as an escape attempt.
     """
 
     async def scenario() -> sc.ArtifactDelivery:

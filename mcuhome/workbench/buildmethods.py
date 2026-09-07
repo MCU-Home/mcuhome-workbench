@@ -627,14 +627,16 @@ class BuildOutcome:
     method: str
     successful: bool
     #: The method's own word for the result: ``success``/``failure`` from
-    #: a contract result document.
+    #: a legacy container invocation result document (retired at the
+    #: switchover).
     status: str
     #: The identity the work is attributed to: the build context's ID.
     context_id: str
     artifacts: tuple[Artifact, ...]
     #: Where the unsigned artifacts and the report are.
     out_dir: Path | None
-    #: The build report's file name in :attr:`out_dir`: the contract's
+    #: The build report's file name in :attr:`out_dir`: the legacy
+    #: container invocation's (retired at the switchover)
     #: ``build-report.json``, which carries the imgtool parameters the
     #: host signer needs (E55).
     report: str

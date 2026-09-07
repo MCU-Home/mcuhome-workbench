@@ -113,14 +113,15 @@ def make_sdk_source(directory: Path, *, index_sha: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------
-# A locked context, written the way §3.2 says one is written
+# A locked context: context.yaml plus manifest.yaml
 # --------------------------------------------------------------------------
 #
 # Through ``conftest``'s workbench-free writer since ADR 0024: the party
 # that creates a context is the workbench, which is not installed next to
 # these tests, and what the backend under test needs is the *document*.
 # The ID still comes from ``mcuhome.model.context``, so what is compared
-# below is the value the contract fixes rather than one this file made up.
+# below is the value the legacy container invocation (retired at the
+# switchover) fixes rather than one this file made up.
 
 
 def make_context(

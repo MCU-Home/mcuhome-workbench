@@ -378,9 +378,9 @@ class ContextIdMismatch(RemoteError):
             f"{local} here.",
             hint=(
                 "the context ID is content-addressed and both sides compute it from the "
-                "same frozen rule the build context format document states, so a disagreement "
-                "means the context on the server is not the context that was sent — the "
-                "session has been closed; open a new one and send it again"
+                "same frozen rule, so a disagreement means the context on the server is "
+                "not the context that was sent — the session has been closed; open a new "
+                "one and send it again"
             ),
         )
         self.local_id = local
@@ -722,8 +722,9 @@ def pack_context(
     """Pack *root* into a deterministic ``tar.zst`` at *spool*.
 
     The wire format of E41, and the only one: tar.zst in both directions,
-    chosen for family consistency with the SDK package the same contract
-    pins. There is no format negotiation, so there is no format field.
+    chosen for family consistency with the SDK package the legacy
+    container invocation (retired at the switchover) pins. There is no
+    format negotiation, so there is no format field.
 
     Determinism is the discipline of ``scripts/build_sdk_archive.py``,
     for the same reason and by the same means: PAX format, entries sorted
