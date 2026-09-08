@@ -234,7 +234,7 @@ class Registry:
         self._open = opener if opener is not None else self._urlopen
         self._tokens: dict[str, str] = {}
 
-    # -- the three questions -------------------------------------------
+    # -- the two questions ---------------------------------------------
 
     def tags(self, reference: Reference) -> tuple[str, ...]:
         """Every tag the repository carries, in the order the registry lists them.
@@ -260,43 +260,6 @@ class Registry:
                 collected.extend(str(tag) for tag in listed)
             url = self._next_page(reference, response)
         return tuple(collected)
-
-    def digest_of(self, reference: Reference) -> str | None:
-        """The digest a tag currently points at, or ``None`` when it has none.
-
-        ``None`` means the tag does not exist, which is an ordinary
-        answer during resolution rather than a failure: a publisher who
-        does not keep an aggregate tag is answered by the fallback.
-
-        The value comes from the ``Docker-Content-Digest`` header rather
-        than from hashing the body, because the header is what the
-        registry itself binds the name to.
-        """
-        api = _api(reference)
-        name = api.digest or api.tag or "latest"
-        url = f"https://{api.registry}/v2/{api.path}/manifests/{name}"
-        response = self._get(reference, url, accept=ACCEPT_MANIFEST)
-        if response is None:
-            return None
-        digest = response.headers.get("Docker-Content-Digest")
-        if not digest:
-            raise RegistryError(
-                f"{reference.repository} answered about {name} without naming a digest.",
-                hint=(
-                    "the registry did not send a Docker-Content-Digest header, which "
-                    "the OCI distribution spec requires — the environment cannot be "
-                    "pinned against it"
-                ),
-            )
-        return digest
-
-    def labels(self, reference: Reference, *, platform: str | None = None) -> dict[str, str]:
-        """What the image says about itself: the config blob's labels.
-
-        :meth:`facts` without the digest, for a caller that only wants
-        the declaration.
-        """
-        return self.facts(reference, platform=platform).labels
 
     def facts(self, reference: Reference, *, platform: str | None = None) -> ImageFacts:
         """The manifest **this host** would run, and what it declares.
@@ -410,7 +373,24 @@ class Registry:
                 f"{reference.repository} has nothing under {name}.",
                 hint="the tag or digest does not exist in that repository",
             )
-        digest = response.headers.get("Docker-Content-Digest") or (api.digest or "")
+        digest = response.headers.get("Docker-Content-Digest") or api.digest
+        if not digest:
+            # Without it there is nothing to pin: the value comes from the
+            # registry because the registry is what binds a name to bytes,
+            # and hashing the body here would be this side inventing the
+            # binding. An answer carrying neither the header nor a digest
+            # in the name it was asked under is one this side cannot act
+            # on — and it is refused here rather than half a resolution
+            # later, where the empty string would read as a malformed
+            # digest instead of as a registry that did not answer.
+            raise RegistryError(
+                f"{reference.repository} answered about {name} without naming a digest.",
+                hint=(
+                    "the registry did not send a Docker-Content-Digest header, which "
+                    "the OCI distribution spec requires — the image cannot be pinned "
+                    "against it"
+                ),
+            )
         return self._json(response, reference, what="manifest"), str(digest)
 
     def _get(self, reference: Reference, url: str, *, accept: str) -> Response | None:

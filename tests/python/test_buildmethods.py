@@ -1031,3 +1031,32 @@ def test_a_patched_context_is_refused_before_the_context_is_locked(
     assert locked == []
     assert not (context / "manifest.yaml").exists()
     assert not (tmp_path / ".mcuhome-local").exists()
+
+
+def test_a_subprocess_build_refuses_the_retired_device_field_too(model, tmp_path) -> None:
+    """``sources.build_environment`` named a container image, and a build
+    without a container is exactly where ignoring it would be easiest to
+    excuse — which is why it is refused there as well.
+
+    The setting says which environment to build in; a build that used
+    another one and said nothing would be the same defect in either mode.
+    """
+    import dataclasses
+
+    stated = dataclasses.replace(
+        model,
+        sources=dataclasses.replace(
+            model.sources, build_environment="ghcr.io/somebody/build-container"
+        ),
+    )
+    with pytest.raises(ConfigError) as caught:
+        buildmethods.compose_subprocess_build(
+            stated,
+            sdk_sources=(),
+            work_root=tmp_path / "work",
+            env={},
+            signing_pub=_PUBLIC_PEM,
+        )
+    assert "sources.build_environment" in caught.value.message
+    assert "retired" in caught.value.message
+    assert not (tmp_path / "work").exists(), "nothing was written"

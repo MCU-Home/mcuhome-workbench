@@ -851,3 +851,31 @@ def test_a_device_that_still_names_a_build_container_is_refused(tmp_path, model,
     assert "retired" in caught.value.message
     assert "sources.build_workspace" in (caught.value.hint or "")
     assert seam.calls == [], "nothing was asked of the runtime"
+
+
+def test_a_machine_whose_memory_cannot_be_measured_states_no_memory_limit(
+    tmp_path, model, public_pem, monkeypatch
+):
+    """Zero is not a small budget — it is the runtime's spelling for *no
+    limit*, and §6.1's "how much memory the step should use".
+
+    Both profiles run on hosts without a Linux ``/proc`` (macOS,
+    Windows), where the available memory cannot be read at all. Such a
+    machine states the CPU figure it does know and leaves the memory
+    unstated, which both sides read as "decide for yourself" — rather
+    than emitting ``--memory 0``, which would remove the hard limit while
+    looking like one, and writing ``memory_bytes: 0``, which would tell a
+    foreign builder to fit in nothing.
+    """
+    from mcuhome.model import jobs
+
+    monkeypatch.setattr(jobs, "_MEMINFO_PATH", tmp_path / "no-such-meminfo")
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem)
+    assert result.outcome.successful, result.outcome.problems
+    argv = seam.step
+    assert "--memory" not in argv
+    assert "--cpus" in argv, "what the machine does know is still stated"
+    assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_PIDS)
+    assert "memory_bytes" not in seam.request["limits"]
+    assert seam.request["limits"]["cpus"] == float(os.cpu_count() or 1)

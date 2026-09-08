@@ -276,11 +276,11 @@ def step_request(
     environment is told so that it can size its build to fit rather than
     to what the machine appears to have.
 
-    There is deliberately nothing else in it: §4 fixes the tree relative
-    to one environment variable, so a path in this document would be a
-    second source of truth for something the environment already knows,
-    and generation 3 states limits nowhere because an orchestrator
-    enforces them rather than negotiating them (§11).
+    There is deliberately no path in it: §4 fixes the tree relative to
+    one environment variable, so a path here would be a second source of
+    truth for something the environment already knows. What the limits
+    are *not* is a negotiation — §11 leaves the orchestrator free to
+    enforce its own from outside, and in the container profile it does.
     """
     document: dict[str, Any] = {
         "spec_generation": SPEC_GENERATION,
@@ -614,10 +614,24 @@ def host_limits(*, cpus: float | None = None, memory_bytes: int | None = None) -
     machine as it is. This is the *recommendation* in the request
     document, and — in the container profile — the same figure that is
     then enforced from outside.
+
+    **A machine that cannot be measured states no memory limit.**
+    ``available_ram_bytes`` answers 0 where it can read neither
+    ``MemAvailable`` nor ``MemTotal``, which is every host without a
+    Linux ``/proc`` — and both profiles run on such hosts. Zero is not a
+    small budget in either place it would land: as a container flag it is
+    the runtime's spelling for *no limit*, and in the request document
+    §6.1 defines it as "how much memory the step should use", which would
+    tell a builder to fit in nothing. So an unmeasurable machine leaves
+    the figure unstated, which both sides already read as "decide for
+    yourself".
     """
+    measured = available_ram_bytes()
     return BuildLimits(
         cpus=float(cpus) if cpus is not None else float(os.cpu_count() or 1),
-        memory_bytes=int(memory_bytes) if memory_bytes is not None else available_ram_bytes(),
+        memory_bytes=(
+            int(memory_bytes) if memory_bytes is not None else (measured if measured > 0 else None)
+        ),
     )
 
 

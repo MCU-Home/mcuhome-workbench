@@ -91,9 +91,9 @@ def test_a_401_is_answered_by_asking_the_realm_it_names() -> None:
                 },
             )
         assert headers["Authorization"] == "Bearer t-42"
-        return Response(status=200, headers={"Docker-Content-Digest": DIGEST})
+        return Response(status=200, body=manifest_body(), headers={"Docker-Content-Digest": DIGEST})
 
-    found = Registry(opener=opener).digest_of(reference(f"{REPO}:zephyr-4.4.0-r10"))
+    found = Registry(opener=opener).facts(reference(f"{REPO}:zephyr-4.4.0-r10")).digest
     assert found == DIGEST
     assert any("scope=repository" in url for url in calls)
     assert any("service=ghcr.io" in url for url in calls)
@@ -121,8 +121,8 @@ def test_the_token_is_reused_for_the_next_question_about_one_repository() -> Non
 
     registry = Registry(opener=opener)
     ref = reference(f"{REPO}:zephyr-4.4.0-r10")
-    assert registry.digest_of(ref) == DIGEST
-    assert registry.labels(ref) == {"a": "b"}
+    assert registry.facts(ref).digest == DIGEST
+    assert registry.facts(ref).labels == {"a": "b"}
     assert tokens == 1
 
 
@@ -143,9 +143,9 @@ def test_a_header_is_read_however_the_server_spelled_it() -> None:
             return Response(
                 status=401, headers={"Www-Authenticate": 'Bearer realm="https://ghcr.io/token"'}
             )
-        return Response(status=200, headers={"docker-content-digest": DIGEST})
+        return Response(status=200, body=manifest_body(), headers={"docker-content-digest": DIGEST})
 
-    assert Registry(opener=opener).digest_of(reference(f"{REPO}:t")) == DIGEST
+    assert Registry(opener=opener).facts(reference(f"{REPO}:t")).digest == DIGEST
 
 
 def test_a_registry_that_hands_out_no_token_is_a_private_one() -> None:
@@ -158,14 +158,14 @@ def test_a_registry_that_hands_out_no_token_is_a_private_one() -> None:
         }
     )
     with pytest.raises(RegistryUnauthorized) as refusal:
-        Registry(opener=opener).digest_of(reference(f"{REPO}:t"))
+        Registry(opener=opener).facts(reference(f"{REPO}:t"))
     assert "docker login ghcr.io" in str(refusal.value)
 
 
 def test_a_401_naming_no_realm_leaves_nothing_to_ask() -> None:
     opener = Opener({"https://ghcr.io/v2/": Response(status=401)})
     with pytest.raises(RegistryUnauthorized):
-        Registry(opener=opener).digest_of(reference(f"{REPO}:t"))
+        Registry(opener=opener).facts(reference(f"{REPO}:t"))
 
 
 # --------------------------------------------------------------------------
@@ -173,14 +173,19 @@ def test_a_401_naming_no_realm_leaves_nothing_to_ask() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_tag_that_does_not_exist_is_an_answer_and_not_a_failure() -> None:
-    """A publisher who keeps no aggregate tag is answered by the fallback.
+def test_a_tag_that_does_not_exist_is_a_refusal_naming_it() -> None:
+    """There is nothing to answer with: a name the repository does not
+    carry is not an image with no labels, it is a name nobody published.
 
-    404 therefore has to come back as ``None`` rather than as a refusal:
-    "keep looking" is an ordinary step of the resolution.
+    A resolution that walks several candidates catches this one and
+    records it as a candidate that could not be read, which is where
+    "keep looking" belongs — here it would be a `None` every caller had
+    to check for.
     """
     opener = Opener({"https://ghcr.io/v2/": Response(status=404)})
-    assert Registry(opener=opener).digest_of(reference(f"{REPO}:nope")) is None
+    with pytest.raises(RegistryError) as refusal:
+        Registry(opener=opener).facts(reference(f"{REPO}:nope"))
+    assert "nope" in str(refusal.value)
 
 
 def test_a_manifest_request_offers_to_take_an_index_first() -> None:
@@ -191,9 +196,13 @@ def test_a_manifest_request_offers_to_take_an_index_first() -> None:
     architecture can use.
     """
     opener = Opener(
-        {"https://ghcr.io/v2/": Response(status=200, headers={"Docker-Content-Digest": DIGEST})}
+        {
+            "https://ghcr.io/v2/": Response(
+                status=200, body=manifest_body(), headers={"Docker-Content-Digest": DIGEST}
+            )
+        }
     )
-    Registry(opener=opener).digest_of(reference(f"{REPO}:t"))
+    Registry(opener=opener).facts(reference(f"{REPO}:t"))
     accept = opener.calls[0][1]["Accept"]
     assert accept.index("index.v1+json") < accept.index("manifest.v2+json")
     assert "manifest.list.v2+json" in accept
@@ -202,7 +211,7 @@ def test_a_manifest_request_offers_to_take_an_index_first() -> None:
 def test_an_answer_without_a_digest_header_cannot_pin_anything() -> None:
     opener = Opener({"https://ghcr.io/v2/": Response(status=200)})
     with pytest.raises(RegistryError) as refusal:
-        Registry(opener=opener).digest_of(reference(f"{REPO}:t"))
+        Registry(opener=opener).facts(reference(f"{REPO}:t"))
     assert "digest" in str(refusal.value)
 
 
@@ -235,11 +244,13 @@ def test_labels_come_from_the_config_blob_the_manifest_names() -> None:
     def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
         del headers, timeout
         if "/manifests/" in url:
-            return Response(status=200, body=manifest_body())
+            return Response(
+                status=200, body=manifest_body(), headers={"Docker-Content-Digest": DIGEST}
+            )
         assert url.endswith(f"/blobs/{CONFIG_DIGEST}")
         return Response(status=200, body=config_body({"org.mcuhome.x": "1"}))
 
-    assert Registry(opener=opener).labels(reference(f"{REPO}:t")) == {"org.mcuhome.x": "1"}
+    assert Registry(opener=opener).facts(reference(f"{REPO}:t")).labels == {"org.mcuhome.x": "1"}
 
 
 AMD64 = "sha256:" + "ef" * 32
@@ -299,8 +310,8 @@ def test_an_index_is_followed_to_this_hosts_platform() -> None:
         {AMD64: AMD64_LABELS, ARM64: ARM64_LABELS},
     )
     registry = Registry(opener=opener)
-    assert registry.labels(reference(f"{REPO}:t"), platform="linux-amd64") == AMD64_LABELS
-    assert registry.labels(reference(f"{REPO}:t"), platform="linux-arm64") == ARM64_LABELS
+    assert registry.facts(reference(f"{REPO}:t"), platform="linux-amd64").labels == AMD64_LABELS
+    assert registry.facts(reference(f"{REPO}:t"), platform="linux-arm64").labels == ARM64_LABELS
 
 
 def test_the_digest_answered_is_the_platform_manifests_and_not_the_indexs() -> None:
@@ -360,7 +371,7 @@ def test_an_attestation_in_the_index_is_not_mistaken_for_an_architecture() -> No
         {AMD64: AMD64_LABELS, ATTESTATION: {}},
     )
     assert (
-        Registry(opener=opener).labels(reference(f"{REPO}:t"), platform="linux-amd64")
+        Registry(opener=opener).facts(reference(f"{REPO}:t"), platform="linux-amd64").labels
         == AMD64_LABELS
     )
 
@@ -386,7 +397,7 @@ def test_an_index_of_nothing_but_attestations_describes_no_architecture() -> Non
         {ATTESTATION: {}},
     )
     with pytest.raises(RegistryError) as refusal:
-        Registry(opener=opener).labels(reference(f"{REPO}:t"), platform="linux-amd64")
+        Registry(opener=opener).facts(reference(f"{REPO}:t"), platform="linux-amd64")
     assert "no architecture" in str(refusal.value)
 
 
@@ -394,10 +405,12 @@ def test_an_image_with_no_labels_states_nothing_rather_than_failing() -> None:
     def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
         del headers, timeout
         if "/manifests/" in url:
-            return Response(status=200, body=manifest_body())
+            return Response(
+                status=200, body=manifest_body(), headers={"Docker-Content-Digest": DIGEST}
+            )
         return Response(status=200, body=config_body(None))
 
-    assert Registry(opener=opener).labels(reference(f"{REPO}:t")) == {}
+    assert Registry(opener=opener).facts(reference(f"{REPO}:t")).labels == {}
 
 
 def test_an_answer_that_is_not_json_names_the_host_rather_than_crashing() -> None:
@@ -419,15 +432,27 @@ def test_docker_hub_is_addressed_at_its_api_host_under_library() -> None:
     normalizations are docker's own; a reference keeps what a person
     wrote and an HTTP call cannot.
     """
-    opener = Opener({"https://": Response(status=200, headers={"Docker-Content-Digest": DIGEST})})
-    Registry(opener=opener).digest_of(reference("busybox:latest"))
+    opener = Opener(
+        {
+            "https://": Response(
+                status=200, body=manifest_body(), headers={"Docker-Content-Digest": DIGEST}
+            )
+        }
+    )
+    Registry(opener=opener).facts(reference("busybox:latest"))
     url = opener.calls[0][0]
     assert url.startswith("https://registry-1.docker.io/v2/library/busybox/manifests/latest")
 
 
 def test_a_hub_path_that_already_has_an_owner_keeps_it() -> None:
-    opener = Opener({"https://": Response(status=200, headers={"Docker-Content-Digest": DIGEST})})
-    Registry(opener=opener).digest_of(reference("someone/thing:latest"))
+    opener = Opener(
+        {
+            "https://": Response(
+                status=200, body=manifest_body(), headers={"Docker-Content-Digest": DIGEST}
+            )
+        }
+    )
+    Registry(opener=opener).facts(reference("someone/thing:latest"))
     assert "/v2/someone/thing/manifests/" in opener.calls[0][0]
 
 
@@ -490,8 +515,33 @@ def test_a_host_that_cannot_be_reached_says_how_to_build_without_it(
     monkeypatch.setattr(Registry, "_urlopen", REAL_URLOPEN)
     monkeypatch.setattr(urllib.request, "build_opener", build_opener)
     with pytest.raises(RegistryUnreachable) as refusal:
-        Registry().digest_of(reference(f"{REPO}:t"))
+        Registry().facts(reference(f"{REPO}:t"))
     assert isinstance(refusal.value, BuildError)
     assert "ghcr.io" in str(refusal.value)
     # The way out of an unreachable registry is a pin, and it is named.
     assert "@sha256" in str(refusal.value)
+
+
+def test_an_answer_without_a_digest_header_is_a_refusal_naming_the_registry() -> None:
+    """The digest comes from the registry because the registry is what
+    binds a name to bytes.
+
+    An answer that carries neither the header nor a digest in the name it
+    was asked under leaves nothing to pin, and it is refused here — where
+    the registry can still be named — rather than half a resolution
+    later, where an empty string reads as a malformed digest instead of
+    as a registry that did not answer.
+    """
+    opener = Opener({"https://ghcr.io/v2/": Response(status=200, body=manifest_body())})
+    with pytest.raises(RegistryError) as refusal:
+        Registry(opener=opener).facts(reference(f"{REPO}:t"))
+    assert REPO in str(refusal.value)
+    assert "Docker-Content-Digest" in str(refusal.value)
+
+
+def test_a_reference_that_names_its_own_digest_needs_no_header() -> None:
+    """Asked by digest, the answer is that digest: the name already is
+    the binding."""
+    pinned = "sha256:" + "9a" * 32
+    opener = Opener({"https://ghcr.io/v2/": Response(status=200, body=manifest_body())})
+    assert Registry(opener=opener).facts(reference(f"{REPO}@{pinned}")).digest == pinned

@@ -222,22 +222,49 @@ class ResourceLimits:
 
     @staticmethod
     def of(limits: BuildLimits, *, pids: int = DEFAULT_PIDS) -> ResourceLimits:
-        """The runtime flags for the limits a step was given."""
+        """The runtime flags for the limits a step was given.
+
+        A figure that was not stated becomes no flag. It is not written
+        as a zero, because zero is this runtime's own spelling for *no
+        limit* — a machine whose memory could not be measured would then
+        get the flag and none of the bound.
+        """
         return ResourceLimits(
-            memory=None if limits.memory_bytes is None else str(limits.memory_bytes),
-            cpus=None if limits.cpus is None else f"{limits.cpus:g}",
+            memory=_positive(limits.memory_bytes),
+            cpus=None if limits.cpus is None or limits.cpus <= 0 else f"{limits.cpus:g}",
             pids=pids,
         )
 
     def to_arguments(self) -> list[str]:
         argv: list[str] = []
-        if self.memory:
-            argv += ["--memory", self.memory]
-        if self.cpus:
-            argv += ["--cpus", self.cpus]
+        if _stated(self.memory):
+            argv += ["--memory", str(self.memory)]
+        if _stated(self.cpus):
+            argv += ["--cpus", str(self.cpus)]
         if self.pids is not None:
             argv += ["--pids-limit", str(self.pids)]
         return argv
+
+
+def _positive(value: int | None) -> str | None:
+    """A byte count as a flag value, or nothing for what was not stated."""
+    return None if value is None or value <= 0 else str(value)
+
+
+def _stated(value: str | None) -> bool:
+    """Whether a flag value bounds anything.
+
+    Empty is nothing to say, and so is a plain zero: the runtime reads
+    ``--memory 0`` and ``--cpus 0`` as *unlimited*, so emitting one would
+    be writing a limit that removes the limit. A value with a unit
+    (``8g``) is never zero and is taken as it is.
+    """
+    if not value:
+        return False
+    try:
+        return float(value) > 0
+    except ValueError:
+        return True
 
 
 class Runtime:

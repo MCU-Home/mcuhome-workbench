@@ -20,10 +20,12 @@ step with ``out`` carried across the session, §6's two documents, and
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
 import pytest
+from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import buildenvsession as session_module
 from mcuhome.workbench.buildenvsession import (
@@ -614,3 +616,62 @@ def test_a_profile_that_delivers_its_own_entry_point_gets_no_link(tmp_path, envi
     step = session.prepare(ACTION_BUILD)
 
     assert not (step.base_dir / "mcuhome" / "bin").exists()
+
+
+# --------------------------------------------------------------------------
+# what a step is told it may use (§6.1)
+# --------------------------------------------------------------------------
+
+
+def test_a_memory_figure_is_read_the_way_a_container_runtime_spells_it() -> None:
+    """An operator writes ``8g``, not 8589934592, and the request document
+    needs the number: both spellings have to arrive at the same bytes."""
+    assert session_module.memory_bytes("8g") == 8 * 1024**3
+    assert session_module.memory_bytes("0.5g") == 512 * 1024**2
+    assert session_module.memory_bytes("2gib") == 2 * 1024**3
+    assert session_module.memory_bytes("4G") == 4 * 1024**3
+    assert session_module.memory_bytes("512m") == 512 * 1024**2
+    assert session_module.memory_bytes("2048k") == 2048 * 1024
+    assert session_module.memory_bytes("4096") == 4096
+    assert session_module.memory_bytes(4096) == 4096
+
+
+def test_nothing_stated_is_not_a_memory_figure_of_zero() -> None:
+    """Zero would be a bound of nothing at all, and the absence of one is
+    what both the flag and the document read as "decide for yourself"."""
+    assert session_module.memory_bytes(None) is None
+    assert session_module.memory_bytes("") is None
+    assert session_module.memory_bytes(0) is None
+
+
+@pytest.mark.parametrize("stated", ["banana", "0", "-3", "g", "0g"])
+def test_a_memory_figure_that_is_not_one_is_refused_by_name(stated: str) -> None:
+    """A misread memory limit either strangles every build or bounds
+    nothing, and both are worse than being told which value is wrong."""
+    with pytest.raises(ConfigError) as refusal:
+        session_module.memory_bytes(stated)
+    assert stated in refusal.value.message
+    assert "build.memory" in (refusal.value.hint or "")
+
+
+def test_host_limits_state_what_the_machine_is_and_what_was_overridden() -> None:
+    limits = session_module.host_limits(cpus=2.5, memory_bytes=17)
+    assert (limits.cpus, limits.memory_bytes) == (2.5, 17)
+    assert session_module.host_limits().cpus == float(os.cpu_count() or 1)
+
+
+def test_an_unmeasurable_machine_states_no_memory(monkeypatch, tmp_path) -> None:
+    """``available_ram_bytes`` answers 0 on a host without a Linux
+    ``/proc``, and 0 is not a budget — it is the absence of one."""
+    from mcuhome.model import jobs
+
+    monkeypatch.setattr(jobs, "_MEMINFO_PATH", tmp_path / "nothing-here")
+    limits = session_module.host_limits()
+    assert limits.memory_bytes is None
+    assert limits.cpus is not None
+    assert (
+        "memory_bytes"
+        not in session_module.step_request(
+            session_id="s", invocation_id="s-1", action="build", limits=limits
+        )["limits"]
+    )

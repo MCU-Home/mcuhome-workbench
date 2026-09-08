@@ -329,10 +329,12 @@ build:
   memory: 12g        # 512m, 8g, or a plain byte count
 ```
 
-Unset means the machine as it is: every core, and the memory that is actually
-free. A container build additionally caps the number of processes in the
-container — nothing that compiles firmware comes near that bound, and a build
-that does is not compiling.
+Unset means the machine as it is: every core, and — where the machine can be
+measured, which today means a Linux host — the memory that is actually free.
+Where it cannot, the memory budget is left unstated rather than guessed at, and
+the build environment sizes itself. A container build additionally caps the
+number of processes in the container — nothing that compiles firmware comes near
+that bound, and a build that does is not compiling.
 
 A build without a container states the same budget and enforces nothing: there
 is no container to hold it to a figure. Where a build has to be held to one,

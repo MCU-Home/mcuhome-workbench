@@ -24,6 +24,7 @@ import pytest
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import configuration
+from mcuhome.workbench.buildmethods import build_options
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     DEFAULT_CONTAINER_REPOSITORIES,
@@ -244,6 +245,47 @@ def test_a_list_of_names_set_through_config_set_reads_back_as_the_list(
     unset_config_value(project.config_file, "build.container_repositories")
     settings = resolve_settings(project=project, env={})
     assert settings.value("build.container_repositories") == DEFAULT_CONTAINER_REPOSITORIES
+
+
+def test_a_cpu_share_is_a_number_and_a_memory_figure_is_a_word(project: Project) -> None:
+    """What one build may use of this machine, through the layers.
+
+    ``cpus`` is a number because a CPU share is one — ``docker run
+    --cpus 1.5`` means one and a half cores' worth of time. ``memory``
+    is written the way a container runtime spells it, and the workbench
+    turns it into the byte count the request document carries.
+    """
+    write_project(project, "build:\n  cpus: 2.5\n  memory: 6g\n")
+    settings = resolve_settings(project=project, env={})
+    assert settings.value("build.cpus") == 2.5
+    assert settings.value("build.memory") == "6g"
+    limits = build_options(settings).limits()
+    assert limits.cpus == 2.5
+    assert limits.memory_bytes == 6 * 1024**3
+
+
+def test_a_cpu_share_from_the_environment_is_a_number_too(project: Project) -> None:
+    settings = resolve_settings(project=project, env={"MCUHOME_BUILD_CPUS": "0.5"})
+    assert settings.value("build.cpus") == 0.5
+
+
+@pytest.mark.parametrize("stated", ["0", "-2", "zwei"])
+def test_a_cpu_share_that_is_not_one_is_refused_by_the_variable(
+    project: Project, stated: str
+) -> None:
+    """Zero cores is not a share and neither is a word: the layer that
+    supplied the value is the one that names it."""
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={"MCUHOME_BUILD_CPUS": stated})
+    assert "MCUHOME_BUILD_CPUS" in caught.value.message
+
+
+def test_a_cpu_share_that_is_not_one_is_refused_in_a_file(project: Project) -> None:
+    write_project(project, "build:\n  cpus: -1\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert "build.cpus" in caught.value.message
+    assert "greater than 0" in caught.value.message
 
 
 def test_a_path_in_the_section_resolves_against_its_own_file(project: Project) -> None:
