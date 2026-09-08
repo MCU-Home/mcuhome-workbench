@@ -6,7 +6,7 @@ The subprocess profile of the build environment specification runs the
 builder as an ordinary process, which means the environment has to exist
 as files on this machine rather than as a container image. This module is
 the step that puts it there: the packages a build pins are acquired
-verified (:func:`~mcuhome.workbench.orchestrator.acquire_package`),
+verified (:func:`~mcuhome.workbench.packagefetch.acquire_package`),
 unpacked into a per-user store, finalized once, and frozen read-only.
 
 **Where it goes.** ``${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments/``,
@@ -60,7 +60,7 @@ from pathlib import Path
 from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand, home
 
-from mcuhome.workbench.orchestrator import SDK_MAX_BYTES, acquire_package
+from mcuhome.workbench.packagefetch import SDK_MAX_BYTES, acquire_package
 from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_pins import SDK_SOURCE
 

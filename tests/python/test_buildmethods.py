@@ -42,15 +42,15 @@ from mcuhome.model.context import DeveloperEnvironment
 from mcuhome.model.errors import BuildError, ConfigError
 
 from mcuhome.workbench import buildmethods, containerbuild, sessionclient, subprocessbuild
-from mcuhome.workbench import orchestrator as lb
+from mcuhome.workbench.buildenvsession import EnvironmentUnavailable, LocalOutcome
 from mcuhome.workbench.buildlock import holder_of
+from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import (
     create_build_context,
     read_context_manifest,
     read_context_request,
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
-from mcuhome.workbench.orchestrator import EnvironmentUnavailable
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
 #: A fixed public key, so nothing here draws one and every context this
@@ -169,7 +169,7 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
 
     def fake(device_model, **kwargs):
         seen.update(kwargs)
-        outcome = lb.LocalOutcome(
+        outcome = LocalOutcome(
             action="build",
             context_id="sha256:" + "2" * 64,
             exit_code=0,
@@ -251,7 +251,7 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         driven["context_dir"] = context_dir
         driven.update(kwargs)
         return subprocessbuild.SubprocessBuildResult(
-            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=kwargs["environment"],
@@ -328,7 +328,7 @@ def test_the_environment_is_checked_before_the_context_is_locked(
         subprocessbuild,
         "run_locked_build",
         lambda context_dir, **kwargs: subprocessbuild.SubprocessBuildResult(
-            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=kwargs["environment"],
@@ -372,7 +372,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
 
     def fake(device_model, **kwargs):
         seen.update(kwargs)
-        outcome = lb.LocalOutcome(
+        outcome = LocalOutcome(
             action="build",
             context_id="sha256:" + "1" * 64,
             exit_code=0,
@@ -381,7 +381,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             artifacts=_artifacts(),
             out=tmp_path / "delivery",
         )
-        return containerbuild.LocalBuildResult(
+        return containerbuild.ContainerBuildResult(
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
@@ -430,7 +430,7 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
 
     def fake(device_model, **kwargs):
         seen["holder"] = holder_of(tmp_path)
-        outcome = lb.LocalOutcome(
+        outcome = LocalOutcome(
             action="build",
             context_id="sha256:" + "1" * 64,
             exit_code=0,
@@ -439,7 +439,7 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
             artifacts=_artifacts(),
             out=tmp_path / "delivery",
         )
-        return containerbuild.LocalBuildResult(
+        return containerbuild.ContainerBuildResult(
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
@@ -592,13 +592,14 @@ def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path,
 
 
 def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, monkeypatch):
-    """The orchestrator is the workbench's own, so no build needs a compiler.
+    """The container profile is the workbench's own, so no build needs a compiler.
 
-    This is the point of moving it. A build needs a container runtime and
-    nothing else of a toolchain — that was always the claim, and until the
-    orchestrator lived here it was untrue at the level of installed
-    distributions: ``local`` refused without ``mcuhome-compiler`` even
-    though nothing it ran came from the container's own package.
+    This is the point of it living here. A build needs a container
+    runtime and nothing else of a toolchain — that was always the claim,
+    and while the profile lived in the compiler's own distribution it was
+    untrue at the level of installed distributions: a local build refused
+    without ``mcuhome-compiler`` even though nothing it ran came from
+    that package.
 
     Asserted by making *every* dynamic import fail and showing that the
     build gets past it: what it stops at instead is one of the things it
@@ -615,7 +616,7 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
     # A docker that answers, badly: the daemon is not running. It stops
     # the build at the first thing it genuinely needs, which is the
     # point — what is asserted below is which refusal it is *not*.
-    monkeypatch.setattr(lb, "_run_command", lambda argv, on_line=None: lb.Completed(1, ""))
+    monkeypatch.setattr(containerbuild, "run_command", lambda argv, on_line=None: Completed(1, ""))
     with pytest.raises(BuildError) as refusal:
         _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
     assert "mcuhome-compiler" not in str(refusal.value)
@@ -791,7 +792,7 @@ def test_a_development_workspace_reaches_the_composition(model, tmp_path, monkey
     def fake(device_model, **kwargs):
         seen.update(kwargs)
         return subprocessbuild.SubprocessBuildResult(
-            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=tmp_path / "context",
             environment=kwargs["environment"],
@@ -855,7 +856,7 @@ def test_a_development_context_has_the_same_id_from_two_workspaces(
 
     def fake(context_dir, *, environment, **kwargs):
         return subprocessbuild.SubprocessBuildResult(
-            outcome=lb.LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=environment,

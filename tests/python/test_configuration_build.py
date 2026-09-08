@@ -41,6 +41,7 @@ from mcuhome.workbench.project import Project, init_project
 #: wrong rule as happily as with the right one.
 KEYS = {
     "build.mode": "MCUHOME_BUILD_MODE",
+    "build.container_repositories": "MCUHOME_BUILD_CONTAINER_REPOSITORIES",
     "build.env_store": "MCUHOME_BUILD_ENV_STORE",
     "build.dev_workspace": "MCUHOME_BUILD_DEV_WORKSPACE",
     "build.python": "MCUHOME_BUILD_PYTHON",

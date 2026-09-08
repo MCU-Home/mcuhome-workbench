@@ -28,8 +28,7 @@ from mcuhome.model import buildimage
 from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
-from mcuhome.workbench import buildenv as container
-from mcuhome.workbench import configuration, ociregistry, orchestrator
+from mcuhome.workbench import configuration, containerbuild, ociregistry
 from mcuhome.workbench.api import load_model
 from mcuhome.workbench.project import Project, find_project_root
 
@@ -194,7 +193,7 @@ def _no_docker(monkeypatch):
     """Nothing in this suite is allowed to reach a container runtime.
 
     A safety net, not a convenience: `mcuhome build` now defaults to the
-    container, so a test that forgets to stub stage 5 would otherwise
+    container, so a test that forgets to stub the runtime would otherwise
     quietly start a real Matter build on the machine running pytest —
     minutes of CPU and gigabytes of build directory, from a suite whose
     whole promise is one second. Tests that want a working preflight
@@ -202,32 +201,26 @@ def _no_docker(monkeypatch):
     monkeypatch is applied later.
     """
 
-    def refuse(command, env):
-        raise AssertionError(
-            f"a test tried to run {command[0]!r}: stage 5 must be stubbed, "
-            "see tests/python/README.md"
-        )
-
     def refuse_argv(argv, on_line=None):
         del on_line
         raise AssertionError(
-            f"a test tried to run {argv[0]!r}: stage 5 must be stubbed, see tests/python/README.md"
+            f"a test tried to run {argv[0]!r}: the container runtime must be stubbed, "
+            "see tests/python/README.md"
         )
 
-    monkeypatch.setattr(container, "_run_quiet", refuse)
-    # Both halves, because a container build reaches docker through both:
-    # the yes/no lookups go through the first, and everything the
-    # orchestrator drives — including the preflight and the fetch, which
-    # are routed through its seam so that stubbing it stubs all of docker
-    # — through the second.
-    monkeypatch.setattr(orchestrator, "_run_command", refuse_argv)
+    # Both halves of the container runtime seam: the short commands — the
+    # preflight, the image lookup, the fetch — and the one that starts a
+    # step. A test that stubbed one and not the other would run a real
+    # container out of its own assertion.
+    monkeypatch.setattr(containerbuild, "run_command", refuse_argv)
+    monkeypatch.setattr(containerbuild, "spawn_process", refuse_argv)
 
 
 #: The environment every scripted registry below answers with, and the
 #: one the fixture tree's model resolves against.
 ENVIRONMENT_DIGEST = "sha256:" + "ab" * 32
-ENVIRONMENT_TAG = "zephyr-4.4.0-r10"
-ENVIRONMENT_REPOSITORY = "ghcr.io/mcu-home/build-container"
+ENVIRONMENT_TAG = "0.1.0-r1"
+ENVIRONMENT_REPOSITORY = buildimage.ENVIRONMENT_IMAGE_REPOSITORY
 ENVIRONMENT_PIN = f"{ENVIRONMENT_REPOSITORY}:{ENVIRONMENT_TAG}@{ENVIRONMENT_DIGEST}"
 
 # --------------------------------------------------------------------------
@@ -348,51 +341,105 @@ def write_environment_packages(
     return hashes
 
 
-class ScriptedRegistry:
-    """A registry that answers one environment, and counts the asking.
+#: What the two environment packages hash to in this suite. The archives
+#: are one deterministic line each (:func:`write_environment_packages`),
+#: so the labels a scripted image declares can be computed here instead
+#: of being written down twice.
+def _package_hash(name: str, version: str = ENVIRONMENT_VERSION) -> str:
+    import hashlib
 
-    Passed as ``registry=`` wherever a build resolves one. It is not a
-    convenience: choosing an environment is the one step that talks to
-    the network, and a suite whose promise is one second may not.
+    return hashlib.sha256(f"{name} {version}\n".encode()).hexdigest()
+
+
+def environment_labels(
+    *,
+    zephyr: str = "4.4.0",
+    generation: str = "3",
+    constraint: str = "mcuhome-workbench:",
+    workspace: str | None = None,
+    tools: str | None = None,
+) -> dict[str, str]:
+    """The labels an image delivering this suite's package set carries.
+
+    Build-environment specification §5.2: an image mirrors every member
+    of the declaration as a label, and the ``packages.`` members carry a
+    hash because an image is a delivery. *workspace* and *tools* replace
+    a member value outright, which is how a test states the near miss —
+    the same package under other bytes.
+    """
+    labels = {
+        f"{buildimage.LABEL_PREFIX}.spec-generation": generation,
+        f"{buildimage.LABEL_PREFIX}.zephyr.version": zephyr,
+        f"{buildimage.LABEL_PREFIX}.build-context.generator-constraint": constraint,
+        f"{buildimage.LABEL_PREFIX}.packages.{WORKSPACE_PACKAGE}": (
+            workspace
+            if workspace is not None
+            else f"{ENVIRONMENT_VERSION}@sha256:{_package_hash(WORKSPACE_PACKAGE)}"
+        ),
+        f"{buildimage.LABEL_PREFIX}.packages.{TOOLS_PACKAGE}": (
+            tools
+            if tools is not None
+            else f"{ENVIRONMENT_VERSION}@sha256:{_package_hash(TOOLS_PACKAGE)}"
+        ),
+    }
+    return {name: value for name, value in labels.items() if value}
+
+
+class ScriptedRegistry:
+    """A container registry that answers with one image, and counts the asking.
+
+    Passed as ``images=`` wherever a build resolves an environment. It is
+    not a convenience: choosing an image is the one step of a container
+    build that talks to the network, and a suite whose promise is one
+    second may not.
+
+    The labels are the whole answer. An image is chosen by declaring
+    exactly the package set the context pinned (§5.2), so a test moves
+    the *labels* to move the outcome: another Zephyr release, another
+    hash on a package, a member missing.
     """
 
     def __init__(
         self,
         *,
         digest: str = ENVIRONMENT_DIGEST,
-        tag: str = "zephyr-4.4.0-latest",
+        tag: str = ENVIRONMENT_TAG,
+        tags: tuple[str, ...] | None = None,
         zephyr: str = "4.4.0",
-        toolchain: str = "zephyr-sdk-1.0.1",
-        contract: str = "1",
+        generation: str = "3",
+        constraint: str = "mcuhome-workbench:",
+        workspace: str | None = None,
+        tools: str | None = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
         self.digest = digest
         self.tag = tag
-        self.labels_ = {
-            buildimage.CONTRACT_LABEL: contract,
-            buildimage.ZEPHYR_LABEL: zephyr,
-            buildimage.TOOLCHAIN_LABEL: toolchain,
-        }
+        self.tags_ = tags if tags is not None else (tag,)
+        self.labels_ = (
+            labels
+            if labels is not None
+            else environment_labels(
+                zephyr=zephyr,
+                generation=generation,
+                constraint=constraint,
+                workspace=workspace,
+                tools=tools,
+            )
+        )
         self.asked: list[str] = []
 
     def tags(self, reference):
-        """One moving tag, so the fallback has something to find."""
+        """What the repository publishes, in the order the registry lists it."""
         del reference
-        return (self.tag,)
+        return self.tags_
 
     def digest_of(self, reference):
-        """Every tag resolves, so a test moves the *labels* to move the answer.
-
-        Which tag a resolution lands on is
-        :mod:`~mcuhome.workbench.resolve_env`'s own business and is tested
-        there; here the point is what a build does with the environment it
-        got.
-        """
         self.asked.append(reference.tag or "")
         return self.digest
 
     def labels(self, reference):
-        del reference
-        return {name: value for name, value in self.labels_.items() if value}
+        self.asked.append(reference.tag or "")
+        return dict(self.labels_)
 
 
 @pytest.fixture(autouse=True)

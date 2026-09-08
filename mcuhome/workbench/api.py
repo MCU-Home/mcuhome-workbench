@@ -120,18 +120,18 @@ What is here, in the order a caller needs it:
     The section's ``build.sdk_sources`` is the one key that travels on
     the request instead (``BuildRequest.sdk_sources``), because the
     remote method needs it as well.
-``open_environment`` / ``BuildEnvironment`` / ``Invocation``
-    The **backend role**, for the one caller that owns its own sessions
+``BuilderSession`` / ``LocalOutcome``
+    The **backend role**, for the caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a
-    context somebody else created and locked, materializes the
-    environment that context pins — image resolved and cross-checked,
-    SDK acquired and verified, trees arranged, container started — and
-    then runs actions in it. The split into ``prepare`` and ``run`` is
-    what makes an invocation cancellable: the sentinel whose existence
-    means stop is known before the call that blocks. Everything the
-    build methods above do goes through the same code, which is the
-    point — what a local build does and what a build server does differ
-    in who owns the session, not in what a build is.
+    context somebody else created and locked, plus the environment that
+    context pins, and drives one step of the build-environment
+    specification at a time — the tree, the request document, the result
+    document, the verdict. The split into ``prepare`` and ``run`` is
+    what makes a step cancellable: the sentinel whose existence means
+    stop is known before the call that blocks. Everything the build
+    methods above do goes through the same code, which is the point:
+    what a local build does and what a build server does differ in who
+    owns the session, not in what a build is.
 ``build_lock`` / ``BuildDirectoryBusy``
     One build directory, one operation at a time. ``run_build`` takes
     the lock itself, so an embedder gets the guard for free; a caller
@@ -176,6 +176,14 @@ from mcuhome.model.model import MODEL_VERSION, DeviceModel
 from mcuhome.model.modelfile import read_model
 
 from mcuhome.workbench import __version__
+from mcuhome.workbench.buildenvsession import (
+    BuilderSession,
+    CacheTier,
+    EnvironmentUnavailable,
+    EnvironmentUnusable,
+    LocalOutcome,
+    Step,
+)
 from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildmethods import (
@@ -228,17 +236,7 @@ from mcuhome.workbench.generate import CompilerUnavailable, generate_tree
 from mcuhome.workbench.loader import load_config
 from mcuhome.workbench.migrations import Migration
 from mcuhome.workbench.migrations import plan_for as upgrade_plan
-from mcuhome.workbench.orchestrator import (
-    BackendConfig,
-    BuildEnvironment,
-    Docker,
-    EnvironmentUnavailable,
-    EnvironmentUnusable,
-    Invocation,
-    LocalOutcome,
-    SdkUnavailable,
-    open_environment,
-)
+from mcuhome.workbench.packagefetch import SdkUnavailable
 from mcuhome.workbench.project import (
     BUILD_DIR,
     DEVICE_ENTRY,
@@ -292,9 +290,8 @@ from mcuhome.workbench.validate import validate
 __all__ = [
     "BUILDER_TYPES",
     "BUILD_DIR",
-    "BackendConfig",
     "BuildDirectoryBusy",
-    "BuildEnvironment",
+    "BuilderSession",
     "BuildError",
     "BuildOptions",
     "BuildOutcome",
@@ -317,14 +314,14 @@ __all__ = [
     "DEVICE_ENTRY",
     "DeviceModel",
     "DeviceOutline",
-    "Docker",
+    "CacheTier",
     "EndpointChoice",
     "EnvironmentUnavailable",
     "EnvironmentUnusable",
     "Execution",
     "GenerationError",
     "InitResult",
-    "Invocation",
+    "Step",
     "LOCAL",
     "LocalBuild",
     "LocalOutcome",
@@ -382,7 +379,6 @@ __all__ = [
     "is_upgrading",
     "load_model",
     "new_device",
-    "open_environment",
     "options_for",
     "project_at",
     "read_model",

@@ -272,6 +272,40 @@ Everything else needs an index that lists the two packages, because a hash can
 come from nowhere else: put them in one of the operator's own package
 directories, or configure the registry.
 
+### Which container image a container build runs in
+
+A build context pins the build environment by its **packages**, never by an
+image. A container image is one delivery of such a set: it declares the packages
+it was assembled from as labels, and a container build looks for the image whose
+labels are exactly the set the context pinned. An image assembled from the same
+package versions but different bytes is a different environment and is never used
+instead — the build is refused, with each candidate and the reason it was
+rejected.
+
+Where MCUHome looks is configuration, because it is a decision about trust:
+
+```yaml
+build:
+  container_repositories:
+    - ghcr.io/mcu-home/build-environment
+```
+
+The list is searched in order and the first repository holding a matching image
+wins; unset, it is MCUHome's own repository. Where a repository holds several
+images for one package set, the highest assembly revision (`…-r2` over `…-r1`)
+is taken.
+
+`--container-image` narrows the search for one build, in any of the forms you
+already know from docker: a repository, a tag, a digest, or a repository with one
+of the two. It says *which* image to look at and never that it may be run without
+being what it claims — the labels are checked either way.
+
+The image runs with no network, as the calling user, and with exactly the tree
+the build-environment specification defines mounted into it: the build context
+and the SDK read-only, the output directory writable, and the compiler cache
+tiers this machine provides. One fresh container per step, thrown away when the
+step ends.
+
 ### Building without a container
 
 A local build runs in a build container by default. The other way is to run the

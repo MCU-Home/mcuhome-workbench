@@ -16,16 +16,15 @@ packages unpacked into a read-only store on the host — and every rule of
 §4, §6, §7 and §8 applies to both. So the layout, the two documents and
 the judging live here once, and *how a step is entered* is a function
 this module is handed: a :data:`Launcher` receives the prepared
-:class:`Step` and answers a handle to a running process. The subprocess
-profile's launcher is
-:mod:`mcuhome.workbench.subprocessbuild`; a container profile's would
-mount the same directories and run the same entry point in a container.
+:class:`Step` and answers a handle to a running process. The two
+launchers are :mod:`mcuhome.workbench.subprocessbuild` — a child process
+against the store — and :mod:`mcuhome.workbench.containerbuild`, which
+mounts the same directories into a fresh container and runs the entry
+point the image carries.
 
 **What a session is here.** One sequence of steps that together produce
 one set of artifacts (§1), running strictly one after another (§3). Two
-things distinguish a step from the legacy container invocation (retired
-at the switchover), and both are the reason this module exists beside
-:mod:`mcuhome.workbench.orchestrator` rather than inside it:
+properties of a step decide the layout below:
 
 * **Every step gets a fresh ``mcuhome/`` tree.** ``work`` is empty at the
   start of every step, and nothing a step wrote outside ``out`` survives
@@ -43,10 +42,9 @@ anything, or know what a build context is. It is handed a context
 directory, an SDK tree and an entry point, and it drives steps against
 them.
 
-The answer is :class:`~mcuhome.workbench.orchestrator.LocalOutcome` —
-the same type the legacy container invocation (retired at the switchover)
-produces — so that a caller which only wants a firmware never has to ask
-which profile ran.
+The answer is :class:`LocalOutcome` — one type for both profiles, so
+that a caller which only wants a firmware never has to ask which one
+ran.
 """
 
 from __future__ import annotations
@@ -63,21 +61,17 @@ from pathlib import Path
 from typing import Any
 
 from mcuhome.model.artifacts import Artifact
+from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.hashes import sha256_file
 
-from mcuhome.workbench.orchestrator import (
-    LineSink,
-    Liveness,
-    LocalOutcome,
-    Running,
-    contained,
-    write_request,
-)
+from mcuhome.workbench.buildprocess import LineSink, Liveness, Running
 
 __all__ = [
     "ACTION_BUILD",
     "ARTIFACT_ROLES",
     "BASE_DIR_VAR",
+    "CACHE_LOCAL_DIR",
+    "CACHE_SHARED_DIR",
     "CACHE_TIERS",
     "CCACHE_SUBDIR",
     "ENTRY_POINT",
@@ -86,15 +80,71 @@ __all__ = [
     "STATUS_FAILURE",
     "STATUS_SUCCESS",
     "STATUS_UNSUPPORTED",
+    "SHARED_CACHE_OPTION",
     "STEP_DIR",
     "BuilderSession",
     "CacheTier",
+    "EnvironmentUnavailable",
+    "EnvironmentUnusable",
     "Launcher",
+    "LocalOutcome",
     "Step",
+    "cache_tiers",
+    "contained",
     "judge_step",
     "step_request",
     "verify_step_artifacts",
+    "write_request",
 ]
+
+
+class EnvironmentUnavailable(BuildError):
+    """The build environment this context pins is not on this machine.
+
+    Distinct from :class:`EnvironmentUnusable` because the two have
+    different fixes: this one is fetched or provisioned, that one is not
+    going to work however often it is tried.
+    """
+
+
+class EnvironmentUnusable(BuildError):
+    """The environment is here and cannot be trusted with this build.
+
+    What it declares about itself is not what the build needs — another
+    specification generation, another package set, another Zephyr
+    release — and no amount of retrying changes that.
+    """
+
+
+@dataclass
+class LocalOutcome:
+    """What one step produced, from the orchestrator's side.
+
+    :attr:`successful` is the whole verdict a caller has to consult
+    before the other fields mean anything; :attr:`problems` is what it
+    renders when the verdict is no.
+
+    :attr:`violation` is §6.3's contradiction — a result document that
+    says ``success`` after a non-zero exit, or a zero exit after
+    anything else. It fails the step either way; carrying it separately
+    is what lets a caller say that the *environment* misbehaved rather
+    than the build.
+    """
+
+    action: str
+    context_id: str
+    exit_code: int | None
+    result: dict[str, Any] | None = None
+    status: str = "failure"
+    successful: bool = False
+    problems: tuple[str, ...] = ()
+    violation: str | None = None
+    artifacts: tuple[Artifact, ...] = field(default_factory=tuple)
+    #: The session's ``out`` directory on this machine — where every
+    #: verified artifact in :attr:`artifacts` actually is (its ``path``
+    #: is relative to here). ``None`` on an outcome that never reached a
+    #: step.
+    out: Path | None = None
 
 
 # --------------------------------------------------------------------------
@@ -212,13 +262,11 @@ def step_request(
     the specification's own example writes ``{}`` and an environment that
     reads ``parameters`` without checking for its absence is not wrong.
 
-    There is deliberately nothing else in it. The legacy container
-    invocation (retired at the switchover) carries the whole layout in
-    its request document — every directory as an absolute
-    path, the trees, the limits — because the program was told where
-    things were; here §4 fixes the tree relative to one environment
-    variable, so a path in this document would be a second source of
-    truth for something the environment already knows.
+    There is deliberately nothing else in it: §4 fixes the tree relative
+    to one environment variable, so a path in this document would be a
+    second source of truth for something the environment already knows,
+    and generation 3 states limits nowhere because an orchestrator
+    enforces them rather than negotiating them (§11).
     """
     return {
         "spec_generation": SPEC_GENERATION,
@@ -227,6 +275,33 @@ def step_request(
         "action": action,
         "parameters": dict(parameters or {}),
     }
+
+
+def write_request(document: dict[str, Any], path: Path) -> None:
+    """Place the request document atomically, and durably.
+
+    A temporary neighbour, an ``fsync``, a rename, and an ``fsync`` of
+    the directory so the name itself survives. The environment opens the
+    document as the first thing it does, and a half-written one is the
+    single failure it cannot report through a result document.
+
+    UTF-8 without BOM, one JSON object, and no ``null`` anywhere:
+    ``null`` never means "absent" here, and :func:`step_request` omits
+    rather than nulls.
+    """
+    temporary = path.with_name(path.name + ".tmp")
+    payload = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=False)
+    with temporary.open("w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    temporary.replace(path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def judge_step(
@@ -251,13 +326,13 @@ def judge_step(
     Everything else is a problem, and the problems are the message a
     caller renders.
 
-    :attr:`~mcuhome.workbench.orchestrator.LocalOutcome.status` carries
+    :attr:`LocalOutcome.status` carries
     the environment's own word, ``unsupported`` included: it means *no
     environment of my kind can do this* and tells the caller to look for
     a different environment rather than report a broken build, which is a
     decision this function must not make for it.
 
-    :attr:`~mcuhome.workbench.orchestrator.LocalOutcome.violation` is
+    :attr:`LocalOutcome.violation` is
     §6.3's contradiction — a document that says ``success`` after a
     non-zero exit, or a zero exit after anything else. It fails the step
     either way; carrying it separately is what lets a caller say that the
@@ -351,10 +426,8 @@ def verify_step_artifacts(
     anything.
 
     The walk under ``out`` is
-    :func:`mcuhome.workbench.orchestrator.contained` — the same one the
-    legacy container invocation (retired at the switchover) uses for its
-    egress, because an egress check that exists
-    twice is an egress check that will differ once.
+    :func:`contained`, and it is the only egress check there is: one
+    that exists twice is one that will differ once.
 
     §7 is what is enforced on the way: "Put only regular files and
     directories in ``out``. No symlinks, hard links, device nodes,
@@ -411,6 +484,33 @@ def verify_step_artifacts(
     return tuple(verified), tuple(problems)
 
 
+def contained(out: Path, relative: str) -> Path | None:
+    """The absolute path of a declared artifact under ``out``, or ``None``.
+
+    Strict containment, checked segment by segment with ``lstat`` rather
+    than with :meth:`Path.resolve`: what matters is that no segment of the
+    path is a symlink at all, and that every non-final segment is a real
+    directory. A missing final segment is not a failure here — it returns
+    the path so the caller can report "declared and not there" distinctly
+    from "leaves the directory" — but a missing intermediate segment, a
+    symlinked segment, or a ``.``/``..``/empty segment is ``None``.
+    """
+    segments = relative.split("/")
+    if not segments or any(part in ("", ".", "..") for part in segments):
+        return None
+    current = out
+    for part in segments:
+        current = current / part
+        info = _lstat(current)
+        if info is None:
+            return current if part == segments[-1] else None
+        if stat.S_ISLNK(info.st_mode):
+            return None
+        if part != segments[-1] and not stat.S_ISDIR(info.st_mode):
+            return None
+    return current
+
+
 def _lstat(path: Path) -> os.stat_result | None:
     try:
         return os.lstat(path)
@@ -444,6 +544,81 @@ class CacheTier:
 
     path: Path
     writable: bool = False
+
+
+#: The two role directories a cache root is laid out with. One root
+#: serves both profiles — the subprocess profile links these directories
+#: into a step's tree, the container profile mounts them into its
+#: container — so the names are stated once here rather than per profile.
+CACHE_LOCAL_DIR = "cache-local"
+CACHE_SHARED_DIR = "cache-shared"
+
+#: The configuration key that names a shared compiler cache, quoted in
+#: the refusal when the directory it names is not there.
+SHARED_CACHE_OPTION = "build.cache_shared"
+
+
+def cache_tiers(
+    *,
+    ccache_dir: Path | None = None,
+    local_dir: Path | None = None,
+    shared_ccache_dir: Path | None = None,
+    session_dir: Path | None = None,
+    project_dir: Path | None = None,
+) -> dict[str, CacheTier]:
+    """The cache tiers this orchestrator provides a step, from directories.
+
+    **The ``local`` tier is where the durable cache goes**, and that is
+    not a contradiction of the specification's "it is per step": a tier
+    is only per step if the orchestrator leaves it that way, and the
+    specification says in the same paragraph that the orchestrator "may
+    or may not mount something over it". MCUHome's own environment uses
+    the most local writable tier as its primary cache, which is the local
+    one — so an orchestrator that wants a compiler cache at all provides
+    a durable directory for it, in either profile.
+
+    **A shared tier somebody named has to exist.** The shared cache is
+    offered read-only and is the one tier this function will not create,
+    so a path that is not a directory would silently mean "no shared
+    cache" — and a machine configured to start warm off a network mount
+    that failed to appear would build cold for weeks without saying so.
+    A *derived* shared directory (the one under the cache root) may be
+    absent, because that is not a statement anybody made.
+    """
+    tiers: dict[str, CacheTier] = {}
+    # A tier named outright wins over the layout under the cache root:
+    # `ccache_dir` says where this machine keeps its caches, `local_dir`
+    # says where this one tier is, and a machine that states both meant
+    # the more specific of the two.
+    local = local_dir if local_dir is not None else _under_root(ccache_dir, CACHE_LOCAL_DIR)
+    if local is not None:
+        tiers["local"] = CacheTier(path=Path(local), writable=True)
+    if session_dir is not None:
+        tiers["session"] = CacheTier(path=Path(session_dir), writable=True)
+    if project_dir is not None:
+        tiers["project"] = CacheTier(path=Path(project_dir), writable=True)
+    if shared_ccache_dir is not None:
+        shared = Path(shared_ccache_dir)
+        if not shared.is_dir():
+            raise ConfigError(
+                f"The shared compiler cache {shared} is not a directory.",
+                hint=(
+                    "the shared cache is read-only to a build, so MCUHome does not "
+                    "create it: mount or create the directory, or unset "
+                    f"{SHARED_CACHE_OPTION} to build without a shared cache"
+                ),
+            )
+        tiers["shared"] = CacheTier(path=shared, writable=False)
+        return tiers
+    derived = _under_root(ccache_dir, CACHE_SHARED_DIR)
+    if derived is not None and derived.is_dir():
+        tiers["shared"] = CacheTier(path=derived, writable=False)
+    return tiers
+
+
+def _under_root(root: Path | None, name: str) -> Path | None:
+    """A role directory under the cache root, or ``None`` without one."""
+    return None if root is None else Path(root) / name
 
 
 #: How a step is entered. The prepared :class:`Step` and a log sink in, a
@@ -544,8 +719,7 @@ class BuilderSession:
     that runs — and with the :data:`Launcher` that knows how to enter a
     step in the profile in use. :meth:`invoke` then runs one action to
     its end and answers the same
-    :class:`~mcuhome.workbench.orchestrator.LocalOutcome` every other
-    build path answers.
+    :class:`LocalOutcome` every other build path answers.
 
     **The session owns ``out``** and nothing else that survives a step.
     It is created empty here and every step's ``mcuhome/out`` points at
@@ -606,8 +780,7 @@ class BuilderSession:
         # session starts") and which would let a stale `firmware.bin`
         # travel out of a build that never wrote one. `steps` is the same
         # question with disk attached: one build tree per build, kept
-        # forever. The legacy container invocation (retired at the
-        # switchover) clears its own for exactly these two reasons.
+        # forever.
         self.out = _fresh(self.root / "out")
         self._steps = _fresh(self.root / "steps")
         self._control = _fresh(self.root / "control")

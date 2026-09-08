@@ -279,8 +279,8 @@ def create_context(
     Both pins arrive **already resolved**, and for the same reason: this
     function writes a document, it does not decide what goes in it.
     Resolving the SDK constraint is
-    :mod:`mcuhome.workbench.resolve_pins`, resolving the build
-    environment is :mod:`mcuhome.workbench.resolve_env`, and both happen
+    :mod:`mcuhome.workbench.resolve_pins`, and both the SDK pin and
+    the environment's package pins are resolved there — both happen
     before a context directory exists — a refusal from either costs
     nothing then.
 

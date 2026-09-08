@@ -14,10 +14,9 @@ up to a few kilobytes.
 registry hands out a pull token to anyone who asks (``GET /token`` at the
 realm its ``401`` names), and this asks for one and no more. A registry
 that refuses even that is a private one, and private registries are
-answered by :mod:`~mcuhome.workbench.resolve_env` handing the question to
-the local container program, which already has the operator's
-credentials. Teaching this module to log in would mean owning credential
-storage, and docker owns it better.
+answered by handing the question to the local container program, which
+already has the operator's credentials. Teaching this module to log in
+would mean owning credential storage, and docker owns it better.
 
 **Stdlib HTTP on purpose.** Three GETs against one host do not justify a
 dependency, and a workbench that resolves an environment on every
@@ -214,10 +213,10 @@ class Registry:
         """Every tag the repository carries, in the order the registry lists them.
 
         The expensive question — paginated on large repositories, rate
-        limited on some hosts — and the reason
-        :mod:`~mcuhome.workbench.resolve_env` tries to answer without it
-        first. Pagination is followed through the ``Link`` header, which
-        is what the distribution spec says a registry signals it with.
+        limited on some hosts — and the reason a pinned tag or digest is
+        worth having (:mod:`~mcuhome.workbench.resolve_image`). Pagination
+        is followed through the ``Link`` header, which is what the
+        distribution spec says a registry signals it with.
         """
         collected: list[str] = []
         api = _api(reference)

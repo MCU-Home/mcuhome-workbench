@@ -67,7 +67,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from mcuhome.model import containerpaths
 from mcuhome.model.buildenvironment import (
     DECLARATION_FILE,
     SPEC_GENERATION,
@@ -88,7 +87,7 @@ from mcuhome.model.context import (
     PackagePin,
     format_generator_chain,
 )
-from mcuhome.model.errors import BuildError, ConfigError
+from mcuhome.model.errors import BuildError
 from mcuhome.model.jobs import JOBS_VAR
 
 from mcuhome.workbench import devworkspace
@@ -100,7 +99,9 @@ from mcuhome.workbench.buildenvsession import (
     BuilderSession,
     CacheTier,
     Launcher,
+    LocalOutcome,
     Step,
+    cache_tiers,
 )
 from mcuhome.workbench.buildenvstore import (
     TOOLS_KIND,
@@ -112,26 +113,19 @@ from mcuhome.workbench.buildenvstore import (
     provision,
     provisioned,
 )
+from mcuhome.workbench.buildprocess import LineSink, Running, spawn_process
 from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
-from mcuhome.workbench.orchestrator import (
-    LineSink,
-    LocalOutcome,
-    Running,
-    acquire_sdk,
-    spawn_process,
-)
+from mcuhome.workbench.packagefetch import acquire_sdk
 from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
     "DEV_WORKSPACE_OPTION",
-    "SHARED_CACHE_OPTION",
     "ENTRY_POINT_DIR",
     "TOOLS_ROOT_VAR",
     "WORKSPACE_ROOT_VAR",
     "Environment",
     "SubprocessBuildResult",
-    "cache_tiers",
     "check_environment",
     "declaration_of",
     "developer_launcher",
@@ -145,10 +139,6 @@ __all__ = [
     "run_locked_build",
     "step_environment",
 ]
-
-#: The configuration key that names a shared compiler cache, quoted in
-#: the refusal when the directory it names is not there.
-SHARED_CACHE_OPTION = "build.cache_shared"
 
 #: What points this profile at a west workspace the developer maintains
 #: instead of at the store. Named here because every refusal of a
@@ -739,81 +729,6 @@ def launcher(
         return child
 
     return launch
-
-
-def cache_tiers(
-    *,
-    ccache_dir: Path | None = None,
-    local_dir: Path | None = None,
-    shared_ccache_dir: Path | None = None,
-    session_dir: Path | None = None,
-    project_dir: Path | None = None,
-) -> dict[str, CacheTier]:
-    """The cache tiers this orchestrator provides a step, from directories.
-
-    **The ``local`` tier is where the durable cache goes**, and that is
-    not a contradiction of the specification's "it is per step": a tier
-    is only per step if the orchestrator leaves it that way, and the
-    specification says in the same paragraph that the orchestrator "may
-    or may not mount something over it". MCUHome's own environment uses
-    the most local writable tier as its primary cache, which is the
-    local one — so an orchestrator that wants a compiler cache in this
-    profile at all provides a durable directory for it, exactly as the
-    container profile mounts a host directory at the same place.
-
-    The two directory names under a cache root are the container
-    profile's own, so that one cache root serves both profiles rather
-    than each inventing a layout. The *entries* in them are not shared:
-    the container profile points ccache at the role directory itself and
-    this one at ``<tier>/ccache`` inside it, and the compile commands
-    differ by their paths anyway.
-
-    **A shared tier somebody named has to exist.** The shared cache is
-    offered read-only and is the one tier this function will not create,
-    so a path that is not a directory would silently mean "no shared
-    cache" — and a machine configured to start warm off a network mount
-    that failed to appear would build cold for weeks without saying so.
-    A *derived* shared directory (the one under the cache root) may be
-    absent, because that is not a statement anybody made.
-    """
-    tiers: dict[str, CacheTier] = {}
-    # A tier named outright wins over the layout under the cache root:
-    # `ccache_dir` says where this machine keeps its caches, `local_dir`
-    # says where this one tier is, and a machine that states both meant
-    # the more specific of the two.
-    local = (
-        local_dir
-        if local_dir is not None
-        else _under_root(ccache_dir, containerpaths.CCACHE_LOCAL.name)
-    )
-    if local is not None:
-        tiers["local"] = CacheTier(path=Path(local), writable=True)
-    if session_dir is not None:
-        tiers["session"] = CacheTier(path=Path(session_dir), writable=True)
-    if project_dir is not None:
-        tiers["project"] = CacheTier(path=Path(project_dir), writable=True)
-    if shared_ccache_dir is not None:
-        shared = Path(shared_ccache_dir)
-        if not shared.is_dir():
-            raise ConfigError(
-                f"The shared compiler cache {shared} is not a directory.",
-                hint=(
-                    "the shared cache is read-only to a build, so MCUHome does not "
-                    "create it: mount or create the directory, or unset "
-                    f"{SHARED_CACHE_OPTION} to build without a shared cache"
-                ),
-            )
-        tiers["shared"] = CacheTier(path=shared, writable=False)
-        return tiers
-    derived = _under_root(ccache_dir, containerpaths.CCACHE_SHARED.name)
-    if derived is not None and derived.is_dir():
-        tiers["shared"] = CacheTier(path=derived, writable=False)
-    return tiers
-
-
-def _under_root(root: Path | None, name: str) -> Path | None:
-    """A role directory under the cache root, or ``None`` without one."""
-    return None if root is None else Path(root) / name
 
 
 # --------------------------------------------------------------------------

@@ -33,8 +33,8 @@ import dataclasses
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
+from mcuhome.workbench import buildenvsession as lb
 from mcuhome.workbench import buildmethods, buildtarget, containerbuild, sessionclient
-from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.buildlock import holder_of
 
 
@@ -62,7 +62,7 @@ def _local_result(tmp_path, seen: dict):
             artifacts=(),
             out=tmp_path / "delivery",
         )
-        return containerbuild.LocalBuildResult(
+        return containerbuild.ContainerBuildResult(
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",

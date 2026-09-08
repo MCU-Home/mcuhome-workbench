@@ -80,7 +80,11 @@ from mcuhome.workbench.buildenvstore import (
     WORKSPACE_KIND,
 )
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
-from mcuhome.workbench.buildtarget import BUILD_MODES, DEFAULT_BUILD_MODE
+from mcuhome.workbench.buildtarget import (
+    BUILD_MODES,
+    DEFAULT_BUILD_MODE,
+    DEFAULT_CONTAINER_REPOSITORIES,
+)
 from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file
 
@@ -110,6 +114,12 @@ CONFIG_FILE = "configuration.yaml"
 #: the environment is the shell's, the arguments are the invocation's.
 CONFIG_SCOPES = ("system", "user", "project")
 
+#: What separates the entries of a ``strings`` option outside a file —
+#: in an environment variable and in ``mcuhome config set``. A comma
+#: rather than ``os.pathsep``, because the values it separates are names
+#: that may contain a colon.
+_LIST_SEPARATOR = ","
+
 #: Origin labels, in ascending precedence. ``default`` is what a value
 #: has when no layer set it.
 _ORIGINS = ("default", "system", "user", "project", "environment", "arguments")
@@ -120,9 +130,11 @@ class Option:
     """One declared option — the single source of every spelling.
 
     *kind* is one of ``string``, ``path``, ``paths`` (an ordered list,
-    ``os.pathsep``-separated in the environment), ``integer``, and the
-    two structured kinds ``builders`` and ``registry``, which parse and
-    merge themselves and live in files only.
+    ``os.pathsep``-separated in the environment), ``strings`` (an ordered
+    list of plain names, comma-separated in the environment because the
+    names may contain a colon), ``integer``, and the two structured kinds
+    ``builders`` and ``registry``, which parse and merge themselves and
+    live in files only.
     The three channel switches say where the option may be set:
     *files* covers all three file layers at once — there is no option
     that a user file may set and a system file may not. *bootstrap*
@@ -275,6 +287,17 @@ OPTIONS: tuple[Option, ...] = (
         default=DEFAULT_BUILD_MODE,
         choices=BUILD_MODES,
         help="how a local build is executed: in a build container, or as a child process",
+    ),
+    # Where a container build may take its environment from, in search
+    # order. An image is chosen by the packages its labels declare, never
+    # by its name, so this list is not "which image" but "whose images
+    # may be trusted to deliver one" — which is why it is configuration
+    # and not a device's business.
+    Option(
+        "build.container_repositories",
+        kind="strings",
+        default=DEFAULT_CONTAINER_REPOSITORIES,
+        help="container repositories a build environment may be taken from, in order",
     ),
     Option(
         "build.env_store",
@@ -527,6 +550,12 @@ def _parse_file_value(
         if not isinstance(value, str) or not value:
             raise refuse("a path")
         return _resolve_path(value, env=env, base=file.parent)
+    if opt.kind == "strings":
+        if isinstance(value, str):
+            raise refuse("a list (one `- value` line each), not a single string")
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise refuse("a list of names")
+        return tuple(item for item in value if item)
     if opt.kind == "paths":
         if isinstance(value, str):
             raise refuse("a list of paths (one `- path` line each), not a single string")
@@ -575,6 +604,11 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
         return number
     if opt.kind == "path":
         return _resolve_path(value, env=env, base=None)
+    if opt.kind == "strings":
+        # Comma-separated, deliberately not `os.pathsep`: a container
+        # repository legitimately carries a colon (a registry port, a
+        # tag), and a separator a value can contain is not one.
+        return tuple(item.strip() for item in value.split(_LIST_SEPARATOR) if item.strip())
     if opt.kind == "paths":
         return tuple(
             _resolve_path(item, env=env, base=None) for item in value.split(os.pathsep) if item
@@ -982,6 +1016,8 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
                 location=location,
                 hint=opt.help or None,
             ) from None
+    if opt.kind == "strings":
+        return [item.strip() for item in text.split(_LIST_SEPARATOR) if item.strip()]
     if opt.kind == "paths":
         return [item for item in text.split(os.pathsep) if item]
     # A vocabulary is deliberately *not* checked here: the caller proves

@@ -46,9 +46,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from mcuhome.model.buildimage import ENVIRONMENT_IMAGE_REPOSITORY
+
 __all__ = [
     "BUILD_MODES",
     "DEFAULT_BUILD_MODE",
+    "DEFAULT_CONTAINER_REPOSITORIES",
     "DEFAULT_MAX_WAIT_SECONDS",
     "MODE_CONTAINER",
     "MODE_SUBPROCESS",
@@ -59,6 +62,14 @@ __all__ = [
     "RemoteBuild",
     "SubprocessExecution",
 ]
+
+#: Where a container build looks for its environment when nobody
+#: configured a search list: MCUHome's own repository. Stated here beside
+#: the two modes rather than in the profile that searches it, so that the
+#: option registry can declare it as the default of
+#: ``build.container_repositories`` without importing a build path.
+DEFAULT_CONTAINER_REPOSITORIES: tuple[str, ...] = (ENVIRONMENT_IMAGE_REPOSITORY,)
+
 
 #: The two executions, as the words a configuration writes them in: the
 #: values of the ``build.mode`` key. They live here, with the classes

@@ -42,7 +42,7 @@ from mcuhome.packagetool.source import (
     read_document,
 )
 
-from mcuhome.workbench import orchestrator, packageregistry
+from mcuhome.workbench import packagefetch, packageregistry
 from mcuhome.workbench.packageregistry import (
     PackageRegistry,
     PackageRegistryError,
@@ -220,7 +220,7 @@ def build_source(
             name=name,
             version=version,
             file=filename,
-            sha256=orchestrator.sha256_file(directory / filename),
+            sha256=packagefetch.sha256_file(directory / filename),
             size=len(payload),
             issued=moment,
             signers=publishers,
@@ -291,7 +291,7 @@ def test_a_served_source_verifies_and_its_index_is_readable(
     assert index.versions(SDK) == (VERSION,)
     entry = index.resolve(SDK, VERSION)
     assert entry.name == SDK
-    assert entry.sha256 == orchestrator.sha256_file(source / f"{SDK}-{VERSION}.tar.zst")
+    assert entry.sha256 == packagefetch.sha256_file(source / f"{SDK}-{VERSION}.tar.zst")
     # The bootstrap host is asked exactly once, and only for the mirror list.
     assert served.calls[0] == f"https://{DOMAIN}/{SOURCE}/{MIRRORS_FILE}"
 
@@ -905,7 +905,7 @@ def local_source(directory: Path) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     filename = f"{SDK}-{VERSION}.tar.zst"
     (directory / filename).write_bytes(SDK_ARCHIVE)
-    digest = orchestrator.sha256_file(directory / filename)
+    digest = packagefetch.sha256_file(directory / filename)
     (directory / INDEX_FILE).write_text(
         json.dumps(
             {
@@ -924,7 +924,7 @@ def test_a_package_found_locally_never_touches_the_registry(
 ) -> None:
     digest = local_source(tmp_path / "operator")
     client = registry(tmp_path, anchor, bootstrap(Served().publish(MIRROR, source)))
-    package = orchestrator.acquire_package(
+    package = packagefetch.acquire_package(
         name=SDK,
         version=VERSION,
         sha256=digest,
@@ -941,9 +941,9 @@ def test_a_package_missing_locally_comes_off_the_registry(
 ) -> None:
     empty = tmp_path / "operator"
     empty.mkdir()
-    digest = orchestrator.sha256_file(source / f"{SDK}-{VERSION}.tar.zst")
+    digest = packagefetch.sha256_file(source / f"{SDK}-{VERSION}.tar.zst")
     served = bootstrap(Served().publish(MIRROR, source))
-    package = orchestrator.acquire_package(
+    package = packagefetch.acquire_package(
         name=SDK,
         version=VERSION,
         sha256=digest,
@@ -981,10 +981,10 @@ def test_a_family_is_acquired_through_its_meta_entry(tmp_path: Path, keys) -> No
         opener=Offline(),
         now=NOW,
     )
-    pinned = orchestrator.sha256_file(tools / f"{AMD64}-{VERSION}.tar.zst")
+    pinned = packagefetch.sha256_file(tools / f"{AMD64}-{VERSION}.tar.zst")
     empty = tmp_path / "operator"
     empty.mkdir()
-    package = orchestrator.acquire_package(
+    package = packagefetch.acquire_package(
         kind="build-tools",
         name=TOOLS,
         version=VERSION,
@@ -1008,11 +1008,11 @@ def test_a_family_in_a_local_index_resolves_without_the_registry(tmp_path: Path,
         packages=((AMD64, VERSION, amd64), (ARM64, VERSION, arm64)),
         meta=(TOOLS, VERSION, {"arch": {"linux-amd64": AMD64, "linux-arm64": ARM64}}),
     )
-    package = orchestrator.acquire_package(
+    package = packagefetch.acquire_package(
         kind="build-tools",
         name=TOOLS,
         version=VERSION,
-        sha256=orchestrator.sha256_file(directory / f"{AMD64}-{VERSION}.tar.zst"),
+        sha256=packagefetch.sha256_file(directory / f"{AMD64}-{VERSION}.tar.zst"),
         sources=(directory,),
         into=tmp_path / "tree",
         platform="linux-amd64",
@@ -1032,7 +1032,7 @@ def test_a_version_is_matched_the_way_pep_440_reads_it(tmp_path: Path) -> None:
     directory.mkdir()
     filename = f"{SDK}-0.1.tar.zst"
     (directory / filename).write_bytes(SDK_ARCHIVE)
-    digest = orchestrator.sha256_file(directory / filename)
+    digest = packagefetch.sha256_file(directory / filename)
     (directory / INDEX_FILE).write_text(
         json.dumps(
             {
@@ -1043,7 +1043,7 @@ def test_a_version_is_matched_the_way_pep_440_reads_it(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    package = orchestrator.acquire_package(
+    package = packagefetch.acquire_package(
         name=SDK,
         version="0.1.0",
         sha256=digest,
@@ -1077,7 +1077,7 @@ def test_a_local_index_with_a_broken_meta_hash_refuses_rather_than_skips(
     second = tmp_path / "second"
     second.mkdir()
     with pytest.raises(BuildError) as refusal:
-        orchestrator.acquire_package(
+        packagefetch.acquire_package(
             kind="build-tools",
             name=TOOLS,
             version=VERSION,
@@ -1097,7 +1097,7 @@ def test_a_local_index_that_names_no_package_for_this_host_refuses(tmp_path: Pat
         meta=(TOOLS, VERSION, {"arch": {"linux-arm64": ARM64}}),
     )
     with pytest.raises(BuildError) as refusal:
-        orchestrator.acquire_package(
+        packagefetch.acquire_package(
             kind="build-tools",
             name=TOOLS,
             version=VERSION,
@@ -1121,11 +1121,11 @@ def test_a_directory_without_an_index_refuses_a_foreign_architecture(
     directory.mkdir()
     (directory / f"{ARM64}-{VERSION}.tar.zst").write_bytes(SDK_ARCHIVE)
     with pytest.raises(BuildError) as refusal:
-        orchestrator.acquire_package(
+        packagefetch.acquire_package(
             kind="build-tools",
             name=ARM64,
             version=VERSION,
-            sha256=orchestrator.sha256_file(directory / f"{ARM64}-{VERSION}.tar.zst"),
+            sha256=packagefetch.sha256_file(directory / f"{ARM64}-{VERSION}.tar.zst"),
             sources=(directory,),
             into=tmp_path / "tree",
             platform="linux-amd64",
@@ -1147,11 +1147,11 @@ def test_a_directory_without_an_index_does_not_guess_a_family_filename(
     directory.mkdir()
     (directory / f"{AMD64}-{VERSION}.tar.zst").write_bytes(SDK_ARCHIVE)
     with pytest.raises(BuildError) as refusal:
-        orchestrator.acquire_package(
+        packagefetch.acquire_package(
             kind="build-tools",
             name=TOOLS,
             version=VERSION,
-            sha256=orchestrator.sha256_file(directory / f"{AMD64}-{VERSION}.tar.zst"),
+            sha256=packagefetch.sha256_file(directory / f"{AMD64}-{VERSION}.tar.zst"),
             sources=(directory,),
             into=tmp_path / "tree",
             platform="linux-amd64",
@@ -1166,7 +1166,7 @@ def test_a_registry_entry_that_is_not_the_pinned_bytes_is_refused(
     empty.mkdir()
     served = bootstrap(Served().publish(MIRROR, source))
     with pytest.raises(BuildError) as refusal:
-        orchestrator.acquire_package(
+        packagefetch.acquire_package(
             name=SDK,
             version=VERSION,
             sha256="c" * 64,
@@ -1204,7 +1204,7 @@ def _sdk_source_holding(directory: Path, versions: tuple[str, ...]) -> Path:
     entries = {
         version: {
             "file": f"{SDK}-{version}.tar.zst",
-            "sha256": orchestrator.sha256_file(directory / f"{SDK}-{version}.tar.zst"),
+            "sha256": packagefetch.sha256_file(directory / f"{SDK}-{version}.tar.zst"),
             "size": (directory / f"{SDK}-{version}.tar.zst").stat().st_size,
         }
         for version in versions
@@ -1357,10 +1357,10 @@ def test_a_configured_local_mirror_reaches_the_composition(tmp_path: Path, keys)
 
     empty = tmp_path / "operator"
     empty.mkdir()
-    package = orchestrator.acquire_package(
+    package = packagefetch.acquire_package(
         name=SDK,
         version=VERSION,
-        sha256=orchestrator.sha256_file(source / f"{SDK}-{VERSION}.tar.zst"),
+        sha256=packagefetch.sha256_file(source / f"{SDK}-{VERSION}.tar.zst"),
         sources=(empty,),
         into=tmp_path / "tree",
         registry=promised,

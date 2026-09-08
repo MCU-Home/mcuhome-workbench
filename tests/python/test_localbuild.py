@@ -1,27 +1,21 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Driving a ``local`` build from a device model (``containerbuild.py``).
+"""Driving a container build from a device model (``containerbuild.py``).
 
-**Docker never runs here.** The one impure operation is the seam: a
-scripted stand-in dispatches on the argv the real
-:class:`~mcuhome.workbench.orchestrator.Docker` composed and writes the
-result document a real container would. What is asserted is the
-composition above the backend — it lives in
-the workbench (:func:`mcuhome.workbench.buildmethods.compose_local_build`)
-over the compiler's two halves: that a device model becomes a locked
-context and one ``build`` invocation, that the two typed refusals a local
-build must surface cleanly (a missing image, a missing SDK source) land
-before a container starts, and that the **private** key never
-appears in any docker argv and the context carries only the public half.
+**No container ever runs here.** The one impure operation is the runtime
+seam: a scripted stand-in dispatches on the argv
+:class:`~mcuhome.workbench.containerbuild.Runtime` composed and writes
+the result document a real container would (build-environment
+specification §6.2). What is asserted is the composition above the
+profile — :func:`mcuhome.workbench.buildmethods.compose_container_build`:
+that a device model becomes a locked context and one ``build`` step, that
+the image is chosen by the packages that context pins and checked before
+anything is fetched, and that the **private** key never appears in any
+argv while the context carries only the public half.
 
-The seam and the SDK-source fixture used to be imported from
-``test_localbackend.py``, which went to ``mcuhome-sdk`` with the backend
-it tests. They are restated below rather than reached across a repository
-boundary, and they are deliberately the *smaller* half: the backend's own
-suite over there builds a context too, this one must not — the whole
-subject here is that ``compose_local_build`` creates and locks the
-context itself, so a context these tests wrote would be the one thing
-capable of hiding a defect in it.
+The suite deliberately builds no context of its own: the whole subject
+here is that the composition creates and locks one, and a context these
+tests wrote would be the one thing capable of hiding a defect in it.
 """
 
 from __future__ import annotations
@@ -37,20 +31,21 @@ import pytest
 import zstandard
 from conftest import (
     ENVIRONMENT_DIGEST,
+    ENVIRONMENT_REPOSITORY,
     EXAMPLES_DIR,
     ScriptedRegistry,
     resolve_file,
     sdk_members,
     write_environment_packages,
 )
-from mcuhome.model import buildimage, containerpaths
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import buildmethods, containerbuild
-from mcuhome.workbench import orchestrator as lb
+from mcuhome.workbench.buildenvsession import RESULT_PREFIX, RESULT_SUFFIX, SPEC_GENERATION
+from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
-from mcuhome.workbench.orchestrator import Docker
+from mcuhome.workbench.packagefetch import SDK_PACKAGE_NAME
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 from mcuhome.workbench.signing import (
     generate_key_pem,
@@ -62,27 +57,11 @@ from mcuhome.workbench.signing import (
 #: A P-256 key with a known scalar, so this module never draws one.
 TEST_SCALAR = 0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEF0
 
-#: The digest the scripted registry pins and the fake image reports —
-#: one value, because the backend cross-checks the two and a test where
-#: they differed would be testing the cross-check by accident.
+#: The digest the scripted registry answers with — what a build resolves
+#: to, and what it reports afterwards.
 DIGEST = ENVIRONMENT_DIGEST
 SDK_VERSION = "0.1.0"
-IMAGE = "ghcr.io/mcu-home/build-container"
-CONTAINER_ID = "c" * 64
-
-#: The ``program`` block a conforming image answers ``describe`` with,
-#: from the legacy container invocation this backend still drives (the
-#: container backend has not moved to the current invocation yet). Only
-#: the fields the preflight judges are load-bearing here.
-PROGRAM_BLOCK = {
-    "id": "org.mcuhome.build-container",
-    "version": "0.1.0",
-    "contract": 1,
-    "request": [1],
-    "result": [1],
-    "actions": ["describe", "verify", "build"],
-    "trees": {"sdk": {"path": None}, "zephyr": {"path": "/mcuhome/workspace/zephyr"}},
-}
+IMAGE = ENVIRONMENT_REPOSITORY
 
 
 # --------------------------------------------------------------------------
@@ -124,214 +103,126 @@ def make_sdk_source(directory: Path) -> str:
 
 
 # --------------------------------------------------------------------------
-# The scripted docker seam
+# The scripted container runtime
 # --------------------------------------------------------------------------
 
 
-def image_facts(*, digest: str | None = DIGEST, labels: dict[str, str] | None = None) -> str:
-    """What ``docker image inspect`` answers for a conforming image."""
-    facts = {
-        "Id": "sha256:" + "f" * 64,
-        "RepoDigests": [f"{IMAGE}@{digest}"] if digest else [],
-        "Config": {
-            "Labels": labels
-            or {
-                buildimage.CONTRACT_LABEL: "1",
-                buildimage.ZEPHYR_LABEL: "4.4.0",
-                buildimage.TOOLCHAIN_LABEL: "zephyr-0.16.8",
-            }
-        },
-    }
-    return json.dumps(facts)
+def build_result(request: dict[str, Any], out: Path, *, status: str = "success") -> None:
+    """Write the artifacts into ``out`` and a conforming result document.
 
-
-def describe_result_document(program: dict[str, Any] | None = None) -> str:
-    return json.dumps(
-        {
-            "result": 1,
-            "status": "success",
-            "action": "describe",
-            "program": program or PROGRAM_BLOCK,
-        }
-    )
-
-
-def build_result(
-    request: dict[str, Any],
-    *,
-    context: str,
-    status: str = "success",
-    action: str = "build",
-) -> None:
-    """Write the artifacts under ``out`` and a conforming result document.
-
-    Every written file is hashed from disk and declared with the one legal
-    hash spelling, so the judgment the backend performs, under the legacy
-    container invocation (retired at the switchover), runs over a
-    document that really matches what is on disk.
+    §6.2 exactly: the generation this side speaks, the invocation id
+    echoed back, the status, and the names of the files this step wrote
+    into ``out``. The orchestrator hashes them itself, which is the only
+    order in which the measurement is worth anything — so nothing here
+    declares a hash.
     """
-    out = Path(request["out"])
     files = {"firmware.hex": b"HEX", "firmware.bin": b"BIN", "build-report.json": b'{"report": 1}'}
-    roles = {"firmware.hex": "firmware", "firmware.bin": "firmware", "build-report.json": "report"}
-    declared: list[dict[str, Any]] = []
     for name, data in files.items():
         (out / name).write_bytes(data)
-        declared.append(
-            {
-                "root": "out",
-                "path": name,
-                "role": roles[name],
-                "hashes": {"sha256": sha256_file(out / name)},
-            }
-        )
-    document: dict[str, Any] = {
-        "result": 1,
+    invocation = request["invocation_id"]
+    document = {
+        "spec_generation": SPEC_GENERATION,
+        "invocation_id": invocation,
         "status": status,
-        "action": action,
-        "session": request.get("session"),
-        "reason": None if status in ("success", "cancelled") else "error.build.failed",
-        "error": None
-        if status in ("success", "cancelled")
-        else {"retryable": False, "message": "x"},
-        "context": context,
+        "message": "" if status == "success" else "the build failed",
+        "artifacts": sorted(files) if status == "success" else [],
     }
-    if action == "build" and status == "success":
-        document["artifacts"] = declared
-        document["layers"] = {}
-    Path(request["result"]).write_text(json.dumps(document), "utf-8")
+    (out / f"{RESULT_PREFIX}{invocation}{RESULT_SUFFIX}").write_text(json.dumps(document), "utf-8")
 
 
 class Seam:
-    """A scripted stand-in for docker, recording every argv it is handed.
+    """A scripted stand-in for the container runtime, recording every argv.
 
-    Dispatches on the composed argv the real
-    :class:`~mcuhome.workbench.orchestrator.Docker` produced, so the tests
-    exercise the true argv composition and can then assert it.
+    Dispatches on the argv :class:`~mcuhome.workbench.containerbuild.Runtime`
+    composed, so the tests exercise the true composition and can then
+    assert it. The step itself is played by reading the request document
+    through the mounts the ``run`` was given — a path no ``--volume``
+    reaches does not exist inside a real container, and resolving one
+    anyway would let the suite pass over the one defect this layout is
+    about.
     """
 
     def __init__(
         self,
         *,
-        facts: str,
-        build,
-        describe_static: str | None = None,
-        container_id: str = CONTAINER_ID,
-        start_status: int = 0,
-        exec_status: int = 0,
+        build=None,
+        present: bool = True,
+        pull_status: int = 0,
+        exit_status: int = 0,
     ) -> None:
-        self.facts = facts
-        self.build = build
-        self.describe_static = describe_static
-        self.container_id = container_id
-        self.start_status = start_status
-        self.exec_status = exec_status
+        self.build = build if build is not None else build_result
+        self.present = present
+        self.pull_status = pull_status
+        self.exit_status = exit_status
         self.calls: list[list[str]] = []
-        self.exec_request: dict[str, Any] | None = None
-        self.describe_invoked = False
-        #: ``container target -> host source``, from the mounts of the
-        #: ``docker run`` that created the container. Container paths are
-        #: the same for every session now, so this map is the only way
-        #: back to a host file — which is the container's own situation.
+        self.request: dict[str, Any] | None = None
+        #: ``container target -> host source``, from the ``--volume``
+        #: arguments of the run that played a step.
         self.mounts: dict[PurePosixPath, Path] = {}
 
-    #: The request-document fields that name a directory the program is
-    #: given, under the legacy container invocation (retired at the
-    #: switchover). Everything else that starts with a slash is not a
-    #: path: ``required`` holds JSON pointers, and a ``trees`` entry may
-    #: name a tree that lives in the image and is mounted by nobody.
-    PATH_FIELDS = ("result", "out", "work", "tmp", "context", "events", "cancel")
+    def __call__(self, argv, on_line=None) -> Completed:
+        argv = list(argv)
+        self.calls.append(argv)
+        verb = argv[1] if len(argv) > 1 else ""
+        if verb == "version":
+            return Completed(0, "29.7.2\n")
+        if argv[1:3] == ["image", "inspect"]:
+            return Completed(0 if self.present else 1, "" if self.present else "No such image")
+        if verb == "pull":
+            return Completed(self.pull_status, "pulled" if not self.pull_status else "denied")
+        if verb == "rm":
+            return Completed(0, "")
+        raise AssertionError(f"unexpected runtime call: {argv}")
 
-    def _host(self, path: str, *, required: bool = True) -> Path:
-        """*path* as the host spells it, through this container's mounts.
+    def spawn(self, argv, on_line=None):
+        """The step, which is spawned rather than run.
 
-        A path no ``--volume`` reaches does not exist inside a real
-        container, so resolving it anyway would let the suite pass over
-        the one defect this layout is about: a backend naming a directory
-        the container cannot see.
+        It plays the scripted build synchronously and answers with a
+        handle that has already finished — the shape a supervisor walks
+        over without a rung ever firing.
         """
+        argv = list(argv)
+        self.calls.append(argv)
+        assert argv[1] == "run", f"only a step is spawned: {argv}"
+        self.mounts = {}
+        for volume in [argv[i + 1] for i, item in enumerate(argv) if item == "--volume"]:
+            source, target = volume.removesuffix(":ro").rsplit(":", 1)
+            self.mounts[PurePosixPath(target)] = Path(source)
+        request = json.loads(self._host(containerbuild.REQUEST_TARGET).read_text("utf-8"))
+        self.request = request
+        self.build(request, self._host(containerbuild.OUT_TARGET))
+        if on_line is not None:
+            on_line("compiling...")
+        return _Finished(self.exit_status)
+
+    def _host(self, path: str) -> Path:
         inside = PurePosixPath(path)
         for target, source in self.mounts.items():
             if inside == target:
                 return source
             if target in inside.parents:
                 return source / inside.relative_to(target)
-        if required:
-            raise AssertionError(
-                f"{path} is in the request document and no --volume of "
-                f"{sorted(map(str, self.mounts))} mounts it: inside a real container "
-                "that path does not exist"
-            )
-        return Path(path)
+        raise AssertionError(
+            f"{path} is reached by no --volume of {sorted(map(str, self.mounts))}: "
+            "inside a real container that path does not exist"
+        )
 
-    def _host_view(self, document):
-        """The request document as the host can act on it.
+    @property
+    def step(self) -> list[str]:
+        """The argv of the run that played a step."""
+        return next(argv for argv in self.calls if argv[1] == "run")
 
-        Every field of :data:`PATH_FIELDS` has to be reachable through a
-        mount; a ``trees`` entry and a shared cache need not be, and are
-        translated only when they are.
-        """
-        view = dict(document)
-        for key in self.PATH_FIELDS:
-            if key in view:
-                view[key] = str(self._host(view[key]))
-        if isinstance(view.get("trees"), dict):
-            view["trees"] = {
-                name: {**entry, "path": str(self._host(entry["path"], required=False))}
-                for name, entry in view["trees"].items()
-            }
-        if isinstance(view.get("ccache"), dict):
-            cache = view["ccache"]
-            view["ccache"] = {**cache, "path": str(self._host(cache["path"], required=False))}
-        return view
-
-    def __call__(self, argv, on_line=None) -> lb.Completed:
-        argv = list(argv)
-        self.calls.append(argv)
-        verb = argv[1] if len(argv) > 1 else ""
-        if verb == "version":
-            return lb.Completed(0, "20.10.0\n")
-        if argv[1:3] == ["image", "inspect"]:
-            return lb.Completed(0, self.facts)
-        if verb == "run" and "cat" in argv:
-            if self.describe_static is None:
-                return lb.Completed(1, "no such file")
-            return lb.Completed(0, self.describe_static)
-        if verb == "run" and lb.PROGRAM in argv and lb.ACTION_DESCRIBE in argv:
-            self.describe_invoked = True
-            request = json.loads(Path(argv[-1]).read_text("utf-8"))
-            Path(request["result"]).write_text(describe_result_document(), "utf-8")
-            return lb.Completed(0, "")
-        if verb == "run" and "--detach" in argv:
-            for volume in [argv[i + 1] for i, item in enumerate(argv) if item == "--volume"]:
-                source, target = volume.removesuffix(":ro").split(":")
-                self.mounts[PurePosixPath(target)] = Path(source)
-            return lb.Completed(self.start_status, self.container_id + "\n")
-        if verb == "rm":
-            return lb.Completed(0, "")
-        raise AssertionError(f"unexpected docker call: {argv}")
-
-    def spawn(self, argv, on_line=None):
-        """The invocation, which is spawned rather than run.
-
-        It plays the scripted program synchronously and answers with a
-        handle that has already finished — the shape a supervisor walks
-        over without a rung ever firing.
-        """
-        argv = list(argv)
-        self.calls.append(argv)
-        assert argv[1] == "exec", f"only an invocation is spawned: {argv}"
-        request = json.loads(self._host(argv[-1]).read_text("utf-8"))
-        self.exec_request = request
-        self.build(self._host_view(request))
-        if on_line is not None:
-            on_line("compiling...")
-        return _Finished(self.exec_status)
+    @property
+    def volumes(self) -> list[str]:
+        """Every ``--volume`` argument of that run."""
+        return [self.step[i + 1] for i, item in enumerate(self.step) if item == "--volume"]
 
 
 class _Finished:
-    """A spawned invocation that is already over."""
+    """A spawned step that is already over."""
 
     output = "compiling..."
+    started = True
 
     def __init__(self, status: int | None) -> None:
         self.status = status
@@ -359,71 +250,56 @@ def public_pem() -> str:
     return public_key_pem(generate_key_pem(TEST_SCALAR))
 
 
-def _conforming(request) -> None:
-    """Play a conforming build, computing the context id the backend expects.
+def _runtime(seam) -> containerbuild.Runtime:
+    """A runtime driven by *seam* in both of its roles.
 
-    The context id is not known until the composition has created
-    and locked the context, so the seam reads it back from the manifest at
-    the ``context`` path the request names — exactly what a real program
-    does when it computes ``result.context`` from the context as mounted.
+    Short commands go through the runner and the step through the
+    spawner, which is the split the real one has: a step is neither short
+    nor bounded, and something has to watch the clock while it runs.
     """
-    manifest = read_context_manifest(Path(request["context"]) / "manifest.yaml")
-    build_result(request, context=manifest.compute_id())
-
-
-def _docker(seam) -> Docker:
-    """A docker seam driven by *seam* for both of its two roles.
-
-    Short commands go through the runner and the invocation through the
-    spawner, which is the split the real one has: an invocation is
-    neither short nor bounded, and something has to watch the clock
-    while it runs.
-    """
-    return Docker(runner=seam, spawner=getattr(seam, "spawn", _never_spawned))
+    return containerbuild.Runtime(runner=seam, spawner=getattr(seam, "spawn", _never_spawned))
 
 
 def _never_spawned(argv, on_line=None):
-    """For the seams of tests that refuse before an invocation exists."""
-    raise AssertionError(f"nothing should have been invoked: {list(argv)}")
-
-
-def _seam(**overrides) -> Seam:
-    return Seam(
-        facts=overrides.pop("facts", image_facts()),
-        build=overrides.pop("build", _conforming),
-        describe_static=overrides.pop("describe_static", describe_result_document()),
-        **overrides,
-    )
+    """For the seams of tests that refuse before a step exists."""
+    raise AssertionError(f"nothing should have been started: {list(argv)}")
 
 
 def _flatten(calls: list[list[str]]) -> str:
     return "\n".join(" ".join(argv) for argv in calls)
 
 
-# --------------------------------------------------------------------------
-# The happy path: model -> context -> one build invocation
-# --------------------------------------------------------------------------
-
-
-def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model, public_pem):
-    make_sdk_source(tmp_path / "src")
-    seam = _seam()
-    result = buildmethods.compose_local_build(
-        model,
-        signing_pub=public_pem,
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={},
-        image=IMAGE,
-        jobs=2,
-        registry=ScriptedRegistry(),
-        docker=_docker(seam),
+def _build(tmp_path, model, public_pem, **overrides):
+    """One composed container build, with this suite's seams in place."""
+    seam = overrides.pop("seam", None) or Seam()
+    return (
+        seam,
+        buildmethods.compose_container_build(
+            model,
+            signing_pub=public_pem,
+            sdk_sources=overrides.pop("sdk_sources", (tmp_path / "src",)),
+            work_root=overrides.pop("work_root", tmp_path / "wr"),
+            env=overrides.pop("env", {}),
+            images=overrides.pop("images", None) or ScriptedRegistry(),
+            runtime=_runtime(seam),
+            **overrides,
+        ),
     )
+
+
+# --------------------------------------------------------------------------
+# The happy path: model -> context -> one build step
+# --------------------------------------------------------------------------
+
+
+def test_a_container_build_composes_a_context_and_drives_one_step(tmp_path, model, public_pem):
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem, jobs=2)
     assert result.outcome.successful, result.outcome.problems
-    # The pin, not the repository: what a build reports is the image it
-    # resolved to, digest included.
+    # What a build reports is the image it resolved to, tag and digest —
+    # the tag is where it was found, the digest is what ran.
     assert result.image.startswith(f"{IMAGE}:")
-    assert result.image.endswith(f"@{ENVIRONMENT_DIGEST}")
+    assert result.image.endswith(f"@{DIGEST}")
     # A locked context was created from the model, with the pins the pin
     # resolution produced.
     manifest = read_context_manifest(result.context_dir / "manifest.yaml")
@@ -432,59 +308,54 @@ def test_run_local_build_composes_a_context_and_drives_one_build(tmp_path, model
     assert (result.out_dir / "firmware.bin").is_file()
     assert (result.out_dir / "build-report.json").is_file()
     assert {a.role for a in result.outcome.artifacts} == {"firmware", "report"}
+    # One step, one container, no arguments after the image: the image's
+    # own entry point is what §6 runs.
+    assert seam.step[-1] == f"{IMAGE}@{DIGEST}"
+    assert len([argv for argv in seam.calls if argv[1] == "run"]) == 1
 
 
 def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
-    """``context`` before one exists, ``compile`` before the drive.
+    """``context`` before one exists, ``environment`` after it does.
 
-    The honest-progress seam: a caller renders steps it
-    was told about, and these two are the ones this composition owns.
-    The context reports itself twice — once on entry, once with what it
-    turned out to be — and the facts are read back off
-    the locked directory rather than remembered here, so what a caller
-    renders is what the build environment receives.
+    The honest-progress seam: a caller renders steps it was told about.
+    The order is the order the decisions happen in — a context pins
+    packages and the image is chosen from them, so the context comes
+    first here exactly as it does in the subprocess profile.
     """
     make_sdk_source(tmp_path / "src")
     steps: list[tuple[str, dict]] = []
-    result = buildmethods.compose_local_build(
+    seam, result = _build(
+        tmp_path,
         model,
-        signing_pub=public_pem,
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={},
-        image=IMAGE,
+        public_pem,
         on_step=lambda stage, **facts: steps.append((stage, facts)),
-        registry=ScriptedRegistry(),
-        docker=_docker(_seam()),
     )
     assert result.outcome.successful
     assert [stage for stage, _facts in steps] == [
-        "environment",
-        "environment",
         "context",
         "context",
+        "environment",
+        "environment",
         "compile",
     ]
     assert steps[0][1] == {}
-    # The environment step, once it knows: which image, and what it says.
-    chosen = steps[1][1]
-    assert chosen["build_environment"].endswith(f"@{ENVIRONMENT_DIGEST}")
-    assert chosen["zephyr"] == "4.4.0"
-    assert steps[2][1] == {}
-    facts = steps[3][1]
+    facts = steps[1][1]
     # What the context says its environment is: the two packages it
-    # pins, never the image. The image is a delivery of that set and is
-    # reported by the environment step above.
+    # pins, never the image.
     assert facts["build_environment"] == "mcuhome-build-workspace 0.1.0, mcuhome-build-tools 0.1.0"
     assert facts["board"] == model.device.board
     assert facts["patches"] == []
-    assert facts["files"] >= 2  # the model and the public key, at least
-    assert facts["id"].startswith("sha256:")
-    assert (
-        facts["sdk_sha256"]
-        == read_context_manifest(tmp_path / "wr" / "context" / "manifest.yaml").sdk.sha256
-    )
-    assert steps[4][1]["image"] == steps[1][1]["build_environment"]
+    # No id yet: freezing the context is what computes one, and it
+    # happens after the environment is resolved so that an image refusal
+    # costs no write into a directory the user keeps.
+    assert "id" not in facts
+    # The environment step, once it knows: which image, and what it says.
+    assert steps[2][1] == {}
+    chosen = steps[3][1]
+    assert chosen["build_environment"].endswith(f"@{DIGEST}")
+    assert chosen["zephyr"] == "4.4.0"
+    assert chosen["found_under"]
+    assert steps[4][1]["image"] == chosen["build_environment"]
 
 
 # --------------------------------------------------------------------------
@@ -492,217 +363,210 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
 # --------------------------------------------------------------------------
 
 
-def test_the_private_key_never_appears_in_any_docker_argv(tmp_path, model):
+def test_the_private_key_never_appears_in_any_argv(tmp_path, model):
     """The container gets keys/signing.pub and nothing else of the key pair.
 
-    A private key file exists on this host, and its bytes and its path are
-    grepped for across every composed docker command the backend produced —
-    the run that starts the container, the exec that invokes the program,
-    every mount argument. It appears in none of them, because
-    :func:`~mcuhome.workbench.buildmethods.compose_local_build` has no way
-    to receive it: its only key input is the public PEM.
+    A private key file exists on this host, and its bytes and its path
+    are grepped for across every composed runtime command — the run that
+    plays the step, every mount argument. It appears in none of them,
+    because the composition has no way to receive it: its only key input
+    is the public PEM.
     """
     private_pem = generate_key_pem(TEST_SCALAR)
     private_path = tmp_path / "signing.key"
     private_path.write_text(private_pem, encoding="utf-8")
-    public_pem = public_key_pem(private_pem)
 
     make_sdk_source(tmp_path / "src")
-    seam = _seam()
-    result = buildmethods.compose_local_build(
-        model,
-        signing_pub=public_pem,
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={},
-        image=IMAGE,
-        registry=ScriptedRegistry(),
-        docker=_docker(seam),
-    )
+    seam, result = _build(tmp_path, model, public_key_pem(private_pem))
     assert result.outcome.successful
-
-    # The container really was started and the program really was invoked —
-    # so the grep below is over a real invocation, not an empty one.
-    assert any("--detach" in argv for argv in seam.calls)
-    assert any(argv[1] == "exec" for argv in seam.calls)
 
     flat = _flatten(seam.calls)
     assert str(private_path) not in flat
-    assert "PRIVATE KEY" not in flat  # no private key material rode along in an argv
+    assert "PRIVATE KEY" not in flat
     # What the context does carry is the public half, and only that.
     signing_pub = (result.context_dir / "keys" / "signing.pub").read_text(encoding="utf-8")
     assert looks_like_p256_public_key(signing_pub)
     assert not looks_like_p256_key(signing_pub)
     # And the context is mounted read-only, so even the public key cannot
     # be written back by the container.
-    start = next(argv for argv in seam.calls if "--detach" in argv)
-    mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
-    assert f"{result.context_dir}:{containerpaths.CONTEXT}:ro" in mounts
+    assert f"{result.context_dir}:{containerbuild.CONTEXT_TARGET}:ro" in seam.volumes
 
 
 # --------------------------------------------------------------------------
-# The two typed refusals a local build must surface cleanly (image, SDK source)
+# The tree of specification §4, and nothing besides
 # --------------------------------------------------------------------------
 
 
-def test_an_image_that_cannot_be_fetched_refuses_before_a_container_starts(
-    tmp_path, model, public_pem
-):
-    """A missing image stopped being a refusal and became a fetch.
+def test_the_step_is_handed_the_specifications_tree_and_nothing_else(tmp_path, model, public_pem):
+    """§4: the request document, sdk and build-context read-only, out
+    writable, the cache tiers — and not one mount more.
+
+    ``work`` is deliberately absent: it is empty at the start of a step
+    because the container is new, and mounting a host directory there
+    would hand the step something that outlives it. The entry point is
+    absent for a related reason — it is the image's own content at the
+    path §4 fixes.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(
+        tmp_path,
+        model,
+        public_pem,
+        env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
+    )
+    assert result.outcome.successful, result.outcome.problems
+    targets = {volume.removesuffix(":ro").rsplit(":", 1)[1] for volume in seam.volumes}
+    assert targets == {
+        containerbuild.REQUEST_TARGET,
+        containerbuild.SDK_TARGET,
+        containerbuild.CONTEXT_TARGET,
+        containerbuild.OUT_TARGET,
+        f"{containerbuild.CACHE_TARGET}/local",
+    }
+    read_only = {
+        volume.removesuffix(":ro").rsplit(":", 1)[1]
+        for volume in seam.volumes
+        if volume.endswith(":ro")
+    }
+    assert read_only == {
+        containerbuild.REQUEST_TARGET,
+        containerbuild.SDK_TARGET,
+        containerbuild.CONTEXT_TARGET,
+    }
+
+
+def test_the_step_is_isolated_and_runs_as_the_calling_user(tmp_path, model, public_pem):
+    """``--network none`` because §11 says an environment never requires
+    one, ``--user`` because everything in ``out`` lands on a bind mount
+    this side reads back, ``--rm`` and ``--init`` because a step's
+    container is over when the step is."""
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem)
+    assert result.outcome.successful
+    argv = seam.step
+    assert "--rm" in argv and "--init" in argv
+    assert argv[argv.index("--network") + 1] == "none"
+    assert argv[argv.index("--user") + 1] == containerbuild.current_user()
+    # The one environment variable the specification defines, and it is
+    # the tree's root.
+    assert f"MCUHOME_BUILDER_BASE_DIR={containerbuild.BASE_DIR}" in argv
+
+
+def test_the_request_document_is_the_five_fields_of_the_specification(tmp_path, model, public_pem):
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem)
+    assert result.outcome.successful
+    assert set(seam.request) == {
+        "spec_generation",
+        "session_id",
+        "invocation_id",
+        "action",
+        "parameters",
+    }
+    assert seam.request["spec_generation"] == SPEC_GENERATION
+    assert seam.request["action"] == "build"
+    assert seam.request["parameters"] == {}
+
+
+# --------------------------------------------------------------------------
+# The refusals a container build must surface cleanly
+# --------------------------------------------------------------------------
+
+
+def test_an_image_that_cannot_be_fetched_refuses_before_a_step_starts(tmp_path, model, public_pem):
+    """A missing image is a fetch, and a fetch that fails is a refusal.
 
     The reference is pinned to a digest by then, so there is exactly one
     set of bytes that answers to it — and either they arrive or the pull
-    fails, which is this. Asking the user to type a pull command for a
-    name MCUHome resolved itself was only ever right while the name came
-    from a constant they could have chosen differently.
+    fails, which is this.
     """
     make_sdk_source(tmp_path / "src")
-    seen: list[list[str]] = []
-
-    def runner(argv, on_line=None):
-        seen.append(argv)
-        if argv[1] == "version":
-            return lb.Completed(0, "28.0.0")
-        if argv[1:3] == ["image", "inspect"]:
-            return _missing_image()
-        if argv[1] == "pull":
-            return lb.Completed(1, "Error response from daemon: manifest unknown")
-        raise AssertionError(f"nothing else is asked once the fetch failed: {argv}")
-
+    seam = Seam(present=False, pull_status=1)
     with pytest.raises(BuildError) as caught:
-        buildmethods.compose_local_build(
-            model,
-            signing_pub=public_pem,
-            sdk_sources=(tmp_path / "src",),
-            work_root=tmp_path / "wr",
-            env={},
-            image=IMAGE,
-            registry=ScriptedRegistry(),
-            docker=_docker(runner),
-        )
+        _build(tmp_path, model, public_pem, seam=seam)
     assert "could not fetch" in caught.value.message
-    assert any(argv[1] == "pull" for argv in seen), "it tried"
-    assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
+    assert any(argv[1] == "pull" for argv in seam.calls), "it tried"
+    assert not any(argv[1] == "run" for argv in seam.calls)
 
 
-def test_an_environment_of_another_zephyr_release_refuses_before_anything_is_written(
-    tmp_path, model, public_pem
-):
-    """The requirement is checked where the environment is chosen.
-
-    It is checked against what the *image says about itself*, which is
-    read out of a registry before anything is fetched — so the mismatch
-    costs no context directory, no SDK lookup and no download, and the
-    refusal names both what the device needs and what the image carries.
-    """
+def test_an_image_of_another_zephyr_release_is_refused(tmp_path, model, public_pem):
+    """The device's requirement is checked against what the image says
+    about itself — read out of a registry, before anything is fetched."""
     make_sdk_source(tmp_path / "src")
-
-    def runner(argv, on_line=None):
-        if argv[1] == "version":
-            return lb.Completed(0, "28.0.0")
-        raise AssertionError(f"nothing is asked of docker once the release is wrong: {argv}")
-
     with pytest.raises(BuildError) as caught:
-        buildmethods.compose_local_build(
-            model,
-            signing_pub=public_pem,
-            sdk_sources=(tmp_path / "src",),
-            work_root=tmp_path / "wr",
-            env={},
-            image=f"{IMAGE}:zephyr-4.5.0-r1",
-            registry=ScriptedRegistry(tag="zephyr-4.5.0-r1", zephyr="4.5.0"),
-            docker=_docker(runner),
-        )
+        _build(tmp_path, model, public_pem, images=ScriptedRegistry(zephyr="4.5.0"))
     assert "4.5.0" in caught.value.message
     assert model.toolchain.zephyr_constraint in caught.value.message
-    assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
 
 
-def test_an_environment_with_no_zephyr_label_refuses_before_anything_is_written(
-    tmp_path, model, public_pem
-):
-    """ "Absence is never read as compatible" — a rule from the legacy
-    container invocation (retired at the switchover) — here too.
+def test_an_image_declaring_other_bytes_is_not_used_instead(tmp_path, model, public_pem):
+    """The near miss: the same package versions under other hashes.
 
-    An image that carries no Zephyr label states nothing about what it
-    builds against, and there used to be a fallback that read the
-    workbench's own pin into that silence — which invented a claim the
-    image had never made and put it in a refusal. There is nothing to
-    invent from any more: what the label says is the whole of what is
-    known about an image nobody has fetched.
+    That is a different environment, whatever it is called, so the search
+    ends without a match and the refusal says what was wanted and what
+    each candidate declared instead.
     """
     make_sdk_source(tmp_path / "src")
-
-    def runner(argv, on_line=None):
-        if argv[1] == "version":
-            return lb.Completed(0, "28.0.0")
-        raise AssertionError(f"nothing is asked of docker once the image says nothing: {argv}")
-
+    other = ScriptedRegistry(workspace="0.1.0@sha256:" + "cd" * 32)
     with pytest.raises(BuildError) as caught:
-        buildmethods.compose_local_build(
+        _build(tmp_path, model, public_pem, images=other)
+    assert "No container image declares" in caught.value.message
+    assert "cd" * 32 in str(caught.value)
+
+
+def test_an_image_that_accepts_no_context_from_this_workbench_is_refused(
+    tmp_path, model, public_pem
+):
+    """§9.1: the environment declares which build contexts it takes, and
+    the check runs before the step rather than inside it."""
+    make_sdk_source(tmp_path / "src")
+    with pytest.raises(BuildError) as caught:
+        _build(
+            tmp_path,
             model,
-            signing_pub=public_pem,
-            sdk_sources=(tmp_path / "src",),
-            work_root=tmp_path / "wr",
-            env={},
-            image=f"{IMAGE}:silent",
-            registry=ScriptedRegistry(tag="silent", zephyr=""),
-            docker=_docker(runner),
+            public_pem,
+            images=ScriptedRegistry(constraint="other-tool:~=1.0"),
         )
-    assert "does not say which Zephyr it carries" in caught.value.message
-    assert model.toolchain.zephyr_constraint in str(caught.value)
-    assert not (tmp_path / "wr" / "context").exists(), "nothing was written"
+    assert "does not accept build contexts" in caught.value.message
+
+
+def test_an_image_of_another_specification_generation_is_refused(tmp_path, model, public_pem):
+    make_sdk_source(tmp_path / "src")
+    with pytest.raises(BuildError) as caught:
+        _build(tmp_path, model, public_pem, images=ScriptedRegistry(generation="2"))
+    assert "generation 2" in caught.value.message
 
 
 def test_no_sdk_source_configured_is_a_typed_refusal(tmp_path, model, public_pem):
-    calls: list[list[str]] = []
-
-    def runner(argv, on_line=None):
-        calls.append(argv)
-        if argv[1] == "version":
-            return lb.Completed(0, "28.0.0")
-        if argv[1:3] == ["image", "inspect"]:
-            return _image_ok()
-        raise AssertionError(f"no container should start with no SDK: {argv}")
-
+    seam = Seam()
     with pytest.raises(BuildError) as caught:
-        buildmethods.compose_local_build(
-            model,
-            signing_pub=public_pem,
-            sdk_sources=(),
-            work_root=tmp_path / "wr",
-            env={},
-            image=IMAGE,
-            registry=ScriptedRegistry(),
-            docker=_docker(runner),
-        )
+        _build(tmp_path, model, public_pem, seam=seam, sdk_sources=())
     assert "SDK source" in caught.value.message
-    assert not any("--detach" in argv for argv in calls)
+    assert not any(argv[1] == "run" for argv in seam.calls)
 
 
 def test_a_source_without_the_package_is_a_typed_refusal(tmp_path, model, public_pem):
     empty = tmp_path / "empty"
     empty.mkdir()
-
-    def runner(argv, on_line=None):
-        if argv[1] == "version":
-            return lb.Completed(0, "28.0.0")
-        if argv[1:3] == ["image", "inspect"]:
-            return _image_ok()
-        raise AssertionError(f"no container should start: {argv}")
-
+    seam = Seam()
     with pytest.raises(BuildError) as caught:
-        buildmethods.compose_local_build(
-            model,
-            signing_pub=public_pem,
-            sdk_sources=(empty,),
-            work_root=tmp_path / "wr",
-            env={},
-            image=IMAGE,
-            registry=ScriptedRegistry(),
-            docker=_docker(runner),
-        )
-    assert containerbuild.lb.SDK_PACKAGE_NAME in caught.value.message
+        _build(tmp_path, model, public_pem, seam=seam, sdk_sources=(empty,))
+    assert SDK_PACKAGE_NAME in caught.value.message
+    assert not any(argv[1] == "run" for argv in seam.calls)
+
+
+def test_a_failed_step_comes_back_as_an_answer_and_not_as_an_exception(tmp_path, model, public_pem):
+    """A build that ran and failed is a verdict a caller renders."""
+    make_sdk_source(tmp_path / "src")
+
+    def failing(request, out):
+        build_result(request, out, status="failure")
+
+    seam = Seam(build=failing, exit_status=1)
+    _seam, result = _build(tmp_path, model, public_pem, seam=seam)
+    assert not result.outcome.successful
+    assert result.outcome.status == "failure"
+    assert any("the build failed" in problem for problem in result.outcome.problems)
 
 
 # --------------------------------------------------------------------------
@@ -744,14 +608,7 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     creates the context; a caller that already holds one — an embedder
     that assembled it elsewhere, a build server that received it over a
     socket — hands the directory over instead, and then nothing is
-    resolved and nothing is written into it but the lock. That is what
-    makes "create a context" and "build a context" two calls rather than
-    one, and it is the seam a build server enters at.
-
-    The context here comes from ``create_build_context``, the real
-    creator, and not from this test: what is asserted is that the
-    composition builds the directory it was given, which a hand-written
-    context would say nothing about.
+    resolved and nothing is written into it but the lock.
     """
     make_sdk_source(tmp_path / "src")
     context = tmp_path / "held"
@@ -764,22 +621,12 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     )
     before = sorted(path.name for path in context.iterdir())
     steps: list[str] = []
-    seam = _seam()
-    result = buildmethods.compose_local_build(
+    _seam, result = _build(
+        tmp_path,
         model,
-        signing_pub=public_pem,
-        # Still needed, and for the other of the two things a source is
-        # for: the SDK pin is already in the supplied context and is not
-        # resolved again, but the bytes it pins still have to be found
-        # and mounted.
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={},
-        image=IMAGE,
-        registry=ScriptedRegistry(),
+        public_pem,
         context_dir=context,
         on_step=lambda stage, **facts: steps.append(stage),
-        docker=_docker(seam),
     )
     assert result.outcome.successful, result.outcome.problems
     assert result.context_dir == context
@@ -788,59 +635,65 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     assert not (tmp_path / "wr" / "context").exists()
     assert sorted(path.name for path in context.iterdir()) == sorted([*before, "manifest.yaml"])
     # No context step: this composition did not create one, and a step
-    # bar that claimed otherwise would be showing work nobody did. The
-    # environment step is still there — an image that delivers the
-    # environment still has to be here, and getting it here is work.
+    # bar that claimed otherwise would be showing work nobody did.
     assert steps == ["environment", "environment", "compile"]
-    # The supplied context's own pins are what it is locked under: nothing
-    # about it was re-resolved, and the packages it names are the ones its
-    # SDK's environment lock states.
     pinned = read_context_manifest(context / "manifest.yaml").build_environment
     assert pinned.workspace.name == "mcuhome-build-workspace"
     assert pinned.tools.version == "0.1.0"
 
 
 # --------------------------------------------------------------------------
-# A locally built image carries no repo digest — the placeholder path
+# The compiler cache
 # --------------------------------------------------------------------------
 
 
-def test_an_image_built_here_is_pinned_by_its_own_id_and_still_builds(tmp_path, model, public_pem):
-    """``--container-image localhost/…`` names bytes no registry has.
+def test_the_users_compiler_cache_is_mounted_as_the_local_tier(tmp_path, model) -> None:
+    """One cache per user, offered as §8's most local writable tier.
 
-    The registry has no such tag — nobody published it — so the image is
-    found on this host and pinned by the only identity it has, docker's
-    own image ID. That is honest rather than portable, and it is why the
-    reference stays with the build instead of travelling in the context:
-    those bytes are fetchable nowhere, and a context that named them
-    would describe an environment nobody else can obtain.
+    The same root the subprocess profile lays its tiers out under, so a
+    machine that builds both ways keeps one cache and not two.
     """
     make_sdk_source(tmp_path / "src")
-    identity = "sha256:" + "f" * 64
-    seam = _seam(facts=image_facts(digest=None))
-
-    class NoSuchTag(ScriptedRegistry):
-        def digest_of(self, reference):
-            return None
-
-        def tags(self, reference):
-            return ()
-
-    result = buildmethods.compose_local_build(
+    seam, _result = _build(
+        tmp_path,
         model,
-        signing_pub=public_pem,
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={},
-        image="localhost/builder:wip",
-        registry=NoSuchTag(),
-        docker=_docker(seam),
+        public_key_pem(generate_key_pem(TEST_SCALAR)),
+        env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
     )
-    assert result.outcome.successful, result.outcome.problems
-    # The image is what this build ran in, and it is reported rather than
-    # written into the context: a context pins packages, and an image
-    # nobody can fetch is a location that only means something here.
-    assert result.image == f"localhost/builder:wip@{identity}"
+    cache = tmp_path / "xdg" / "mcuhome" / "ccache"
+    assert f"{cache / 'cache-local'}:{containerbuild.CACHE_TARGET}/local" in seam.volumes
+
+
+def test_a_shared_cache_is_offered_read_only(tmp_path, model) -> None:
+    """The shared tier exists when somebody filled it, and a build may
+    only read it (§8)."""
+    make_sdk_source(tmp_path / "src")
+    cache = tmp_path / "xdg" / "mcuhome" / "ccache"
+    (cache / "cache-shared").mkdir(parents=True)
+    seam, _result = _build(
+        tmp_path,
+        model,
+        public_key_pem(generate_key_pem(TEST_SCALAR)),
+        env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
+    )
+    assert f"{cache / 'cache-shared'}:{containerbuild.CACHE_TARGET}/shared:ro" in seam.volumes
+
+
+def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> None:
+    """`ccache_dir` resolves through the configuration layers, so the
+    caller states it and this composition passes it on unchanged."""
+    make_sdk_source(tmp_path / "src")
+    seam, _result = _build(
+        tmp_path,
+        model,
+        public_key_pem(generate_key_pem(TEST_SCALAR)),
+        env={"HOME": str(tmp_path / "home")},
+        ccache_dir=tmp_path / "fast-disk",
+    )
+    assert (
+        f"{tmp_path / 'fast-disk' / 'cache-local'}:{containerbuild.CACHE_TARGET}/local"
+        in seam.volumes
+    )
 
 
 # --------------------------------------------------------------------------
@@ -867,8 +720,6 @@ def test_resolve_sdk_pin_resolves_a_dev_only_source_under_any(tmp_path):
     build did before the first stable release: the source directory holds
     one archive and it carries the ``.dev0`` version.
     """
-    import json
-
     source = tmp_path / "src"
     source.mkdir()
     (source / "index.json").write_text(
@@ -897,59 +748,3 @@ def test_resolve_sdk_pin_without_a_source_refuses(tmp_path):
     with pytest.raises(BuildError) as caught:
         resolve_sdk_pin(())
     assert "SDK source" in caught.value.message
-
-
-def _image_ok():
-    return lb.Completed(0, image_facts())
-
-
-def _missing_image():
-    return lb.Completed(1, "No such image")
-
-
-def test_the_local_method_mounts_the_users_compiler_cache(tmp_path, model) -> None:
-    """Both cache roles, from this user's cache directory into the container.
-
-    The wiring crosses a repository boundary — the workbench composes,
-    the compiler's backend mounts — and it is the whole difference
-    between a build that recompiles Zephyr every time and one that does
-    not, so it is pinned where the composition happens.
-    """
-    make_sdk_source(tmp_path / "src")
-    seam = _seam()
-    buildmethods.compose_local_build(
-        model,
-        signing_pub=public_key_pem(generate_key_pem(TEST_SCALAR)),
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
-        image=IMAGE,
-        registry=ScriptedRegistry(),
-        docker=_docker(seam),
-    )
-    start = next(argv for argv in seam.calls if "--detach" in argv)
-    mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
-    cache = tmp_path / "xdg" / "mcuhome" / "ccache"
-    assert f"{cache / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in mounts
-    assert f"{cache / 'cache-shared'}:{containerpaths.CCACHE_SHARED}:ro" in mounts
-
-
-def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> None:
-    """`ccache_dir` resolves through the configuration layers, so the
-    caller states it and this composition passes it on unchanged."""
-    make_sdk_source(tmp_path / "src")
-    seam = _seam()
-    buildmethods.compose_local_build(
-        model,
-        signing_pub=public_key_pem(generate_key_pem(TEST_SCALAR)),
-        sdk_sources=(tmp_path / "src",),
-        work_root=tmp_path / "wr",
-        env={"HOME": str(tmp_path / "home")},
-        image=IMAGE,
-        ccache_dir=tmp_path / "fast-disk",
-        registry=ScriptedRegistry(),
-        docker=_docker(seam),
-    )
-    start = next(argv for argv in seam.calls if "--detach" in argv)
-    mounts = [start[i + 1] for i, item in enumerate(start) if item == "--volume"]
-    assert f"{tmp_path / 'fast-disk' / 'cache-local'}:{containerpaths.CCACHE_LOCAL}" in mounts

@@ -109,7 +109,8 @@ IMGTOOL_VAR = "MCUHOME_IMGTOOL"
 #: Runs one imgtool invocation and answers with its exit status and
 #: whatever it printed. Injectable so the test suite can watch the
 #: commands without starting a process — the same shape
-#: :mod:`mcuhome.workbench.buildenv` uses for docker.
+#: :mod:`mcuhome.workbench.containerbuild` uses for the container
+#: runtime.
 Runner = Callable[[list[str]], tuple[int, str]]
 
 

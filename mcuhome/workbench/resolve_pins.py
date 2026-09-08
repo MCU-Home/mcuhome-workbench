@@ -437,7 +437,7 @@ class SdkResolution:
     Where it came from is one of two: :attr:`source`, an operator
     directory whose index selected it, or :attr:`base`, the registry
     mirror that served the index — and
-    :func:`~mcuhome.workbench.orchestrator.acquire_package` searches the
+    :func:`~mcuhome.workbench.packagefetch.acquire_package` searches the
     directories again before it touches the network either way.
 
     It exists because a :class:`~mcuhome.model.context.SdkPin` needs more
@@ -509,7 +509,7 @@ def resolve_sdk(
     each carries the static :data:`INDEX_FILE`
     (``scripts/build_sdk_archive.py``), they are searched in order, and
     the first that holds a matching package wins — the same "first source
-    wins" rule :func:`~mcuhome.workbench.orchestrator.acquire_package`
+    wins" rule :func:`~mcuhome.workbench.packagefetch.acquire_package`
     then fetches the bytes by. Only when none of them holds one is
     *registry* asked, and what it answers with is an index a mirror
     served and the project's trust anchor accepted. A machine that has
@@ -676,7 +676,7 @@ def environment_lock(
     Read out of the SDK package itself, and deliberately not from
     anywhere else: the archive is acquired by ``(version, sha256)``
     through the tiered, hash-checked path every package takes
-    (:func:`~mcuhome.workbench.orchestrator.acquire_package`), so the
+    (:func:`~mcuhome.workbench.packagefetch.acquire_package`), so the
     lock a build derives its environment from comes out of bytes that
     were already verified against the pin the context is identified by.
     A sidecar beside the archive would be a second copy nobody checked.
@@ -688,7 +688,7 @@ def environment_lock(
     is an SDK this workbench cannot derive an environment for, and
     guessing one would pin packages nobody tested together.
     """
-    from mcuhome.workbench.orchestrator import acquire_package
+    from mcuhome.workbench.packagefetch import acquire_package
 
     acquired = acquire_package(
         kind=SDK_SOURCE,

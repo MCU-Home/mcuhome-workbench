@@ -33,7 +33,7 @@ from mcuhome.workbench.buildenvsession import (
     CacheTier,
     Step,
 )
-from mcuhome.workbench.orchestrator import Running, spawn_process
+from mcuhome.workbench.buildprocess import Running, spawn_process
 
 # --------------------------------------------------------------------------
 # The fake entry point

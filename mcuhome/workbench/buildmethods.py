@@ -43,7 +43,7 @@ on.
 
 **Nothing here reaches outside this package.** The thing that drives a
 build container is this package's own
-(:mod:`mcuhome.workbench.orchestrator`), and no build method runs a
+(:mod:`mcuhome.workbench.containerbuild`), and no build method runs a
 compiler in this process. "A build needs a container runtime and nothing
 else of a toolchain" was the claim from the start, and it is true at the
 level of installed distributions: ``mcuhome-compiler`` is what a *build
@@ -96,10 +96,12 @@ from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenvstore, containerbuild, subprocessbuild
+from mcuhome.workbench.buildenvsession import EnvironmentUnavailable, cache_tiers
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     DEFAULT_BUILD_MODE,
+    DEFAULT_CONTAINER_REPOSITORIES,
     DEFAULT_MAX_WAIT_SECONDS,
     MODE_CONTAINER,
     MODE_SUBPROCESS,
@@ -119,7 +121,6 @@ from mcuhome.workbench.contextdir import (
     read_generator_chain,
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
-from mcuhome.workbench.orchestrator import EnvironmentUnavailable
 from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import package_reference
 
@@ -344,10 +345,15 @@ class BuildOptions:
 
     #: ``build.mode``: ``container`` or ``subprocess``.
     mode: str = DEFAULT_BUILD_MODE
+    #: ``build.container_repositories``: where a container build may take
+    #: its environment from, in search order. The image is chosen by the
+    #: package set its labels declare, so this list says whose images may
+    #: deliver one and never which image is used.
     #: Where ``mode`` came from, in the words :class:`…configuration.Setting`
     #: uses — the file, the variable, or ``default``. Carried so that a
     #: refusal caused by the mode can say who chose it.
     mode_source: str = "default"
+    container_repositories: tuple[str, ...] = DEFAULT_CONTAINER_REPOSITORIES
     #: ``build.env_store``: the store's root. ``None`` is the user's
     #: cache home, which is where a machine nobody configured keeps it.
     env_store: Path | None = None
@@ -415,6 +421,7 @@ def build_options(settings: Settings) -> BuildOptions:
     return BuildOptions(
         mode=resolve_build_mode(setting.value),
         mode_source=setting.source or setting.origin,
+        container_repositories=tuple(settings.value("build.container_repositories")),
         env_store=path("build.env_store"),
         dev_workspace=path("build.dev_workspace"),
         python=settings.value("build.python") or None,
@@ -485,8 +492,10 @@ class BuildRequest:
     env: Mapping[str, str] = field(default_factory=dict)
     #: Parallel compile jobs.
     jobs: int = 1
-    #: ``clean`` or the pristine mode a build environment understands;
-    #: both methods pass it into the invocation.
+    #: The pristine mode the ``remote`` method's session protocol still
+    #: carries. A local build ignores it: under build-environment
+    #: specification generation 3 every step starts pristine by
+    #: definition (§3), so there is nothing to ask for.
     mode: str = "clean"
     #: Where the build log goes, line by line, while it happens.
     on_line: LineSink | None = None
@@ -897,53 +906,30 @@ def compose_local_build(
     registries: Sequence[RegistrySettings] = (),
     image: str | None = None,
     jobs: int = 1,
-    mode: str = "clean",
     ccache_dir: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
     on_line: Any = None,
     on_step: Any = None,
-    docker: Any = None,
+    runtime: Any = None,
     registry: Any = None,
+    images: Any = None,
     build_mode: str = DEFAULT_BUILD_MODE,
     environment: Any = None,
     options: BuildOptions | None = None,
 ):
-    """The container execution's composition: pin, create, lock, drive.
+    """The local build, dispatched to the execution this machine uses.
 
-    Three steps and they are announced in that order, because that is the
-    order a person experiences them in. **environment** resolves what the
-    model says about its build environment to one image and gets it onto
-    this machine
-    (:func:`~mcuhome.workbench.containerbuild.prepare_environment`) —
-    which is where a registry is talked to and where a gigabyte may be
-    fetched. **context** writes the directory the build is attributed to,
-    pin included. **compile** hands the locked context to the container
-    (:func:`~mcuhome.workbench.containerbuild.run_locked_build`).
+    One entry point for the two executions, so that a mode a
+    configuration produced reaches the right composition without every
+    caller learning both: ``container`` is
+    :func:`compose_container_build` and ``subprocess` is
+    :func:`compose_subprocess_build`. *environment* — the store entries a
+    build runs against — belongs to the second alone, and *image*,
+    *runtime* and *images* to the first.
 
-    Order is the composition's promise: every environment refusal costs
-    no context directory and no SDK lookup. Synchronous —
-    ``build_firmware`` offloads it; *docker* and *registry* are the test
-    seams.
-
-    *context_dir* is the caller that already holds a **base** context and
-    wants this one built — an embedder that assembled one elsewhere, a
-    build server that received one over a socket. It is used as it is:
-    nothing is written into it but the lock, and no context step is
-    announced, because this composition did not create one. The image is
-    still resolved from the model, because a context pins the
-    environment's *packages* and not a container: finding the image whose
-    labels state exactly those packages is what the container profile
-    does at switchover
-    (:func:`~mcuhome.workbench.resolve_image.image_for_packages`), and
-    until then this profile resolves the image the way it always has.
-
-    *build_mode* is the other execution axis and is dispatched here
-    rather than by the caller, so that a name a configuration produced
-    reaches the right composition without every caller learning both:
-    ``subprocess`` hands over to :func:`compose_subprocess_build`, and
-    *environment* — the store entries it runs against — belongs to that
-    mode alone.
+    Synchronous, because both compositions are; ``build_firmware``
+    offloads them.
     """
     options = options if options is not None else BuildOptions()
     if resolve_build_mode(build_mode) == MODE_SUBPROCESS:
@@ -965,39 +951,95 @@ def compose_local_build(
             registry=registry,
             options=options,
         )
-    sources = tuple(Path(source) for source in sdk_sources)
-    work_root = Path(work_root)
-    packages = _package_registry(
+    return compose_container_build(
         model,
+        signing_pub=signing_pub,
+        sdk_sources=sdk_sources,
+        work_root=work_root,
+        env=env,
         project_root=project_root,
         registries=registries,
-        work_root=work_root,
+        image=image,
+        jobs=jobs,
+        ccache_dir=ccache_dir,
+        created=created,
+        context_dir=context_dir,
         on_line=on_line,
+        on_step=on_step,
+        runtime=runtime,
+        registry=registry,
+        images=images,
+        options=options,
+    )
+
+
+def compose_container_build(
+    model: DeviceModel,
+    *,
+    signing_pub: str = "",
+    sdk_sources: Sequence[Path],
+    work_root: Path,
+    env: dict[str, str],
+    project_root: Path | None = None,
+    registries: Sequence[RegistrySettings] = (),
+    image: str | None = None,
+    jobs: int = 1,
+    ccache_dir: Path | None = None,
+    created: datetime | None = None,
+    context_dir: Path | None = None,
+    on_line: Any = None,
+    on_step: Any = None,
+    runtime: Any = None,
+    registry: Any = None,
+    images: Any = None,
+    options: BuildOptions | None = None,
+) -> containerbuild.ContainerBuildResult:
+    """The container execution's composition: create, resolve, lock, drive.
+
+    The same three announced steps the subprocess execution has, in the
+    same order and for the same reason: **context** is the locked
+    directory the build is attributed to, **environment** is the image
+    that delivers the package set that context pinned
+    (:func:`~mcuhome.workbench.containerbuild.prepare_environment` — a
+    registry question, and where a gigabyte may be fetched), and
+    **compile** hands the locked context to one container per step
+    (:func:`~mcuhome.workbench.containerbuild.run_locked_build`).
+
+    **The context comes first, and that is what pinning by packages
+    means.** There is nothing to resolve until the context exists,
+    because the context is what names the packages the image has to
+    declare. A build environment is therefore never chosen from a
+    device's wishes, only from what the resolved context pinned.
+
+    *image* is the one-invocation override, in any of the four pin forms;
+    it narrows which images are looked at and never what is accepted.
+    *context_dir* is the caller that already holds a **base** context and
+    wants this one built — an embedder that assembled one elsewhere, a
+    build server that received one over a socket. It is used as it is:
+    nothing is written into it but the lock, and no context step is
+    announced, because this composition did not create one.
+
+    *runtime*, *registry* and *images* are the three seams a caller may
+    replace: the container runtime, the package registry the pins are
+    resolved and fetched through (``None`` derives it from the project),
+    and the container registry the image labels are read from.
+    """
+    options = options if options is not None else BuildOptions()
+    sources = tuple(Path(source) for source in sdk_sources)
+    work_root = Path(work_root)
+    packages = (
+        registry
+        if registry is not None
+        else _package_registry(
+            model,
+            project_root=project_root,
+            registries=registries,
+            work_root=work_root,
+            on_line=on_line,
+        )
     )
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
-
-    if on_step is not None:
-        on_step("environment")
-    resolved, fetched = containerbuild.prepare_environment(
-        model.sources.build_environment,
-        constraint=model.toolchain.zephyr_constraint,
-        env=dict(env),
-        override=image,
-        registry=registry,
-        docker_seam=docker,
-        on_line=on_line,
-    )
-    pinned = resolved.pin
-    if on_step is not None:
-        on_step(
-            "environment",
-            build_environment=pinned.reference,
-            zephyr=resolved.zephyr,
-            found_under=resolved.found_under,
-            fetched=fetched,
-        )
-
     if not supplied:
         if on_step is not None:
             on_step("context")
@@ -1013,27 +1055,73 @@ def compose_local_build(
             created=created or datetime.now(UTC),
             registry=packages,
         )
-    lock_context(context_dir)
-    if on_step is not None:
-        if not supplied:
-            # What the context turned out to be, read back off the locked
+        if on_step is not None:
+            # What the context turned out to be, read back off the
             # directory: the step announced itself before any of this was
             # decided, and the decisions are the interesting part.
             on_step("context", **context_facts(context_dir))
-        on_step("compile", image=pinned.reference, jobs=jobs)
+
+    if on_step is not None:
+        on_step("environment")
+    pin = read_context_request(context_dir / CONTEXT_FILE).build_environment
+    resolved = containerbuild.prepare_environment(
+        pin,
+        env=env,
+        repositories=options.container_repositories,
+        image_pin=image,
+        workspace_source=package_reference(model.sources.build_workspace).source,
+        tools_source=package_reference(model.sources.build_tools).source,
+        sources=sources,
+        workspace_sources=options.workspace_sources,
+        tools_sources=options.tools_sources,
+        registry=packages,
+        images=images,
+        runtime=runtime,
+        on_line=on_line,
+    )
+    # Everything the image declares beyond its packages, against what
+    # this build needs: the specification generation it implements, the
+    # build contexts it accepts, and the Zephyr release it builds
+    # against. The package set itself is what found it.
+    containerbuild.check_image(
+        resolved.declaration,
+        reference=resolved.reference,
+        generator=format_generator_chain(read_generator_chain(context_dir / BUILD_CONTEXT_FILE)),
+        zephyr_constraint=model.toolchain.zephyr_constraint,
+    )
+    if on_step is not None:
+        on_step(
+            "environment",
+            build_environment=resolved.reference,
+            zephyr=resolved.declaration.zephyr_version,
+            found_under=resolved.match.found_under,
+            fetched=resolved.fetched,
+        )
+    lock_context(context_dir)
+    if on_step is not None:
+        on_step("compile", image=resolved.reference, jobs=jobs)
+    root = containerbuild.cache_root(env, ccache_dir)
     return containerbuild.run_locked_build(
         context_dir,
-        image=pinned.reference,
+        image=resolved,
         sdk_sources=sources,
         work_root=work_root / "backend",
         env=dict(env),
         jobs=jobs,
-        mode=mode,
-        ccache_dir=ccache_dir,
         sdk_max_bytes=options.sdk_max_bytes,
+        # The same cache root and the same tiers the subprocess profile
+        # is given: one cache per user, laid out once, mounted here and
+        # linked there.
+        tiers=cache_tiers(
+            ccache_dir=root,
+            local_dir=options.cache_local,
+            shared_ccache_dir=options.cache_shared,
+            session_dir=options.cache_session,
+            project_dir=options.cache_project,
+        ),
         registry=packages,
+        runtime=runtime,
         on_line=on_line,
-        docker=docker,
     )
 
 
@@ -1199,7 +1287,7 @@ def compose_subprocess_build(
         # than a refusal. The tiers on top of it are this profile's, and
         # each of them may be moved somewhere else outright.
         ccache_dir=cache_root,
-        tiers=subprocessbuild.cache_tiers(
+        tiers=cache_tiers(
             ccache_dir=cache_root,
             local_dir=options.cache_local,
             shared_ccache_dir=options.cache_shared,
@@ -1289,7 +1377,6 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         registries=request.registries,
         image=execution.image,
         jobs=request.jobs,
-        mode=request.mode,
         ccache_dir=execution.ccache_dir,
         context_dir=request.context_dir,
         on_line=request.on_line,

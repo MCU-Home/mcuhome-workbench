@@ -25,7 +25,7 @@ import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model.errors import ConfigError
 
-from mcuhome.workbench import buildenvstore, buildmethods, subprocessbuild
+from mcuhome.workbench import buildenvsession, buildenvstore, buildmethods, subprocessbuild
 from mcuhome.workbench.buildmethods import BuildOptions, BuildRequest, build_options, options_for
 from mcuhome.workbench.configuration import resolve_settings
 from mcuhome.workbench.project import Project, init_project
@@ -351,11 +351,28 @@ def test_the_options_reach_the_provisioner_and_the_backend(model, tmp_path, monk
     assert tiers["project"].path == tmp_path / "cache-project"
 
 
+class _Pinned:
+    """A context request whose environment pin is all that is read of it."""
+
+    build_environment = "a package set"
+
+
+class _Resolved:
+    """What ``prepare_environment`` answers: an image and its declaration."""
+
+    reference = "an-image@sha256:" + "3" * 64
+    runnable = reference
+    fetched = False
+    match = type("Match", (), {"found_under": "a-tag"})()
+    declaration = type("Declaration", (), {"zephyr_version": "4.4.0"})()
+
+
 def test_the_container_composition_carries_the_same_values(model, tmp_path, monkeypatch):
-    """A container build unpacks the SDK too, and pins its two environment
-    packages out of the same directories — so both reach it as well."""
+    """A container build unpacks the SDK too, and finds its image by the two
+    environment packages the context pinned — so both reach it as well."""
     created: dict[str, object] = {}
     driven: dict[str, object] = {}
+    resolved: dict[str, object] = {}
 
     monkeypatch.setattr(
         buildmethods,
@@ -364,22 +381,17 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
     )
     monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
     monkeypatch.setattr(buildmethods, "context_facts", lambda directory: {})
+    monkeypatch.setattr(buildmethods, "read_context_request", lambda path: _Pinned())
+    monkeypatch.setattr(
+        buildmethods, "read_generator_chain", lambda path: ("mcuhome-workbench", "0.1.0")
+    )
+    monkeypatch.setattr(buildmethods, "format_generator_chain", lambda chain: "mcuhome-workbench:0")
     monkeypatch.setattr(
         buildmethods.containerbuild,
         "prepare_environment",
-        lambda *a, **k: (
-            type(
-                "Resolved",
-                (),
-                {
-                    "pin": type("Pin", (), {"reference": "an-image"})(),
-                    "zephyr": "",
-                    "found_under": "",
-                },
-            )(),
-            False,
-        ),
+        lambda pin, **kwargs: resolved.update(kwargs) or _Resolved(),
     )
+    monkeypatch.setattr(buildmethods.containerbuild, "check_image", lambda *a, **k: None)
     monkeypatch.setattr(
         buildmethods.containerbuild,
         "run_locked_build",
@@ -398,6 +410,10 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
             sdk_max_bytes=11,
         ),
     )
+    # The image is looked for through the same package directories the
+    # context was pinned against.
+    assert resolved["workspace_sources"] == (tmp_path / "workspaces",)
+    assert resolved["tools_sources"] == (tmp_path / "tools",)
     assert created["workspace_sources"] == (tmp_path / "workspaces",)
     assert created["tools_sources"] == (tmp_path / "tools",)
     assert created["sdk_max_bytes"] == 11
@@ -442,37 +458,38 @@ class _Stop(Exception):
 
 
 def test_the_container_backend_is_configured_with_the_sdk_bound(tmp_path, monkeypatch) -> None:
-    """The last hop of the container path: the backend that unpacks the SDK."""
+    """The last hop of the container path: it unpacks the SDK itself."""
     from mcuhome.workbench import containerbuild
-    from mcuhome.workbench import orchestrator as lb
 
-    captured: dict[str, object] = {}
+    seen: dict[str, object] = {}
 
-    class FakeBackend:
-        def __init__(self, config, docker=None):
-            captured["config"] = config
+    def fake_acquire_sdk(**kwargs):
+        seen.update(kwargs)
+        raise _Stop
 
-        def run(self, **kwargs):
-            return lb.LocalOutcome(
-                action="build",
-                context_id="sha256:" + "2" * 64,
-                exit_code=0,
-                status="success",
-                successful=True,
-                artifacts=(),
-                out=tmp_path / "out",
-            )
-
-    monkeypatch.setattr(lb, "LocalBackend", FakeBackend)
-    containerbuild.run_locked_build(
-        tmp_path / "context",
-        image="ghcr.io/mcu-home/x:1",
-        sdk_sources=(),
-        work_root=tmp_path / "work",
-        env={},
-        sdk_max_bytes=11,
+    monkeypatch.setattr(containerbuild, "acquire_sdk", fake_acquire_sdk)
+    monkeypatch.setattr(
+        containerbuild,
+        "read_context_manifest",
+        lambda path: type(
+            "Manifest",
+            (),
+            {
+                "sdk": type("Sdk", (), {"version": "0.1.0", "sha256": "a" * 64})(),
+                "compute_id": lambda self: "sha256:" + "0" * 64,
+            },
+        )(),
     )
-    assert captured["config"].sdk_max_bytes == 11
+    with pytest.raises(_Stop):
+        containerbuild.run_locked_build(
+            tmp_path / "context",
+            image="ghcr.io/mcu-home/x@sha256:" + "1" * 64,
+            sdk_sources=(),
+            work_root=tmp_path / "work",
+            env={},
+            sdk_max_bytes=11,
+        )
+    assert seen["max_bytes"] == 11
 
 
 def test_the_subprocess_backend_acquires_the_sdk_under_the_configured_bound(
@@ -539,25 +556,25 @@ def test_the_subprocess_backend_acquires_the_sdk_under_the_configured_bound(
 
 
 def test_a_named_local_tier_beats_the_layout_under_the_cache_root(tmp_path) -> None:
-    under_root = subprocessbuild.cache_tiers(ccache_dir=tmp_path / "root")
+    under_root = buildenvsession.cache_tiers(ccache_dir=tmp_path / "root")
     assert under_root["local"].path == tmp_path / "root" / "cache-local"
     assert under_root["local"].writable
 
-    named = subprocessbuild.cache_tiers(
+    named = buildenvsession.cache_tiers(
         ccache_dir=tmp_path / "root", local_dir=tmp_path / "elsewhere"
     )
     assert named["local"].path == tmp_path / "elsewhere"
 
 
 def test_a_local_tier_can_be_named_without_a_cache_root(tmp_path) -> None:
-    tiers = subprocessbuild.cache_tiers(local_dir=tmp_path / "elsewhere")
+    tiers = buildenvsession.cache_tiers(local_dir=tmp_path / "elsewhere")
     assert tiers["local"].path == tmp_path / "elsewhere"
     assert "shared" not in tiers
 
 
 def test_a_named_shared_tier_is_read_only(tmp_path) -> None:
     (tmp_path / "shared").mkdir()
-    tiers = subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "shared")
+    tiers = buildenvsession.cache_tiers(shared_ccache_dir=tmp_path / "shared")
     assert tiers["shared"].path == tmp_path / "shared"
     assert not tiers["shared"].writable
 
@@ -566,20 +583,20 @@ def test_a_named_shared_tier_that_is_not_there_is_refused(tmp_path) -> None:
     """Somebody said where the shared cache is; silently building without
     it would hide a mount that never appeared."""
     with pytest.raises(ConfigError) as refusal:
-        subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "nothing")
+        buildenvsession.cache_tiers(shared_ccache_dir=tmp_path / "nothing")
     assert str(tmp_path / "nothing") in str(refusal.value)
-    assert subprocessbuild.SHARED_CACHE_OPTION in (refusal.value.hint or "")
+    assert buildenvsession.SHARED_CACHE_OPTION in (refusal.value.hint or "")
     # A file is not a directory either.
     (tmp_path / "a-file").write_text("", encoding="utf-8")
     with pytest.raises(ConfigError):
-        subprocessbuild.cache_tiers(shared_ccache_dir=tmp_path / "a-file")
+        buildenvsession.cache_tiers(shared_ccache_dir=tmp_path / "a-file")
 
 
 def test_a_derived_shared_tier_may_simply_be_absent(tmp_path) -> None:
     """The directory under the cache root is nobody's statement: a machine
     that never made one builds without a shared cache."""
-    tiers = subprocessbuild.cache_tiers(ccache_dir=tmp_path / "root")
+    tiers = buildenvsession.cache_tiers(ccache_dir=tmp_path / "root")
     assert "shared" not in tiers
     (tmp_path / "root" / "cache-shared").mkdir(parents=True)
-    tiers = subprocessbuild.cache_tiers(ccache_dir=tmp_path / "root")
+    tiers = buildenvsession.cache_tiers(ccache_dir=tmp_path / "root")
     assert tiers["shared"].path == tmp_path / "root" / "cache-shared"

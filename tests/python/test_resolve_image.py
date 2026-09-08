@@ -28,7 +28,7 @@ from mcuhome.model.buildenvironment import (
 from mcuhome.model.errors import BuildError
 
 from mcuhome.workbench.ociregistry import RegistryError
-from mcuhome.workbench.resolve_image import image_for_packages
+from mcuhome.workbench.resolve_image import image_for_packages, parse_image_pin, revision_of
 
 REPO = "ghcr.io/mcu-home/build-environment"
 OTHER_REPO = "example.com/other/build-environment"
@@ -357,3 +357,153 @@ def test_a_wanted_set_whose_member_states_no_hash_matches_nothing() -> None:
         image_for_packages(hashless, registry=registry, repositories=(REPO,))
     # And the same image is taken the moment the hash is stated.
     assert image_for_packages(WANTED, registry=registry, repositories=(REPO,)).found_under == "v1"
+
+
+# --------------------------------------------------------------------------
+# the pin, in its four forms
+# --------------------------------------------------------------------------
+
+
+def test_no_pin_searches_the_configured_repositories_in_order() -> None:
+    """The default form: the search list decides, and the first repository
+    holding a matching image wins."""
+    labels = image_labels(packages=wanted_values())
+    registry = ScriptedImages(
+        {REPO: {}, OTHER_REPO: {"v1": (digest("other"), labels)}},
+    )
+    found = image_for_packages(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+    assert found.reference.repository == OTHER_REPO
+    assert registry.tag_listings == [REPO, OTHER_REPO]
+
+
+def test_a_repository_only_pin_searches_that_repository_alone() -> None:
+    """It replaces the search list rather than joining it: a pin that named
+    a repository named the only one to look in."""
+    labels = image_labels(packages=wanted_values())
+    registry = ScriptedImages(
+        {REPO: {"v1": (digest("a"), labels)}, OTHER_REPO: {"v1": (digest("b"), labels)}},
+    )
+    found = image_for_packages(
+        WANTED,
+        registry=registry,
+        repositories=(REPO,),
+        pin=parse_image_pin(OTHER_REPO),
+    )
+    assert found.reference.repository == OTHER_REPO
+    assert registry.tag_listings == [OTHER_REPO]
+
+
+def test_a_tag_only_pin_looks_at_that_one_name_in_the_search_list() -> None:
+    """No tag listing at all: the pin says which name to read the labels of,
+    and the search list says where."""
+    labels = image_labels(packages=wanted_values())
+    registry = ScriptedImages({REPO: {"v1": (digest("a"), labels), "v2": (digest("b"), labels)}})
+    found = image_for_packages(
+        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin("v2")
+    )
+    assert found.found_under == "v2"
+    assert found.reference.digest == digest("b")
+    assert registry.tag_listings == [], "a pinned name costs no listing"
+    assert registry.label_reads == [(REPO, "v2")]
+
+
+def test_a_canonical_pin_names_one_image_and_its_labels_still_decide() -> None:
+    """The narrowest form, and the check that is never skipped: an image
+    that does not declare the set is refused however precisely it was
+    named."""
+    other = image_labels(packages={**wanted_values(), "tool-a": f"1.0.0@sha256:{HASH_C}"})
+    registry = ScriptedImages({REPO: {"v1": (digest("a"), other)}})
+    with pytest.raises(BuildError) as refusal:
+        image_for_packages(
+            WANTED,
+            registry=registry,
+            repositories=(),
+            pin=parse_image_pin(f"{REPO}:v1"),
+        )
+    # A canonical pin names that one image, so the refusal does too.
+    assert f"{REPO}:v1" in str(refusal.value)
+    assert HASH_C in str(refusal.value)
+
+
+def test_a_digest_only_pin_is_read_out_of_the_repositories_that_are_searched() -> None:
+    labels = image_labels(packages=wanted_values())
+    pinned = digest("pinned")
+    registry = ScriptedImages({REPO: {"": (pinned, labels)}})
+
+    def labels_of(reference):
+        assert reference.digest == pinned
+        return labels
+
+    registry.labels = labels_of  # type: ignore[method-assign]
+    found = image_for_packages(
+        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin(pinned)
+    )
+    assert found.reference.digest == pinned
+    assert registry.tag_listings == []
+
+
+# --------------------------------------------------------------------------
+# newest unless pinned
+# --------------------------------------------------------------------------
+
+
+def test_the_highest_revision_wins_among_images_that_declare_the_same_set() -> None:
+    """Two deliveries of one package set are the same environment, so the
+    choice is a preference — and the preference is the newest assembly."""
+    labels = image_labels(packages=wanted_values())
+    registry = ScriptedImages(
+        {
+            REPO: {
+                "1.0.0-r1": (digest("r1"), labels),
+                "1.0.0-r2": (digest("r2"), labels),
+                "1.0.0-r10": (digest("r10"), labels),
+            }
+        }
+    )
+    found = image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+    assert found.found_under == "1.0.0-r10"
+    # And it was the first candidate read, so the others cost nothing.
+    assert registry.label_reads == [(REPO, "1.0.0-r10")]
+
+
+def test_a_tag_without_a_revision_is_tried_after_every_tag_that_has_one() -> None:
+    labels = image_labels(packages=wanted_values())
+    registry = ScriptedImages(
+        {REPO: {"latest": (digest("l"), labels), "1.0.0-r1": (digest("r1"), labels)}}
+    )
+    assert image_for_packages(WANTED, registry=registry, repositories=(REPO,)).found_under == (
+        "1.0.0-r1"
+    )
+
+
+def test_the_revision_is_read_through_a_platform_suffix() -> None:
+    """A published set carries the platform tags beside the plain one, and
+    they are the same assembly revision."""
+    assert revision_of("0.1.10.dev2-r1") == 1
+    assert revision_of("0.1.10.dev2-r1-amd64") == 1
+    assert revision_of("0.1.10.dev2-r12") == 12
+    assert revision_of("latest") == -1
+
+
+# --------------------------------------------------------------------------
+# the refusal, after every candidate was tried
+# --------------------------------------------------------------------------
+
+
+def test_the_refusal_lists_every_candidate_and_why_it_was_rejected() -> None:
+    """ "No image declares the pinned package set" is only useful with the
+    list behind it: an image built from the same versions under other
+    bytes and an image that was never published read identically in a
+    one-line message."""
+    other = image_labels(packages={**wanted_values(), "tool-b": f"2.0.0@sha256:{HASH_D}"})
+    registry = ScriptedImages(
+        {REPO: {"1.0.0-r1": (digest("a"), other)}, OTHER_REPO: {}},
+        unreachable=frozenset({OTHER_REPO}),
+    )
+    with pytest.raises(BuildError) as refusal:
+        image_for_packages(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+    message = str(refusal.value)
+    assert "1.0.0-r1" in message
+    assert HASH_D in message, "the near miss says which bytes it has instead"
+    assert "could not be asked" in message, "and the repository that never answered"
+    assert f"tool-a {WANTED['tool-a'].value()}" in message

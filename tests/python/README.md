@@ -43,7 +43,9 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_scaffold.py` | `mcuhome new`: the starter configuration and its refusals |
 | `test_api.py` | the supported surface: exports, `validate_device`, `error_dicts`, the version |
 | `test_buildmethods.py` | the three build methods behind `run_build`; the call-time compiler edge |
-| `test_localbuild.py` | the `local` method's composition (`compose_local_build`) against a scripted container backend |
+| `test_localbuild.py` | the container execution's composition (`compose_container_build`) against a scripted container runtime |
+| `test_packagefetch.py` | acquiring a pinned package and the rules its archive is unpacked under |
+| `test_buildprocess.py` | starting a program, streaming its log, and the liveness ladder over it |
 | `test_resolve_pins.py` | SDK pin resolution: index, directory, refusals |
 | `test_sessionclient.py` | the session protocol end to end against a live build server |
 | `test_signing.py` | the per-project signing key: where it is, what it is, how the refusals read (ADR 0015 §8) |
