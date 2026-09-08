@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The build methods behind one interface (ADR 0020 decision 6, E18).
+"""The build methods behind one interface.
 
-``local`` drives a build environment on this machine through the
-invocation ABI, ``remote`` drives a build server through the session
-protocol. They differ in almost everything — one starts a container, one
+``local`` drives a build environment on this machine through the build
+environment specification, ``remote`` drives a build server through the
+session protocol. They differ in almost everything — one starts a container, one
 opens a WebSocket — and in exactly the thing a caller cares about they do
 not differ at all: both deliver an **unsigned** image plus a build report,
 and the signature is a separate host-side step afterwards (E55, E56). That
@@ -85,6 +85,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.artifacts import Artifact
+from mcuhome.model.buildimage import DEFAULT_ENVIRONMENT
 from mcuhome.model.context import (
     BUILD_CONTEXT_FILE,
     CONTEXT_FILE,
@@ -153,8 +154,10 @@ __all__ = [
     "UnknownMethod",
     "build_firmware",
     "build_options",
+    "compose_container_build",
     "compose_subprocess_build",
     "options_for",
+    "refuse_retired_environment_field",
     "websocket_url",
     "resolve_build_mode",
     "resolve_method",
@@ -162,10 +165,10 @@ __all__ = [
     "target_for_method",
 ]
 
-#: Drives a build environment on this machine through the invocation ABI
-#: (E51). The default: it is the method that needs a container runtime and
-#: nothing else of a toolchain, and the one whose private key never
-#: reaches the thing that compiles (E54).
+#: Drives a build environment on this machine, through the build
+#: environment specification. The default: it is the method that needs a
+#: container runtime and nothing else of a toolchain, and the one whose
+#: private key never reaches the thing that compiles.
 LOCAL = "local"
 
 #: The same as ``local``, through a build server (ADR 0019).
@@ -345,14 +348,14 @@ class BuildOptions:
 
     #: ``build.mode``: ``container`` or ``subprocess``.
     mode: str = DEFAULT_BUILD_MODE
-    #: ``build.container_repositories``: where a container build may take
-    #: its environment from, in search order. The image is chosen by the
-    #: package set its labels declare, so this list says whose images may
-    #: deliver one and never which image is used.
     #: Where ``mode`` came from, in the words :class:`…configuration.Setting`
     #: uses — the file, the variable, or ``default``. Carried so that a
     #: refusal caused by the mode can say who chose it.
     mode_source: str = "default"
+    #: ``build.container_repositories``: where a container build may take
+    #: its environment from, in search order. The image is chosen by the
+    #: package set its labels declare, so this list says whose images may
+    #: deliver one and never which image is used.
     container_repositories: tuple[str, ...] = DEFAULT_CONTAINER_REPOSITORIES
     #: ``build.env_store``: the store's root. ``None`` is the user's
     #: cache home, which is where a machine nobody configured keeps it.
@@ -769,6 +772,35 @@ def _refuse_developer_remotely(workspace: Path) -> ConfigError:
     )
 
 
+def refuse_retired_environment_field(model: DeviceModel) -> None:
+    """A device that still names a build container is refused, not ignored.
+
+    ``sources.build_environment`` named the image a build ran in, back
+    when an image was chosen by the Zephyr release it declared. A build
+    environment is now identified by its **packages**, and the image that
+    delivers them is found by its labels — so the field names a thing
+    that is no longer selected that way, and its old default names an
+    image that no longer exists.
+
+    Ignoring it would be the worse of the two answers: the device says
+    which environment to build in, the build would use another one, and
+    nothing about the result would say so. The persistent pin returns
+    under its own name once the device schema carries it.
+    """
+    stated = model.sources.build_environment
+    if not stated or stated == DEFAULT_ENVIRONMENT:
+        return
+    raise ConfigError(
+        f'This device names sources.build_environment: "{stated}", and that setting is retired.',
+        hint=(
+            "a build environment is named by its packages now — sources.build_workspace "
+            "and sources.build_tools — and the container image that delivers them is "
+            "found by the packages it declares. Remove the entry from the device; to "
+            "pin one image for a single build, pass it to that build instead."
+        ),
+    )
+
+
 def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
     """The build target a method *name* and a request describe together.
 
@@ -1025,6 +1057,7 @@ def compose_container_build(
     and the container registry the image labels are read from.
     """
     options = options if options is not None else BuildOptions()
+    refuse_retired_environment_field(model)
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = (
@@ -1082,7 +1115,10 @@ def compose_container_build(
     # Everything the image declares beyond its packages, against what
     # this build needs: the specification generation it implements, the
     # build contexts it accepts, and the Zephyr release it builds
-    # against. The package set itself is what found it.
+    # against. The package set itself is what found it. It runs here so
+    # that a refusal costs no lock in a directory the user keeps, and
+    # again in `run_locked_build`, which is the entry point an embedder
+    # and a build server reach directly.
     containerbuild.check_image(
         resolved.declaration,
         reference=resolved.reference,
@@ -1109,6 +1145,7 @@ def compose_container_build(
         env=dict(env),
         jobs=jobs,
         sdk_max_bytes=options.sdk_max_bytes,
+        zephyr_constraint=model.toolchain.zephyr_constraint,
         # The same cache root and the same tiers the subprocess profile
         # is given: one cache per user, laid out once, mounted here and
         # linked there.
@@ -1182,6 +1219,7 @@ def compose_subprocess_build(
     against).
     """
     options = options if options is not None else BuildOptions()
+    refuse_retired_environment_field(model)
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = _package_registry(

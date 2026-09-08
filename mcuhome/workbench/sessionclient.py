@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The ``remote`` build method: the session-protocol client (E18, ADR 0019).
+"""The ``remote`` build method: the session-protocol client.
 
 The second build method's whole client half. ``local`` drives a build
-container through the invocation ABI on this machine
-(:mod:`mcuhome.workbench.containerbuild`); ``remote`` drives *a build server*
-over one WebSocket, which speaks the eleven verbs of ADR 0019's session
+container on this machine, per the build environment specification
+(:mod:`mcuhome.workbench.containerbuild`); ``remote`` drives *a build
+server* over one WebSocket, which speaks the eleven verbs of the session
 protocol. This module is that conversation, and nothing else: it uploads
 a build context, freezes it, starts an invocation, follows its events and
 takes the artifacts back.

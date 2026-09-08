@@ -62,7 +62,7 @@ from mcuhome.model.buildimage import ENVIRONMENT_IMAGE_REPOSITORY
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 
-from mcuhome.workbench.ociregistry import Registry, RegistryError
+from mcuhome.workbench.ociregistry import ImageFacts, Registry, RegistryError
 
 __all__ = [
     "ImageMatch",
@@ -104,10 +104,11 @@ class ImagePin:
     ``ImagePin()``
         Nothing pinned. The configured repositories are searched in
         order, newest revision first.
-    :attr:`repository` alone
+    :attr:`repository` alone — a bare name
         That repository is searched, in place of the configured list,
         and no other.
-    :attr:`tag` or :attr:`digest` alone
+    :attr:`tag` alone (written ``:<tag>``) or :attr:`digest` alone
+        (written ``@sha256:…``)
         The configured repositories are searched in order, but only that
         one name is looked at in each.
     :attr:`repository` with a tag or a digest — the canonical form
@@ -145,36 +146,42 @@ class ImagePin:
 def parse_image_pin(text: str | None) -> ImagePin:
     """Read one of the four pin forms out of *text*.
 
-    The forms are told apart by what is in the string, and the rule is
-    the one a person can predict from what they typed:
+    The forms are told apart by what the value **starts** with, so that
+    nothing has to be guessed from a name that could be either:
 
     * empty — nothing pinned;
-    * ``sha256:…`` — a digest, in whatever repository is searched;
-    * anything holding ``/``, ``:`` or ``@`` — a repository, with the
-      tag or digest it carries, parsed as a container reference;
-    * anything else — a **tag**. A single word is far more often
-      ``0.1.10.dev2-r1`` than a repository, and a repository a build
-      environment is published in has a registry and a path in it.
+    * ``@sha256:…`` — a digest, looked for in whatever repositories are
+      searched;
+    * ``:<tag>`` — a tag, in the same repositories (``:0.1.10.dev2-r1``);
+    * anything else — a repository, with the tag or digest it carries:
+      ``ghcr.io/mcu-home/build-environment``,
+      ``…/build-environment:0.1.10.dev2-r1`` or ``…@sha256:…``.
+
+    The leading marker is what makes a bare word unambiguous: written
+    plainly it is a repository, and a tag or a digest of its own says so
+    with the character a reference separates it by anyway.
     """
     stated = (text or "").strip()
     if not stated:
         return ImagePin()
-    if stated.startswith("sha256:"):
+    if stated.startswith("@"):
+        digest = stated[1:]
         parse_reference(
-            f"{ENVIRONMENT_IMAGE_REPOSITORY}@{stated}",
+            f"{ENVIRONMENT_IMAGE_REPOSITORY}@{digest}",
             default_registry=DOCKER_HUB,
             what="build environment",
         )
-        return ImagePin(digest=stated)
-    if not any(character in stated for character in "/:@"):
-        # A bare word. Checked as a tag by parsing it in a reference,
-        # so that a refusal names the part that is wrong.
+        return ImagePin(digest=digest)
+    if stated.startswith(":"):
+        tag = stated[1:]
+        # Checked as a tag by parsing it in a reference, so that a
+        # refusal names the part that is wrong.
         parse_reference(
-            f"{ENVIRONMENT_IMAGE_REPOSITORY}:{stated}",
+            f"{ENVIRONMENT_IMAGE_REPOSITORY}:{tag}",
             default_registry=DOCKER_HUB,
             what="build environment",
         )
-        return ImagePin(tag=stated)
+        return ImagePin(tag=tag)
     reference = parse_reference(stated, default_registry=DOCKER_HUB, what="build environment")
     return ImagePin(
         repository=reference.repository,
@@ -247,6 +254,7 @@ def image_for_packages(
     registry: Registry | None = None,
     repositories: Sequence[str] = (ENVIRONMENT_IMAGE_REPOSITORY,),
     pin: ImagePin | None = None,
+    platform: str | None = None,
 ) -> ImageMatch:
     """The image whose ``packages.`` labels are exactly *packages*.
 
@@ -262,6 +270,12 @@ def image_for_packages(
 
     *pin* narrows what is looked at (:class:`ImagePin`) and never what is
     accepted.
+
+    *platform* is the host the image has to run on, in the package
+    index's spelling (``linux-amd64``). It is the same name the package
+    pins were resolved against, and it decides which manifest of a
+    multi-architecture image is read and pinned — the labels of an image
+    are per platform, because the tools package is.
 
     *registry* is the seam a test replaces; left ``None`` it talks to the
     real registries.
@@ -289,18 +303,18 @@ def image_for_packages(
             repository, default_registry=DOCKER_HUB, what="build environment"
         )
         for candidate in _candidates(client, reference, pin, rejected):
-            labels = _labels_of(client, candidate, rejected)
-            if labels is None:
+            facts = _facts_of(client, candidate, platform, rejected)
+            if facts is None:
                 continue
-            if not declares_exactly(labels, packages):
-                rejected.append(f"{candidate} declares {_described(labels)}")
+            if not declares_exactly(facts.labels, packages):
+                rejected.append(f"{candidate} declares {_described(facts.labels)}")
                 continue
-            digest = candidate.digest or _digest_of(client, candidate, rejected)
-            if digest is None:  # pragma: no cover - a tag that vanished mid-search
-                continue
+            # The digest of the manifest whose labels were just checked —
+            # for a multi-architecture image that is this host's manifest
+            # and not the index that lists it.
             return ImageMatch(
-                reference=candidate.with_digest(digest),
-                declaration=declaration_from_labels(labels),
+                reference=candidate.with_digest(facts.digest),
+                declaration=declaration_from_labels(facts.labels),
                 found_under=candidate.tag or "",
             )
     raise _no_image_declares(packages, pin, searched, rejected)
@@ -335,21 +349,19 @@ def _candidates(
     ]
 
 
-def _labels_of(
-    client: Registry, candidate: Reference, rejected: list[str]
-) -> Mapping[str, str] | None:
+def _facts_of(
+    client: Registry, candidate: Reference, platform: str | None, rejected: list[str]
+) -> ImageFacts | None:
+    """This host's manifest of *candidate* and its labels, or a reason why not.
+
+    An image published for other architectures only lands here too: the
+    registry refuses to pick a foreign manifest, and that refusal is one
+    more candidate rejected rather than the end of the search.
+    """
     try:
-        return client.labels(candidate)
+        return client.facts(candidate, platform=platform)
     except RegistryError as unreadable:
         rejected.append(f"{candidate} could not be read ({unreadable})")
-        return None
-
-
-def _digest_of(client: Registry, candidate: Reference, rejected: list[str]) -> str | None:
-    try:
-        return client.digest_of(candidate)
-    except RegistryError as unreadable:  # pragma: no cover - answered its labels a moment ago
-        rejected.append(f"{candidate} could not be pinned ({unreadable})")
         return None
 
 

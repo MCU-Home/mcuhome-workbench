@@ -27,7 +27,7 @@ from mcuhome.model.buildenvironment import (
 )
 from mcuhome.model.errors import BuildError
 
-from mcuhome.workbench.ociregistry import RegistryError
+from mcuhome.workbench.ociregistry import ImageFacts, RegistryError
 from mcuhome.workbench.resolve_image import image_for_packages, parse_image_pin, revision_of
 
 REPO = "ghcr.io/mcu-home/build-environment"
@@ -122,14 +122,31 @@ class ScriptedImages:
         self.tag_listings.append(reference.repository)
         return tuple(self.repositories.get(reference.repository, {}))
 
-    def labels(self, reference):
-        self.label_reads.append((reference.repository, reference.tag or ""))
-        found = self.repositories.get(reference.repository, {}).get(reference.tag or "")
-        return dict(found[1]) if found else {}
+    def facts(self, reference, *, platform=None):
+        """What one candidate declares, and the digest that was read.
 
-    def digest_of(self, reference):
-        found = self.repositories.get(reference.repository, {}).get(reference.tag or "")
-        return found[0] if found else None
+        A tag whose entry is a mapping is a multi-architecture image:
+        the value is keyed by platform, and asking for one the index does
+        not carry is the registry's own refusal, exactly as it is against
+        a real index.
+        """
+        self.label_reads.append((reference.repository, reference.tag or ""))
+        key = reference.tag or reference.digest or ""
+        found = self.repositories.get(reference.repository, {}).get(key)
+        if found is None:
+            return ImageFacts(digest=reference.digest or "", labels={})
+        if isinstance(found, dict):
+            wanted = platform or "linux-amd64"
+            if wanted not in found:
+                raise RegistryError(
+                    f"{reference.repository} publishes no {wanted} image under this name.",
+                    hint="the index lists " + ", ".join(sorted(found)),
+                )
+            found = found[wanted]
+        return ImageFacts(digest=found[0], labels=dict(found[1]))
+
+    def labels(self, reference, *, platform=None):
+        return self.facts(reference, platform=platform).labels
 
 
 class _UntouchedRegistry:
@@ -146,6 +163,9 @@ class _UntouchedRegistry:
         raise AssertionError("the registry was asked despite an empty allowlist")
 
     def digest_of(self, reference):
+        raise AssertionError("the registry was asked despite an empty allowlist")
+
+    def facts(self, reference, *, platform=None):
         raise AssertionError("the registry was asked despite an empty allowlist")
 
 
@@ -399,7 +419,7 @@ def test_a_tag_only_pin_looks_at_that_one_name_in_the_search_list() -> None:
     labels = image_labels(packages=wanted_values())
     registry = ScriptedImages({REPO: {"v1": (digest("a"), labels), "v2": (digest("b"), labels)}})
     found = image_for_packages(
-        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin("v2")
+        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin(":v2")
     )
     assert found.found_under == "v2"
     assert found.reference.digest == digest("b")
@@ -426,19 +446,17 @@ def test_a_canonical_pin_names_one_image_and_its_labels_still_decide() -> None:
 
 
 def test_a_digest_only_pin_is_read_out_of_the_repositories_that_are_searched() -> None:
+    """``@sha256:…`` names bytes and not a place, so the search list still
+    says where to look — and the listing is skipped, because the one name
+    to read is already known."""
     labels = image_labels(packages=wanted_values())
     pinned = digest("pinned")
-    registry = ScriptedImages({REPO: {"": (pinned, labels)}})
-
-    def labels_of(reference):
-        assert reference.digest == pinned
-        return labels
-
-    registry.labels = labels_of  # type: ignore[method-assign]
+    registry = ScriptedImages({REPO: {pinned: (pinned, labels)}})
     found = image_for_packages(
-        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin(pinned)
+        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin(f"@{pinned}")
     )
     assert found.reference.digest == pinned
+    assert found.found_under == "", "a digest pin was reached through no tag"
     assert registry.tag_listings == []
 
 
@@ -507,3 +525,52 @@ def test_the_refusal_lists_every_candidate_and_why_it_was_rejected() -> None:
     assert HASH_D in message, "the near miss says which bytes it has instead"
     assert "could not be asked" in message, "and the repository that never answered"
     assert f"tool-a {WANTED['tool-a'].value()}" in message
+
+
+def test_the_image_is_resolved_for_the_platform_the_packages_were(monkeypatch) -> None:
+    """One index, two architectures, and the tools package tells them apart.
+
+    The set a context pins is this host's — the family pin was resolved
+    against the package index for this platform — so the image that
+    delivers it is the manifest built for the same one. Reading the other
+    would be reading another environment that happens to live under the
+    same tag.
+    """
+    arm_tools = PackageMember(name="tool-a_linux-arm64", version="1.0.0", sha256=HASH_C)
+    amd_tools = PackageMember(name="tool-a_linux-amd64", version="1.0.0", sha256=HASH_A)
+    per_platform = {
+        "linux-amd64": (
+            digest("amd64"),
+            image_labels(packages={amd_tools.name: amd_tools.value()}),
+        ),
+        "linux-arm64": (
+            digest("arm64"),
+            image_labels(packages={arm_tools.name: arm_tools.value()}),
+        ),
+    }
+    registry = ScriptedImages({REPO: {"1.0.0-r1": per_platform}})
+
+    amd = image_for_packages(
+        {amd_tools.name: amd_tools},
+        registry=registry,
+        repositories=(REPO,),
+        platform="linux-amd64",
+    )
+    assert amd.reference.digest == digest("amd64")
+
+    arm = image_for_packages(
+        {arm_tools.name: arm_tools},
+        registry=registry,
+        repositories=(REPO,),
+        platform="linux-arm64",
+    )
+    assert arm.reference.digest == digest("arm64")
+
+    # And the set of one platform is not delivered by the other's image.
+    with pytest.raises(BuildError):
+        image_for_packages(
+            {amd_tools.name: amd_tools},
+            registry=registry,
+            repositories=(REPO,),
+            platform="linux-arm64",
+        )

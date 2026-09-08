@@ -111,7 +111,7 @@ class Execution:
 
 @dataclass(frozen=True)
 class ContainerExecution(Execution):
-    """Compile in a build container, through the invocation ABI.
+    """Compile in a build container, per the build environment specification.
 
     The ordinary execution, and the one that needs a container runtime
     and nothing else of a toolchain — which is also why it is the one

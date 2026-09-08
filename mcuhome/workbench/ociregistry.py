@@ -45,11 +45,12 @@ from mcuhome.model.imageref import DOCKER_HUB, Reference
 
 __all__ = [
     "ACCEPT_MANIFEST",
+    "ImageFacts",
     "Registry",
     "RegistryError",
-    "Response",
     "RegistryUnauthorized",
     "RegistryUnreachable",
+    "Response",
 ]
 
 #: The media types a manifest request accepts, **index types first**. The
@@ -93,6 +94,32 @@ def _attestation(entry: dict[str, Any]) -> bool:
     if not isinstance(platform, dict):
         return False
     return _ATTESTATION_PLATFORM in (platform.get("architecture"), platform.get("os"))
+
+
+@dataclass(frozen=True)
+class ImageFacts:
+    """One image of a repository, as this host would run it.
+
+    :attr:`digest` is the manifest the labels were read from — **not**
+    the index that pointed at it. The two differ for a multi-architecture
+    image, and only the first is a name for bytes that run here: an index
+    digest names every architecture at once, and what was checked was one
+    of them.
+
+    :attr:`labels` is that manifest's config labels, or an empty mapping
+    for an image that carries none.
+    """
+
+    digest: str
+    labels: dict[str, str]
+
+
+def _platform_of(entry: dict[str, Any]) -> tuple[str, str]:
+    """One index entry's ``os`` and ``architecture``, lowercased."""
+    platform = entry.get("platform")
+    if not isinstance(platform, dict):
+        return ("", "")
+    return (str(platform.get("os", "")).lower(), str(platform.get("architecture", "")).lower())
 
 
 def _api(reference: Reference) -> Reference:
@@ -263,73 +290,117 @@ class Registry:
             )
         return digest
 
-    def labels(self, reference: Reference) -> dict[str, str]:
+    def labels(self, reference: Reference, *, platform: str | None = None) -> dict[str, str]:
         """What the image says about itself: the config blob's labels.
+
+        :meth:`facts` without the digest, for a caller that only wants
+        the declaration.
+        """
+        return self.facts(reference, platform=platform).labels
+
+    def facts(self, reference: Reference, *, platform: str | None = None) -> ImageFacts:
+        """The manifest **this host** would run, and what it declares.
 
         Two requests deep — the manifest names the config blob, the blob
         holds the labels — and the second one is the redirect the
         header-stripping above exists for.
 
-        A **manifest index** is followed one level: an index carries no
-        config of its own, so the labels come from the first
-        architecture's manifest. That is sound because the labels this
-        project constrains on describe the *environment* (contract
-        version, Zephyr release, toolchain), which every architecture of
-        one build environment shares by construction.
+        **A manifest index is followed to this host's platform, and to no
+        other.** An index carries no config of its own, and the entries
+        under it are different images: MCUHome's build environment
+        declares its *tools* package per platform
+        (``mcuhome-build-tools_linux-amd64``), so reading whichever
+        manifest happens to be listed first would answer with another
+        architecture's package set — right on the machine that publishes
+        it, wrong on every other. *platform* is the same name the package
+        index is resolved against
+        (:func:`~mcuhome.workbench.packageregistry.host_platform`,
+        ``linux-amd64``), split into the ``os`` and ``architecture`` an
+        index entry states.
+
+        **The digest answered is the platform manifest's**, because that
+        is what was checked. Pinning the index instead would pin a name
+        that stands for every architecture, including the ones whose
+        labels nobody read.
 
         **An attestation is not an architecture.** ``buildx`` writes SBOM
         and provenance manifests into the index it publishes and marks
         them ``platform: {"architecture": "unknown", "os": "unknown"}``.
         They carry a config blob like any manifest and no image labels at
         all, so following one would report an image that states nothing
-        about itself — the environment would be refused for missing the
-        labels it does carry. Nothing in the OCI spec orders an index, and
-        the one this project publishes happens to list its architectures
-        first; that is luck, not a promise, so the marked entries are
-        skipped by name.
+        about itself. They are skipped by that name, and the platform
+        match would exclude them anyway.
         """
-        manifest = self._manifest(reference)
-        entries = manifest.get("manifests")
+        document, digest = self._manifest(reference)
+        entries = document.get("manifests")
         if isinstance(entries, list) and entries:
-            first = next(
-                (
-                    item
-                    for item in entries
-                    if isinstance(item, dict) and item.get("digest") and not _attestation(item)
-                ),
-                None,
-            )
-            if first is None:
-                raise RegistryError(
-                    f"{reference.repository} answered with an index naming no manifests.",
-                    hint="the image cannot be inspected — it describes no architecture",
-                )
-            manifest = self._manifest(reference.with_digest(str(first["digest"])))
-        config = manifest.get("config")
-        digest = config.get("digest") if isinstance(config, dict) else None
-        if not isinstance(digest, str):
+            digest = self._platform_manifest(reference, entries, platform)
+            document, _ = self._manifest(reference.with_digest(digest))
+        config = document.get("config")
+        blob_digest = config.get("digest") if isinstance(config, dict) else None
+        if not isinstance(blob_digest, str):
             raise RegistryError(
                 f"{reference.repository} answered with a manifest naming no config.",
                 hint="an image without a config blob states nothing about itself",
             )
         api = _api(reference)
-        url = f"https://{api.registry}/v2/{api.path}/blobs/{digest}"
+        url = f"https://{api.registry}/v2/{api.path}/blobs/{blob_digest}"
         response = self._get(reference, url, accept="application/json")
         if response is None:
             raise RegistryError(
                 f"{reference.repository} names a config blob it does not have.",
-                hint=f"{digest} is referenced by the manifest and answered with 404",
+                hint=f"{blob_digest} is referenced by the manifest and answered with 404",
             )
         blob = self._json(response, reference, what="image config")
         inner = blob.get("config")
         labels = inner.get("Labels") if isinstance(inner, dict) else None
-        if not isinstance(labels, dict):
-            return {}
-        return {str(key): str(value) for key, value in labels.items() if value is not None}
+        clean = (
+            {str(key): str(value) for key, value in labels.items() if value is not None}
+            if isinstance(labels, dict)
+            else {}
+        )
+        return ImageFacts(digest=digest, labels=clean)
+
+    def _platform_manifest(
+        self, reference: Reference, entries: list[Any], platform: str | None
+    ) -> str:
+        """The digest of the index entry built for *platform*.
+
+        A refusal rather than a fallback when nothing matches: an image
+        that is not published for this host cannot be run on it, and
+        taking a foreign architecture's manifest would report a package
+        set this machine can never use.
+        """
+        from mcuhome.workbench.packageregistry import host_platform
+
+        wanted = platform or host_platform()
+        system, _, architecture = wanted.partition("-")
+        offered: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("digest") or _attestation(entry):
+                continue
+            found = _platform_of(entry)
+            if found == (system, architecture):
+                return str(entry["digest"])
+            offered.append("/".join(part for part in found if part) or "unnamed")
+        raise RegistryError(
+            f"{reference.repository} publishes no {wanted} image under this name.",
+            hint=(
+                "the index lists "
+                + (", ".join(sorted(set(offered))) or "no architecture")
+                + " — build in another mode, or use an image published for this machine"
+            ),
+        )
 
     # -- plumbing ------------------------------------------------------
 
-    def _manifest(self, reference: Reference) -> dict[str, Any]:
+    def _manifest(self, reference: Reference) -> tuple[dict[str, Any], str]:
+        """One manifest document and the digest the registry named it by.
+
+        The digest comes from the ``Docker-Content-Digest`` header where
+        the registry sent one and from the reference otherwise, so that a
+        caller pinning what it read never has to hash a body itself.
+        """
         api = _api(reference)
         name = api.digest or api.tag or "latest"
         url = f"https://{api.registry}/v2/{api.path}/manifests/{name}"
@@ -339,7 +410,8 @@ class Registry:
                 f"{reference.repository} has nothing under {name}.",
                 hint="the tag or digest does not exist in that repository",
             )
-        return self._json(response, reference, what="manifest")
+        digest = response.headers.get("Docker-Content-Digest") or (api.digest or "")
+        return self._json(response, reference, what="manifest"), str(digest)
 
     def _get(self, reference: Reference, url: str, *, accept: str) -> Response | None:
         """One GET with the pull-token dance, or ``None`` for a 404."""

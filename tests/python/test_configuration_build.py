@@ -24,7 +24,12 @@ import pytest
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import configuration
-from mcuhome.workbench.buildtarget import BUILD_MODES, MODE_CONTAINER, MODE_SUBPROCESS
+from mcuhome.workbench.buildtarget import (
+    BUILD_MODES,
+    DEFAULT_CONTAINER_REPOSITORIES,
+    MODE_CONTAINER,
+    MODE_SUBPROCESS,
+)
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
     OPTIONS,
@@ -169,6 +174,74 @@ def test_a_section_key_is_nearest_wins_like_every_other_scalar(
     settings = resolve_settings(project=project, env=env)
     assert settings.value("build.mode") == MODE_SUBPROCESS
     assert settings.value("build.python") == "python3.14"
+
+
+def test_a_list_of_names_is_a_yaml_list_and_keeps_its_order(project: Project) -> None:
+    """``build.container_repositories`` is an ordered search list, and the
+    order is the whole meaning of it: the first repository holding a
+    matching image wins and the rest are never queried."""
+    write_project(
+        project,
+        "build:\n"
+        "  container_repositories:\n"
+        "    - ghcr.io/mcu-home/build-environment\n"
+        "    - registry.example.org/mirror/build-environment\n",
+    )
+    settings = resolve_settings(project=project, env={})
+    assert settings.value("build.container_repositories") == (
+        "ghcr.io/mcu-home/build-environment",
+        "registry.example.org/mirror/build-environment",
+    )
+    assert settings.origin("build.container_repositories") == "project"
+
+
+def test_a_list_of_names_is_comma_separated_in_the_environment(project: Project) -> None:
+    """Not ``os.pathsep``: a container reference carries a colon of its own
+    — a registry port, a tag — so a colon-separated list would split names
+    in half."""
+    env = {
+        "MCUHOME_BUILD_CONTAINER_REPOSITORIES": (
+            "registry.example.org:5000/build-environment, ghcr.io/mcu-home/build-environment"
+        )
+    }
+    settings = resolve_settings(project=project, env=env)
+    assert settings.value("build.container_repositories") == (
+        "registry.example.org:5000/build-environment",
+        "ghcr.io/mcu-home/build-environment",
+    )
+
+
+def test_a_list_of_names_written_as_one_string_is_refused_with_its_shape(
+    project: Project,
+) -> None:
+    """The refusal names the file and says what the value has to look like,
+    because a list written as a scalar is the mistake a person makes once."""
+    write_project(project, "build:\n  container_repositories: ghcr.io/mcu-home/build-environment\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert "container_repositories" in caught.value.message
+    assert "a list" in caught.value.message
+
+
+def test_a_list_of_names_set_through_config_set_reads_back_as_the_list(
+    project: Project,
+) -> None:
+    """``mcuhome config set`` takes the one-value spelling and writes the
+    file's own: what it wrote has to read back as the value it was given."""
+    set_config_value(
+        project.config_file,
+        "build.container_repositories",
+        "ghcr.io/mcu-home/build-environment,registry.example.org/mirror/build-environment",
+        env={},
+    )
+    settings = resolve_settings(project=project, env={})
+    assert settings.value("build.container_repositories") == (
+        "ghcr.io/mcu-home/build-environment",
+        "registry.example.org/mirror/build-environment",
+    )
+    unset_config_value(project.config_file, "build.container_repositories")
+    settings = resolve_settings(project=project, env={})
+    assert settings.value("build.container_repositories") == DEFAULT_CONTAINER_REPOSITORIES
 
 
 def test_a_path_in_the_section_resolves_against_its_own_file(project: Project) -> None:

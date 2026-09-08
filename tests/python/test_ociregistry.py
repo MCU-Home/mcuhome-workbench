@@ -242,30 +242,101 @@ def test_labels_come_from_the_config_blob_the_manifest_names() -> None:
     assert Registry(opener=opener).labels(reference(f"{REPO}:t")) == {"org.mcuhome.x": "1"}
 
 
-def test_an_index_is_followed_one_level_to_reach_a_config() -> None:
-    """An index carries no config of its own; the labels are per-architecture.
+AMD64 = "sha256:" + "ef" * 32
+ARM64 = "sha256:" + "cd" * 32
+ATTESTATION = "sha256:" + "ab" * 32
 
-    Sound because the labels a build environment is selected on describe
-    the environment — contract version, Zephyr release, toolchain — which
-    every architecture of one environment shares by construction.
+#: What the two architectures of one build environment declare. The
+#: workspace package is architecture-neutral and identical in both; the
+#: tools package is per platform and is exactly why an index may not be
+#: read at whichever manifest comes first.
+AMD64_LABELS = {"org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-amd64": "1.0.0"}
+ARM64_LABELS = {"org.mcuhome.build-environment.packages.mcuhome-build-tools_linux-arm64": "1.0.0"}
+
+
+def index_opener(entries: list[dict[str, Any]], configs: dict[str, dict[str, str]]) -> Any:
+    """A registry answering one index, its manifests and their configs.
+
+    *entries* is the index verbatim, *configs* maps a manifest digest to
+    the labels its config blob carries — each manifest names a config of
+    its own, so the test can tell which one was read.
     """
-    inner = "sha256:" + "ef" * 32
-    seen: list[str] = []
+    blobs = {digest: "sha256:" + f"{index:02x}" * 32 for index, digest in enumerate(configs, 1)}
 
     def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
         del headers, timeout
         if "/manifests/" in url:
-            seen.append(url)
-            if url.endswith(inner):
-                return Response(status=200, body=manifest_body())
+            for digest, blob in blobs.items():
+                if url.endswith(digest):
+                    return Response(
+                        status=200,
+                        body=json.dumps({"config": {"digest": blob}}).encode(),
+                        headers={"Docker-Content-Digest": digest},
+                    )
             return Response(
                 status=200,
-                body=json.dumps({"manifests": [{"digest": inner, "platform": {}}]}).encode(),
+                body=json.dumps({"manifests": entries}).encode(),
+                headers={"Docker-Content-Digest": "sha256:" + "11" * 32},
+            )
+        for digest, blob in blobs.items():
+            if url.endswith(blob):
+                return Response(status=200, body=config_body(configs[digest]))
+        return Response(status=404)
+
+    return opener
+
+
+def test_an_index_is_followed_to_this_hosts_platform() -> None:
+    """An index carries no config of its own, and its entries are not
+    interchangeable: the tools package a build environment declares is
+    per platform, so reading whichever manifest is listed first would
+    answer with another architecture's package set."""
+    opener = index_opener(
+        [
+            {"digest": ARM64, "platform": {"os": "linux", "architecture": "arm64"}},
+            {"digest": AMD64, "platform": {"os": "linux", "architecture": "amd64"}},
+        ],
+        {AMD64: AMD64_LABELS, ARM64: ARM64_LABELS},
+    )
+    registry = Registry(opener=opener)
+    assert registry.labels(reference(f"{REPO}:t"), platform="linux-amd64") == AMD64_LABELS
+    assert registry.labels(reference(f"{REPO}:t"), platform="linux-arm64") == ARM64_LABELS
+
+
+def test_the_digest_answered_is_the_platform_manifests_and_not_the_indexs() -> None:
+    """What was checked is what is pinned. An index digest stands for
+    every architecture at once, including the ones whose labels nobody
+    read, so it is not a name for the bytes that will run here."""
+    opener = index_opener(
+        [
+            {"digest": AMD64, "platform": {"os": "linux", "architecture": "amd64"}},
+            {"digest": ARM64, "platform": {"os": "linux", "architecture": "arm64"}},
+        ],
+        {AMD64: AMD64_LABELS, ARM64: ARM64_LABELS},
+    )
+    registry = Registry(opener=opener)
+    assert registry.facts(reference(f"{REPO}:t"), platform="linux-amd64").digest == AMD64
+    assert registry.facts(reference(f"{REPO}:t"), platform="linux-arm64").digest == ARM64
+
+
+def test_an_image_that_is_no_index_is_pinned_by_the_digest_it_answered_with() -> None:
+    """A single-architecture image has no index above it, and the digest
+    the registry named it by is the one to pin."""
+    digest = "sha256:" + "77" * 32
+
+    def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
+        del headers, timeout
+        if "/manifests/" in url:
+            return Response(
+                status=200,
+                body=manifest_body(),
+                headers={"Docker-Content-Digest": digest},
             )
         return Response(status=200, body=config_body({"k": "v"}))
 
-    assert Registry(opener=opener).labels(reference(f"{REPO}:t")) == {"k": "v"}
-    assert any(url.endswith(inner) for url in seen)
+    facts = Registry(opener=opener).facts(reference(f"{REPO}:t"))
+    assert facts.digest == digest
+    assert facts.labels == {"k": "v"}
 
 
 def test_an_attestation_in_the_index_is_not_mistaken_for_an_architecture() -> None:
@@ -281,59 +352,41 @@ def test_an_attestation_in_the_index_is_not_mistaken_for_an_architecture() -> No
     The attestation is first here on purpose: that is the ordering the
     old code could not survive.
     """
-    inner = "sha256:" + "ef" * 32
-    attestation = "sha256:" + "ab" * 32
-    followed: list[str] = []
-
-    def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
-        del headers, timeout
-        if "/manifests/" in url:
-            if url.endswith(inner) or url.endswith(attestation):
-                followed.append(url)
-                return Response(status=200, body=manifest_body())
-            return Response(
-                status=200,
-                body=json.dumps(
-                    {
-                        "manifests": [
-                            {
-                                "digest": attestation,
-                                "platform": {"architecture": "unknown", "os": "unknown"},
-                            },
-                            {"digest": inner, "platform": {"architecture": "arm64", "os": "linux"}},
-                        ]
-                    }
-                ).encode(),
-            )
-        return Response(status=200, body=config_body({"k": "v"}))
-
-    assert Registry(opener=opener).labels(reference(f"{REPO}:t")) == {"k": "v"}
-    assert followed == [url for url in followed if url.endswith(inner)], (
-        "the attestation manifest was fetched"
+    opener = index_opener(
+        [
+            {"digest": ATTESTATION, "platform": {"architecture": "unknown", "os": "unknown"}},
+            {"digest": AMD64, "platform": {"os": "linux", "architecture": "amd64"}},
+        ],
+        {AMD64: AMD64_LABELS, ATTESTATION: {}},
     )
+    assert (
+        Registry(opener=opener).labels(reference(f"{REPO}:t"), platform="linux-amd64")
+        == AMD64_LABELS
+    )
+
+
+def test_an_index_without_this_hosts_platform_is_refused_by_name() -> None:
+    """An image that is not published for this machine cannot be run on
+    it, and taking a foreign architecture's manifest would report a
+    package set this host can never use."""
+    opener = index_opener(
+        [{"digest": ARM64, "platform": {"os": "linux", "architecture": "arm64"}}],
+        {ARM64: ARM64_LABELS},
+    )
+    with pytest.raises(RegistryError) as refusal:
+        Registry(opener=opener).facts(reference(f"{REPO}:t"), platform="linux-amd64")
+    assert "linux-amd64" in str(refusal.value)
+    assert "linux/arm64" in str(refusal.value)
 
 
 def test_an_index_of_nothing_but_attestations_describes_no_architecture() -> None:
     """Which is the refusal that already existed, for a case that can now happen."""
-
-    def opener(url: str, headers: dict[str, str], timeout: float) -> Response:
-        del headers, timeout
-        return Response(
-            status=200,
-            body=json.dumps(
-                {
-                    "manifests": [
-                        {
-                            "digest": "sha256:" + "ab" * 32,
-                            "platform": {"architecture": "unknown", "os": "unknown"},
-                        }
-                    ]
-                }
-            ).encode(),
-        )
-
+    opener = index_opener(
+        [{"digest": ATTESTATION, "platform": {"architecture": "unknown", "os": "unknown"}}],
+        {ATTESTATION: {}},
+    )
     with pytest.raises(RegistryError) as refusal:
-        Registry(opener=opener).labels(reference(f"{REPO}:t"))
+        Registry(opener=opener).labels(reference(f"{REPO}:t"), platform="linux-amd64")
     assert "no architecture" in str(refusal.value)
 
 

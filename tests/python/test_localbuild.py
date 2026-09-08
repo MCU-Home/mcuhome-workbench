@@ -38,7 +38,7 @@ from conftest import (
     sdk_members,
     write_environment_packages,
 )
-from mcuhome.model.errors import BuildError
+from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import buildmethods, containerbuild
@@ -308,9 +308,10 @@ def test_a_container_build_composes_a_context_and_drives_one_step(tmp_path, mode
     assert (result.out_dir / "firmware.bin").is_file()
     assert (result.out_dir / "build-report.json").is_file()
     assert {a.role for a in result.outcome.artifacts} == {"firmware", "report"}
-    # One step, one container, no arguments after the image: the image's
-    # own entry point is what §6 runs.
-    assert seam.step[-1] == f"{IMAGE}@{DIGEST}"
+    # One step, one container, and §6's entry point named by its path
+    # with no arguments after it — never the image's own CMD.
+    assert seam.step[-2:] == [f"{IMAGE}@{DIGEST}", containerbuild.ENTRY_POINT_PATH]
+    assert containerbuild.ENTRY_POINT_PATH == "/mcuhome/bin/build-environment-entry"
     assert len([argv for argv in seam.calls if argv[1] == "run"]) == 1
 
 
@@ -748,3 +749,68 @@ def test_resolve_sdk_pin_without_a_source_refuses(tmp_path):
     with pytest.raises(BuildError) as caught:
         resolve_sdk_pin(())
     assert "SDK source" in caught.value.message
+
+
+def test_the_entry_point_is_named_by_its_path_and_not_left_to_the_image(
+    tmp_path, model, public_pem
+):
+    """§6 fixes where the executable is and says nothing about ``CMD``.
+
+    An image that declares none is conforming and would not start; one
+    that declares something else is not the thing to run. So the path is
+    composed from the base directory this side set and handed over as the
+    container's command, with nothing after it.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem)
+    assert result.outcome.successful
+    argv = seam.step
+    assert argv[-1] == f"{containerbuild.BASE_DIR}mcuhome/bin/build-environment-entry"
+    assert argv[-2].startswith(IMAGE), "the entry point is the command, the image is the image"
+
+
+def test_a_stopped_step_has_its_container_removed_by_name(tmp_path, model, public_pem):
+    """Signalling the client is not ending the build: the build is inside
+    the container, and what stops it is removing the container.
+
+    Both rungs of the ladder reach it, so the removal is asserted on the
+    handle the launcher answers with rather than through a timing race.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem)
+    assert result.outcome.successful
+    name = seam.step[seam.step.index("--name") + 1]
+    assert name.startswith("mcuhome-")
+
+    removed: list[str] = []
+    runtime = containerbuild.Runtime(
+        runner=lambda argv, on_line=None: removed.append(argv[-1]) or Completed(0, ""),
+        spawner=lambda argv, on_line=None: _Finished(None),
+    )
+    handle = containerbuild._StepContainer(_Finished(None), runtime=runtime, name=name)
+    handle.terminate()
+    handle.kill()
+    assert removed == [name, name], "each rung reaps the container it is stopping"
+
+
+def test_a_device_that_still_names_a_build_container_is_refused(tmp_path, model, public_pem):
+    """``sources.build_environment`` is retired, and ignoring it would be
+    the worse answer: the device says which environment to build in, the
+    build would use another one, and nothing about the result would say
+    so."""
+    import dataclasses
+
+    stated = dataclasses.replace(
+        model,
+        sources=dataclasses.replace(
+            model.sources, build_environment="ghcr.io/somebody/build-container"
+        ),
+    )
+    make_sdk_source(tmp_path / "src")
+    seam = Seam()
+    with pytest.raises(ConfigError) as caught:
+        _build(tmp_path, stated, public_pem, seam=seam)
+    assert "sources.build_environment" in caught.value.message
+    assert "retired" in caught.value.message
+    assert "sources.build_workspace" in (caught.value.hint or "")
+    assert seam.calls == [], "nothing was asked of the runtime"

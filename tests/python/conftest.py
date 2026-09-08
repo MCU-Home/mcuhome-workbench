@@ -437,9 +437,15 @@ class ScriptedRegistry:
         self.asked.append(reference.tag or "")
         return self.digest
 
-    def labels(self, reference):
+    def facts(self, reference, *, platform=None):
+        del platform  # one architecture is enough for a suite about builds
         self.asked.append(reference.tag or "")
-        return dict(self.labels_)
+        from mcuhome.workbench.ociregistry import ImageFacts
+
+        return ImageFacts(digest=self.digest, labels=dict(self.labels_))
+
+    def labels(self, reference, *, platform=None):
+        return self.facts(reference, platform=platform).labels
 
 
 @pytest.fixture(autouse=True)

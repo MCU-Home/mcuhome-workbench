@@ -57,7 +57,13 @@ from mcuhome.model.buildenvironment import (
     PackageMember,
 )
 from mcuhome.model.buildimage import CCACHE_DIR_VAR, DOCKER_VAR
-from mcuhome.model.context import MANIFEST_FILE, ContextEnvironment, DeveloperEnvironment
+from mcuhome.model.context import (
+    BUILD_CONTEXT_FILE,
+    MANIFEST_FILE,
+    ContextEnvironment,
+    DeveloperEnvironment,
+    format_generator_chain,
+)
 from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.imageref import Reference
 from mcuhome.model.jobs import JOBS_VAR
@@ -67,7 +73,9 @@ from mcuhome.workbench.buildenvsession import (
     ACTION_BUILD,
     BASE_DIR_VAR,
     CACHE_TIERS,
+    ENTRY_POINT,
     REQUEST_FILE,
+    STEP_BIN,
     STEP_CACHE,
     STEP_CONTEXT,
     STEP_DIR,
@@ -92,7 +100,7 @@ from mcuhome.workbench.buildprocess import (
     spawn_process,
 )
 from mcuhome.workbench.buildtarget import DEFAULT_CONTAINER_REPOSITORIES
-from mcuhome.workbench.contextdir import read_context_manifest
+from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
 from mcuhome.workbench.packagefetch import acquire_sdk
 from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_image import (
@@ -104,11 +112,14 @@ from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
     "CONTAINER_REPOSITORIES_OPTION",
+    "ENTRY_POINT_PATH",
     "ContainerBuildResult",
     "Mount",
+    "ResolvedImage",
     "ResourceLimits",
     "Runtime",
     "cache_root",
+    "check_image",
     "ccache_directory",
     "docker_program",
     "ensure_image",
@@ -136,6 +147,12 @@ DEFAULT_RUNTIME = "docker"
 #: puts absolute paths into every compile.
 BASE_DIR = "/"
 _TREE = f"/{STEP_DIR}"
+#: What §6 runs, once per step and with no arguments. Composed from the
+#: base directory and the path the specification fixes, never taken from
+#: the image's own ``CMD``: an image is not required to name one, and an
+#: environment that did would be telling the orchestrator how to start it
+#: — which is exactly the thing §6 puts on this side.
+ENTRY_POINT_PATH = f"{_TREE}/{STEP_BIN}/{ENTRY_POINT}"
 REQUEST_TARGET = f"{_TREE}/{REQUEST_FILE}"
 SDK_TARGET = f"{_TREE}/{STEP_SDK}"
 CONTEXT_TARGET = f"{_TREE}/{STEP_CONTEXT}"
@@ -456,14 +473,15 @@ def step_command(
     user: str | None = None,
     limits: ResourceLimits | None = None,
     jobs: int | None = None,
-    labels: Mapping[str, str] | None = None,
 ) -> list[str]:
     """The ``run`` that is one step of the session.
 
-    * **No command and no arguments.** §6 runs the entry point at the
-      path it fixes, with no arguments, and the image's own ``CMD`` is
-      that entry point — so this argv ends at the image. Overriding it
-      would be this side deciding how the environment starts itself.
+    * **The entry point, by the path §6 fixes, with no arguments.** It
+      is named explicitly rather than left to the image's ``CMD``: the
+      specification says where the executable is and that it is run once
+      per step, and says nothing about ``CMD`` — an image that declares
+      none is conforming, and one that declares something else is not
+      the thing to start.
     * ``--rm`` because a step's container is over when the step is: what
       it produced is on the ``out`` mount, and §3 says nothing it wrote
       elsewhere survives.
@@ -492,12 +510,10 @@ def step_command(
         # environment that does not know the name ignores it, which is
         # the same rule §6.1 gives for a request field.
         argv += ["--env", f"{JOBS_VAR}={jobs}"]
-    for label, value in sorted((labels or {}).items()):
-        argv += ["--label", f"{label}={value}"]
     argv += (limits or ResourceLimits()).to_arguments()
     for mount in _ordered(step_mounts(step)):
         argv += ["--volume", mount.to_argument()]
-    argv.append(image)
+    argv += [image, ENTRY_POINT_PATH]
     return argv
 
 
@@ -558,7 +574,6 @@ def launcher(
     user: str | None = None,
     limits: ResourceLimits | None = None,
     jobs: int | None = None,
-    labels: Mapping[str, str] | None = None,
     started: list[str] | None = None,
 ) -> Launcher:
     """How a step is entered in this profile: one fresh container.
@@ -586,7 +601,6 @@ def launcher(
             user=user,
             limits=limits,
             jobs=jobs,
-            labels=labels,
         )
         if started is not None:
             started.append(name)
@@ -701,6 +715,7 @@ def image_for_context(
         registry=images,
         repositories=tuple(repositories),
         pin=parse_image_pin(image_pin),
+        platform=platform,
     )
 
 
@@ -874,8 +889,8 @@ def run_locked_build(
     registry: RegistrySource | None = None,
     deadline_seconds: int = 5400,
     limits: ResourceLimits | None = None,
-    labels: Mapping[str, str] | None = None,
     user: str | None = None,
+    zephyr_constraint: str = "",
     runtime: Runtime | None = None,
     on_line: LineSink | None = None,
 ) -> ContainerBuildResult:
@@ -897,6 +912,19 @@ def run_locked_build(
     documentation for whoever reads the record a year later and is never
     what the runtime resolves.
 
+    **What the image declares is checked here as well**
+    (:func:`check_image`), for the reason every entry point that a caller
+    can reach directly checks: this is where an embedder and a build
+    server enter, and a rule a caller can go around by calling one
+    function lower is not a rule. Everything the context can answer on
+    its own is checked — the specification generation the image
+    implements and the build contexts it accepts against this context's
+    generator chain; the device's Zephyr constraint is a property of the
+    device model, which a locked context does not carry, so a caller that
+    holds one states it as *zephyr_constraint*. A plain reference instead
+    of a :class:`ResolvedImage` carries no declaration and is taken as
+    already checked by whoever resolved it.
+
     The containers this session started are swept when it ends. ``--rm``
     already removed the ones that finished; the sweep is for a step that
     was stopped, and it is best effort because a failed teardown must not
@@ -908,6 +936,15 @@ def run_locked_build(
     manifest = read_context_manifest(context_dir / MANIFEST_FILE)
     running = image.runnable if isinstance(image, ResolvedImage) else image
     recorded = image.reference if isinstance(image, ResolvedImage) else image
+    if isinstance(image, ResolvedImage):
+        check_image(
+            image.declaration,
+            reference=recorded,
+            generator=format_generator_chain(
+                read_generator_chain(context_dir / BUILD_CONTEXT_FILE)
+            ),
+            zephyr_constraint=zephyr_constraint,
+        )
     seam = runtime if runtime is not None else Runtime(docker_program(env))
     sdk_tree = acquire_sdk(
         version=manifest.sdk.version,
@@ -932,7 +969,6 @@ def run_locked_build(
             user=user if user is not None else current_user(),
             limits=limits,
             jobs=jobs,
-            labels=labels,
             started=started,
         ),
         context_id=manifest.compute_id(),

@@ -295,10 +295,19 @@ wins; unset, it is MCUHome's own repository. Where a repository holds several
 images for one package set, the highest assembly revision (`…-r2` over `…-r1`)
 is taken.
 
-`--container-image` narrows the search for one build, in any of the forms you
-already know from docker: a repository, a tag, a digest, or a repository with one
-of the two. It says *which* image to look at and never that it may be run without
-being what it claims — the labels are checked either way.
+A pin narrows the search for one build. It says *which* image to look at and
+never that it may be run without being what it claims — the labels are checked
+either way. Four forms, told apart by what the value starts with:
+
+| pin | means |
+|---|---|
+| `ghcr.io/mcu-home/build-environment` | that repository, in place of the list |
+| `:0.1.10.dev2-r1` | that tag, in the repositories of the list |
+| `@sha256:…` | those bytes, in the repositories of the list |
+| `ghcr.io/…/build-environment:0.1.10.dev2-r1` or `…@sha256:…` | exactly one image |
+
+The leading `:` and `@` are what make a bare name unambiguous: written plainly
+it is a repository.
 
 The image runs with no network, as the calling user, and with exactly the tree
 the build-environment specification defines mounted into it: the build context
