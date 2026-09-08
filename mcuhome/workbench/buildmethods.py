@@ -1283,11 +1283,11 @@ def compose_subprocess_build(
     person to wonder (:func:`_note_pin_without_container`). A
     *development* build is the one place the pin is refused, and the
     context writer does it with the other ``sources`` entries: nothing
-    there is fetched at all.
+    there is fetched at all — so the note is not printed there, because
+    the refusal that follows says the opposite of it.
     """
     options = options if options is not None else BuildOptions()
     limits = options.limits()
-    _note_pin_without_container(model, on_line=on_line)
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = _package_registry(
@@ -1298,6 +1298,12 @@ def compose_subprocess_build(
         on_line=on_line,
     )
     developing = environment is not None and environment.developer
+    # After the development question is settled, and only for the answer
+    # that has an environment to speak of: a development build is refused
+    # over this pin a moment later, and a note saying it has no effect
+    # would be telling the person the opposite of what happens next.
+    if not developing:
+        _note_pin_without_container(model, on_line=on_line)
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
     if not supplied:

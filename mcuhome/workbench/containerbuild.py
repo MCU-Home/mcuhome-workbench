@@ -725,10 +725,11 @@ def image_for_context(
     Nothing is fetched here: the index says which package this host
     needs, and the image is what carries the bytes.
 
-    *image_pin* is the one-invocation override, in any of the four forms
-    :func:`~mcuhome.workbench.resolve_image.parse_image_pin` reads. It
-    narrows which images are looked at; the labels are checked either
-    way.
+    *image_pin* is what this build asks for, in any of the four forms
+    :func:`~mcuhome.workbench.resolve_image.parse_image_pin` reads —
+    whichever of the device's own ``sources.container_image`` and a
+    one-invocation override the caller resolved them to. It narrows
+    which images are looked at; the labels are checked either way.
     """
     if isinstance(pin, DeveloperEnvironment):
         raise EnvironmentUnavailable(

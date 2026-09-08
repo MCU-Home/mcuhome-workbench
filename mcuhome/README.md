@@ -52,7 +52,7 @@ pytest                           # the suite in ../tests/python/
 | `workbench/contextdir.py` | — | build-context creation and locking (ADR 0018) |
 | `workbench/resolve_pins.py` | — | SDK pin resolution against an index or directory |
 | `workbench/buildmethods.py` | — | the two build targets behind `run_build` |
-| `workbench/sessionclient.py` | — | the remote method's session-protocol client (ADR 0019) |
+| `workbench/sessionclient.py` | — | the ``remote`` target's session-protocol client |
 | `workbench/imgtool.py` | — | detached signing over the build report, whose shape the build actions document defines |
 | `workbench/signing.py` | — | the per-project signing key and its refusals (ADR 0015 §8) |
 | `workbench/userpaths.py` | — | the process-boundary seam for `$HOME`-shaped lookups |

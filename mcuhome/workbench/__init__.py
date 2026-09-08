@@ -27,7 +27,7 @@ already has them.
 :mod:`mcuhome.workbench.resolve`       stage 3: defaults and completion
 :mod:`mcuhome.workbench.contextdir`    creating and verifying a context directory
 :mod:`mcuhome.workbench.buildmethods`  the two build targets, behind one call
-:mod:`mcuhome.workbench.sessionclient` the ``remote`` method's protocol client
+:mod:`mcuhome.workbench.sessionclient` the ``remote`` target's protocol client
 :mod:`mcuhome.workbench.signing`       the per-project firmware signing key
 :mod:`mcuhome.workbench.imgtool`       signing an image afterwards (ADR 0015 §8)
 :mod:`mcuhome.workbench.otafile`       wrapping a signed image in a Matter ``.ota``

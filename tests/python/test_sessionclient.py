@@ -2668,7 +2668,7 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
 
 
 # --------------------------------------------------------------------------
-# The `remote` build target, from a device model (E65)
+# The `remote` build target, from a device model
 # --------------------------------------------------------------------------
 #
 # Everything above drives the session client directly, from a context
@@ -2753,7 +2753,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
     assert outcome.report == BUILD_REPORT_FILE
     report = imgtool.read_build_report(outcome.out_dir / outcome.report)
     assert report["signing"]["signature_type"] == "ecdsa-p256"
-    # Unsigned, as every target delivers (E55, E56): nothing signed came
+    # Unsigned, as every target delivers: nothing signed came
     # back, and the signature is the host step after this.
     assert not [path for path in outcome.out_dir.iterdir() if "sign" in path.name]
 

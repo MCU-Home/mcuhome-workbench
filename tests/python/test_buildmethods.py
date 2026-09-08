@@ -11,7 +11,7 @@ that a caller reaches the right one and reads one answer whichever ran.
 
 The properties, in the order they matter:
 
-* the outcome shape does not depend on the target (E56) — success, the
+* the outcome shape does not depend on the target — success, the
   delivery directory, and the *name of the build report*, which is what
   the one shared host-side signing step needs;
 * a target name nobody implements is a refusal that lists the ones that
@@ -1231,17 +1231,32 @@ def test_a_subprocess_build_says_the_pin_has_no_effect_rather_than_refusing(
     assert any(":0.1.10.dev2-r1" in line and "no effect" in line for line in said)
 
 
-def test_a_development_build_refuses_the_pin(model, tmp_path) -> None:
-    """A development build starts no container, so no image can name it."""
+def test_a_development_build_refuses_the_pin_and_notes_nothing(model, tmp_path) -> None:
+    """A development build starts no container, so no image can name it.
+
+    Driven the way a person drives it — a workspace on the request, the
+    whole composition underneath — because the two halves of this answer
+    live in two places: the note that says a pin has no effect is the
+    subprocess composition's, and the refusal is the context writer's.
+    A build that printed the note and then refused over the same pin
+    would have told the person the opposite of what happened.
+    """
+    workspace = west_workspace(tmp_path / "west-workspace")
     pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
+    said: list[str] = []
     with pytest.raises(BuildError, match="sources.container_image") as refused:
-        create_build_context(
-            pinned,
-            out_dir=tmp_path / "context",
-            work_root=tmp_path / "made",
-            sdk_sources=(),
-            signing_pub=_PUBLIC_PEM,
-            developer=True,
+        asyncio.run(
+            buildmethods.build_firmware(
+                buildmethods.BuildRequest(
+                    model=pinned,
+                    out_dir=tmp_path / "out",
+                    signing_pub=_PUBLIC_PEM,
+                    on_line=said.append,
+                ),
+                target=buildmethods.LocalBuild(
+                    execution=buildmethods.SubprocessExecution(dev_workspace=workspace)
+                ),
+            )
         )
     assert "build.dev_workspace" in refused.value.hint
-    assert not (tmp_path / "context").exists()
+    assert not any("no effect" in line for line in said)
