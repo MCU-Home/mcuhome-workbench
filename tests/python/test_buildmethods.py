@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The build methods behind one interface (``buildmethods.py``).
+"""The build targets behind one interface (``buildmethods.py``).
 
-No container and no socket: each method is stubbed at its own backend
+No container and no socket: each target is stubbed at its own backend
 seam — ``compose_local_build``, ``run_remote_build`` — and what is
 asserted is the layer above them. That is deliberately the whole point of
 the module: the compositions are tested where they live
@@ -11,10 +11,10 @@ that a caller reaches the right one and reads one answer whichever ran.
 
 The properties, in the order they matter:
 
-* the outcome shape does not depend on the method (E56) — success, the
+* the outcome shape does not depend on the target (E56) — success, the
   delivery directory, and the *name of the build report*, which is what
   the one shared host-side signing step needs;
-* a method name nobody implements is a refusal that lists the ones that
+* a target name nobody implements is a refusal that lists the ones that
   exist, rather than a ``KeyError`` or a silent default;
 * ``remote`` refuses in words for the two things it cannot invent — the
   build server's address (E53) and the SDK source its context is pinned
@@ -70,41 +70,61 @@ def _artifacts() -> tuple[Artifact, ...]:
     )
 
 
-def _run(request: buildmethods.BuildRequest, method: str) -> buildmethods.BuildOutcome:
+def _run(request: buildmethods.BuildRequest, target: str) -> buildmethods.BuildOutcome:
     """What a command line does at its entry point: one ``asyncio.run``."""
-    return asyncio.run(buildmethods.run_build(request, method=method))
+    return asyncio.run(buildmethods.run_build(request, target=target))
 
 
 # --------------------------------------------------------------------------
-# Choosing a method
+# Choosing a target
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", buildmethods.METHODS)
-def test_every_method_name_resolves_to_itself(name: str) -> None:
-    assert buildmethods.resolve_method(name) == name
+@pytest.mark.parametrize("name", buildmethods.BUILD_TARGETS)
+def test_every_target_name_resolves_to_itself(name: str) -> None:
+    assert buildmethods.resolve_build_target(name) == name
 
 
 @pytest.mark.parametrize("nothing", [None, ""])
 def test_no_preference_is_the_local_container(nothing) -> None:
-    """E54: the default is the build container on this machine."""
-    assert buildmethods.resolve_method(nothing) == buildmethods.LOCAL
-    assert buildmethods.DEFAULT_METHOD == buildmethods.LOCAL
+    """The default is a build on this machine, in a container."""
+    assert buildmethods.resolve_build_target(nothing) == buildmethods.TARGET_LOCAL
+    assert buildmethods.DEFAULT_BUILD_TARGET == buildmethods.TARGET_LOCAL
 
 
-def test_an_unknown_method_is_a_refusal_that_lists_the_real_ones() -> None:
+def test_a_caller_that_names_no_target_takes_the_configured_one(model, tmp_path) -> None:
+    """``None`` is "no preference", and ``build.target`` is what answers it.
+
+    The name a caller passes is the more explicit statement and wins
+    where there is one; an embedder that passes nothing builds the way
+    the machine is configured, exactly as it does for ``build.mode``.
+    """
+    request = buildmethods.BuildRequest(
+        model=model,
+        out_dir=tmp_path,
+        server="attic",
+        options=buildmethods.BuildOptions(target=buildmethods.TARGET_REMOTE),
+    )
+    assert isinstance(buildmethods.build_target_for(None, request), buildmethods.RemoteBuild)
+    assert isinstance(
+        buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request),
+        buildmethods.LocalBuild,
+    )
+
+
+def test_an_unknown_target_is_a_refusal_that_lists_the_real_ones() -> None:
     """Typed, and it names them all — a user who guessed wrong needs them."""
-    with pytest.raises(buildmethods.UnknownMethod) as refusal:
-        buildmethods.resolve_method("cloud")
+    with pytest.raises(buildmethods.UnknownBuildTarget) as refusal:
+        buildmethods.resolve_build_target("cloud")
     rendered = str(refusal.value)
     assert '"cloud"' in rendered
-    for name in buildmethods.METHODS:
+    for name in buildmethods.BUILD_TARGETS:
         assert name in rendered
 
 
-def test_run_build_refuses_an_unknown_method_before_it_runs_anything(model, tmp_path) -> None:
+def test_run_build_refuses_an_unknown_target_before_it_runs_anything(model, tmp_path) -> None:
     request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    with pytest.raises(buildmethods.UnknownMethod):
+    with pytest.raises(buildmethods.UnknownBuildTarget):
         _run(request, "cloud")
 
 
@@ -142,15 +162,15 @@ def test_an_unknown_build_mode_is_a_refusal_that_lists_the_real_ones() -> None:
         assert name in rendered
 
 
-def test_the_mode_selects_the_execution_the_local_method_runs(model, tmp_path) -> None:
+def test_the_mode_selects_the_execution_the_local_target_runs(model, tmp_path) -> None:
     """One name, two decisions: the target states them apart."""
-    container = buildmethods.target_for_method(
-        buildmethods.LOCAL, buildmethods.BuildRequest(model=model, out_dir=tmp_path)
+    container = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL, buildmethods.BuildRequest(model=model, out_dir=tmp_path)
     )
     assert isinstance(container.execution, buildmethods.ContainerExecution)
 
-    subprocess_target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    subprocess_target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         buildmethods.BuildRequest(
             model=model,
             out_dir=tmp_path,
@@ -193,9 +213,9 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
             build_mode=buildmethods.MODE_SUBPROCESS,
             ccache_dir=tmp_path / "ccache",
         ),
-        buildmethods.LOCAL,
+        buildmethods.TARGET_LOCAL,
     )
-    assert outcome.method == buildmethods.LOCAL
+    assert outcome.target == buildmethods.TARGET_LOCAL
     assert outcome.successful
     assert outcome.artifacts == _artifacts()
     assert outcome.report == BUILD_REPORT_FILE
@@ -212,8 +232,8 @@ def test_a_subprocess_build_resolves_its_pins_like_every_other_build(model, tmp_
     """The mode is no longer blocked, and the first thing it needs is a pin.
 
     A subprocess build creates its own context now — that is what makes
-    it a build method rather than half of one — so a request with no
-    package source at all fails where every other build method fails: at
+    it a build target rather than half of one — so a request with no
+    package source at all fails where every other build target fails: at
     the SDK pin, naming the setting that supplies one. The old refusal
     ("nothing states which packages to use") is gone, and this test is
     what would notice it coming back.
@@ -366,11 +386,11 @@ def test_the_environment_is_checked_before_the_context_is_locked(
 
 
 # --------------------------------------------------------------------------
-# One outcome shape, both methods
+# One outcome shape, both targets
 # --------------------------------------------------------------------------
 
 
-def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path, monkeypatch):
+def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path, monkeypatch):
     """``local``: the legacy container invocation's outcome (retired at
     the switchover), unchanged, in the shared shape."""
     seen: dict[str, object] = {}
@@ -402,9 +422,9 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             sdk_sources=(tmp_path / "sdk",),
             image="ghcr.io/mcu-home/build-container:test",
         ),
-        buildmethods.LOCAL,
+        buildmethods.TARGET_LOCAL,
     )
-    assert outcome.method == buildmethods.LOCAL
+    assert outcome.target == buildmethods.TARGET_LOCAL
     assert outcome.successful and outcome.status == "success"
     assert outcome.context_id == "sha256:" + "1" * 64
     assert outcome.artifacts == _artifacts()
@@ -419,10 +439,10 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
 
 
 def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkeypatch):
-    """Whichever method runs, the directory is taken for its duration.
+    """Whichever target runs, the directory is taken for its duration.
 
-    The guard sits at the dispatch and not in a method because every
-    method writes into the same directory — and the two runs that
+    The guard sits at the dispatch and not in a target because every
+    target writes into the same directory — and the two runs that
     collide need not even be the same program: a command line, a
     dashboard and a future ``device flash`` all reach the files through
     a directory somebody else may be rewriting. What the lock keeps out
@@ -452,15 +472,15 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
 
     monkeypatch.setattr(buildmethods, "compose_local_build", fake)
     request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    assert _run(request, buildmethods.LOCAL).successful
+    assert _run(request, buildmethods.TARGET_LOCAL).successful
     holder = seen["holder"]
     assert holder["device"] == model.device.name  # type: ignore[index]
     assert holder["operation"] == "build"  # type: ignore[index]
     # And released again: the next build of that directory just runs.
-    assert _run(request, buildmethods.LOCAL).successful
+    assert _run(request, buildmethods.TARGET_LOCAL).successful
 
 
-def test_the_remote_method_answers_in_the_same_shape(model, tmp_path, monkeypatch):
+def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatch):
     """``remote``: a server's verdict, in the shape the container path uses."""
     seen: dict[str, object] = {}
     context = tmp_path / "context"
@@ -488,14 +508,14 @@ def test_the_remote_method_answers_in_the_same_shape(model, tmp_path, monkeypatc
             token="a-token",
             context_dir=context,
         ),
-        buildmethods.REMOTE,
+        buildmethods.TARGET_REMOTE,
     )
-    assert outcome.method == buildmethods.REMOTE
+    assert outcome.target == buildmethods.TARGET_REMOTE
     assert outcome.successful and outcome.status == "success"
     assert outcome.context_id == "sha256:" + "2" * 64
     assert outcome.artifacts == _artifacts()
     assert outcome.out_dir == tmp_path / "out"
-    # The same report name as the local method: both are deliveries out of
+    # The same report name as the local target: both are deliveries out of
     # a build container, so one host-side signer reads either (E55, E56).
     assert outcome.report == BUILD_REPORT_FILE
     assert seen["context_dir"] == context
@@ -524,14 +544,14 @@ def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> N
     with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
         _run(
             buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-            buildmethods.REMOTE,
+            buildmethods.TARGET_REMOTE,
         )
     rendered = str(refusal.value)
     assert "type: remote" in rendered
     assert "--builder attic" in rendered
     assert "default_builder" in rendered
     assert "secrets/build-server/attic.yaml" in rendered
-    assert "--build-mode remote --build-server" in rendered
+    assert "--build-target remote --build-server" in rendered
     assert "--build-token" in rendered
 
 
@@ -540,8 +560,8 @@ def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> No
 
     ``remote`` creates its own context now, and a context is
     content-addressed over the SDK package's hash — so the one thing this
-    method still cannot invent is *which package*. The refusal names the
-    same two knobs the ``local`` method reads, because they are the same
+    target still cannot invent is *which package*. The refusal names the
+    same two knobs the ``local`` target reads, because they are the same
     two knobs: the pin is resolved here either way, and only who fetches
     the bytes afterwards differs. It deliberately does not fall back to
     "whatever the server has", which would be an identity describing a
@@ -552,7 +572,7 @@ def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> No
             buildmethods.BuildRequest(
                 model=model, out_dir=tmp_path, server="ws://build.example/session"
             ),
-            buildmethods.REMOTE,
+            buildmethods.TARGET_REMOTE,
         )
     rendered = str(refusal.value)
     assert "--sdk-sources" in rendered
@@ -585,7 +605,7 @@ def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path,
                 server="ws://build.example/session",
                 context_dir=context,
             ),
-            buildmethods.REMOTE,
+            buildmethods.TARGET_REMOTE,
         )
     assert "pip install 'mcuhome-workbench[remote]'" in str(refusal.value)
 
@@ -595,7 +615,7 @@ def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path,
 # --------------------------------------------------------------------------
 
 
-def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, monkeypatch):
+def test_the_container_target_no_longer_asks_for_the_compiler(model, tmp_path, monkeypatch):
     """The container profile is the workbench's own, so no build needs a compiler.
 
     This is the point of it living here. A build needs a container
@@ -622,7 +642,7 @@ def test_the_container_method_no_longer_asks_for_the_compiler(model, tmp_path, m
     # point — what is asserted below is which refusal it is *not*.
     monkeypatch.setattr(containerbuild, "run_command", lambda argv, on_line=None: Completed(1, ""))
     with pytest.raises(BuildError) as refusal:
-        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.LOCAL)
+        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.TARGET_LOCAL)
     assert "mcuhome-compiler" not in str(refusal.value)
 
 
@@ -726,10 +746,10 @@ def west_workspace(root: Path) -> Path:
 
 
 def test_the_development_workspace_reaches_the_execution(model, tmp_path) -> None:
-    """``build.dev_workspace`` is read where every other method-specific
+    """``build.dev_workspace`` is read where every other target-specific
     field is read, and lands on the target."""
-    target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         buildmethods.BuildRequest(
             model=model,
             out_dir=tmp_path,
@@ -750,8 +770,8 @@ def test_a_development_workspace_is_refused_for_a_container_build(model, tmp_pat
     to change.
     """
     with pytest.raises(ConfigError, match="development workspace") as refusal:
-        buildmethods.target_for_method(
-            buildmethods.LOCAL,
+        buildmethods.build_target_for(
+            buildmethods.TARGET_LOCAL,
             buildmethods.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
@@ -773,8 +793,8 @@ def test_a_development_workspace_is_refused_for_a_remote_build(model, tmp_path) 
     person meant.
     """
     with pytest.raises(ConfigError, match="development workspace") as refusal:
-        buildmethods.target_for_method(
-            buildmethods.REMOTE,
+        buildmethods.build_target_for(
+            buildmethods.TARGET_REMOTE,
             buildmethods.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
@@ -1033,35 +1053,6 @@ def test_a_patched_context_is_refused_before_the_context_is_locked(
     assert not (tmp_path / ".mcuhome-local").exists()
 
 
-def test_a_subprocess_build_refuses_the_retired_device_field_too(model, tmp_path) -> None:
-    """``sources.build_environment`` named a container image, and a build
-    without a container is exactly where ignoring it would be easiest to
-    excuse — which is why it is refused there as well.
-
-    The setting says which environment to build in; a build that used
-    another one and said nothing would be the same defect in either mode.
-    """
-    import dataclasses
-
-    stated = dataclasses.replace(
-        model,
-        sources=dataclasses.replace(
-            model.sources, build_environment="ghcr.io/somebody/build-container"
-        ),
-    )
-    with pytest.raises(ConfigError) as caught:
-        buildmethods.compose_subprocess_build(
-            stated,
-            sdk_sources=(),
-            work_root=tmp_path / "work",
-            env={},
-            signing_pub=_PUBLIC_PEM,
-        )
-    assert "sources.build_environment" in caught.value.message
-    assert "retired" in caught.value.message
-    assert not (tmp_path / "work").exists(), "nothing was written"
-
-
 def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, monkeypatch):
     """What built it, in the same form a local container build records.
 
@@ -1097,7 +1088,7 @@ def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, mon
             token="a-token",
             context_dir=context,
         ),
-        buildmethods.REMOTE,
+        buildmethods.TARGET_REMOTE,
     )
     assert outcome.image == f"ghcr.io/mcu-home/build-environment@{digest}"
 
@@ -1138,6 +1129,119 @@ def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, mon
             context_dir=context,
             image=":0.1.10.dev2-r1",
         ),
-        buildmethods.REMOTE,
+        buildmethods.TARGET_REMOTE,
     )
     assert seen["image"] == ":0.1.10.dev2-r1"
+
+
+# --------------------------------------------------------------------------
+# The device's own image pin (``sources.container_image``)
+# --------------------------------------------------------------------------
+
+
+def test_the_device_pin_answers_where_no_invocation_named_one(model) -> None:
+    """Two statements can name an image, and the more specific one wins."""
+    plain = replace(model, sources=replace(model.sources, container_image=None))
+    pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
+    assert buildmethods.image_pin(plain, None) is None
+    assert buildmethods.image_pin(plain, "@sha256:" + "a" * 64) == "@sha256:" + "a" * 64
+    assert buildmethods.image_pin(pinned, None) == ":0.1.10.dev2-r1"
+    assert buildmethods.image_pin(pinned, "localhost/other:wip") == "localhost/other:wip"
+
+
+def test_a_container_build_resolves_the_pin_the_device_carries(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The persistent pin reaches the image search, and the flag overrides it.
+
+    The search is where a pin means anything — it narrows which images
+    are looked at — so this asserts the value that arrives there, once
+    for a device that carries one and once for a build that named its
+    own.
+    """
+    seen: list[str | None] = []
+
+    def resolve(pin, **kwargs):
+        seen.append(kwargs["image_pin"])
+        raise BuildError("stopped after the pin was read", hint="nothing to fix")
+
+    monkeypatch.setattr(containerbuild, "prepare_environment", resolve)
+    pinned = replace(
+        model,
+        sources=replace(model.sources, container_image="ghcr.io/mcu-home/build-environment"),
+    )
+    make_package_source(tmp_path / "sdk")
+    for index, image in enumerate((None, ":wip")):
+        with pytest.raises(BuildError, match="stopped after the pin was read"):
+            buildmethods.compose_container_build(
+                pinned,
+                sdk_sources=(tmp_path / "sdk",),
+                work_root=tmp_path / f"work-{index}",
+                env={},
+                signing_pub=_PUBLIC_PEM,
+                image=image,
+            )
+    assert seen == ["ghcr.io/mcu-home/build-environment", ":wip"]
+
+
+def test_a_remote_build_carries_the_device_pin_as_well(model, tmp_path) -> None:
+    """The far side is told what the device pins, not only what a flag said."""
+    pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_REMOTE,
+        buildmethods.BuildRequest(model=pinned, out_dir=tmp_path, server="attic"),
+    )
+    assert target.image == ":0.1.10.dev2-r1"
+    stated = buildmethods.build_target_for(
+        buildmethods.TARGET_REMOTE,
+        buildmethods.BuildRequest(
+            model=pinned, out_dir=tmp_path, server="attic", image="@sha256:" + "b" * 64
+        ),
+    )
+    assert stated.image == "@sha256:" + "b" * 64
+
+
+def test_a_subprocess_build_says_the_pin_has_no_effect_rather_than_refusing(
+    model, tmp_path, monkeypatch
+) -> None:
+    """A build without a container has no image to pin, and says so once.
+
+    Refusing would be wrong: the same device builds in a container on the
+    next machine, and the pin is a statement about that delivery. Silence
+    would be worse than either — the person pinned an image and would
+    never learn that this build used none.
+    """
+    said: list[str] = []
+
+    def stop(*args, **kwargs):
+        raise BuildError("stopped after the note", hint="nothing to fix")
+
+    monkeypatch.setattr(subprocessbuild, "environment_from_pins", stop)
+    make_package_source(tmp_path / "sdk")
+    pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
+    with pytest.raises(BuildError, match="stopped after the note"):
+        buildmethods.compose_subprocess_build(
+            pinned,
+            sdk_sources=(tmp_path / "sdk",),
+            work_root=tmp_path / "work",
+            env={},
+            signing_pub=_PUBLIC_PEM,
+            on_line=said.append,
+        )
+    assert any(":0.1.10.dev2-r1" in line and "no effect" in line for line in said)
+
+
+def test_a_development_build_refuses_the_pin(model, tmp_path) -> None:
+    """A development build starts no container, so no image can name it."""
+    pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
+    with pytest.raises(BuildError, match="sources.container_image") as refused:
+        create_build_context(
+            pinned,
+            out_dir=tmp_path / "context",
+            work_root=tmp_path / "made",
+            sdk_sources=(),
+            signing_pub=_PUBLIC_PEM,
+            developer=True,
+        )
+    assert "build.dev_workspace" in refused.value.hint
+    assert not (tmp_path / "context").exists()

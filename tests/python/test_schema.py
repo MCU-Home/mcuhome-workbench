@@ -31,25 +31,45 @@ def test_sources_takes_the_three_package_overrides(write_config) -> None:
     assert model.sources.sdk == "sdk/mcuhome-sdk:0.1.9"
     assert model.sources.build_workspace == "build-workspace/mcuhome-build-workspace:0.1.10.dev1"
     assert model.sources.build_tools == "build-tools/mcuhome-build-tools"
-    # The fourth field of the model is not a device key: the container
-    # image a local build happens to run in stays what MCUHome ships,
-    # whatever the block says. A device that could move it would change
-    # where the container backend fetches its image from.
-    assert model.sources.build_environment == SourcesModel().build_environment
+    # The fourth entry is not one of the three and is not stated here:
+    # unset, a device pins no image and the search answers.
+    assert model.sources.container_image is None
+    assert SourcesModel().container_image is None
+
+
+def test_sources_takes_a_container_image_pin(write_config) -> None:
+    """The fourth entry: which image delivers this device's environment.
+
+    Optional, with no default, and never written unless somebody wrote
+    it — so a device that states nothing carries nothing, and the image
+    is found by the packages its labels declare.
+    """
+    text = VALID_CONFIG + (
+        "\nsources:\n  container_image: ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1\n"
+    )
+    model = resolve_file(write_config(text))
+    assert model.sources.container_image == "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1"
+    # The three package entries are untouched by it.
+    assert model.sources.sdk == SourcesModel().sdk
+    # It travels in the canonical model exactly as it was written, and a
+    # device that states none writes no key at all.
+    assert model.to_dict()["sources"]["container_image"] == model.sources.container_image
+    assert "container_image" not in resolve_file(write_config(VALID_CONFIG)).to_dict()["sources"]
 
 
 def test_sources_refuses_a_key_it_does_not_know(write_config) -> None:
     """A typo in a package name is refused where it stands, not at build time.
 
-    ``build_environment`` is refused with it, deliberately: the block
-    names the three packages a device may choose, and the container image
-    a local build happens to run in is not a property of the device.
+    ``build_environment`` is refused with it, deliberately: it named an
+    image chosen by the Zephyr release it declared, and an environment is
+    identified by its packages now — what replaced it is
+    ``container_image``, which pins the image that delivers them.
     """
     text = VALID_CONFIG + "\nsources:\n  build_workspaces: build-workspace/x\n"
     errors = expect_failure(write_config(text))
     error = find_error(errors, 'Unknown key "build_workspaces"')
     assert error.location.line == line_of(text, "build_workspaces:")
-    assert error.hint == "keys allowed here: build_tools, build_workspace, sdk"
+    assert error.hint == "keys allowed here: build_tools, build_workspace, container_image, sdk"
 
     other = VALID_CONFIG + "\nsources:\n  build_environment: mcu-home/build-environment\n"
     assert find_error(expect_failure(write_config(other)), 'Unknown key "build_environment"')

@@ -39,7 +39,7 @@ from conftest import (
     sdk_members,
     write_environment_packages,
 )
-from mcuhome.model.errors import BuildError, ConfigError
+from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import buildmethods, containerbuild
@@ -828,29 +828,6 @@ def test_a_stopped_step_has_its_container_removed_by_name(tmp_path, model, publi
     handle.terminate()
     handle.kill()
     assert removed == [name, name], "each rung reaps the container it is stopping"
-
-
-def test_a_device_that_still_names_a_build_container_is_refused(tmp_path, model, public_pem):
-    """``sources.build_environment`` is retired, and ignoring it would be
-    the worse answer: the device says which environment to build in, the
-    build would use another one, and nothing about the result would say
-    so."""
-    import dataclasses
-
-    stated = dataclasses.replace(
-        model,
-        sources=dataclasses.replace(
-            model.sources, build_environment="ghcr.io/somebody/build-container"
-        ),
-    )
-    make_sdk_source(tmp_path / "src")
-    seam = Seam()
-    with pytest.raises(ConfigError) as caught:
-        _build(tmp_path, stated, public_pem, seam=seam)
-    assert "sources.build_environment" in caught.value.message
-    assert "retired" in caught.value.message
-    assert "sources.build_workspace" in (caught.value.hint or "")
-    assert seam.calls == [], "nothing was asked of the runtime"
 
 
 def test_a_machine_whose_memory_cannot_be_measured_states_no_memory_limit(

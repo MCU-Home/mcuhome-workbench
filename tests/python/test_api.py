@@ -64,7 +64,7 @@ def test_the_version_is_the_package_version() -> None:
     assert "from mcuhome.workbench import __version__" in Path(api.__file__).read_text("utf-8")
 
 
-def test_the_build_methods_are_part_of_the_surface() -> None:
+def test_the_build_targets_are_part_of_the_surface() -> None:
     """E64: driving a build is supported, not an implementation detail.
 
     Re-exported rather than reimplemented — the same objects
@@ -76,14 +76,14 @@ def test_the_build_methods_are_part_of_the_surface() -> None:
 
     exported = (
         "run_build",
-        "resolve_method",
+        "resolve_build_target",
         "BuildRequest",
         "BuildOutcome",
-        "LOCAL",
-        "REMOTE",
-        "METHODS",
-        "DEFAULT_METHOD",
-        "UnknownMethod",
+        "TARGET_LOCAL",
+        "TARGET_REMOTE",
+        "BUILD_TARGETS",
+        "DEFAULT_BUILD_TARGET",
+        "UnknownBuildTarget",
         "RemoteNotConfigured",
     )
     for name in exported:

@@ -186,8 +186,26 @@ def test_config_print_shows_each_builders_layer(tmp_path: Path, project: Project
 def test_no_builder_and_no_default_falls_back_to_local(project: Project) -> None:
     settings = resolve_settings(project=project, env={})
     selected = resolve_builder(settings, project=project, env={})
-    assert selected.method == "local"
+    assert selected.target == "local"
     assert selected.builder is None
+    assert selected.server is None and selected.token is None
+
+
+def test_the_fallback_is_the_target_the_configuration_names(project: Project) -> None:
+    """No builder at all: ``build.target`` is what answers, not a constant.
+
+    The builder list is one way to say where a build runs and the option
+    is the other; with neither a name nor a default, the option is the
+    only statement there is, and ignoring it would build here while the
+    configuration said otherwise.
+    """
+    write_project(project, "build:\n  target: remote\n")
+    settings = resolve_settings(project=project, env={})
+    selected = resolve_builder(settings, project=project, env={})
+    assert selected.target == "remote"
+    assert selected.builder is None
+    # And nothing is invented for it: a remote build with no builder
+    # carries no server, which is what the build itself refuses over.
     assert selected.server is None and selected.token is None
 
 
@@ -195,7 +213,7 @@ def test_the_default_builder_selects_by_name(project: Project) -> None:
     write_project(project, REMOTE_ATTIC + "default_builder: attic\n")
     settings = resolve_settings(project=project, env={})
     selected = resolve_builder(settings, project=project, env={})
-    assert selected.method == "remote"
+    assert selected.target == "remote"
     assert selected.builder is not None and selected.builder.name == "attic"
     assert selected.server == "10.0.0.5:8291"
 
@@ -207,7 +225,7 @@ def test_an_explicit_name_beats_the_default(project: Project) -> None:
     )
     settings = resolve_settings(project=project, env={})
     selected = resolve_builder(settings, name="bench", project=project, env={})
-    assert selected.method == "local"
+    assert selected.target == "local"
     assert selected.builder is not None and selected.builder.name == "bench"
 
 
@@ -219,7 +237,7 @@ def test_an_unknown_name_lists_the_configured_builders(project: Project) -> None
     assert '--builder "atic" names no configured builder' in caught.value.message
     hint = caught.value.hint or ""
     assert "attic" in hint
-    assert "--build-mode" in hint
+    assert "--build-target" in hint
 
 
 def test_an_unknown_default_says_it_was_the_default(project: Project) -> None:

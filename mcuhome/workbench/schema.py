@@ -236,11 +236,17 @@ class RawSources(RawBase):
     nothing is ever written back into the device. So the absent value here
     is ``None`` — "the device said nothing" — and not the default itself,
     which is :class:`~mcuhome.model.model.SourcesModel`'s to state.
+
+    ``container_image`` is the one entry that names no package: it pins
+    the image that *delivers* the two environment packages, for a build
+    that runs in a container. It has no default at all — unset, the
+    image is found by the packages its labels declare.
     """
 
     sdk: str | None = None
     build_workspace: str | None = None
     build_tools: str | None = None
+    container_image: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -617,23 +623,26 @@ def _parse_device(reader: MapReader) -> RawDevice:
 
 
 def _parse_sources(reader: MapReader) -> RawSources:
-    """``sources:`` — three optional package references, as text.
+    """``sources:`` — three optional package references and an image pin, as text.
 
-    The references are not taken apart here. Their grammar is
-    ``[registry/]<source>/<package>[:version][@sha256:…]``, and the one
-    place that knows it is the resolution that has to answer with a pin
-    (:mod:`mcuhome.workbench.resolve_pins`), which refuses a reference it
-    cannot resolve naming the part that is wrong. Splitting that
-    knowledge in two would give a device file two graders of the same
-    string.
+    Neither the references nor the pin are taken apart here. The
+    reference grammar is ``[registry/]<source>/<package>[:version][@sha256:…]``
+    and the one place that knows it is the resolution that has to answer
+    with a pin (:mod:`mcuhome.workbench.resolve_pins`); the image pin's
+    forms are the container profile's
+    (:func:`~mcuhome.workbench.resolve_image.parse_image_pin`), and it
+    refuses a value that is not a reference naming the part that is
+    wrong. Splitting that knowledge in two would give a device file two
+    graders of the same string.
     """
-    reader.reject_unknown({"sdk", "build_workspace", "build_tools"})
+    reader.reject_unknown({"sdk", "build_workspace", "build_tools", "container_image"})
     return RawSources(
         loc=reader.loc,
         locs=reader.all_locs(),
         sdk=reader.string("sdk"),
         build_workspace=reader.string("build_workspace"),
         build_tools=reader.string("build_tools"),
+        container_image=reader.string("container_image"),
     )
 
 

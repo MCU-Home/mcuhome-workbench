@@ -118,7 +118,7 @@ def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextRequest:
 
 
 def _lock(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
-    """Create a base context and freeze it — what a local build method does.
+    """Create a base context and freeze it — what a local build target does.
 
     ``create_context`` writes only the request; the ``files`` list and the
     ID exist only once the context is locked, so every test that needs a

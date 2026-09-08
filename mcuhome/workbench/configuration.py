@@ -82,7 +82,9 @@ from mcuhome.workbench.buildenvstore import (
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
+    BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
+    DEFAULT_BUILD_TARGET,
     DEFAULT_CONTAINER_REPOSITORIES,
 )
 from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
@@ -186,17 +188,19 @@ class Option:
         """The flag this registry derives, or empty for an option in an area.
 
         No flag in MCUHome is written with a dot, and the obvious
-        substitution would produce spellings that mean something else —
-        ``--build-mode`` is the command line's word for *where* a build
-        runs, not for how this machine executes it. So nothing is derived
+        substitution would derive a spelling for every key in an area —
+        including the many nobody sets per invocation, and including
+        ``build.sdk_sources``, whose flag is ``--sdk-sources`` and older
+        than the areas are. A derived flag would then be offered in
+        messages for options no command line has. So nothing is derived
         for an option that names its area, and a message that offers a
         flag checks this first: such an option is set in a file or in the
         environment.
 
         A tool may still put a flag of its **own** on one, because the
-        arguments channel takes the option's name rather than a spelling.
-        The command line does exactly that for ``build.sdk_sources``,
-        which carried ``--sdk-sources`` before the areas existed. What
+        arguments channel takes the option's name rather than a
+        spelling: ``mcuhome device build`` does that for
+        ``build.target``, ``build.mode`` and ``build.sdk_sources``. What
         this registry will not do is invent the spelling.
         """
         return "" if self.area else "--" + self.name.replace("_", "-")
@@ -227,12 +231,6 @@ OPTIONS: tuple[Option, ...] = (
         kind="path",
         files=False,
         help="a firmware signing key file to use instead of the project's",
-    ),
-    Option(
-        "jobs",
-        kind="integer",
-        default=1,
-        help="parallel compile jobs a build may use",
     ),
     # One cache for everything this user builds — its entries are content
     # addresses, so two projects share one exactly when the compilation
@@ -278,10 +276,23 @@ OPTIONS: tuple[Option, ...] = (
     ),
     # -- build.* : how this machine builds -----------------------------
     # Everything below describes the machine a build runs on, not the
-    # firmware: which of the two executions it uses, where the unpacked
-    # build environment lives, and what it may spend on it. All of it is
-    # a property of the host, so all of it is configuration and none of
-    # it belongs in a device.
+    # firmware: where a build of it runs, which of the two executions it
+    # uses, where the unpacked build environment lives, and what it may
+    # spend on it. All of it is a property of the host, so all of it is
+    # configuration and none of it belongs in a device.
+    #
+    # The two axes are two keys, deliberately: `build.target` is where a
+    # build runs and `build.mode` is how the machine that runs it
+    # executes the work — a client does not get to tell a build server
+    # whether to start a container, so one word for both could never
+    # stay symmetric.
+    Option(
+        "build.target",
+        kind="string",
+        default=DEFAULT_BUILD_TARGET,
+        choices=BUILD_TARGETS,
+        help="where a build runs: on this machine, or on a build server",
+    ),
     Option(
         "build.mode",
         kind="string",
@@ -708,7 +719,7 @@ def _read_layer(
         raise ConfigError(
             f"{file.name} must be a mapping of `option: value` pairs.",
             location=Location(file=file, line=1, column=1),
-            hint="one option per line, for example:\n    jobs: 4",
+            hint="one option per line, for example:\n    default_builder: attic",
         )
     by_name = {opt.name: opt for opt in registry}
     settable = sorted(name for name, opt in by_name.items() if opt.files and not opt.bootstrap)
@@ -871,10 +882,11 @@ def resolve_builder(
 ) -> SelectedBuilder:
     """Which builder this invocation uses, credentials included.
 
-    The two configured rungs of ADR 0023 §2 — an explicit ``--builder``
-    *name*, then the configured ``default_builder`` — over the resolved
-    ``builders`` list, falling back to a plain ``local`` build when
-    neither is set. The fully manual rung never calls this. A remote
+    The two configured rungs — an explicit ``--builder`` *name*, then
+    the configured ``default_builder`` — over the resolved ``builders``
+    list, falling back to ``build.target`` when neither is set (and that
+    key's own default is a build on this machine). A caller that names a
+    target outright never calls this. A remote
     builder's token comes from ``secrets/build-server/<name>.yaml``,
     looked up nearest-first: the project, then the user configuration
     directory, then the system one — the same ladder its definition
@@ -888,6 +900,7 @@ def resolve_builder(
         settings.value("builders"),
         name=name,
         default=settings.value("default_builder"),
+        fallback=settings.value("build.target"),
         token_of=lambda builder: _builder_token(
             builder.name, project=project, env=env, on_warning=on_warning
         ),
@@ -1082,7 +1095,7 @@ def _load_for_editing(file: Path, yaml: Any) -> Any:
         raise ConfigError(
             f"{file.name} must be a mapping of `option: value` pairs.",
             location=Location(file=file, line=1, column=1),
-            hint="one option per line, for example:\n    jobs: 4",
+            hint="one option per line, for example:\n    default_builder: attic",
         )
     return data
 

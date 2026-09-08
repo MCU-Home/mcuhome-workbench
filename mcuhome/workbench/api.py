@@ -95,17 +95,18 @@ What is here, in the order a caller needs it:
     against a build environment unpacked on the host) — which is why
     ``LocalBuild`` carries an ``Execution`` and ``RemoteBuild`` does not.
     ``RemoteNotConfigured`` is the typed refusal a caller renders.
-``run_build`` / ``resolve_method`` / ``target_for_method``
-    The same build, selected by method name — for a caller whose choice
+``run_build`` / ``resolve_build_target`` / ``build_target_for``
+    The same build, selected by target name — for a caller whose choice
     arrived as a command-line flag or a configuration value.
-    ``resolve_method`` turns a name, or nothing, into one of ``LOCAL``,
-    ``REMOTE`` (``METHODS``, ``DEFAULT_METHOD``) or raises
-    ``UnknownMethod``; ``target_for_method`` is the name and the request
-    read together as the target they describe. ``resolve_build_mode``
-    does the same for the other axis — ``MODE_CONTAINER``,
-    ``MODE_SUBPROCESS`` (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or
-    ``UnknownBuildMode`` — and ``BuildRequest.build_mode`` is where a
-    caller states it.
+    ``resolve_build_target`` turns a name into one of ``TARGET_LOCAL``,
+    ``TARGET_REMOTE`` (``BUILD_TARGETS``, ``DEFAULT_BUILD_TARGET``) or
+    raises ``UnknownBuildTarget``; ``build_target_for`` is the name and
+    the request read together as the target they describe, and a name of
+    ``None`` there takes ``build.target``. ``resolve_build_mode`` does
+    the same for the
+    other axis — ``MODE_CONTAINER``, ``MODE_SUBPROCESS``
+    (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or ``UnknownBuildMode`` —
+    and ``BuildRequest.build_mode`` is where a caller states it.
 ``BuildOptions`` / ``build_options`` / ``options_for``
     What the ``build`` section of the configuration says about *this
     machine*: the execution it uses, where it keeps unpacked build
@@ -114,12 +115,14 @@ What is here, in the order a caller needs it:
     where the compiler cache tiers are. ``build_options`` turns resolved
     ``Settings`` into that object; ``options_for`` answers for a request —
     the options it states, or the machine's own, resolved from the
-    environment and the project the request names. A caller that never
+    environment and the project the request names. ``build.target`` is
+    in there too: where a build of this machine runs when nothing more
+    explicit said otherwise. A caller that never
     touches any of it builds the way the machine is configured, which is
     the point: the registry derives no command-line flag for these keys.
     The section's ``build.sdk_sources`` is the one key that travels on
-    the request instead (``BuildRequest.sdk_sources``), because the
-    remote method needs it as well.
+    the request instead (``BuildRequest.sdk_sources``), because a remote
+    build needs it as well.
 ``BuilderSession`` / ``LocalOutcome``
     The **backend role**, for the caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a
@@ -188,27 +191,27 @@ from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildmethods import (
     BUILD_MODES,
+    BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
+    DEFAULT_BUILD_TARGET,
     DEFAULT_MAX_WAIT_SECONDS,
-    DEFAULT_METHOD,
-    LOCAL,
-    METHODS,
     MODE_CONTAINER,
     MODE_SUBPROCESS,
-    REMOTE,
+    TARGET_LOCAL,
+    TARGET_REMOTE,
     BuildOptions,
     BuildOutcome,
     BuildRequest,
     RemoteNotConfigured,
     UnknownBuildMode,
-    UnknownMethod,
+    UnknownBuildTarget,
     build_firmware,
     build_options,
+    build_target_for,
     options_for,
     resolve_build_mode,
-    resolve_method,
+    resolve_build_target,
     run_build,
-    target_for_method,
 )
 from mcuhome.workbench.buildtarget import (
     BuildTarget,
@@ -296,6 +299,7 @@ __all__ = [
     "BuildOptions",
     "BuildOutcome",
     "BUILD_MODES",
+    "BUILD_TARGETS",
     "BuildRequest",
     "BuildTarget",
     "Builder",
@@ -310,7 +314,7 @@ __all__ = [
     "ContainerExecution",
     "DEFAULT_MAX_WAIT_SECONDS",
     "DEFAULT_BUILD_MODE",
-    "DEFAULT_METHOD",
+    "DEFAULT_BUILD_TARGET",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
     "DeviceModel",
@@ -321,15 +325,15 @@ __all__ = [
     "Execution",
     "GenerationError",
     "InitResult",
-    "LOCAL",
     "LocalBuild",
     "LocalOutcome",
     "Location",
     "MARKER_FILE",
     "MCUHomeError",
-    "METHODS",
     "MODE_CONTAINER",
     "MODE_SUBPROCESS",
+    "TARGET_LOCAL",
+    "TARGET_REMOTE",
     "MODEL_VERSION",
     "Migration",
     "MigrationFailed",
@@ -346,7 +350,6 @@ __all__ = [
     "ProjectFileError",
     "ProjectUpgradeRequired",
     "ProjectVersionUnsupported",
-    "REMOTE",
     "RemoteBuild",
     "RemoteNotConfigured",
     "SubprocessExecution",
@@ -358,7 +361,7 @@ __all__ = [
     "Step",
     "UPGRADE_FILE",
     "UnknownBuildMode",
-    "UnknownMethod",
+    "UnknownBuildTarget",
     "UpgradeInProgress",
     "UpgradeInterrupted",
     "UpgradeResult",
@@ -366,6 +369,7 @@ __all__ = [
     "VERSION",
     "ValidationResult",
     "build_firmware",
+    "build_target_for",
     "build_options",
     "build_lock",
     "config_json_schema",
@@ -386,14 +390,13 @@ __all__ = [
     "render_starter",
     "resolve_builder",
     "resolve_build_mode",
-    "resolve_method",
+    "resolve_build_target",
     "resolve_project",
     "resolve_settings",
     "run_build",
     "running_builds",
     "scope_config_file",
     "set_config_value",
-    "target_for_method",
     "unset_config_value",
     "upgrade_plan",
     "upgrade_session",

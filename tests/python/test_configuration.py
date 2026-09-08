@@ -92,44 +92,50 @@ def test_every_option_kind_is_one_the_parsers_know() -> None:
 
 def test_defaults_answer_when_nothing_is_configured(project: Project) -> None:
     settings = resolve_settings(project=project, env={})
-    assert settings.value("jobs") == 1
-    assert settings.origin("jobs") == "default"
-    assert settings.setting("jobs").source is None
+    assert settings.value("build.sdk_max_bytes") == 2 * 1024**3
+    assert settings.origin("build.sdk_max_bytes") == "default"
+    assert settings.setting("build.sdk_max_bytes").source is None
 
 
 def test_the_user_layer_beats_the_default(tmp_path: Path, project: Project) -> None:
     env = user_env(tmp_path)
-    file = write_user(tmp_path, "jobs: 3\n")
+    file = write_user(tmp_path, "build:\n  sdk_max_bytes: 3\n")
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("jobs") == 3
-    assert settings.origin("jobs") == "user"
-    assert settings.setting("jobs").source == str(file)
+    assert settings.value("build.sdk_max_bytes") == 3
+    assert settings.origin("build.sdk_max_bytes") == "user"
+    assert settings.setting("build.sdk_max_bytes").source == str(file)
 
 
 def test_the_project_layer_beats_the_user_layer(tmp_path: Path, project: Project) -> None:
     env = user_env(tmp_path)
-    write_user(tmp_path, "jobs: 3\n")
-    write_project(project, "jobs: 5\n")
+    write_user(tmp_path, "build:\n  sdk_max_bytes: 3\n")
+    write_project(project, "build:\n  sdk_max_bytes: 5\n")
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("jobs") == 5
-    assert settings.origin("jobs") == "project"
+    assert settings.value("build.sdk_max_bytes") == 5
+    assert settings.origin("build.sdk_max_bytes") == "project"
 
 
 def test_the_environment_beats_every_file(tmp_path: Path, project: Project) -> None:
-    env = user_env(tmp_path) | {"MCUHOME_JOBS": "7"}
-    write_user(tmp_path, "jobs: 3\n")
-    write_project(project, "jobs: 5\n")
+    env = user_env(tmp_path) | {"MCUHOME_BUILD_SDK_MAX_BYTES": "7"}
+    write_user(tmp_path, "build:\n  sdk_max_bytes: 3\n")
+    write_project(project, "build:\n  sdk_max_bytes: 5\n")
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("jobs") == 7
-    assert settings.origin("jobs") == "environment"
-    assert settings.setting("jobs").source == "MCUHOME_JOBS"
+    assert settings.value("build.sdk_max_bytes") == 7
+    assert settings.origin("build.sdk_max_bytes") == "environment"
+    assert settings.setting("build.sdk_max_bytes").source == "MCUHOME_BUILD_SDK_MAX_BYTES"
 
 
 def test_the_command_line_beats_the_environment(project: Project) -> None:
-    settings = resolve_settings(project=project, env={"MCUHOME_JOBS": "7"}, args={"jobs": 2})
-    assert settings.value("jobs") == 2
-    assert settings.origin("jobs") == "arguments"
-    assert settings.setting("jobs").source == "--jobs"
+    settings = resolve_settings(
+        project=project,
+        env={"MCUHOME_BUILD_SDK_MAX_BYTES": "7"},
+        args={"build.sdk_max_bytes": 2},
+    )
+    assert settings.value("build.sdk_max_bytes") == 2
+    assert settings.origin("build.sdk_max_bytes") == "arguments"
+    # An option in an area has no derived flag, so the source is its own
+    # name — the same rule `_refuse_not_file_settable` documents.
+    assert settings.setting("build.sdk_max_bytes").source == "build.sdk_max_bytes"
 
 
 def test_the_system_layer_is_the_lowest_file(
@@ -137,36 +143,36 @@ def test_the_system_layer_is_the_lowest_file(
 ) -> None:
     system = tmp_path / "etc" / "mcuhome"
     system.mkdir(parents=True)
-    (system / CONFIG_FILE).write_text("jobs: 9\n", encoding="utf-8")
+    (system / CONFIG_FILE).write_text("build:\n  sdk_max_bytes: 9\n", encoding="utf-8")
     monkeypatch.setattr(configuration, "system_config_dir", lambda env: system)
     env = user_env(tmp_path)
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("jobs") == 9
-    assert settings.origin("jobs") == "system"
-    write_user(tmp_path, "jobs: 3\n")
-    assert resolve_settings(project=project, env=env).value("jobs") == 3
+    assert settings.value("build.sdk_max_bytes") == 9
+    assert settings.origin("build.sdk_max_bytes") == "system"
+    write_user(tmp_path, "build:\n  sdk_max_bytes: 3\n")
+    assert resolve_settings(project=project, env=env).value("build.sdk_max_bytes") == 3
 
 
 def test_outside_a_project_the_project_layer_is_simply_absent(tmp_path: Path) -> None:
     settings = resolve_settings(project=None, env={})
-    assert settings.value("jobs") == 1
+    assert settings.value("build.sdk_max_bytes") == 2 * 1024**3
 
 
 def test_an_environment_without_a_home_has_no_user_layer(project: Project) -> None:
     """A service account is a normal caller, not a broken one."""
     settings = resolve_settings(project=project, env={})
-    assert settings.origin("jobs") == "default"
+    assert settings.origin("build.sdk_max_bytes") == "default"
 
 
 def test_an_empty_environment_value_sets_nothing(project: Project) -> None:
-    settings = resolve_settings(project=project, env={"MCUHOME_JOBS": ""})
-    assert settings.origin("jobs") == "default"
+    settings = resolve_settings(project=project, env={"MCUHOME_BUILD_SDK_MAX_BYTES": ""})
+    assert settings.origin("build.sdk_max_bytes") == "default"
 
 
 def test_an_empty_configuration_file_is_an_empty_layer(tmp_path: Path, project: Project) -> None:
     write_project(project, "# nothing decided yet\n")
     settings = resolve_settings(project=project, env={})
-    assert settings.origin("jobs") == "default"
+    assert settings.origin("build.sdk_max_bytes") == "default"
 
 
 # --- value parsing, per channel ---------------------------------------
@@ -199,25 +205,25 @@ def test_a_single_string_where_a_list_belongs_is_explained(project: Project) -> 
 
 
 def test_a_word_where_a_number_belongs_is_located(project: Project) -> None:
-    write_project(project, "# a comment first\njobs: four\n")
+    write_project(project, "# a comment first\nbuild:\n  sdk_max_bytes: four\n")
     with pytest.raises(ConfigError) as caught:
         resolve_settings(project=project, env={})
-    assert "'jobs' must be a whole number" in caught.value.message
+    assert "'build.sdk_max_bytes' must be a whole number" in caught.value.message
     assert caught.value.location is not None
-    assert caught.value.location.line == 2
+    assert caught.value.location.line == 3
 
 
 def test_a_boolean_is_not_a_whole_number(project: Project) -> None:
-    write_project(project, "jobs: true\n")
+    write_project(project, "build:\n  sdk_max_bytes: true\n")
     with pytest.raises(ConfigError) as caught:
         resolve_settings(project=project, env={})
-    assert "'jobs' must be a whole number" in caught.value.message
+    assert "'build.sdk_max_bytes' must be a whole number" in caught.value.message
 
 
 def test_environment_rubbish_names_the_variable(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
-        resolve_settings(project=project, env={"MCUHOME_JOBS": "vier"})
-    assert caught.value.message == "MCUHOME_JOBS must be a whole number, not 'vier'."
+        resolve_settings(project=project, env={"MCUHOME_BUILD_SDK_MAX_BYTES": "vier"})
+    assert caught.value.message == "MCUHOME_BUILD_SDK_MAX_BYTES must be a whole number, not 'vier'."
 
 
 # --- channel rules ----------------------------------------------------
@@ -229,7 +235,7 @@ def test_an_unknown_key_lists_what_a_file_may_set(project: Project) -> None:
         resolve_settings(project=project, env={})
     assert caught.value.message == "There is no option called 'jobz'."
     hint = caught.value.hint or ""
-    assert "jobs" in hint
+    assert "build.sdk_max_bytes" in hint
     assert "build.sdk_sources" in hint
     assert "signing_key" not in hint  # not settable from files
     assert "project_dir" not in hint  # bootstrap
@@ -276,10 +282,14 @@ def test_arguments_for_undeclared_or_bootstrap_names_are_programming_errors(
 
 
 def test_print_data_shows_every_value_with_its_origin(tmp_path: Path, project: Project) -> None:
-    env = user_env(tmp_path) | {"MCUHOME_JOBS": "7"}
+    env = user_env(tmp_path) | {"MCUHOME_BUILD_SDK_MAX_BYTES": "7"}
     write_user(tmp_path, "build:\n  sdk_sources:\n    - /pkgs\n")
     data = resolve_settings(project=project, env=env).print_data()
-    assert data["jobs"] == {"value": 7, "origin": "environment", "source": "MCUHOME_JOBS"}
+    assert data["build.sdk_max_bytes"] == {
+        "value": 7,
+        "origin": "environment",
+        "source": "MCUHOME_BUILD_SDK_MAX_BYTES",
+    }
     assert data["build.sdk_sources"]["value"] == ["/pkgs"]  # JSON-ready, not Path
     assert data["build.sdk_sources"]["origin"] == "user"
     assert "project_dir" not in data  # bootstrap options are not settings
@@ -318,15 +328,15 @@ def test_a_stated_system_directory_is_the_layer_that_is_read(
     """End to end: the file under the stated directory is the system layer."""
     directory = tmp_path / "etc" / "mcuhome"
     directory.mkdir(parents=True)
-    (directory / CONFIG_FILE).write_text("jobs: 8\n", encoding="utf-8")
+    (directory / CONFIG_FILE).write_text("build:\n  sdk_max_bytes: 8\n", encoding="utf-8")
     env = {"XDG_CONFIG_DIRS": str(tmp_path / "etc")}
     settings = resolve_settings(project=project, env=env)
-    assert settings.value("jobs") == 8
-    assert settings.origin("jobs") == "system"
+    assert settings.value("build.sdk_max_bytes") == 8
+    assert settings.origin("build.sdk_max_bytes") == "system"
     # And an environment that points somewhere empty has no system layer,
     # whatever this machine's own /etc holds.
     empty = {"XDG_CONFIG_DIRS": str(tmp_path / "nothing")}
-    assert resolve_settings(project=project, env=empty).origin("jobs") == "default"
+    assert resolve_settings(project=project, env=empty).origin("build.sdk_max_bytes") == "default"
 
 
 # --- writing configuration (config set/unset, ADR 0022 §3) ------------
@@ -334,20 +344,20 @@ def test_a_stated_system_directory_is_the_layer_that_is_read(
 
 def test_set_writes_a_value_the_next_resolve_reads_back(project: Project) -> None:
     file = configuration.scope_config_file("project", project=project, env={})
-    written = configuration.set_config_value(file, "jobs", "4", env={})
+    written = configuration.set_config_value(file, "build.sdk_max_bytes", "4", env={})
     assert written == 4
     resolved = resolve_settings(project=project, env={})
-    assert resolved.value("jobs") == 4
-    assert resolved.origin("jobs") == "project"
+    assert resolved.value("build.sdk_max_bytes") == 4
+    assert resolved.origin("build.sdk_max_bytes") == "project"
 
 
 def test_set_preserves_comments_and_neighboring_keys(project: Project) -> None:
     write_project(project, "# my project\nbuild:\n  sdk_sources:\n    - /pkgs  # pinned packages\n")
-    configuration.set_config_value(project.config_file, "jobs", "2", env={})
+    configuration.set_config_value(project.config_file, "build.sdk_max_bytes", "2", env={})
     text = project.config_file.read_text(encoding="utf-8")
     assert "# my project" in text
     assert "# pinned packages" in text
-    assert "jobs: 2" in text
+    assert "sdk_max_bytes: 2" in text
 
 
 def test_set_creates_the_file_and_its_directory(tmp_path: Path) -> None:
@@ -371,10 +381,10 @@ def test_set_splits_a_paths_value_like_the_environment_does(project: Project) ->
 
 
 def test_set_validates_the_value_before_touching_the_file(project: Project) -> None:
-    write_project(project, "jobs: 2\n")
+    write_project(project, "build:\n  sdk_max_bytes: 2\n")
     before = project.config_file.read_text(encoding="utf-8")
     with pytest.raises(ConfigError) as caught:
-        configuration.set_config_value(project.config_file, "jobs", "vier", env={})
+        configuration.set_config_value(project.config_file, "build.sdk_max_bytes", "vier", env={})
     assert "whole number" in caught.value.message
     assert project.config_file.read_text(encoding="utf-8") == before
 
@@ -383,7 +393,7 @@ def test_set_refuses_an_undeclared_name_with_the_settable_list(project: Project)
     with pytest.raises(ConfigError) as caught:
         configuration.set_config_value(project.config_file, "jobz", "4", env={})
     assert caught.value.message == "There is no option called 'jobz'."
-    assert "jobs" in (caught.value.hint or "")
+    assert "build.sdk_max_bytes" in (caught.value.hint or "")
 
 
 def test_set_refuses_the_channels_a_file_may_not_carry(project: Project) -> None:
@@ -404,27 +414,27 @@ def test_set_refuses_builders_toward_the_file_itself(project: Project) -> None:
 
 def test_set_refuses_an_empty_value_toward_unset(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
-        configuration.set_config_value(project.config_file, "jobs", "", env={})
-    assert "mcuhome config unset jobs" in (caught.value.hint or "")
+        configuration.set_config_value(project.config_file, "build.sdk_max_bytes", "", env={})
+    assert "mcuhome config unset build.sdk_max_bytes" in (caught.value.hint or "")
 
 
 def test_set_refuses_a_file_that_is_not_a_mapping(project: Project) -> None:
     write_project(project, "- a list\n")
     with pytest.raises(ConfigError) as caught:
-        configuration.set_config_value(project.config_file, "jobs", "4", env={})
+        configuration.set_config_value(project.config_file, "build.sdk_max_bytes", "4", env={})
     assert "must be a mapping" in caught.value.message
 
 
 def test_unset_removes_the_key_and_says_whether_it_did(project: Project) -> None:
-    write_project(project, "# keep me\njobs: 4\ndefault_builder: attic\n")
-    assert configuration.unset_config_value(project.config_file, "jobs") is True
+    write_project(project, "# keep me\nbuild:\n  sdk_max_bytes: 4\ndefault_builder: attic\n")
+    assert configuration.unset_config_value(project.config_file, "build.sdk_max_bytes") is True
     text = project.config_file.read_text(encoding="utf-8")
-    assert "jobs" not in text
+    assert "sdk_max_bytes" not in text
     assert "# keep me" in text
     assert "default_builder: attic" in text
-    assert configuration.unset_config_value(project.config_file, "jobs") is False
+    assert configuration.unset_config_value(project.config_file, "build.sdk_max_bytes") is False
     missing = project.root / "nowhere.yaml"
-    assert configuration.unset_config_value(missing, "jobs") is False
+    assert configuration.unset_config_value(missing, "build.sdk_max_bytes") is False
 
 
 def test_unset_refuses_a_typo_rather_than_confirming_nothing(project: Project) -> None:

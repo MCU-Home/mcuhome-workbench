@@ -432,6 +432,23 @@ def create_build_context(
         # the person's own PATH. Honouring one would fetch a package
         # nothing then builds; ignoring it would build something other
         # than what the device says.
+        if model.sources.container_image:
+            # Not a package, and refused for the same reason: a
+            # development build starts no container, so the image the
+            # device pins would name nothing this build uses. A pin that
+            # is quietly dropped is worse than one that is refused —
+            # the firmware would look exactly like the pinned build.
+            raise BuildError(
+                f"This device states sources.container_image: "
+                f'"{model.sources.container_image}", and this build compiles a '
+                f"workspace you maintain.",
+                hint=(
+                    "a development build runs on this machine with your own tools "
+                    "and starts no container, so no image can name it — remove "
+                    "sources.container_image from the device, or unset "
+                    "build.dev_workspace to build in the environment it pins"
+                ),
+            )
         for key, stated, default in (
             ("sdk", model.sources.sdk, DEFAULT_SDK),
             ("build_workspace", model.sources.build_workspace, DEFAULT_BUILD_WORKSPACE),

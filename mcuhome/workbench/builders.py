@@ -1,36 +1,35 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Named builders: where a build runs, as configuration (ADR 0023).
+"""Named builders: where a build runs, as configuration.
 
-A **builder** is configuration *about* a build method, never a third
-method: the method vocabulary underneath (``local``/``remote``), its
+A **builder** is configuration *about* a build target, never a third
+target: the target vocabulary underneath (``local``/``remote``), its
 validation and its typed refusals stay
-:mod:`mcuhome.workbench.buildmethods`'s (ADR 0020). What this module
-adds is the product shape on top — ``mcuhome device build`` should
-simply work, and *where* it built is something the user configured
-once:
+:mod:`mcuhome.workbench.buildmethods`'s. What this module adds is the
+product shape on top — ``mcuhome device build`` should simply work, and
+*where* it built is something the user configured once:
 
-* ``local`` — a build container on this machine; nothing required,
-  the image is optionally configurable.
+* ``local`` — a build on this machine, in the mode ``build.mode``
+  names; nothing required, the container image is optionally
+  configurable.
 * ``remote`` — a build server; the address is required, and the
   credentials live **next to the other secrets**, in
-  ``secrets/build-server/<name>.yaml`` (ADR 0022 §5), never in the
-  builder list itself — configuration files are committed, secrets
-  are not.
+  ``secrets/build-server/<name>.yaml``, never in the builder list
+  itself — configuration files are committed, secrets are not.
 
 Builder lists merge **by name** across the configuration layers; on a
 name collision the layer nearer the project wins whole — no per-field
 merging of one builder from two layers, because half a builder from
 ``/etc`` and half from ``mcuhome.yaml`` is a deployment nobody wrote.
 ``default_builder`` names the builder a plain build uses; selection
-itself (explicit name, then the default, then the built-in ``local``
-fallback) is :func:`select_builder`, and the token lookup walks the
-same nearest-wins ladder the definition did.
+itself (explicit name, then the default, then the target
+``build.target`` names) is :func:`select_builder`, and the token lookup
+walks the same nearest-wins ladder the definition did.
 
 The credential file is deliberately tolerant of keys it does not know:
 today it carries ``token``, later it can grow certificate or
-TLS-pinning material when the session protocol does (ADR 0023 §4) —
-an unknown key there is the future, not a typo worth refusing.
+TLS-pinning material when the session protocol does — an unknown key
+there is the future, not a typo worth refusing.
 """
 
 from __future__ import annotations
@@ -43,6 +42,8 @@ from typing import Any
 
 from mcuhome.model.errors import ConfigError, Location
 
+from mcuhome.workbench.buildtarget import BUILD_TARGETS, DEFAULT_BUILD_TARGET, TARGET_REMOTE
+
 __all__ = [
     "BUILDER_TYPES",
     "CREDENTIALS_TOKEN_KEY",
@@ -53,8 +54,8 @@ __all__ = [
     "select_builder",
 ]
 
-#: The builder types, one per build method (ADR 0023 §1).
-BUILDER_TYPES = ("local", "remote")
+#: The builder types, one per build target.
+BUILDER_TYPES = BUILD_TARGETS
 
 #: The one key a ``secrets/build-server/<name>.yaml`` carries today.
 CREDENTIALS_TOKEN_KEY = "token"
@@ -92,8 +93,8 @@ class Builder:
     source: str
     #: ``remote``: the build server's address, ``IP/hostname[:port]``.
     server: str | None = None
-    #: ``local``: the build-container reference; ``None`` takes the
-    #: default image.
+    #: ``local``: the container image to build in, in the four pin
+    #: forms; ``None`` searches the configured repositories.
     image: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -231,7 +232,7 @@ def _typed(builder: Builder, entry: dict, *, location: Location) -> Builder:
 
 
 _REQUIRED_HINTS = {
-    "local": "a local builder needs nothing; `image:` optionally names a build container",
+    "local": "a local builder needs nothing; `image:` optionally pins a container image",
     "remote": "a remote builder names its build server:\n"
     "    - name: attic\n"
     "      type: remote\n"
@@ -241,7 +242,7 @@ _REQUIRED_HINTS = {
 
 
 def merge_builders(lower: tuple[Builder, ...], upper: tuple[Builder, ...]) -> tuple[Builder, ...]:
-    """ADR 0023 §3: by name, the nearer layer wins whole.
+    """Merged by name: the nearer layer wins whole.
 
     Order is kept readable rather than clever: the lower layer's order,
     with a replaced builder staying in its place and genuinely new
@@ -257,14 +258,14 @@ def merge_builders(lower: tuple[Builder, ...], upper: tuple[Builder, ...]) -> tu
 class SelectedBuilder:
     """What a build call needs to know after selection.
 
-    ``builder`` is ``None`` exactly for the built-in fallback — no
-    ``--builder``, no ``default_builder``, so a plain ``local`` build
-    with every default (ADR 0023: today's default stays ``local``).
+    ``builder`` is ``None`` exactly for the fallback — no ``--builder``
+    and no ``default_builder``, so a plain build at the target
+    ``build.target`` names, with every default.
     """
 
-    #: One of :data:`~mcuhome.workbench.buildmethods.METHODS` — a
-    #: builder *type* is a method name, on purpose.
-    method: str
+    #: One of :data:`~mcuhome.workbench.buildtarget.BUILD_TARGETS` — a
+    #: builder *type* is a target name, on purpose.
+    target: str
     builder: Builder | None = None
     server: str | None = None
     token: str | None = None
@@ -277,15 +278,18 @@ def select_builder(
     name: str | None,
     default: str | None,
     token_of: Callable[[Builder], str | None],
+    fallback: str = DEFAULT_BUILD_TARGET,
 ) -> SelectedBuilder:
-    """The selection ladder of ADR 0023 §2, below the fully manual rung.
+    """The selection ladder, below the caller that names a target outright.
 
-    The manual rung (``--build-mode`` plus its mode-specific flags)
-    bypasses the builder list entirely and never reaches this function.
-    Here: an explicit *name* first, then the configured *default*, then
-    the built-in ``local`` fallback. *token_of* answers a remote
-    builder's credentials — a lookup the caller owns, because where the
-    secrets directories are is layer knowledge, not vocabulary.
+    A caller that states the target itself (``--build-target`` plus its
+    target-specific flags) bypasses the builder list entirely and never
+    reaches this function. Here: an explicit *name* first, then the
+    configured *default*, then *fallback* — the target ``build.target``
+    names, which is this machine unless somebody moved it. *token_of*
+    answers a remote builder's credentials — a lookup the caller owns,
+    because where the secrets directories are is layer knowledge, not
+    vocabulary.
     """
     chosen: Builder | None = None
     if name is not None:
@@ -293,12 +297,12 @@ def select_builder(
     elif default is not None:
         chosen = _named(builders, default, selector='default_builder "{0}"')
     if chosen is None:
-        return SelectedBuilder(method="local")
+        return SelectedBuilder(target=fallback or DEFAULT_BUILD_TARGET)
     return SelectedBuilder(
-        method=chosen.type,
+        target=chosen.type,
         builder=chosen,
         server=chosen.server,
-        token=token_of(chosen) if chosen.type == "remote" else None,
+        token=token_of(chosen) if chosen.type == TARGET_REMOTE else None,
         image=chosen.image,
     )
 
@@ -313,6 +317,6 @@ def _named(builders: Sequence[Builder], name: str, *, selector: str) -> Builder:
         hint=(
             f"builders configured on this machine: {known}. Define one under "
             "`builders:` in mcuhome.yaml (or your user/system configuration.yaml), "
-            "or build fully manually with --build-mode."
+            "or name the target outright with --build-target."
         ),
     )

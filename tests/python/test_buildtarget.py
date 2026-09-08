@@ -5,7 +5,7 @@
 Two axes rather than one name, and this file is about the seam that
 carries them: :func:`~mcuhome.workbench.buildmethods.build_firmware`
 takes a target, :func:`~mcuhome.workbench.buildmethods.run_build` takes a
-method name and translates it, and both reach the same composition with
+target name and translates it, and both reach the same composition with
 the same arguments.
 
 Nothing here builds anything. Every composition is stubbed at its own
@@ -19,8 +19,8 @@ properties asserted here are the ones the two-axis vocabulary is *for*:
   to start a container, and a field that let it would be the whole
   asymmetry gone;
 * a target is **authoritative**: what a caller states on it is what runs,
-  whatever the request's method-shaped fields happen to say;
-* every method name resolves to the target that describes it, so a
+  whatever the request's target-shaped fields happen to say;
+* every target name resolves to the target that describes it, so a
   caller that migrates from the one entry point to the other keeps the
   build it had.
 """
@@ -107,18 +107,18 @@ def test_a_remote_build_carries_no_execution() -> None:
 
 
 # --------------------------------------------------------------------------
-# A method name is one word for two decisions
+# A target name is one word for two decisions
 # --------------------------------------------------------------------------
 
 
-def test_the_local_method_is_a_local_build_in_a_container(model, tmp_path) -> None:
+def test_the_local_target_is_a_local_build_in_a_container(model, tmp_path) -> None:
     request = buildmethods.BuildRequest(
         model=model,
         out_dir=tmp_path,
         image="ghcr.io/mcu-home/build-container:test",
         ccache_dir=tmp_path / "ccache",
     )
-    target = buildmethods.target_for_method(buildmethods.LOCAL, request)
+    target = buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request)
     assert target == buildtarget.LocalBuild(
         execution=buildtarget.ContainerExecution(
             image="ghcr.io/mcu-home/build-container:test", ccache_dir=tmp_path / "ccache"
@@ -126,7 +126,7 @@ def test_the_local_method_is_a_local_build_in_a_container(model, tmp_path) -> No
     )
 
 
-def test_the_remote_method_is_a_remote_build(model, tmp_path) -> None:
+def test_the_remote_target_is_a_remote_build(model, tmp_path) -> None:
     request = buildmethods.BuildRequest(
         model=model,
         out_dir=tmp_path,
@@ -135,7 +135,7 @@ def test_the_remote_method_is_a_remote_build(model, tmp_path) -> None:
         wait_for_turn=False,
         max_wait_seconds=90.0,
     )
-    target = buildmethods.target_for_method(buildmethods.REMOTE, request)
+    target = buildmethods.build_target_for(buildmethods.TARGET_REMOTE, request)
     assert target == buildtarget.RemoteBuild(
         server="attic:8100", token="a-token", wait=False, max_wait_seconds=90.0
     )
@@ -145,14 +145,14 @@ def test_the_remote_method_is_a_remote_build(model, tmp_path) -> None:
 def test_no_preference_is_the_container_target(model, tmp_path, nothing) -> None:
     """The default survives the translation: no name still means a container."""
     request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    assert buildmethods.target_for_method(nothing, request) == buildtarget.LocalBuild()
+    assert buildmethods.build_target_for(nothing, request) == buildtarget.LocalBuild()
 
 
-def test_an_unknown_method_refuses_at_the_translation(model, tmp_path) -> None:
+def test_an_unknown_target_refuses_at_the_translation(model, tmp_path) -> None:
     """The same refusal as before, one step earlier — not a ``KeyError``."""
     request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    with pytest.raises(buildmethods.UnknownMethod):
-        buildmethods.target_for_method("cloud", request)
+    with pytest.raises(buildmethods.UnknownBuildTarget):
+        buildmethods.build_target_for("cloud", request)
 
 
 # --------------------------------------------------------------------------
@@ -160,10 +160,10 @@ def test_an_unknown_method_refuses_at_the_translation(model, tmp_path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_stated_target_beats_the_requests_method_fields(model, tmp_path, monkeypatch) -> None:
+def test_a_stated_target_beats_the_requests_target_fields(model, tmp_path, monkeypatch) -> None:
     """A caller that builds a target itself is the one that decides.
 
-    ``BuildRequest`` still carries the method-shaped fields for the name
+    ``BuildRequest`` still carries the target-shaped fields for the name
     entry point, and this is what keeps them from becoming a second
     source of truth: the seam reads the target, and the request's copies
     are ignored — which is what makes deleting them later a deletion
@@ -216,7 +216,7 @@ def test_a_remote_target_reaches_the_session_client(model, tmp_path, monkeypatch
             server="build.example:8080", token="a-token", wait=False, max_wait_seconds=90.0
         ),
     )
-    assert outcome.method == buildmethods.REMOTE
+    assert outcome.target == buildmethods.TARGET_REMOTE
     assert seen["url"] == "ws://build.example:8080/ws"
     assert seen["token"] == "a-token"
     assert seen["wait"] is False
@@ -227,7 +227,7 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
     """``run_build`` is the translation and nothing else.
 
     The one property that makes the older entry point safe to keep while
-    callers migrate: whatever a method name meant, it still means, and it
+    callers migrate: whatever a target name meant, it still means, and it
     reaches the composition with the arguments it always did.
     """
     request = buildmethods.BuildRequest(
@@ -235,16 +235,17 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
         out_dir=tmp_path,
         image="ghcr.io/mcu-home/build-container:test",
         ccache_dir=tmp_path / "ccache",
-        jobs=3,
     )
 
     by_name: dict[str, object] = {}
     monkeypatch.setattr(buildmethods, "compose_local_build", _local_result(tmp_path, by_name))
-    assert asyncio.run(buildmethods.run_build(request, method=buildmethods.LOCAL)).successful
+    assert asyncio.run(buildmethods.run_build(request, target=buildmethods.TARGET_LOCAL)).successful
 
     by_target: dict[str, object] = {}
     monkeypatch.setattr(buildmethods, "compose_local_build", _local_result(tmp_path, by_target))
-    assert _build(request, buildmethods.target_for_method(buildmethods.LOCAL, request)).successful
+    assert _build(
+        request, buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request)
+    ).successful
 
     assert by_name == by_target
 

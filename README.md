@@ -10,8 +10,9 @@ part of the framework the other MCUHome tools embed rather than reimplement.
   configuration, resolve settings, build, and manage a project.
 - The configuration pipeline — a device's `main.yaml` parsed, validated and
   resolved into the canonical device model.
-- The build context and the two build methods, `local` and `remote`, which drive
-  the same build environment from either side.
+- The build context and the two axes a build is placed on: the target
+  (`local`, `remote`) and, for a local build, the mode (`container`,
+  `subprocess`) — the same build environment driven from either side.
 - The package-registry client — mirror discovery, signature verification against
   the project's trust anchor, and the tiered, hash-checked acquisition of the SDK
   and the build-environment packages.
@@ -33,7 +34,7 @@ from mcuhome.workbench import api
 
 project, entry = api.find_device("kitchen", env=env, cwd=cwd)
 model = api.load_model(entry, project=project)
-outcome = await api.run_build(api.BuildRequest(model=model, out_dir=out), method="local")
+outcome = await api.run_build(api.BuildRequest(model=model, out_dir=out), target="local")
 ```
 
 Install the `remote` extra for the build-server client, or `generate` for writing
@@ -104,18 +105,24 @@ variable. Everything that describes **how this machine builds** lives under
 
 ```yaml
 build:
-  mode: subprocess          # MCUHOME_BUILD_MODE
+  target: local             # MCUHOME_BUILD_TARGET — local | remote
+  mode: subprocess          # MCUHOME_BUILD_MODE — container | subprocess
   env_store: /srv/mcuhome/build-environments
 ```
 
-No command-line flag is derived for those options — no flag in MCUHome is
-written with a dot, and `--build-mode` on the command line already means
-something else (where a build runs, not how this machine executes it). Set them
-in a file or in the environment; `mcuhome config print` shows every one of them
-with the layer it came from, and `mcuhome config set build.mode subprocess
---user` writes the section for you. A tool may still map a flag of its own onto
-one: `mcuhome device build --sdk-sources` sets `build.sdk_sources`, which
-carried that flag before the areas existed.
+The two are two axes and therefore two keys: `build.target` says **where** a
+build runs — on this machine or on a build server — and `build.mode` says how
+**this** machine executes a local build. A client does not get to tell a build
+server whether to start a container, so one word could never have answered
+both.
+
+No command-line flag is derived for the options of an area — no flag in MCUHome
+is written with a dot, and deriving one for every key would offer spellings no
+command line has. Set them in a file or in the environment; `mcuhome config
+print` shows every one of them with the layer it came from, and `mcuhome config
+set build.mode subprocess --user` writes the section for you. A tool may still
+map a flag of its own onto one: `mcuhome device build` does that for
+`--build-target`, `--build-mode` and `--sdk-sources`.
 
 ### Package registries
 
@@ -308,6 +315,16 @@ either way. Four forms, told apart by what the value starts with:
 
 The leading `:` and `@` are what make a bare name unambiguous: written plainly
 it is a repository.
+
+Two places state a pin, and the more specific of the two wins. A device carries
+one from build to build in `sources.container_image` — optional, written into a
+device only by whoever wants it there — and a single build overrides it (the
+command line's `--container-image`). Both mean the same thing at either target:
+a local container build resolves the pin against the repository list above, and
+a remote build hands it to the server, which resolves it against what its
+operator allows. A build that starts no container has no image to pin: a
+development build is refused over it, and a `subprocess` build says in its log
+that the pin has no effect here rather than pretending otherwise.
 
 The image runs with no network, as the calling user, and with exactly the tree
 the build-environment specification defines mounted into it: the build context
@@ -508,8 +525,9 @@ What is refused rather than half-done:
 - a build context that carries a **patch**, because your workspace is yours and
   a build that quietly patched it — or quietly ignored the patch — would be
   wrong either way;
-- a device that states any `sources.*` entry, because every one of them names a
-  package to fetch and this build fetches nothing;
+- a device that states any `sources.*` entry: the package references name
+  something to fetch and this build fetches nothing, and `sources.container_image`
+  names an image for a build that starts no container;
 - `build.mode: container` together with `build.dev_workspace`, because a
   container has neither your workspace nor your tools;
 - a directory that is not a west workspace, or whose manifest repository is not

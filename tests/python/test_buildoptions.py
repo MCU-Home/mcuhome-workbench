@@ -3,7 +3,7 @@
 """From the ``build`` configuration section to what a build actually does.
 
 :mod:`test_configuration_build` asserts that the keys resolve; this file
-asserts that the resolved values *arrive*: at the target a method
+asserts that the resolved values *arrive*: at the target ``build_target_for``
 produces, at the provisioner's store and interpreter, at the unpacking
 bounds, at the per-package source directories and at the compiler cache
 tiers. Nothing here compiles anything — every consumer is stubbed at the
@@ -143,8 +143,8 @@ def test_the_environment_reaches_a_request_without_a_project(model, tmp_path) ->
 
 
 def test_the_configured_mode_selects_the_execution(model, tmp_path) -> None:
-    target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
@@ -155,8 +155,8 @@ def test_the_configured_mode_selects_the_execution(model, tmp_path) -> None:
 
 
 def test_a_stated_mode_beats_the_configuration(model, tmp_path) -> None:
-    target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
@@ -168,8 +168,8 @@ def test_a_stated_mode_beats_the_configuration(model, tmp_path) -> None:
 
 
 def test_the_configured_developer_trees_reach_the_execution(model, tmp_path) -> None:
-    target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
@@ -183,8 +183,8 @@ def test_the_configured_developer_trees_reach_the_execution(model, tmp_path) -> 
 
 
 def test_a_stated_developer_tree_beats_the_configured_one(model, tmp_path) -> None:
-    target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
@@ -206,8 +206,8 @@ def test_a_configured_development_workspace_needs_the_configured_mode(model, tmp
     came from, because that is the file they are not looking at.
     """
     with pytest.raises(ConfigError, match="development workspace") as refusal:
-        buildmethods.target_for_method(
-            buildmethods.LOCAL,
+        buildmethods.build_target_for(
+            buildmethods.TARGET_LOCAL,
             BuildRequest(
                 model=model,
                 out_dir=tmp_path,
@@ -239,7 +239,7 @@ def test_an_image_without_a_container_is_refused_naming_both_ways_out(
         image="ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1",
     )
     with pytest.raises(ConfigError) as refusal:
-        buildmethods.target_for_method(buildmethods.LOCAL, request)
+        buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request)
     rendered = str(refusal.value)
     hint = refusal.value.hint or ""
     assert "ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1" in rendered
@@ -254,8 +254,8 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
     """The refusal names whoever chose the mode, and a mode stated for one
     build came from no file."""
     with pytest.raises(ConfigError) as refusal:
-        buildmethods.target_for_method(
-            buildmethods.LOCAL,
+        buildmethods.build_target_for(
+            buildmethods.TARGET_LOCAL,
             BuildRequest(
                 model=model,
                 out_dir=tmp_path,
@@ -270,8 +270,8 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
 
 
 def test_an_image_with_a_container_is_the_ordinary_case(model, tmp_path) -> None:
-    target = buildmethods.target_for_method(
-        buildmethods.LOCAL,
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
         BuildRequest(model=model, out_dir=tmp_path, image="ghcr.io/mcu-home/x:1"),
     )
     assert target.execution.image == "ghcr.io/mcu-home/x:1"
@@ -421,7 +421,7 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
 
 
 def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch) -> None:
-    """The remote method writes its base context through the same writer,
+    """The remote target writes its base context through the same writer,
     so the machine's package directories and bound reach it there too.
 
     Remote builds are out of service until the build server runs

@@ -121,9 +121,11 @@ def resolve(config: RawConfig) -> DeviceModel:
 def _resolve_sources(config: RawConfig) -> SourcesModel:
     """``sources:`` — the entries the device stated, and defaults for the rest.
 
-    An entry the device did not name keeps
+    A package entry the device did not name keeps
     :class:`~mcuhome.model.model.SourcesModel`'s own value, which names a
-    package and no version and is therefore resolved at build time. That
+    package and no version and is therefore resolved at build time; an
+    unnamed ``container_image`` stays unset, because it has no default
+    and pins nothing. That
     is the whole reason each entry is resolved on its own: a device that
     pins one package must not be pinned to today's version of the other
     two as a side effect, and nothing here is ever written back into the
@@ -138,6 +140,7 @@ def _resolve_sources(config: RawConfig) -> SourcesModel:
             ("sdk", raw.sdk),
             ("build_workspace", raw.build_workspace),
             ("build_tools", raw.build_tools),
+            ("container_image", raw.container_image),
         )
         if value is not None
     }

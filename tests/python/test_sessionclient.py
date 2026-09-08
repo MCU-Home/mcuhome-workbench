@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The ``remote`` build method, driven against the real build server.
+"""The ``remote`` build target, driven against the real build server.
 
 **The peer here is the real thing wherever it can be.** ``mcuhome-buildserver``
 is importable in this development environment, so most of these tests run
@@ -96,7 +96,7 @@ NEEDED = {
 MISSING = sorted(name for name in NEEDED if importlib.util.find_spec(name) is None)
 if MISSING:
     pytest.skip(
-        "the remote build method is tested against the REAL build server over a real "
+        "the remote build target is tested against the REAL build server over a real "
         f"socket, and this environment is missing: {', '.join(MISSING)}. Install with — "
         + " ; ".join(sorted({NEEDED[name] for name in MISSING})),
         allow_module_level=True,
@@ -622,7 +622,7 @@ def write_sdk_package(directory: Path, *, declared_sha256: str | None = None) ->
     network either. The SDK's own archive carries a
     ``build-environment.lock.json`` naming the same two packages at
     :data:`ENVIRONMENT_VERSION`, which is what lets the ``remote`` build
-    *method* (as opposed to a context written by hand) resolve a device's
+    *target* (as opposed to a context written by hand) resolve a device's
     unpinned ``sources.build_workspace``/``sources.build_tools`` the way
     a local build does.
     """
@@ -734,7 +734,7 @@ class PinnedEnvironment:
 
     :attr:`pin` is the same :data:`ENVIRONMENT` :func:`make_context`
     writes into every hand-written base context of this module, so a
-    test that compares the ``remote`` build *method*'s own resolution
+    test that compares the ``remote`` build *target*'s own resolution
     against it is comparing two paths to one answer rather than to a
     fixture-local guess.
     """
@@ -954,7 +954,7 @@ def test_capabilities_is_the_handshake_and_carries_no_session(tmp_path: Path) ->
 def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path) -> None:
     """open → send-context → lock → build → get-artifact → close.
 
-    The path the ``remote`` build method is: an unsigned image and the
+    The path the ``remote`` build target is: an unsigned image and the
     build report in the build actions document's shape come back,
     attributed to a context ID both sides computed independently.
     """
@@ -1302,7 +1302,7 @@ def test_no_frame_this_client_sends_carries_the_private_signing_key(tmp_path: Pa
 
     ADR 0015 decision 8 as the product owner restated it on 2026-08-10:
     the private signing key never leaves the local machine. For the
-    ``remote`` method that means it appears in **no frame sent to the
+    ``remote`` target that means it appears in **no frame sent to the
     build server** — the server is not trusted, which is the whole reason
     the build returns an unsigned image and the host signs afterwards
     (E55, E56).
@@ -2588,10 +2588,10 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
         remote_fields & local_fields
     )
     assert remote_fields - local_fields == {"error", "invocation_id", "image"}, (
-        "a field this method has and `local` does not — name it here or drop it"
+        "a field this target has and `local` does not — name it here or drop it"
     )
     assert local_fields - remote_fields == {"exit_code", "result", "problems", "violation"}, (
-        "a field `local` has and this method does not — a client cannot invent what it "
+        "a field `local` has and this target does not — a client cannot invent what it "
         "did not observe, but the divergence has to be a decision"
     )
 
@@ -2615,7 +2615,7 @@ def test_run_remote_build_can_verify_as_well_as_build(tmp_path: Path) -> None:
     """``LocalBackend.run`` takes an action, and so does this.
 
     The server implements both working verbs and the client exposes both,
-    so a composition that hardcoded ``build`` made the remote method the
+    so a composition that hardcoded ``build`` made the remote target the
     only one of the three that cannot check a context — and reported
     ``action="build"`` for whatever it did.
     """
@@ -2668,11 +2668,11 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
 
 
 # --------------------------------------------------------------------------
-# The `remote` build method, from a device model (E65)
+# The `remote` build target, from a device model (E65)
 # --------------------------------------------------------------------------
 #
 # Everything above drives the session client directly, from a context
-# somebody already wrote. These drive `run_build(method="remote")` — the
+# somebody already wrote. These drive `run_build(target="remote")` — the
 # supported entry point — from a resolved device model and nothing else,
 # which is the gap E65 closed: the SDK pin is resolved on this side, from
 # this side's source directories, and the context is created here.
@@ -2685,7 +2685,7 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
 
 
 def _model():
-    """The reference device, stages 1-3 run — the ``remote`` method's input."""
+    """The reference device, stages 1-3 run — the ``remote`` target's input."""
     return resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
 
 
@@ -2706,7 +2706,7 @@ def _remote_request(tmp_path: Path, sources: Path, harness: Harness, **overrides
     )
 
 
-def test_the_remote_method_builds_from_a_model_against_the_real_server(
+def test_the_remote_target_builds_from_a_model_against_the_real_server(
     tmp_path: Path, pinned_environment
 ) -> None:
     """Model in, unsigned image out — no context written by the caller.
@@ -2722,7 +2722,7 @@ def test_the_remote_method_builds_from_a_model_against_the_real_server(
     The last assertion is the E56 seam: what a build delivers is an
     unsigned image plus a build report the one host-side signer reads —
     the same report name, in the same relationship to the same directory,
-    as the ``local`` method's delivery.
+    as the ``local`` target's delivery.
     """
     sources = tmp_path / "packages"
     write_sdk_package(sources)
@@ -2732,11 +2732,11 @@ def test_the_remote_method_builds_from_a_model_against_the_real_server(
         async with real_server(tmp_path) as harness:
             return await buildmethods.run_build(
                 _remote_request(tmp_path, sources, harness, on_line=lines.append),
-                method=buildmethods.REMOTE,
+                target=buildmethods.TARGET_REMOTE,
             )
 
     outcome = run(scenario())
-    assert outcome.method == buildmethods.REMOTE
+    assert outcome.target == buildmethods.TARGET_REMOTE
     assert outcome.successful is True and outcome.status == "success"
     assert outcome.context_id.startswith("sha256:")
     assert {entry.path for entry in outcome.artifacts} == {name for name, _ in ARTIFACTS}
@@ -2753,11 +2753,11 @@ def test_the_remote_method_builds_from_a_model_against_the_real_server(
     assert outcome.report == BUILD_REPORT_FILE
     report = imgtool.read_build_report(outcome.out_dir / outcome.report)
     assert report["signing"]["signature_type"] == "ecdsa-p256"
-    # Unsigned, as every method delivers (E55, E56): nothing signed came
+    # Unsigned, as every target delivers (E55, E56): nothing signed came
     # back, and the signature is the host step after this.
     assert not [path for path in outcome.out_dir.iterdir() if "sign" in path.name]
 
-    # And what the method created on the way: a base context, carrying the
+    # And what the target created on the way: a base context, carrying the
     # public key and no manifest — freezing it is the server's act (E7).
     context = work_root / "context"
     assert (context / "keys" / "signing.pub").read_text(encoding="utf-8") == _public_pem()
@@ -2765,14 +2765,14 @@ def test_the_remote_method_builds_from_a_model_against_the_real_server(
     assert not (context / "manifest.yaml").exists()
 
 
-def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
+def test_the_context_the_remote_target_creates_pins_what_the_resolver_answered(
     tmp_path: Path, pinned_environment
 ) -> None:
     """The pin in ``context.yaml`` is exactly what the resolver answered.
 
     Asserted against the resolver rather than against the fixture's own
     hash, because the claim is that one rule produced both: the same
-    function the ``local`` method resolves its pin with wrote this one,
+    function the ``local`` target resolves its pin with wrote this one,
     from the same ``--sdk-source`` directories, so a build server and a
     build container are asked for the same package by the same name and
     the same bytes.
@@ -2791,7 +2791,7 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
     async def scenario() -> None:
         async with real_server(tmp_path) as harness:
             await buildmethods.run_build(
-                _remote_request(tmp_path, sources, harness), method=buildmethods.REMOTE
+                _remote_request(tmp_path, sources, harness), target=buildmethods.TARGET_REMOTE
             )
 
     run(scenario())
@@ -2814,7 +2814,7 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
         resolve_pins.DEFAULT_SDK_CONSTRAINT,
         "",
     )
-    # And the three-value helper the `local` method reads answers the same
+    # And the three-value helper the `local` target reads answers the same
     # package, with the constraint as *stated*.
     assert resolve_pins.resolve_sdk_pin((sources,), constraint=stated, prereleases=prereleases) == (
         stated,
@@ -2838,7 +2838,7 @@ def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path)
 
     Driven with a hand-written context rather than through
     :func:`~mcuhome.workbench.buildmethods.run_build`'s ``remote``
-    method: that method resolves and verifies every pin locally, SDK
+    target: that target resolves and verifies every pin locally, SDK
     included, before a context is ever created (build-environment
     resolution reads the environment lock out of the SDK's own,
     already-hashed bytes) — so a wrong hash it was handed never reaches

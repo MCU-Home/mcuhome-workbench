@@ -27,9 +27,12 @@ from mcuhome.workbench import configuration
 from mcuhome.workbench.buildmethods import build_options
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
+    BUILD_TARGETS,
     DEFAULT_CONTAINER_REPOSITORIES,
     MODE_CONTAINER,
     MODE_SUBPROCESS,
+    TARGET_LOCAL,
+    TARGET_REMOTE,
 )
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
@@ -46,6 +49,7 @@ from mcuhome.workbench.project import Project, init_project
 #: computed the answer the same way the code does would agree with a
 #: wrong rule as happily as with the right one.
 KEYS = {
+    "build.target": "MCUHOME_BUILD_TARGET",
     "build.mode": "MCUHOME_BUILD_MODE",
     "build.container_repositories": "MCUHOME_BUILD_CONTAINER_REPOSITORIES",
     "build.cpus": "MCUHOME_BUILD_CPUS",
@@ -98,13 +102,13 @@ def test_every_build_key_is_declared_with_the_expected_variable() -> None:
 
 
 def test_an_option_in_an_area_has_no_flag() -> None:
-    """No flag is written with a dot, and the obvious one means something else."""
+    """No flag is written with a dot; the command line maps its own onto some."""
     assert option("build.mode").flag == ""
     assert option("build.mode").area == "build"
     assert option("build.mode").leaf == "mode"
     # The bare options keep theirs.
-    assert option("jobs").flag == "--jobs"
-    assert option("jobs").area == ""
+    assert option("ccache_dir").flag == "--ccache-dir"
+    assert option("ccache_dir").area == ""
 
 
 def test_the_pre_area_spelling_of_a_moved_key_is_not_an_option(project: Project) -> None:
@@ -329,6 +333,25 @@ def test_a_mode_outside_the_vocabulary_is_refused_in_the_environment(project: Pr
     assert MODE_SUBPROCESS in str(refusal.value)
 
 
+def test_a_target_outside_the_vocabulary_is_refused_in_a_file(project: Project) -> None:
+    """The other axis is validated in its own right, and by the same rule."""
+    write_project(project, "build:\n  target: cloud\n")
+    with pytest.raises(ConfigError) as refusal:
+        resolve_settings(project=project, env={})
+    rendered = str(refusal.value)
+    for name in BUILD_TARGETS:
+        assert name in rendered
+    assert refusal.value.location is not None
+    assert refusal.value.location.line == 2
+
+
+def test_a_target_outside_the_vocabulary_is_refused_in_the_environment(project: Project) -> None:
+    with pytest.raises(ConfigError) as refusal:
+        resolve_settings(project=project, env={"MCUHOME_BUILD_TARGET": "cloud"})
+    assert "MCUHOME_BUILD_TARGET" in str(refusal.value)
+    assert TARGET_REMOTE in str(refusal.value)
+
+
 def test_a_bound_below_its_minimum_is_refused_in_a_file(project: Project) -> None:
     write_project(project, "build:\n  workspace_max_bytes: 0\n")
     with pytest.raises(ConfigError) as refusal:
@@ -402,12 +425,12 @@ def test_a_key_of_another_area_is_still_an_unknown_option(project: Project) -> N
 def test_config_set_writes_the_section_and_keeps_the_rest(project: Project) -> None:
     """What is written reads back, and everything else in the file survives."""
     file = project.config_file
-    file.write_text("# a comment\njobs: 4\n", encoding="utf-8")
+    file.write_text("# a comment\ndefault_builder: attic\n", encoding="utf-8")
     set_config_value(file, "build.mode", MODE_SUBPROCESS, env={})
     set_config_value(file, "build.env_store", "/srv/store", env={})
     text = file.read_text(encoding="utf-8")
     assert "# a comment" in text
-    assert "jobs: 4" in text
+    assert "default_builder: attic" in text
     assert "build:\n  mode: subprocess\n  env_store: /srv/store\n" in text
     settings = resolve_settings(project=project, env={})
     assert settings.value("build.mode") == MODE_SUBPROCESS
@@ -497,3 +520,44 @@ def test_the_retired_developer_tools_key_is_unknown(project: Project) -> None:
     assert caught.value.message == "There is no option called 'build.dev_tools'."
     # The one that replaced it is in the list of what the section has.
     assert "dev_workspace" in (caught.value.hint or "")
+
+
+def test_the_target_is_a_key_of_the_section_like_the_mode(project: Project) -> None:
+    """``build.target`` resolves through the same five layers ``build.mode`` does.
+
+    The two are the two axes of a build — where it runs, and how the
+    machine that runs it executes the work — and each is one key with one
+    declaration, so a file, a variable and an invocation state them the
+    same way.
+    """
+    settings = resolve_settings(project=None, env={})
+    assert settings.value("build.target") == TARGET_LOCAL
+    assert settings.origin("build.target") == "default"
+
+    write_project(project, "build:\n  target: remote\n")
+    settings = resolve_settings(project=project, env={})
+    assert settings.value("build.target") == TARGET_REMOTE
+    assert settings.origin("build.target") == "project"
+
+    settings = resolve_settings(project=project, env={"MCUHOME_BUILD_TARGET": TARGET_LOCAL})
+    assert settings.value("build.target") == TARGET_LOCAL
+    assert settings.setting("build.target").source == "MCUHOME_BUILD_TARGET"
+
+    settings = resolve_settings(project=project, env={}, args={"build.target": TARGET_LOCAL})
+    assert settings.value("build.target") == TARGET_LOCAL
+    assert settings.origin("build.target") == "arguments"
+
+
+def test_the_build_options_carry_the_target_and_where_it_came_from(project: Project) -> None:
+    """What a build reads is the resolved object, source included.
+
+    The source is carried for the same reason the mode's is: a refusal
+    that a target caused has to be able to say who chose it, and it
+    usually came out of a file the person is not looking at.
+    """
+    write_project(project, "build:\n  target: remote\n")
+    options = build_options(resolve_settings(project=project, env={}))
+    assert options.target == TARGET_REMOTE
+    assert options.target_source == str(project.root / "mcuhome.yaml")
+    assert build_options(resolve_settings(project=None, env={})).target == TARGET_LOCAL
+    assert build_options(resolve_settings(project=None, env={})).target_source == "default"

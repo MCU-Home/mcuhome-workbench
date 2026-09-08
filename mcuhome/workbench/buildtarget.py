@@ -3,20 +3,24 @@
 """Where a build runs, and how it is executed — two axes, not one.
 
 A build has two independent placement questions in it, and the flat list
-of method names this package started with answered them in one word,
-which is why the list could never stay symmetric: ``local`` says *here, in
-a container*, ``remote`` says *over there, however that machine builds*,
+of names this package started with answered them in one word, which is
+why the list could never stay symmetric: ``local`` said *here, in a
+container*, ``remote`` said *over there, however that machine builds*,
 and the two are not the same kind of statement at all.
 
-They are separated here:
+They are separated here, and the configuration says them apart as well:
+``build.target`` is the first axis and ``build.mode`` the second.
 
-**Where** — :class:`BuildTarget`. The caller's decision, and the only one
-of the two a caller is entitled to make: build on this machine
-(:class:`LocalBuild`) or hand the context to a build server
-(:class:`RemoteBuild`).
+**Where** — the **target**: :data:`TARGET_LOCAL` or :data:`TARGET_REMOTE`
+as the word a configuration writes, :class:`BuildTarget` as the object it
+resolves to. The caller's decision, and the only one of the two a caller
+is entitled to make: build on this machine (:class:`LocalBuild`) or hand
+the context to a build server (:class:`RemoteBuild`).
 
-**How it is executed** — :class:`Execution`. A property of the machine
-that ends up doing the work. There are two: a build container
+**How it is executed** — the **mode**: :data:`MODE_CONTAINER` or
+:data:`MODE_SUBPROCESS` as the word, :class:`Execution` as the object. A
+property of the machine that ends up doing the work. There are two: a
+build container
 (:class:`ContainerExecution`) and a build environment already unpacked on
 the host (:class:`SubprocessExecution`). Which of them a machine uses is
 that machine's own property and never a client's to state.
@@ -50,11 +54,15 @@ from mcuhome.model.buildimage import ENVIRONMENT_IMAGE_REPOSITORY
 
 __all__ = [
     "BUILD_MODES",
+    "BUILD_TARGETS",
     "DEFAULT_BUILD_MODE",
+    "DEFAULT_BUILD_TARGET",
     "DEFAULT_CONTAINER_REPOSITORIES",
     "DEFAULT_MAX_WAIT_SECONDS",
     "MODE_CONTAINER",
     "MODE_SUBPROCESS",
+    "TARGET_LOCAL",
+    "TARGET_REMOTE",
     "BuildTarget",
     "ContainerExecution",
     "Execution",
@@ -69,6 +77,20 @@ __all__ = [
 #: option registry can declare it as the default of
 #: ``build.container_repositories`` without importing a build path.
 DEFAULT_CONTAINER_REPOSITORIES: tuple[str, ...] = (ENVIRONMENT_IMAGE_REPOSITORY,)
+
+
+#: The two targets, as the words a configuration writes them in: the
+#: values of the ``build.target`` key, and the two classes below.
+TARGET_LOCAL = "local"
+TARGET_REMOTE = "remote"
+
+#: Every target, in the order a refusal lists them.
+BUILD_TARGETS = (TARGET_LOCAL, TARGET_REMOTE)
+
+#: What a caller that expressed no preference gets. This machine: a
+#: build server is never discovered and has no default, so the only
+#: target that can be assumed is the one already here.
+DEFAULT_BUILD_TARGET = TARGET_LOCAL
 
 
 #: The two executions, as the words a configuration writes them in: the
@@ -118,8 +140,11 @@ class ContainerExecution(Execution):
     whose private key never reaches the thing that compiles.
     """
 
-    #: Build-container reference to compile in; ``None`` takes the
-    #: default the compiler side resolves for the model's Zephyr line.
+    #: The build environment this one build asks for, in the four pin
+    #: forms: a repository, ``:tag``, ``@sha256:…``, or a repository with
+    #: either. ``None`` — the ordinary case — searches the configured
+    #: repositories for an image whose labels declare the package set the
+    #: context pinned.
     image: str | None = None
     #: Where the compiler cache lives on this machine. ``None`` takes the
     #: user's cache directory, which is what every build does unless
