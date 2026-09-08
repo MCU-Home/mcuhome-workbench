@@ -48,8 +48,15 @@ import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model import buildenvironment, buildimage
 from mcuhome.model.artifacts import Artifact
-from mcuhome.model.context import ContextRequest, EnvironmentPin, PackagePin, SdkPin
+from mcuhome.model.context import (
+    BUILD_CONTEXT_FILE,
+    ContextRequest,
+    EnvironmentPin,
+    PackagePin,
+    SdkPin,
+)
 
+from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench import (
     buildmethods,
     containerbuild,
@@ -673,6 +680,15 @@ def make_context(root: Path, *, sdk_sha256: str, patches: dict[str, bytes] | Non
     forever — it is written nowhere inside *root*.
     """
     private_pem = signing.generate_key_pem(KEY_SCALAR)
+    # The generator declaration is part of what makes a directory a build
+    # context at all (build environment specification §9): it says which
+    # tool wrote it, and an environment declares which tools' contexts it
+    # accepts. A server refuses a context without it, so a context
+    # written by hand carries it exactly as a real one does.
+    (root / BUILD_CONTEXT_FILE).write_text(
+        json.dumps({"generator": f"mcuhome-workbench:{workbench_version}"}) + "\n",
+        encoding="utf-8",
+    )
     (root / "model").mkdir(parents=True, exist_ok=True)
     (root / "model" / "device-model.json").write_text('{"device": "test"}\n', encoding="utf-8")
     (root / "keys").mkdir(parents=True, exist_ok=True)
@@ -1591,7 +1607,9 @@ def test_the_caps_are_counted_across_the_session_not_per_archive(tmp_path: Path)
             # one entry more.
             await client.send_context(context)
             spent = client.spent
-            assert spent.entries == 7, "context.yaml, the model files and the public key"
+            assert spent.entries == 8, (
+                "the two documents that make it a context, the model files and the key"
+            )
             assert spent.compressed_bytes > 0 and spent.decompressed_bytes > 0
             client.caps = replace(sc.E44_CAPS, entries=spent.entries)
 
@@ -2109,43 +2127,6 @@ def test_a_replay_from_the_beginning_is_not_delivered_twice(tmp_path: Path) -> N
     assert seen == sorted(set(seen)), "the caller saw each event once"
 
 
-def test_a_poisoned_session_is_terminal_and_still_gives_up_its_artifacts(
-    tmp_path: Path,
-) -> None:
-    """E39: ``session.poisoned`` refuses work and keeps the diagnosis.
-
-    The session stays open on purpose — the moment a session poisons is
-    the moment its owner most wants the logs — so the client marks it
-    terminal for *work* while ``get-artifact`` and ``close-session`` go
-    on working.
-    """
-
-    async def scenario() -> None:
-        sdk_sha256 = write_sdk_package(tmp_path / "packages")
-        context = tmp_path / "context"
-        context.mkdir()
-        make_context(context, sdk_sha256=sdk_sha256)
-        async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
-            await client.capabilities()
-            await client.open_session()
-            await client.send_context(context)
-            await client.lock_context()
-            invocation_id = await client.build()
-            await client.wait_finished(invocation_id, timeout=30)
-            harness.state.sessions.require(client.session_id).poison()
-
-            with pytest.raises(sc.SessionPoisoned) as refusal:
-                await client.build()
-            assert client.terminal == "session.poisoned"
-            assert refusal.value.retryable is False
-            # Terminal for work, and only for work.
-            delivery = await client.get_artifact(invocation_id, into=tmp_path / "salvage")
-            assert "firmware.bin" in delivery.files
-            await client.close_session()
-
-    run(scenario())
-
-
 def test_cancel_is_acknowledged_immediately_and_the_session_survives(tmp_path: Path) -> None:
     """E38: the answer means "the stop signal is set", never "it stopped".
 
@@ -2605,7 +2586,7 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
     assert {"action", "context_id", "status", "successful", "artifacts", "out"} <= (
         remote_fields & local_fields
     )
-    assert remote_fields - local_fields == {"error", "invocation_id"}, (
+    assert remote_fields - local_fields == {"error", "invocation_id", "image"}, (
         "a field this method has and `local` does not — name it here or drop it"
     )
     assert local_fields - remote_fields == {"exit_code", "result", "problems", "violation"}, (
@@ -3067,3 +3048,38 @@ def test_a_seat_offer_is_read_defensively(tmp_path: Path) -> None:
     assert sc.seat_offer(refusal({"seat": "seat-x", "retry_after_seconds": True})) is None
     offer = sc.seat_offer(refusal({"seat": "seat-x", "retry_after_seconds": 5}))
     assert offer == sc.SeatOffer(token="seat-x", retry_after=5.0)
+
+
+def test_a_remote_build_answers_which_environment_served_it(tmp_path: Path) -> None:
+    """The digest that ran comes back, and it is the pair that cannot move.
+
+    A build context pins packages; an image is one delivery of that set,
+    and which one served a session is the server's own answer at
+    ``send-context``. A client that dropped it would have no record of
+    what actually built the firmware — the packages say what was wanted,
+    the digest says what ran — so it travels out of the composition in
+    the same ``<repository>@sha256:…`` form a local container build
+    records.
+    """
+    result = _remote_build(tmp_path)
+    assert result.image == IMAGE_RUNNABLE
+
+
+def test_the_environment_answer_is_read_defensively() -> None:
+    """A record of a fact, never an invented one.
+
+    The reader takes the digest where there is one and the reference
+    where there is not; a server that answered neither gets the empty
+    string rather than a value this side made up, because "what built
+    this" is worth nothing unless it is what actually built it.
+    """
+    canonical = {
+        "container": {
+            "build_environment": f"{IMAGE}:{IMAGE_TAG}@{IMAGE_DIGEST}",
+            "digest": IMAGE_DIGEST,
+        }
+    }
+    assert sc.served_environment(canonical) == IMAGE_RUNNABLE
+    assert sc.served_environment({"container": {"build_environment": IMAGE}}) == IMAGE
+    assert sc.served_environment({"container": {}}) == ""
+    assert sc.served_environment({}) == ""

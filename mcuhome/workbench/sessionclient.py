@@ -97,7 +97,7 @@ import stat
 import tarfile
 import tempfile
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -105,6 +105,7 @@ from typing import Any
 from mcuhome.model.artifacts import Artifact, artifacts_from_wire
 from mcuhome.model.context import (
     BACKEND_DIR,
+    BUILD_CONTEXT_FILE,
     CONTEXT_FILE,
     CONTEXT_VERSION,
     MANIFEST_FILE,
@@ -145,11 +146,11 @@ __all__ = [
     "SeatWait",
     "ServerRefusal",
     "SessionClient",
-    "SessionPoisoned",
     "WaitedTooLong",
     "pack_context",
     "run_remote_build",
     "seat_offer",
+    "served_environment",
 ]
 
 #: Where a caller's own callback is reported when it raises. A sink is a
@@ -271,17 +272,6 @@ class ServerRefusal(RemoteError):
         self.details = error.get("details") or {}
         self.verb = verb
         self.server_message = message
-
-
-class SessionPoisoned(ServerRefusal):
-    """``session.poisoned`` — terminal for the session (E39).
-
-    An interrupted patch application left trees no future build may
-    trust. ``get-artifact`` and ``close-session`` still work, which is the
-    point: the moment a session poisons is the moment its owner most
-    wants the logs. Every *working* command from here on is refused, so
-    this client marks the session terminal and does not retry into it.
-    """
 
 
 @dataclass(frozen=True)
@@ -761,7 +751,15 @@ def pack_context(
     zstandard = _zstandard()
     root = Path(root)
     names = _members(
-        root, only=only, exclude=frozenset({CONTEXT_FILE}) if for_extension else frozenset()
+        root,
+        only=only,
+        # The two documents an extension may never carry, and for one
+        # reason: both are what the *session* was admitted and answered
+        # on — the pins, and the tool that generated the context, which
+        # is what the build environment was selected against. A server
+        # refuses either in an extension, and re-sending a file that
+        # never changed would turn "add these files" into a refusal.
+        exclude=frozenset({CONTEXT_FILE, BUILD_CONTEXT_FILE}) if for_extension else frozenset(),
     )
     if spent.entries + len(names) > caps.entries:
         raise ContextTooLarge(
@@ -1296,8 +1294,9 @@ class SessionClient:
         self.session_id: str | None = None
         self.context_state: str = "none"
         self.context_id: str | None = None
-        #: One-way: set by ``session.poisoned`` and by an E37 mismatch.
-        #: Both are terminal for the session, and neither is retried into.
+        #: One-way: set when the context ID this client computed and the
+        #: one the server answered disagree. That is terminal for the
+        #: session and is never retried into.
         self.terminal: str | None = None
 
         #: The integrity list of everything sent, path -> sha256. This is
@@ -1461,7 +1460,6 @@ class SessionClient:
             # as the server's judgement. The program's numbered
             # `invocation.finished` still arrives, and is delivered to the
             # caller's sink like any other event.
-            self._note_verdict(payload)
             future = self._finished.setdefault(
                 invocation_id, asyncio.get_running_loop().create_future()
             )
@@ -1475,23 +1473,6 @@ class SessionClient:
             # caller never actually received must stay replayable, and
             # this number is what a resume asks the server for.
             self._last_seq[invocation_id] = seq
-
-    def _note_verdict(self, payload: dict[str, Any]) -> None:
-        """Read the terminal states a verdict carries (E39).
-
-        The synchronous way a session poisons is a refused command, and
-        :meth:`_answer` sets :attr:`terminal` for it. The *ordinary* way
-        is asynchronous: an interrupted patch application ends the
-        invocation, the server poisons the session while assembling the
-        verdict, and the code travels in the verdict's error envelope.
-        Reading it here is what keeps the attribute's promise true for
-        both, so the next ``verify``/``build`` is refused locally instead
-        of one wasted round trip later.
-        """
-        error = payload.get("error")
-        code = error.get("code") if isinstance(error, dict) else None
-        if code == "session.poisoned":
-            self.terminal = "session.poisoned"
 
     def _deliver(self, call: Callable[[], Any], what: str) -> bool:
         """Run a caller's sink, and never let it look like a dead socket.
@@ -1523,8 +1504,8 @@ class SessionClient:
         They are **dropped** as they are failed, and that is the half
         that makes the advertised recovery real: the session outlives the
         socket, so a caller that reconnects and re-attaches gets the
-        verdict of an invocation that kept running. A poisoned future
-        left in this dict would be handed back by
+        verdict of an invocation that kept running. A future left in this
+        dict already failed would be handed back by
         :meth:`wait_finished`'s ``setdefault`` forever, and
         :meth:`_dispatch_event` would drop the real verdict on arrival
         because the future it belongs to is already done.
@@ -1589,12 +1570,7 @@ class SessionClient:
     def _answer(self, verb: str, frame: dict[str, Any]) -> dict[str, Any]:
         """One answering frame as a payload, or as the typed refusal it is."""
         if frame.get("type") == "error":
-            error = frame.get("error") or {}
-            code = str(error.get("code") or "")
-            if code == "session.poisoned":
-                self.terminal = code
-                raise SessionPoisoned(error, verb=verb)
-            raise ServerRefusal(error, verb=verb)
+            raise ServerRefusal(frame.get("error") or {}, verb=verb)
         payload = frame.get("payload")
         if not isinstance(payload, dict):
             raise RemoteTransportError(
@@ -1976,9 +1952,9 @@ class SessionClient:
         never a stop signal, which is why the verb exists.
         """
         # Deliberately not gated on :attr:`terminal`: cancel stops work
-        # rather than doing any, and a poisoned session may still have an
-        # invocation worth stopping — which is exactly the server's own
-        # rule for this verb.
+        # rather than doing any, and a session that may no longer start
+        # one can still have an invocation worth stopping — which is
+        # exactly the server's own rule for this verb.
         if self.session_id is None:
             raise RemoteTransportError("This client has no session.", hint="open-session first")
         return await self._call(
@@ -2255,7 +2231,11 @@ class RemoteBuildResult:
 
     Two fields are this method's own and have no local counterpart:
     :attr:`error`, the refusal envelope out of the verdict, and
-    :attr:`invocation_id`. Four of ``LocalOutcome``'s have no remote
+    :attr:`invocation_id`. :attr:`image` is the one that *does* have a
+    local counterpart and could only come from the far side: which
+    delivery of the pinned package set actually ran is the server's
+    choice, and it answers it at ``send-context``. Four of
+    ``LocalOutcome``'s have no remote
     counterpart — ``exit_code``, ``result``, ``problems`` and
     ``violation`` are what a backend sees of a container it started
     itself, and a client that invented them from a verdict would be
@@ -2270,6 +2250,38 @@ class RemoteBuildResult:
     out: Path | None
     error: dict[str, Any] | None = None
     invocation_id: str = ""
+    #: The build environment that served this build, as the server named
+    #: it: ``<repository>@sha256:…``, the same canonical form a local
+    #: container build records. It is the digest that decides — a tag is
+    #: a location — so this is what a record of "what built this" is
+    #: worth having. Empty when the server named none.
+    image: str = ""
+
+
+def served_environment(accepted: Mapping[str, Any]) -> str:
+    """Which build environment served this session, out of ``send-context``.
+
+    The answer carries the environment the server resolved for the
+    packages the context pins — its full explicit form and, separately,
+    the digest of the manifest whose labels were checked. What a build's
+    record wants is the pair that cannot move: ``<repository>@sha256:…``,
+    which is the same canonical form a local container build records, so
+    that "what built this" reads the same whichever side ran it.
+
+    A server that names no digest is answered with whatever it did name,
+    and one that names nothing at all with the empty string: this is a
+    record of a fact, and inventing one would be worse than recording
+    that the fact was not offered.
+    """
+    block = accepted.get("container")
+    if not isinstance(block, dict):
+        return ""
+    reference = str(block.get("build_environment") or "")
+    digest = str(block.get("digest") or "")
+    if not digest:
+        return reference
+    repository = reference.partition("@")[0].rpartition(":")[0] or reference.partition("@")[0]
+    return f"{repository}@{digest}" if repository else digest
 
 
 async def _wait_for_admission(
@@ -2402,7 +2414,8 @@ async def run_remote_build(
     )
     try:
         try:
-            await client.send_context(Path(context_dir), image=image)
+            accepted = await client.send_context(Path(context_dir), image=image)
+            served = served_environment(accepted)
             identity = await client.lock_context()
             if action == "verify":
                 invocation_id = await client.verify()
@@ -2425,6 +2438,7 @@ async def run_remote_build(
                 out=delivered,
                 error=verdict.get("error"),
                 invocation_id=invocation_id,
+                image=served,
             )
         finally:
             with contextlib.suppress(Exception):
