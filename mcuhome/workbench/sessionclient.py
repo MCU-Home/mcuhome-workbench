@@ -1689,7 +1689,7 @@ class SessionClient:
             )
         return self.session_id
 
-    async def send_context(self, context_dir: Path) -> dict[str, Any]:
+    async def send_context(self, context_dir: Path, *, image: str | None = None) -> dict[str, Any]:
         """``send-context`` — the base context and its pins, once (E41, E43).
 
         The archive is announced in the JSON payload — its compressed size
@@ -1701,6 +1701,23 @@ class SessionClient:
         The context's ``context.yaml`` is read here as well, because its
         pins are two of the three inputs of the context ID and the E37
         comparison needs them locally.
+
+        *image* is the build-environment pin for **this build**, in the
+        four forms
+        :func:`~mcuhome.workbench.resolve_image.parse_image_pin` reads,
+        and it travels here rather than in the context: a context
+        references packages and never an image, so a pin inside it would
+        change the context's identity without changing a build input.
+        This is the message that carries this build's parameters, and the
+        one at which the server chooses the environment.
+
+        What is **not** sent is this side's search list
+        (``build.container_repositories``): which repositories may be
+        used is a decision about trust, and on a build server it is the
+        operator's rather than a client's. A pin naming a repository that
+        server does not allow is refused, which is the honest outcome —
+        the alternative would be a client widening somebody else's
+        allowlist by asking.
         """
         session_id = self._require_session()
         context_dir = Path(context_dir)
@@ -1715,7 +1732,12 @@ class SessionClient:
             packed = await asyncio.to_thread(
                 pack_context, context_dir, spool=spool, caps=self.caps, spent=self.spent
             )
-            payload = await self._upload("send-context", session_id, packed)
+            payload = await self._upload(
+                "send-context",
+                session_id,
+                packed,
+                **({"container_image": image} if image else {}),
+            )
         finally:
             spool.unlink(missing_ok=True)
         self.spent = self.spent.plus(packed)
@@ -2319,6 +2341,7 @@ async def run_remote_build(
     work_root: Path,
     token: str | None = None,
     action: str = "build",
+    image: str | None = None,
     mode: str = "clean",
     profile: str = "oneshot",
     on_line: LineSink | None = None,
@@ -2335,9 +2358,10 @@ async def run_remote_build(
     E37 comparison, the working verb, follow the events until the
     verdict, ``get-artifact`` into ``work_root/out``, ``close-session``.
 
-    *action* is ``build`` or ``verify``, the same two
-    :func:`mcuhome.workbench.containerbuild.run_locked_build` takes and the
-    same two the server implements; *mode* applies to ``build`` only.
+    *action* is ``build`` or ``verify``; *mode* applies to ``build``
+    only. *image* is the build-environment pin for this build, in the
+    same four forms a local container build takes — it travels with
+    ``send-context``, which is where the server chooses the environment.
 
     It mirrors that method: a context directory and a work root in, an
     **unsigned** artifact set plus the build report out, progress through
@@ -2378,7 +2402,7 @@ async def run_remote_build(
     )
     try:
         try:
-            await client.send_context(Path(context_dir))
+            await client.send_context(Path(context_dir), image=image)
             identity = await client.lock_context()
             if action == "verify":
                 invocation_id = await client.verify()
