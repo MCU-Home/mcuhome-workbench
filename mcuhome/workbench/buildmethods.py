@@ -676,7 +676,11 @@ class BuildOutcome:
     #: ``build-report.json``, which carries the imgtool parameters the
     #: host signer needs (E55).
     report: str
-    #: The build-container reference, where one was used.
+    #: The build environment that ran, where one did: the image pinned
+    #: to the digest whose labels were checked, whether this machine
+    #: started it or a build server did. Empty for a build that used no
+    #: image at all — the subprocess profile — and for a server that
+    #: named none.
     image: str = ""
     #: The method's own result object, untouched.
     detail: Any = None
@@ -903,6 +907,11 @@ def target_for_method(method: str | None, request: BuildRequest) -> BuildTarget:
         token=request.token,
         wait=request.wait_for_turn,
         max_wait_seconds=request.max_wait_seconds,
+        # The one-build override reaches the far side as well: a remote
+        # build that quietly ignored it would build in an environment
+        # other than the one it was told to, which is the one thing an
+        # image pin exists to prevent.
+        image=request.image,
     )
 
 
@@ -1630,6 +1639,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         url=url,
         token=target.token,
         work_root=work_root,
+        image=target.image,
         mode=request.mode,
         on_line=request.on_line,
         on_wait=request.on_wait,
@@ -1644,5 +1654,10 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         artifacts=tuple(result.artifacts),
         out_dir=result.out,
         report=BUILD_REPORT_FILE,
+        # What actually built it, in the same canonical form a local
+        # container build records: the server chose the delivery and is
+        # the only side that can say which one, so a record without this
+        # would name the packages and not the bytes.
+        image=result.image,
         detail=result,
     )

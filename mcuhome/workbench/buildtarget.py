@@ -200,3 +200,9 @@ class RemoteBuild(BuildTarget):
     #: How long that wait may last in total, in seconds. ``0`` removes
     #: the bound.
     max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
+    #: The build environment this one build asks for, in the four pin
+    #: forms a container build takes. It travels with the context and
+    #: narrows what the *server* looks at; which repositories may be used
+    #: at all stays that server's operator's decision. Empty is the
+    #: ordinary case: the server searches what it allows.
+    image: str | None = None

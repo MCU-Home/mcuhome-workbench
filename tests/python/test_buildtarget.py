@@ -90,15 +90,20 @@ def test_a_local_build_defaults_to_a_container() -> None:
 def test_a_remote_build_carries_no_execution() -> None:
     """The asymmetry, pinned as a field set rather than as prose.
 
-    A client may say *where* a build runs; it may not tell somebody
-    else's machine *how* to run it — that machine's operator configured
-    that. A build server answers a context by constructing a target of
-    its own, which is also why the multi-hop case needs no special code:
-    a server configured to pass work on constructs a ``RemoteBuild``.
+    A client may say *where* a build runs and *which* build environment
+    it means; it may not tell somebody else's machine **how** to run it —
+    that machine's operator configured that, and an ``Execution`` is
+    exactly the how. The image pin is the one thing on the other side of
+    that line: it names what to build in, which the far side then
+    resolves against its own allowlist and may refuse.
+
+    A build server answers a context by constructing a target of its
+    own, which is also why the multi-hop case needs no special code: a
+    server configured to pass work on constructs a ``RemoteBuild``.
     """
     fields = {field.name for field in dataclasses.fields(buildtarget.RemoteBuild)}
     assert "execution" not in fields
-    assert fields == {"server", "token", "wait", "max_wait_seconds"}
+    assert fields == {"server", "token", "wait", "max_wait_seconds", "image"}
 
 
 # --------------------------------------------------------------------------

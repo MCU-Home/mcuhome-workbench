@@ -1060,3 +1060,84 @@ def test_a_subprocess_build_refuses_the_retired_device_field_too(model, tmp_path
     assert "sources.build_environment" in caught.value.message
     assert "retired" in caught.value.message
     assert not (tmp_path / "work").exists(), "nothing was written"
+
+
+def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, monkeypatch):
+    """What built it, in the same canonical form a local container build records.
+
+    A context pins packages, and an image is one delivery of that set:
+    which delivery ran is the server's choice and the server's answer, so
+    without carrying it back a remote build's record would name the
+    packages and never the bytes. It is the digest that decides — a tag
+    is a location — so the pair recorded is ``<repository>@sha256:…``.
+    """
+    digest = "sha256:" + "f" * 64
+    context = tmp_path / "context"
+    context.mkdir()
+
+    async def fake(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status="success",
+            successful=True,
+            artifacts=_artifacts(),
+            out=tmp_path / "out",
+            invocation_id="inv-1",
+            image=f"ghcr.io/mcu-home/build-environment@{digest}",
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake)
+    outcome = _run(
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            server="ws://build.example:8080/session",
+            token="a-token",
+            context_dir=context,
+        ),
+        buildmethods.REMOTE,
+    )
+    assert outcome.image == f"ghcr.io/mcu-home/build-environment@{digest}"
+
+
+def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, monkeypatch):
+    """``--container-image`` on a remote build reaches the far side.
+
+    The pin is a statement about *this build* and the server is the side
+    that resolves it, so a remote build that dropped it would compile in
+    an environment other than the one it was told to — silently, which is
+    the one outcome a pin exists to prevent. Which repositories may be
+    used at all is not carried: that stays the server operator's.
+    """
+    seen: dict[str, object] = {}
+    context = tmp_path / "context"
+    context.mkdir()
+
+    async def fake(context_dir, **kwargs):
+        del context_dir
+        seen.update(kwargs)
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status="success",
+            successful=True,
+            artifacts=_artifacts(),
+            out=tmp_path / "out",
+            invocation_id="inv-1",
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake)
+    _run(
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            server="ws://build.example:8080/session",
+            token="a-token",
+            context_dir=context,
+            image=":0.1.10.dev2-r1",
+        ),
+        buildmethods.REMOTE,
+    )
+    assert seen["image"] == ":0.1.10.dev2-r1"
