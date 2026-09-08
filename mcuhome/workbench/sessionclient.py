@@ -2271,17 +2271,26 @@ def served_environment(accepted: Mapping[str, Any]) -> str:
     A server that names no digest is answered with whatever it did name,
     and one that names nothing at all with the empty string: this is a
     record of a fact, and inventing one would be worse than recording
-    that the fact was not offered.
+    that the fact was not offered. The repository is taken out of the
+    reference by the parser that owns what a reference is, because a
+    registry with a port in it has a colon that is not a tag's.
     """
+    from mcuhome.model.imageref import DOCKER_HUB, parse_reference
+
     block = accepted.get("container")
     if not isinstance(block, dict):
         return ""
     reference = str(block.get("build_environment") or "")
     digest = str(block.get("digest") or "")
-    if not digest:
+    if not reference or not digest:
         return reference
-    repository = reference.partition("@")[0].rpartition(":")[0] or reference.partition("@")[0]
-    return f"{repository}@{digest}" if repository else digest
+    try:
+        repository = parse_reference(reference, default_registry=DOCKER_HUB).repository
+    except BuildError:
+        # A name this client cannot parse is a name it does not improve
+        # on: what the server said is still the honest record.
+        return reference
+    return f"{repository}@{digest}"
 
 
 async def _wait_for_admission(

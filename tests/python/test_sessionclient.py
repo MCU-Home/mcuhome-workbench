@@ -3083,3 +3083,12 @@ def test_the_environment_answer_is_read_defensively() -> None:
     assert sc.served_environment({"container": {"build_environment": IMAGE}}) == IMAGE
     assert sc.served_environment({"container": {}}) == ""
     assert sc.served_environment({}) == ""
+    # A registry with a port in it has a colon that is not a tag's, which
+    # is why the repository is parsed rather than cut at the last one.
+    ported = {
+        "container": {
+            "build_environment": f"registry.test:5000/mcuhome/env@{IMAGE_DIGEST}",
+            "digest": IMAGE_DIGEST,
+        }
+    }
+    assert sc.served_environment(ported) == f"registry.test:5000/mcuhome/env@{IMAGE_DIGEST}"
