@@ -209,11 +209,13 @@ class ResourceLimits:
     the environment plainly that whatever budget was set may be enforced
     hard.
 
-    They are **always set** in this profile. A local build gets the
-    machine it is running on (:func:`~mcuhome.workbench.buildenvsession.host_limits`)
+    They are **set** in this profile. A local build gets the machine
+    it is running on (:func:`~mcuhome.workbench.buildenvsession.host_limits`)
     and a process count that no build has a use for exceeding, which
     changes nothing about how a healthy build runs and everything about
-    what an unhealthy one can do to the machine around it.
+    what an unhealthy one can do to the machine around it. The one
+    exception is memory on a host whose memory cannot be measured: it is
+    left unbounded there, unless ``build.memory`` is configured.
     """
 
     memory: str | None = None

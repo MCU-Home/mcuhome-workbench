@@ -637,20 +637,19 @@ def test_a_memory_figure_is_read_the_way_a_container_runtime_spells_it() -> None
 
 
 def test_nothing_stated_is_not_a_memory_figure_of_zero() -> None:
-    """Zero would be a bound of nothing at all, and the absence of one is
-    what both the flag and the document read as "decide for yourself"."""
+    """Nothing stated is not the same as a bound of zero: only the absence
+    of a value reads as "decide for yourself"."""
     assert session_module.memory_bytes(None) is None
     assert session_module.memory_bytes("") is None
-    assert session_module.memory_bytes(0) is None
 
 
-@pytest.mark.parametrize("stated", ["banana", "0", "-3", "g", "0g"])
-def test_a_memory_figure_that_is_not_one_is_refused_by_name(stated: str) -> None:
+@pytest.mark.parametrize("stated", ["banana", "0", "-3", "g", "0g", 0, -5])
+def test_a_memory_figure_that_is_not_one_is_refused_by_name(stated: str | int) -> None:
     """A misread memory limit either strangles every build or bounds
     nothing, and both are worse than being told which value is wrong."""
     with pytest.raises(ConfigError) as refusal:
         session_module.memory_bytes(stated)
-    assert stated in refusal.value.message
+    assert str(stated) in refusal.value.message
     assert "build.memory" in (refusal.value.hint or "")
 
 

@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Asking a container registry three questions, anonymously.
+"""Asking a container registry two questions, anonymously.
 
 Choosing a build environment means knowing which tags a repository has,
-which bytes a tag points at, and what an image says about itself. All
-three are answered by the OCI distribution API over plain HTTPS, without
-a container runtime, without credentials and **without pulling the
-image** — which is what makes client-side pinning affordable at all: the
-build container is 1.33 GB on the wire and the three requests below add
-up to a few kilobytes.
+and, for one reference, which bytes it points at and what the image
+says about itself. Both are answered by the OCI distribution API over
+plain HTTPS, without a container runtime, without credentials and
+**without pulling the image** — which is what makes client-side pinning
+affordable at all: the build container is 1.33 GB on the wire and the
+requests below add up to a few kilobytes.
 
 **Anonymous, and that is the whole authentication story.** A public
 registry hands out a pull token to anyone who asks (``GET /token`` at the

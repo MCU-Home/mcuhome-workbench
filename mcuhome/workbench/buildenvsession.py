@@ -583,13 +583,14 @@ def memory_bytes(stated: str | int | None, *, option: str = "build.memory") -> i
     if stated is None or stated == "":
         return None
     if isinstance(stated, int):
-        return stated if stated > 0 else None
-    text = str(stated).strip().lower().removesuffix("ib")
-    number, unit = (text[:-1], text[-1]) if text and text[-1] in _MEMORY_UNITS else (text, "b")
-    try:
-        value = float(number)
-    except ValueError:
-        value = 0.0
+        value, unit = float(stated), "b"
+    else:
+        text = str(stated).strip().lower().removesuffix("ib")
+        number, unit = (text[:-1], text[-1]) if text and text[-1] in _MEMORY_UNITS else (text, "b")
+        try:
+            value = float(number)
+        except ValueError:
+            value = 0.0
     if value <= 0:
         raise ConfigError(
             f'"{stated}" is not an amount of memory.',

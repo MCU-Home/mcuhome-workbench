@@ -145,24 +145,15 @@ class ScriptedImages:
             found = found[wanted]
         return ImageFacts(digest=found[0], labels=dict(found[1]))
 
-    def labels(self, reference, *, platform=None):
-        return self.facts(reference, platform=platform).labels
-
 
 class _UntouchedRegistry:
     """A registry that fails the test the moment anything asks it anything.
 
-    Used for the empty-allowlist refusal, which has to happen before any
-    of the three questions is put to a registry at all.
+    Used for the empty-allowlist refusal, which has to happen before either
+    of the two questions is put to a registry at all.
     """
 
     def tags(self, reference):
-        raise AssertionError("the registry was asked despite an empty allowlist")
-
-    def labels(self, reference):
-        raise AssertionError("the registry was asked despite an empty allowlist")
-
-    def digest_of(self, reference):
         raise AssertionError("the registry was asked despite an empty allowlist")
 
     def facts(self, reference, *, platform=None):
