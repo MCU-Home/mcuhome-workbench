@@ -46,13 +46,26 @@ from typing import Any
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.model import buildimage
+from mcuhome.model import buildenvironment, buildimage
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import ContextRequest, EnvironmentPin, PackagePin, SdkPin
 
-from mcuhome.workbench import buildmethods, containerbuild, imgtool, resolve_pins, signing
+from mcuhome.workbench import (
+    buildmethods,
+    containerbuild,
+    imgtool,
+    ociregistry,
+    packageregistry,
+    resolve_pins,
+    signing,
+)
 from mcuhome.workbench import sessionclient as sc
-from mcuhome.workbench.buildenvsession import LocalOutcome
+from mcuhome.workbench.buildenvsession import (
+    RESULT_PREFIX,
+    RESULT_SUFFIX,
+    SPEC_GENERATION,
+    LocalOutcome,
+)
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
@@ -81,30 +94,6 @@ if MISSING:
         allow_module_level=True,
     )
 
-#: What the build server reaches into this workbench for. It drives a
-#: build through the workbench's own local path, and that path has moved
-#: onto the build-environment specification's container profile: one
-#: fresh container per step, the tree of §4, the two documents. A server
-#: still asking for the retired interface cannot serve these tests, and
-#: one skip that says so is worth more than three dozen identical
-#: attribute errors. **This gate goes away with the server's own move.**
-_SERVER_NEEDS = ("BackendConfig", "Docker", "open_environment")
-_from_the_server = [
-    name
-    for name in _SERVER_NEEDS
-    if importlib.util.find_spec("mcuhome.buildserver") is not None
-    and not hasattr(importlib.import_module("mcuhome.workbench.api"), name)
-]
-if _from_the_server:
-    pytest.skip(
-        "the build server in this environment still drives the retired build interface "
-        f"({', '.join(_from_the_server)}), which this workbench no longer offers. The "
-        "remote build method is tested against the real server, so these tests return "
-        "when the server runs on the build-environment specification's container "
-        "profile.",
-        allow_module_level=True,
-    )
-
 # Imported through `importlib` rather than with `import` statements
 # because they may only be resolved after the gate above.
 test_utils = importlib.import_module("aiohttp.test_utils")
@@ -117,46 +106,82 @@ bs_sessions = importlib.import_module("mcuhome.buildserver.sessions")
 
 TOKEN = "test-token-000000000000000000000000"
 
-#: One image and the labels a conforming one carries. Same values as the
-#: build server's own suite, because they are what its stubbed docker
-#: answers with. No context pins an image any more — a context pins its
-#: build environment's packages — so these describe what the server's
-#: inventory holds and nothing about a pin.
-IMAGE = "ghcr.io/mcu-home/build-container"
-IMAGE_DIGEST = "sha256:" + "b" * 64
-IMAGE_TAG = "zephyr-4.4.0-r10"
-IMAGE_REFERENCE = f"{IMAGE}@{IMAGE_DIGEST}"
-IMAGE_LABELS = {
-    buildimage.CONTRACT_LABEL: "1",
-    buildimage.ZEPHYR_LABEL: "4.4.0",
-    buildimage.TOOLCHAIN_LABEL: "zephyr-sdk-1.0.1",
-}
+#: The build environment a context pins under context format 4: two
+#: packages, each a ``(name, version, sha256)`` triple. The tools entry
+#: is the family, which is the ordinary pin — it resolves per platform
+#: through an index, and its hash covers every platform's package. No
+#: context pins an image any more — a context pins its build
+#: environment's packages — so these describe what the local package
+#: index and the scripted registry below answer with, and nothing about
+#: a pin.
+WORKSPACE_PACKAGE = "mcuhome-build-workspace"
+TOOLS_PACKAGE = "mcuhome-build-tools"
+ENVIRONMENT_VERSION = "2.4.0"
+WORKSPACE_SHA256 = "7c" * 32
+TOOLS_SHA256 = "b9" * 32
 
-#: The Zephyr line the pinned image carries, by its own label.
+#: The image that delivers that package set, as this suite's registry
+#: publishes it: MCUHome's own repository, one tag, one digest. The tag
+#: is a location and the digest is the identity — what a build runs and
+#: what a verdict records is the digest.
+IMAGE = buildimage.ENVIRONMENT_IMAGE_REPOSITORY
+IMAGE_TAG = f"{ENVIRONMENT_VERSION}-r1"
+IMAGE_DIGEST = "sha256:" + "b" * 64
+IMAGE_REFERENCE = f"{IMAGE}:{IMAGE_TAG}@{IMAGE_DIGEST}"
+#: How the runtime is addressed for those bytes, and how a verdict names
+#: them: by digest, never by the tag they were found under.
+IMAGE_RUNNABLE = f"{IMAGE}@{IMAGE_DIGEST}"
+
+#: The Zephyr release the image declares, and the generator constraint it
+#: accepts contexts under (build environment specification §5).
+ZEPHYR_VERSION = "4.4.0"
+GENERATOR_CONSTRAINT = "mcuhome-workbench:"
+
+#: The Zephyr line the device model in a context states. It is the
+#: model's own field and not a pin: what a build runs is decided by the
+#: packages the context names.
 ZEPHYR_LINE = "4.4"
 
-#: A conforming ``describe`` ``program`` block — every field the legacy
-#: container invocation (retired at the switchover) makes mandatory.
-#: ``sdk`` reports ``path: null``: "not in my image, mount it where you
-#: like".
-PROGRAM = {
-    "id": "org.mcuhome.build-container",
-    "version": "2.4.0",
-    "contract": 1,
-    "request": [1],
-    "result": [1],
-    "actions": ["describe", "verify", "build"],
-    "trees": {
-        "zephyr": {"path": "/opt/zephyr", "version": "4.4.0"},
-        "chip": {"path": "/opt/connectedhomeip", "version": "v1.5.1.0"},
-        "mcuboot": {"path": "/opt/bootloader/mcuboot"},
-        "sdk": {"path": None},
-    },
-}
 
-#: The one artifact whose content the build actions document's report shape fixes, for the one
-#: consumer that needs it: the client that signs detached, on the host,
-#: after the unsigned image has come back (E55, E56).
+def environment_labels(
+    *,
+    zephyr: str = ZEPHYR_VERSION,
+    generation: str = "3",
+    constraint: str = GENERATOR_CONSTRAINT,
+    workspace: str | None = None,
+    tools: str | None = None,
+) -> dict[str, str]:
+    """The labels an image delivering this suite's package set carries.
+
+    Build environment specification §5.2: an image mirrors every member
+    of the declaration as a label, and every ``packages.`` member carries
+    a hash because an image is a delivery of exact bytes. *workspace* and
+    *tools* replace a member outright, which is how a test states the
+    near miss — the same packages under other bytes, which is a
+    different environment.
+    """
+    labels = {
+        f"{buildenvironment.LABEL_PREFIX}spec-generation": generation,
+        f"{buildenvironment.LABEL_PREFIX}zephyr.version": zephyr,
+        f"{buildenvironment.LABEL_PREFIX}build-context.generator-constraint": constraint,
+        f"{buildenvironment.LABEL_PREFIX}packages.{WORKSPACE_PACKAGE}": (
+            workspace
+            if workspace is not None
+            else f"{ENVIRONMENT_VERSION}@sha256:{WORKSPACE_SHA256}"
+        ),
+        f"{buildenvironment.LABEL_PREFIX}packages.{TOOLS_PACKAGE}": (
+            tools if tools is not None else f"{ENVIRONMENT_VERSION}@sha256:{TOOLS_SHA256}"
+        ),
+    }
+    return {name: value for name, value in labels.items() if value}
+
+
+IMAGE_LABELS = environment_labels()
+
+#: The one artifact whose content the build actions document's report shape
+#: fixes, for the one consumer that needs it: the client that signs
+#: detached, on the host, after the unsigned image has come back (build
+#: actions document, the host-signing step).
 BUILD_REPORT = {
     "report": 1,
     "signing": {
@@ -178,7 +203,10 @@ SDK_VERSION = "0.1.0"
 
 
 class FakeProcess:
-    """A ``docker exec`` that has already finished, or refuses to."""
+    """A step that has already finished, or refuses to."""
+
+    output = ""
+    started = True
 
     def __init__(self, code: int, *, hang: bool = False) -> None:
         self._code = code
@@ -186,9 +214,13 @@ class FakeProcess:
         self.terminated = False
         self.killed = False
 
-    async def wait(self) -> int:
+    def poll(self) -> int | None:
+        """``None`` while the scripted step is still running."""
+        return None if self._hang else self._code
+
+    def wait(self) -> int | None:
         while self._hang:
-            await asyncio.sleep(0.01)
+            time.sleep(0.005)
         return self._code
 
     def terminate(self) -> None:
@@ -201,44 +233,11 @@ class FakeProcess:
         self._hang = False
         self._code = -9
 
-    # -- the orchestrator's synchronous face ------------------------
-    #
-    # A container is driven from a worker thread, so the handle it hands
-    # back is polled and waited on synchronously. The scripted behaviour
-    # is stated once, here, and both faces read it.
-
-    def poll_sync(self) -> int | None:
-        return None if self._hang else self._code
-
-    def wait_sync(self) -> int:
-        while self._hang:
-            time.sleep(0.005)
-        return self._code
-
-
-class _Driven:
-    """A scripted program, as the orchestrator's synchronous seam answers one."""
-
-    output = ""
-
-    def __init__(self, process: FakeProcess) -> None:
-        self._process = process
-
-    def poll(self) -> int | None:
-        return self._process.poll_sync()
-
-    def wait(self) -> int | None:
-        return self._process.wait_sync()
-
-    def terminate(self) -> None:
-        self._process.terminate()
-
-    def kill(self) -> None:
-        self._process.kill()
-
 
 @dataclass
 class Invocation:
+    """One step this suite's runtime played, as the fake saw it."""
+
     action: str
     argv: list[str]
     request: dict[str, Any]
@@ -246,14 +245,24 @@ class Invocation:
 
 @dataclass
 class FakeDocker:
-    """Docker as this suite has it: argv in, scripted answers out.
+    """The container runtime as this suite has it: argv in, scripted answers out.
 
-    A condensed twin of ``build-server/tests/conftest.py``'s fake, and
+    A condensed twin of ``mcuhome-buildserver``'s own fake, and
     deliberately a copy rather than an import: this repository does not
-    depend on ``mcuhome-buildserver`` and must not start doing so
-    through a test fixture. What it has to get right is only what the
-    *client* path touches — the inventory, the image lookup, ``describe``,
-    one container and one exec per invocation.
+    depend on ``mcuhome-buildserver`` and must not start doing so through
+    a test fixture. It stubs the build server's own discovery seam
+    (``mcuhome.buildserver.container.run_docker``) *and* both halves of
+    the workbench container profile's seam
+    (:func:`mcuhome.workbench.containerbuild.run_command` and
+    :func:`~mcuhome.workbench.containerbuild.spawn_process`), because two
+    different things drive one runtime and a fake that stubbed only one
+    would let the other start a real container.
+
+    Conforming by default — it reads the request document through the
+    mounts the composed ``docker run`` was given, writes real files into
+    ``out`` and answers with the result document the build environment
+    specification §6.2 defines. Tests that want a non-conforming step
+    replace :attr:`run_program`.
     """
 
     calls: list[list[str]] = field(default_factory=list)
@@ -261,33 +270,32 @@ class FakeDocker:
     images: dict[str, dict[str, Any]] = field(default_factory=dict)
     listed: list[str] = field(default_factory=list)
     version_status: int | None = 0
-    program: dict[str, Any] | None = None
+    #: What one step does. Replaced by tests that want a hang or a
+    #: non-conforming answer.
     run_program: Any = None
+    #: Scripted steps currently running in a container, so that removing
+    #: it can end them.
+    running: list[Any] = field(default_factory=list)
     containers: list[str] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
     #: ``container target -> host source``, from the mounts of the
-    #: ``docker run`` that created the session's container. The request
-    #: document names container paths, and this is the only way back.
+    #: ``docker run`` that played the last step.
     mounts: dict[PurePosixPath, Path] = field(default_factory=dict)
-    #: Scripted programs running in a container, so that removing it can
-    #: end them.
-    running: list[Any] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         inspected = {
             "Id": "sha256:" + "c" * 64,
             "RepoTags": [f"{IMAGE}:{IMAGE_TAG}"],
-            "RepoDigests": [IMAGE_REFERENCE],
+            "RepoDigests": [f"{IMAGE}@{IMAGE_DIGEST}"],
             "Config": {"Labels": dict(IMAGE_LABELS)},
         }
-        self.images.setdefault(IMAGE_REFERENCE, inspected)
-        self.images.setdefault(f"{IMAGE}:{IMAGE_TAG}", inspected)
-        self.images.setdefault(f"{IMAGE}:{IMAGE_TAG}@{IMAGE_DIGEST}", inspected)
+        for name in (IMAGE_RUNNABLE, f"{IMAGE}:{IMAGE_TAG}", IMAGE_REFERENCE):
+            self.images.setdefault(name, inspected)
         self.listed = self.listed or [f"{IMAGE}:{IMAGE_TAG}"]
-        if self.program is None:
-            self.program = json.loads(json.dumps(PROGRAM))
         if self.run_program is None:
-            self.run_program = conforming_program
+            self.run_program = conforming_environment
+
+    # -- the seams -----------------------------------------------------
 
     async def run(self, argv):
         """The build server's own discovery seam: asked on its event loop."""
@@ -301,9 +309,9 @@ class FakeDocker:
         discovery happens on its event loop and its seam is not. One
         fake serves both, because they are one docker.
         """
-        del on_line
-        self.calls.append(list(argv))
-        rest = list(argv[1:])
+        argv = list(argv)
+        self.calls.append(argv)
+        rest = argv[1:]
         if self.version_status is None:
             return bs_container.Completed(status=None, output="")
         if rest[:1] == ["version"]:
@@ -311,57 +319,39 @@ class FakeDocker:
         if rest[:2] == ["image", "ls"]:
             return bs_container.Completed(status=0, output="\n".join(self.listed) + "\n")
         if rest[:2] == ["image", "inspect"]:
-            references = list(rest[4:])
-            lines = [
-                json.dumps(self.images[reference])
-                for reference in references
-                if reference in self.images
-            ]
-            status = 0 if len(lines) == len(references) else 1
-            return bs_container.Completed(status=status, output="\n".join(lines))
-        if rest[:1] == ["run"] and rest[-2:-1] == ["cat"]:
-            # The legacy container invocation's static self-description
-            # (retired at the switchover). This image carries none, so the
-            # backend falls back to invoking `describe`.
-            return bs_container.Completed(status=1, output="")
-        if rest[:1] == ["run"] and "--rm" in rest:
-            return self._describe(rest)
-        if rest[:1] == ["run"]:
-            identity = f"{len(self.containers):064x}"
-            self.containers.append(identity)
-            for volume in [rest[i + 1] for i, item in enumerate(rest) if item == "--volume"]:
-                source, target = volume.removesuffix(":ro").split(":")
-                self.mounts[PurePosixPath(target)] = Path(source)
-            return bs_container.Completed(status=0, output=identity + "\n")
+            return self._inspect(rest)
+        if rest[:1] == ["pull"]:
+            return self._pull(rest[-1], on_line)
         if rest[:1] == ["rm"]:
-            self.removed.append(rest[-1])
-            # Removing a container ends what was running in it: the
-            # ladder's last rung is a teardown and not a signal, because
-            # killing a `docker exec` client never reached the process
-            # inside.
-            for process in self.running:
-                process.kill()
-            self.running.clear()
-            return bs_container.Completed(status=0, output="")
+            return self._remove(rest[-1])
         raise AssertionError(f"the fake docker was asked something unexpected: {argv}")
 
-    def drive(self, argv, on_line=None):
-        """The orchestrator's spawn seam: an invocation, already finished."""
+    def spawn(self, argv, on_line=None):
+        """The step, which is spawned rather than run.
+
+        Plays the scripted environment synchronously and answers with a
+        handle — the shape a supervisor walks over. The request document
+        is read **through the mounts** the composed ``docker run`` was
+        given: a path no ``--volume`` reaches does not exist inside a
+        real container, and resolving one anyway would let this suite
+        pass over the one defect the layout is about.
+        """
         argv = list(argv)
         self.calls.append(argv)
-        assert argv[1] == "exec", f"only an invocation is spawned: {argv}"
-        request = json.loads(self.host(argv[-1]).read_text("utf-8"))
-        self.invocations.append(Invocation(action=argv[-2], argv=argv, request=request))
-        process = self.run_program(argv[-2], self.host_view(request), on_line or (lambda _: None))
+        assert argv[1] == "run", f"only a step is spawned: {argv}"
+        self.mounts = {}
+        for volume in [argv[i + 1] for i, item in enumerate(argv) if item == "--volume"]:
+            source, target = volume.removesuffix(":ro").rsplit(":", 1)
+            self.mounts[PurePosixPath(target)] = Path(source)
+        identity = argv[argv.index("--name") + 1] if "--name" in argv else f"{len(self.calls):x}"
+        self.containers.append(identity)
+        request = json.loads(self.host(containerbuild.REQUEST_TARGET).read_text("utf-8"))
+        self.invocations.append(
+            Invocation(action=request.get("action", ""), argv=argv, request=request)
+        )
+        process = self.run_program(request, self.host(containerbuild.OUT_TARGET), on_line)
         self.running.append(process)
-        return _Driven(process)
-
-    #: The request-document fields that name a directory the program is
-    #: given, under the legacy container invocation (retired at the
-    #: switchover). Everything else that starts with a slash is not a
-    #: path: ``required`` holds JSON pointers, and a ``trees`` entry may
-    #: name a tree that lives in the image and is mounted by nobody.
-    PATH_FIELDS = ("result", "out", "work", "tmp", "context", "events", "cancel")
+        return process
 
     def host(self, path: str, *, required: bool = True) -> Path:
         """*path* as the host spells it, through this container's mounts.
@@ -379,77 +369,83 @@ class FakeDocker:
                 return source / inside.relative_to(target)
         if required:
             raise AssertionError(
-                f"{path} is in the request document and no --volume of "
-                f"{sorted(map(str, self.mounts))} mounts it: inside a real container "
-                "that path does not exist"
+                f"{path} is reached by no --volume of {sorted(map(str, self.mounts))}: "
+                "inside a real container that path does not exist"
             )
         return Path(path)
 
-    def host_view(self, document):
-        """The request document as the host can act on it.
+    def _inspect(self, rest: list[str]) -> Any:
+        references = rest[2:]
+        # `docker image inspect --format …` puts the format in front of
+        # the references; the profile's presence check passes none.
+        if references[:1] == ["--format"]:
+            references = references[2:]
+        known = [name for name in references if name in self.images]
+        lines = [json.dumps(self.images[name]) for name in known]
+        status = 0 if len(known) == len(references) and references else 1
+        return bs_container.Completed(status=status, output="\n".join(lines))
 
-        Every field of :data:`PATH_FIELDS` has to be reachable through a
-        mount; a ``trees`` entry and a shared cache need not be, and are
-        translated only when they are.
+    def _pull(self, reference: str, on_line) -> Any:
+        """``docker pull <reference>`` — never needed once the image is present."""
+        relay = on_line if on_line is not None else (lambda _line: None)
+        relay(f"Error response from daemon: manifest for {reference} not found")
+        return bs_container.Completed(status=1, output="not found")
+
+    def _remove(self, identity: str) -> Any:
+        """Removing a container ends what was running in it.
+
+        Which is why the ladder's last rung is a teardown and not a
+        signal: killing a ``docker exec`` client never reached the
+        process inside.
         """
-        view = dict(document)
-        for key in self.PATH_FIELDS:
-            if key in view:
-                view[key] = str(self.host(view[key]))
-        if isinstance(view.get("trees"), dict):
-            view["trees"] = {
-                name: {**entry, "path": str(self.host(entry["path"], required=False))}
-                for name, entry in view["trees"].items()
-            }
-        if isinstance(view.get("ccache"), dict):
-            cache = view["ccache"]
-            view["ccache"] = {**cache, "path": str(self.host(cache["path"], required=False))}
-        return view
-
-    async def spawn(self, argv, *, on_line):
-        self.calls.append(list(argv))
-        action, request_path = argv[-2], self.host(argv[-1])
-        request = json.loads(request_path.read_text())
-        self.invocations.append(Invocation(action=action, argv=list(argv), request=request))
-        return self.run_program(action, self.host_view(request), on_line)
-
-    def _describe(self, rest: list[str]) -> Any:
-        request = Path(rest[-1])
-        document = json.loads(request.read_text())
-        Path(document["result"]).write_text(
-            json.dumps(
-                {
-                    "result": 1,
-                    "status": "success",
-                    "action": "describe",
-                    "reason": None,
-                    "error": None,
-                    "program": self.program,
-                }
-            )
-        )
+        self.removed.append(identity)
+        for process in self.running:
+            process.kill()
+        self.running.clear()
         return bs_container.Completed(status=0, output="")
 
 
-def _emit(request: dict[str, Any], name: str, seq: int, **fields: Any) -> None:
-    with Path(request["events"]).open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"event": name, "seq": seq, **fields}) + "\n")
+class ScriptedRegistry:
+    """A container registry that answers with one image, and counts the asking.
 
+    Choosing an image is the one step of a container build that talks to
+    the network — a registry is asked which tags a repository publishes
+    and what each one's labels say — and this suite's peer is the real
+    build server, so it must not reach ghcr.io to find out.
 
-def _manifest_id(request: dict[str, Any]) -> str:
-    """The context id, read out of the manifest the *server* wrote.
-
-    Read rather than recomputed: a conforming program measures the
-    materialized context and arrives at the value the manifest declares,
-    and re-deriving the frozen rule in a fixture is the second
-    implementation ADR 0020 decision 4 exists to prevent.
+    The labels are the whole answer: an image serves a context by
+    declaring exactly the package set it pins (build environment
+    specification §5.2), so a test moves the *labels* to move the
+    outcome.
     """
-    from ruamel.yaml import YAML
 
-    data = YAML(typ="safe", pure=True).load(
-        (Path(request["context"]) / "manifest.yaml").read_text()
-    )
-    return str(data["id"])
+    def __init__(
+        self,
+        *,
+        digest: str = IMAGE_DIGEST,
+        tags: tuple[str, ...] = (IMAGE_TAG,),
+        labels: dict[str, str] | None = None,
+        repositories: dict[str, dict[str, str]] | None = None,
+    ) -> None:
+        self.digest = digest
+        self.tags_ = tags
+        self.labels_ = IMAGE_LABELS if labels is None else labels
+        #: Per-repository labels, for a test about an allowlist with more
+        #: than one entry in it. A repository not named here answers with
+        #: :attr:`labels_`.
+        self.repositories = repositories or {}
+        self.asked: list[str] = []
+
+    def tags(self, reference):
+        if self.repositories and reference.repository not in self.repositories:
+            raise ociregistry.RegistryError(f"{reference.repository} publishes nothing")
+        return self.tags_
+
+    def facts(self, reference, *, platform=None):
+        del platform  # one architecture is enough for a suite about a protocol
+        self.asked.append(str(reference))
+        labels = self.repositories.get(reference.repository, self.labels_)
+        return ociregistry.ImageFacts(digest=self.digest, labels=dict(labels))
 
 
 #: The artifact set every conforming run below declares. ``paths`` may
@@ -463,99 +459,74 @@ ARTIFACTS: tuple[tuple[str, bytes], ...] = (
 )
 
 
-def _start_program(action: str, request: dict[str, Any], on_line) -> str:
-    """The first two events of a conforming run, and the context it checked."""
-    on_line(f"-- MCUHome {action} starting")
-    _emit(request, "invocation.started", 1, action=action)
-    identity = _manifest_id(request)
-    _emit(request, "context.checked", 2, context=identity)
-    return identity
-
-
-def _finish_program(
-    action: str,
+def _write_result(
     request: dict[str, Any],
+    out: Path,
     on_line,
     *,
-    identity: str,
     artifacts: tuple[tuple[str, bytes], ...] = ARTIFACTS,
+    status: str = "success",
+    message: str = "",
 ) -> None:
-    """The artifacts, the result document and the closing event (seq 3..6)."""
-    out = Path(request["out"])
-    declared = []
+    """The artifacts and the result document a conforming step writes (§6.2).
+
+    There is no events file and no program event stream any more — the
+    server writes its own ``invocation.started`` and ``invocation.verdict``
+    events — so a scripted step has only two things to say: what it
+    wrote into ``out``, and this document.
+    """
+    relay = on_line if on_line is not None else (lambda _line: None)
+    declared: list[str] = []
     for name, payload in artifacts:
         target = out / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
-        declared.append(
-            {
-                "root": "out",
-                "path": name,
-                "role": "report" if name.endswith(".json") else "firmware",
-                "hashes": {"sha256": hashlib.sha256(payload).hexdigest()},
-            }
-        )
-    for index, entry in enumerate(declared, start=3):
-        _emit(request, "artifact.collected", index, role=entry["role"], path=entry["path"], size=1)
-    on_line("-- build finished")
+        declared.append(name)
+    relay("-- build finished")
     document = {
-        "result": 1,
-        "status": "success",
-        "action": action,
-        "session": request["session"],
-        "reason": None,
-        "error": None,
-        "context": identity,
+        "spec_generation": SPEC_GENERATION,
+        "invocation_id": request["invocation_id"],
+        "status": status,
+        "message": message,
         "artifacts": declared,
     }
-    if action == "build":
-        # Under the legacy container invocation (retired at the
-        # switchover): `layers` is what a build reports about the trees
-        # it patched, and a `verify` result may not carry one at all.
-        document["layers"] = {}
-    Path(request["result"]).write_text(json.dumps(document))
-    _emit(request, "invocation.finished", len(declared) + 3, status="success")
+    name = f"{RESULT_PREFIX}{request['invocation_id']}{RESULT_SUFFIX}"
+    (out / name).write_text(json.dumps(document), encoding="utf-8")
 
 
-def conforming_program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-    """A build container that does everything the legacy container
-    invocation (retired at the switchover) asks of it."""
-    identity = _start_program(action, request, on_line)
-    _finish_program(action, request, on_line, identity=identity)
+def conforming_environment(request: dict[str, Any], out: Path, on_line) -> FakeProcess:
+    """A build environment that does everything the specification asks of it."""
+    relay = on_line if on_line is not None else (lambda _line: None)
+    relay(f"-- MCUHome {request['action']} starting")
+    _write_result(request, out, on_line)
     return FakeProcess(0)
 
 
-def hanging_program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-    """A program that never finishes on its own — what ``cancel`` is for."""
-    _emit(request, "invocation.started", 1, action=action)
+def hanging_environment(request: dict[str, Any], out: Path, on_line) -> FakeProcess:
+    """A step that never finishes on its own — what ``cancel`` is for."""
+    del request, out, on_line
     return FakeProcess(0, hang=True)
 
 
 class GatedProcess(FakeProcess):
-    """A program that has started, said so, and is waiting to be let go.
+    """A step that has started and is waiting to be let go.
 
-    The one shape a test of *connection loss* needs and neither of the
-    programs above has: it emits its first events, then blocks until a
-    file appears, and only then writes its artifacts, its result document
-    and the closing event. That is what makes "the socket drops **while
-    the invocation is running**" a thing a test can arrange rather than
-    a thing it hopes for.
+    The one shape a test of *connection loss* needs and neither
+    :func:`conforming_environment` nor :func:`hanging_environment` has:
+    it blocks until a file appears, and only then writes its artifacts
+    and its result document. That is what makes "the socket drops
+    **while the invocation is running**" a thing a test can arrange
+    rather than a thing it hopes for.
     """
 
-    def __init__(self, gate: Path, *, action: str, request: dict[str, Any], on_line, identity: str):
+    def __init__(self, gate: Path, *, request: dict[str, Any], out: Path, on_line):
         super().__init__(0)
         self._gate = gate
-        self._action = action
         self._request = request
+        self._out = out
         self._on_line = on_line
-        self._identity = identity
 
-    async def wait(self) -> int:
-        while not self._gate.exists():
-            await asyncio.sleep(0.01)
-        return self._finish()
-
-    def poll_sync(self) -> int | None:
+    def poll(self) -> int | None:
         """``None`` until the gate appears — the invocation is still running."""
         if self.killed or self.terminated:
             return self._code
@@ -564,7 +535,7 @@ class GatedProcess(FakeProcess):
         self._finish()
         return 0
 
-    def wait_sync(self) -> int:
+    def wait(self) -> int | None:
         while not self._gate.exists():
             if self.killed or self.terminated:
                 return self._code
@@ -574,55 +545,22 @@ class GatedProcess(FakeProcess):
     def _finish(self) -> int:
         if self._gate.with_suffix(".done").exists():
             return 0
-        _finish_program(self._action, self._request, self._on_line, identity=self._identity)
-        # The receipt the test waits on: the events file and the result
-        # document are complete from here, so a reattaching client has
-        # something to replay and the backend has a verdict to publish.
+        _write_result(self._request, self._out, self._on_line)
+        # The receipt the test waits on: the result document is complete
+        # from here, so a reattaching client has a verdict to learn.
         self._gate.with_suffix(".done").write_text("done", encoding="utf-8")
         return 0
 
 
-def gated_program(gate: Path):
+def gated_environment(gate: Path):
     """A ``run_program`` that finishes when *gate* is created."""
 
-    def program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-        identity = _start_program(action, request, on_line)
-        return GatedProcess(
-            gate, action=action, request=request, on_line=on_line, identity=identity
-        )
+    def program(request: dict[str, Any], out: Path, on_line) -> FakeProcess:
+        relay = on_line if on_line is not None else (lambda _line: None)
+        relay(f"-- MCUHome {request['action']} starting")
+        return GatedProcess(gate, request=request, out=out, on_line=on_line)
 
     return program
-
-
-def poisoning_program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-    """A run whose own reason poisons the session (E39; a rule from the
-    legacy container invocation, retired at the switchover).
-
-    ``error.patch.incomplete`` is one of the two reasons the error
-    registry maps to ``session.poisoned``: an interrupted patch
-    application leaves trees no future build may trust. The server
-    poisons the session while assembling the verdict, so the *verdict*
-    carries the code — which is the path a client learns about
-    asynchronously rather than from a refused command.
-    """
-    identity = _start_program(action, request, on_line)
-    Path(request["result"]).write_text(
-        json.dumps(
-            {
-                "result": 1,
-                "status": "failure",
-                "action": action,
-                "session": request["session"],
-                "reason": "error.patch.incomplete",
-                "error": {"message": "the patch application was interrupted"},
-                "context": identity,
-                "layers": {},
-                "artifacts": [],
-            }
-        )
-    )
-    _emit(request, "invocation.finished", 3, status="failure")
-    return FakeProcess(1)
 
 
 # --------------------------------------------------------------------------
@@ -667,28 +605,49 @@ def write_sdk_package(directory: Path, *, declared_sha256: str | None = None) ->
     way to arrange the case E65 exists for: a context pinning bytes the
     server's source does not hold. The **real** hash is returned either
     way — a caller writing a context by hand pins that one.
+
+    The **same index** carries the environment's two packages
+    (:data:`WORKSPACE_PACKAGE`, :data:`TOOLS_PACKAGE`) — one directory
+    resolves every pin a context can make, and it is what
+    ``sdk_sources`` names in :func:`real_server`, so the server's own
+    resolution of the build environment a context pins never reaches a
+    network either. The SDK's own archive carries a
+    ``build-environment.lock.json`` naming the same two packages at
+    :data:`ENVIRONMENT_VERSION`, which is what lets the ``remote`` build
+    *method* (as opposed to a context written by hand) resolve a device's
+    unpinned ``sources.build_workspace``/``sources.build_tools`` the way
+    a local build does.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    archive = make_archive({"mcuhome/__init__.py": b"# the SDK\n"})
+    lock = json.dumps(
+        {
+            f"packages.{WORKSPACE_PACKAGE}": ENVIRONMENT_VERSION,
+            f"packages.{TOOLS_PACKAGE}": ENVIRONMENT_VERSION,
+        }
+    ).encode()
+    archive = make_archive(
+        {"mcuhome/__init__.py": b"# the SDK\n", "build-environment.lock.json": lock}
+    )
     name = f"mcuhome-sdk-{SDK_VERSION}.tar.zst"
     (directory / name).write_bytes(archive)
     real = hashlib.sha256(archive).hexdigest()
-    (directory / "index.json").write_text(
-        json.dumps(
-            {
-                "packages": {
-                    "mcuhome-sdk": {
-                        SDK_VERSION: {
-                            "file": name,
-                            "sha256": declared_sha256 or real,
-                            "size": len(archive),
-                        }
-                    }
-                }
+    packages: dict[str, Any] = {
+        "mcuhome-sdk": {
+            SDK_VERSION: {
+                "file": name,
+                "sha256": declared_sha256 or real,
+                "size": len(archive),
             }
-        ),
-        encoding="utf-8",
-    )
+        }
+    }
+    for package, digest in ((WORKSPACE_PACKAGE, WORKSPACE_SHA256), (TOOLS_PACKAGE, TOOLS_SHA256)):
+        content = f"{package} {ENVIRONMENT_VERSION}\n".encode()
+        filename = f"{package}-{ENVIRONMENT_VERSION}.tar.zst"
+        (directory / filename).write_bytes(content)
+        packages[package] = {
+            ENVIRONMENT_VERSION: {"file": filename, "sha256": digest, "size": len(content)}
+        }
+    (directory / "index.json").write_text(json.dumps({"packages": packages}), encoding="utf-8")
     return real
 
 
@@ -745,55 +704,40 @@ def make_context(root: Path, *, sdk_sha256: str, patches: dict[str, bytes] | Non
 #: each a ``(name, version, sha256)`` triple. The tools entry is the
 #: family, which is the ordinary pin.
 ENVIRONMENT = EnvironmentPin(
-    workspace=PackagePin(name="mcuhome-build-workspace", version="2.4.0", sha256="7c" * 32),
-    tools=PackagePin(name="mcuhome-build-tools", version="2.4.0", sha256="b9" * 32),
-)
-
-#: Why the tests of a finished remote build do not run today.
-#:
-#: The build server picks the container it builds in by the image a build
-#: context names, and a context names its build environment as packages
-#: now. Until the server runs package-built build environments it answers
-#: ``send-context`` with a typed refusal, so nothing behind that verb can
-#: be reached from here either.
-#:
-#: These tests are kept rather than deleted: they are what this file goes
-#: back to asserting when the server runs those environments, and the skip
-#: count is what keeps that debt visible in every run.
-REMOTE_BUILDS_UNAVAILABLE = (
-    "remote builds unavailable until the server runs package-built build environments"
+    workspace=PackagePin(
+        name=WORKSPACE_PACKAGE, version=ENVIRONMENT_VERSION, sha256=WORKSPACE_SHA256
+    ),
+    tools=PackagePin(name=TOOLS_PACKAGE, version=ENVIRONMENT_VERSION, sha256=TOOLS_SHA256),
 )
 
 
-async def send_context(client, context):
-    """``send_context``, or a skip while remote builds are unavailable.
+@dataclass
+class PinnedEnvironment:
+    """What every test that resolves a build environment from a device model needs.
 
-    The refusal arrives at exactly one place — the answer to
-    ``send-context`` — so one reason lives in one place and the skip
-    count means something. Everything behind that verb is unreachable
-    once it fires, which is why this is a skip and not a caught error:
-    the test that called it is about what happens *after* a context was
-    accepted.
+    :attr:`pin` is the same :data:`ENVIRONMENT` :func:`make_context`
+    writes into every hand-written base context of this module, so a
+    test that compares the ``remote`` build *method*'s own resolution
+    against it is comparing two paths to one answer rather than to a
+    fixture-local guess.
     """
-    try:
-        return await client.send_context(context)
-    except sc.ServerRefusal as refusal:
-        if refusal.code == "version.builder-unsatisfiable":
-            pytest.skip(REMOTE_BUILDS_UNAVAILABLE)
-        raise
+
+    pin: EnvironmentPin
 
 
 @pytest.fixture
-def pinned_environment():
-    """Skip: a remote build cannot get past ``send-context`` today.
+def pinned_environment() -> PinnedEnvironment:
+    """The build environment :data:`ENVIRONMENT` names.
 
-    Every test that took this fixture drove a build through the real
-    server, which is exactly what is unavailable
-    (:data:`REMOTE_BUILDS_UNAVAILABLE`). The fixture is kept — and keeps
-    its name — so that the switchover restores the resolution here and
-    the tests run again unchanged.
+    Nothing to set up here beyond the value itself: every test that asks
+    for this fixture also calls :func:`write_sdk_package`, which is what
+    makes the pin resolvable — the SDK's own
+    ``build-environment.lock.json`` and the package index beside it live
+    in one place (see its docstring). The fixture stays a fixture, and
+    keeps its name, so a test that asks for "the pin every context here
+    is built against" says so rather than repeating :data:`ENVIRONMENT`.
     """
-    pytest.skip(REMOTE_BUILDS_UNAVAILABLE)
+    return PinnedEnvironment(pin=ENVIRONMENT)
 
 
 # --------------------------------------------------------------------------
@@ -853,27 +797,64 @@ class Harness:
     state: Any
     docker: FakeDocker
     config: Any
+    registry: ScriptedRegistry
+
+
+def _spawner(fake: FakeDocker):
+    """``spawn_process``'s keyword shape over the fake's positional one."""
+
+    def spawn(argv, *, env=None, cwd=None, on_line=None):
+        del env, cwd
+        return fake.spawn(argv, on_line)
+
+    return spawn
+
+
+def _no_package_registry(*_args: Any, **_kwargs: Any) -> Any:
+    """No test of this suite reaches the package registry.
+
+    Every context here pins packages a local index already answers for
+    (:func:`write_sdk_package`); a resolution that fell through to it
+    would depend on packages.mcuhome.org being reachable and serving
+    exactly what a test expects.
+    """
+    raise packageregistry.PackageRegistryError(
+        "no package registry is reachable from this suite",
+        hint="write what a context pins into the configured package directory",
+    )
 
 
 @contextlib.asynccontextmanager
-async def real_server(tmp_path: Path, *, docker: FakeDocker | None = None, **overrides: Any):
-    """One real build server on a real socket, with docker stubbed out."""
+async def real_server(
+    tmp_path: Path,
+    *,
+    docker: FakeDocker | None = None,
+    registry: ScriptedRegistry | None = None,
+    **overrides: Any,
+):
+    """One real build server on a real socket, with docker and the OCI registry stubbed out."""
     fake = docker if docker is not None else FakeDocker()
-    # Four seams, because two different things drive one docker: the
-    # server's own discovery, on its event loop, and the orchestrator's
-    # driving of a container, in a worker thread. The autouse guard in
-    # conftest refuses the orchestrator's, so this replaces it for the
-    # tests that script a whole build — and restores it afterwards.
+    scripted = registry if registry is not None else ScriptedRegistry()
+    # Three seams onto the container runtime, because two different
+    # things drive one docker: the server's own discovery, on its event
+    # loop, and the workbench container profile's driving of a step, in a
+    # worker thread. Plus the two seams onto the network: which images an
+    # OCI registry publishes, and the package registry every context here
+    # must never reach.
     saved = (
         bs_container.run_docker,
-        bs_container.spawn_docker,
         containerbuild.run_command,
         containerbuild.spawn_process,
+        ociregistry.Registry.tags,
+        ociregistry.Registry.facts,
+        packageregistry.registry_for,
     )
     bs_container.run_docker = fake.run
-    bs_container.spawn_docker = fake.spawn
     containerbuild.run_command = fake.answer
-    containerbuild.spawn_process = fake.drive
+    containerbuild.spawn_process = _spawner(fake)
+    ociregistry.Registry.tags = scripted.tags
+    ociregistry.Registry.facts = scripted.facts
+    packageregistry.registry_for = _no_package_registry
     config = bs_config.Config(
         host="127.0.0.1",
         port=0,
@@ -887,14 +868,22 @@ async def real_server(tmp_path: Path, *, docker: FakeDocker | None = None, **ove
     server = test_utils.TestServer(bs_app.create_app(state))
     await server.start_server()
     try:
-        yield Harness(url=str(server.make_url("/ws")), state=state, docker=fake, config=config)
+        yield Harness(
+            url=str(server.make_url("/ws")),
+            state=state,
+            docker=fake,
+            config=config,
+            registry=scripted,
+        )
     finally:
         await server.close()
         (
             bs_container.run_docker,
-            bs_container.spawn_docker,
             containerbuild.run_command,
             containerbuild.spawn_process,
+            ociregistry.Registry.tags,
+            ociregistry.Registry.facts,
+            packageregistry.registry_for,
         ) = saved
 
 
@@ -971,8 +960,9 @@ def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path
         ):
             await client.capabilities()
             await client.open_session()
-            sent = await send_context(client, context)
-            assert sent["container"]["contract"] == 1
+            sent = await client.send_context(context)
+            assert sent["container"]["spec_generation"] == buildenvironment.SPEC_GENERATION
+            assert sent["container"]["build_environment"] == IMAGE_REFERENCE
             identity = await client.lock_context()
             invocation_id = await client.build()
             verdict = await client.wait_finished(invocation_id, timeout=30)
@@ -998,15 +988,78 @@ def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path
         assert not [entry for entry in verdict["artifacts"] if "sign" in entry["path"]]
         assert not any("sign" in name for name in delivery.files)
         assert lines and any("build finished" in line for line in lines)
-        # Two frames end an invocation and E58 gives them two names: the
-        # program's own event-stream announcement, numbered like every program
-        # event, and the server's verdict. Both reach the sink; only the
-        # second is what `wait_finished` returned.
+        # There is no program event stream any more: the two events of an
+        # invocation are this server's own, "started" then "verdict", and
+        # nothing a scripted build environment writes reaches this sink at
+        # all — a build environment has a request document, a result
+        # document and a log stream, and none of the three is an event.
         seen = [name for name, _ in events]
-        assert seen.count("invocation.finished") == 1
-        assert seen.count("invocation.verdict") == 1
-        assert seen.index("invocation.finished") < seen.index("invocation.verdict")
+        assert seen == ["invocation.started", "invocation.verdict"]
         assert dict(events)["invocation.verdict"] == verdict
+
+    run(scenario())
+
+
+def test_a_container_image_pin_travels_with_send_context_and_is_resolved(tmp_path: Path) -> None:
+    """The session protocol's one new field: ``send-context``'s ``container_image``.
+
+    ``SessionClient.send_context`` accepts *image* in the same four forms
+    a local container build takes; a bare ``:<tag>`` narrows the search
+    to that tag in the server's configured repositories. Asserted two
+    ways: the registry the server resolved through was really asked
+    about that tag (the pin reached the server's payload, not just the
+    client's), and the build the pin selected still runs to a verdict.
+    """
+
+    async def scenario() -> None:
+        sdk_sha256 = write_sdk_package(tmp_path / "packages")
+        context = tmp_path / "context"
+        context.mkdir()
+        make_context(context, sdk_sha256=sdk_sha256)
+        async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
+            await client.capabilities()
+            await client.open_session()
+            sent = await client.send_context(context, image=f":{IMAGE_TAG}")
+            assert any(IMAGE_TAG in asked for asked in harness.registry.asked), (
+                "the pin never reached the server: it asked the registry about no such tag"
+            )
+            assert sent["container"]["build_environment"] == IMAGE_REFERENCE
+            await client.lock_context()
+            invocation_id = await client.build()
+            verdict = await client.wait_finished(invocation_id, timeout=30)
+            await client.close_session()
+        assert verdict["status"] == "success"
+
+    run(scenario())
+
+
+def test_a_container_image_pin_naming_a_denied_repository_is_refused_typed(
+    tmp_path: Path,
+) -> None:
+    """A pin narrows the search; it never widens the operator's allowlist.
+
+    The repository this pin names is not one of :data:`IMAGE`, the only
+    one this suite's server allows — so the refusal has to arrive before
+    any registry is asked, typed ``policy.environment-denied``, exactly
+    as it would for an operator who never configured that repository at
+    all.
+    """
+
+    async def scenario() -> None:
+        sdk_sha256 = write_sdk_package(tmp_path / "packages")
+        context = tmp_path / "context"
+        context.mkdir()
+        make_context(context, sdk_sha256=sdk_sha256)
+        async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
+            await client.capabilities()
+            await client.open_session()
+            with pytest.raises(sc.ServerRefusal) as refusal:
+                await client.send_context(
+                    context, image="ghcr.io/someone-else/build-environment:latest"
+                )
+            await client.close_session()
+        assert refusal.value.code == "policy.environment-denied"
+        assert refusal.value.retryable is False
 
     run(scenario())
 
@@ -1022,9 +1075,9 @@ def test_a_second_base_context_is_refused_typed(tmp_path: Path) -> None:
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             with pytest.raises(sc.ServerRefusal) as refusal:
-                await send_context(client, context)
+                await client.send_context(context)
             await client.close_session()
         assert refusal.value.code == "context.exists"
         assert refusal.value.retryable is False
@@ -1054,7 +1107,7 @@ def test_extend_context_adds_and_removes_in_one_call(tmp_path: Path) -> None:
         ):
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             (context / "patches" / "zephyr" / "0002-new.patch").write_bytes(b"--- new\n")
             answer = await client.extend_context(
                 context,
@@ -1091,7 +1144,7 @@ def test_extend_context_refuses_to_touch_the_pin_file(tmp_path: Path) -> None:
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             with pytest.raises(sc.RemoteError, match="context.yaml"):
                 await client.extend_context(remove=["context.yaml"])
             with pytest.raises(sc.RemoteError, match="context.yaml"):
@@ -1129,7 +1182,7 @@ def test_an_extension_of_the_whole_directory_is_a_legal_extension(tmp_path: Path
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             (context / "model" / "extra.json").write_text('{"more": true}\n', encoding="utf-8")
             answer = await client.extend_context(context)
             identity = await client.lock_context()
@@ -1163,7 +1216,7 @@ def test_a_matching_context_id_lets_the_session_proceed(tmp_path: Path) -> None:
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             identity = await client.lock_context()
             assert identity == client.compute_context_id()
             assert client.context_state == "locked"
@@ -1202,7 +1255,7 @@ def test_a_wrong_context_id_closes_the_session_and_raises(tmp_path: Path) -> Non
             async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
                 await client.capabilities()
                 await client.open_session()
-                await send_context(client, context)
+                await client.send_context(context)
                 with pytest.raises(sc.ContextIdMismatch) as mismatch:
                     await client.lock_context()
                 assert client.session_id is None, "the session was closed on the way out"
@@ -1270,13 +1323,13 @@ def test_no_frame_this_client_sends_carries_the_private_signing_key(tmp_path: Pa
             await client.capabilities()
             await client.open_session()
             with pytest.raises(sc.PrivateKeyRefused, match="private key material"):
-                await send_context(client, context)
+                await client.send_context(context)
             assert not [frame for kind, frame in client.sent if kind == "binary"], (
                 "the refusal has to come before the first byte of the archive"
             )
             # Removing it is the whole fix, and the session is untouched.
             stray.unlink()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             await client.wait_finished(invocation_id, timeout=30)
@@ -1536,7 +1589,7 @@ def test_the_caps_are_counted_across_the_session_not_per_archive(tmp_path: Path)
             await client.open_session()
             # A budget of exactly what the base context costs, and not
             # one entry more.
-            await send_context(client, context)
+            await client.send_context(context)
             spent = client.spent
             assert spent.entries == 7, "context.yaml, the model files and the public key"
             assert spent.compressed_bytes > 0 and spent.decompressed_bytes > 0
@@ -1622,7 +1675,7 @@ def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) 
             client.caps = replace(client.caps, file_bytes=sc.E44_CAPS.file_bytes)
             await client.open_session()
             with pytest.raises(sc.ServerRefusal) as refusal:
-                await send_context(client, context)
+                await client.send_context(context)
             await client.close_session()
         assert refusal.value.code == "policy.ingress-limit-exceeded"
         assert refusal.value.retryable is False
@@ -1652,7 +1705,7 @@ def test_an_announced_cap_is_refused_at_home_before_a_byte_leaves(tmp_path: Path
             await client.capabilities()
             await client.open_session()
             with pytest.raises(sc.ContextTooLarge, match="at most 8"):
-                await send_context(client, context)
+                await client.send_context(context)
             await client.close_session()
             assert not [kind for kind, _ in client.sent if kind == "binary"]
 
@@ -1722,7 +1775,7 @@ def test_a_frame_cap_sizes_the_upload(tmp_path: Path) -> None:
             assert client.caps.frame_bytes == bs_protocol.MAX_FRAME_BYTES
             client.caps = replace(client.caps, frame_bytes=256)
             await client.open_session()
-            packed = await send_context(client, context)
+            packed = await client.send_context(context)
             await client.close_session()
         chunks = [len(data) for kind, data in client.sent if kind == "binary"]
         assert chunks, "nothing was uploaded"
@@ -1730,7 +1783,7 @@ def test_a_frame_cap_sizes_the_upload(tmp_path: Path) -> None:
         assert len(chunks) > 1, "the archive was chunked, not sent whole"
         # And the server put the whole of it back together: it answered
         # the pins out of the context.yaml inside the archive.
-        assert packed["container"]["contract"] == 1
+        assert packed["container"]["spec_generation"] == buildenvironment.SPEC_GENERATION
 
     run(scenario())
 
@@ -1751,13 +1804,15 @@ async def _await_file(path: Path, *, timeout: float = 30.0) -> None:
 def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
     """E46: the events file is the replay buffer, and there is no other.
 
-    The connection is dropped **while the invocation is still running**
-    and a second client attaches to the same session from the last
-    ``seq`` the first one saw. That ordering is the whole test: a drop
-    after the verdict leaves ``from_seq`` one past the maximum, the
-    server replays nothing, and the two assertions below would hold over
-    an empty second half — which is how a reconnect test can pass
-    without ever observing a reconnect.
+    An invocation carries exactly two events of this server's own —
+    ``invocation.started`` then ``invocation.verdict`` — because there is
+    no program event stream any more (a build environment has a request
+    document, a result document and a log stream, and none of the three
+    is an event). So the connection is dropped **right after the first
+    one**, while the invocation is still running, and a second client
+    attaches to the same session from the last ``seq`` the first one saw:
+    the reconnect is what has to deliver the verdict, and there is
+    nothing else left for it to replay.
 
     What the two connections saw together must be the invocation's own
     stream: no event lost, and none delivered twice.
@@ -1771,7 +1826,7 @@ def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
         gate = tmp_path / "let-it-finish"
         first: list[int] = []
         second: list[int] = []
-        docker = FakeDocker(run_program=gated_program(gate))
+        docker = FakeDocker(run_program=gated_environment(gate))
         async with real_server(tmp_path, docker=docker) as harness:
             client = client_for(
                 harness,
@@ -1781,19 +1836,19 @@ def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
             await client.connect()
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
-            # The program has announced itself and is now waiting; the
+            # The step has started and is now waiting on the gate; the
             # socket goes away in the middle of the invocation.
-            while len(first) < 2:
+            while not first:
                 await asyncio.sleep(0.01)
             session_id = client.session_id
             seen = dict(client._last_seq)
             await client.close()
 
-            # It finishes with nobody attached, so its remaining events
-            # are history by the time the second connection asks.
+            # It finishes with nobody attached, so the verdict is history
+            # by the time the second connection asks.
             gate.write_text("go", encoding="utf-8")
             await _await_file(gate.with_suffix(".done"))
 
@@ -1811,14 +1866,10 @@ def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
         return first, second, answer["replayed"]
 
     first, second, replayed = run(scenario())
-    assert first == sorted(first), "the live stream arrived in order"
-    assert first, "the first connection saw the invocation"
-    assert second, "the second connection saw the replay"
-    assert replayed == len(second), "the server replayed exactly what the caller received"
+    assert first == [1], "the live connection saw only the invocation's start"
+    assert second == [2], "the reconnect replayed exactly the verdict it missed"
+    assert replayed == 1
     assert set(first) & set(second) == set(), "nothing was delivered twice"
-    # The program emits seq 1..6 (its own event stream seeds them); together the
-    # two connections saw exactly that, with no hole.
-    assert sorted(first + second) == list(range(1, max(first + second) + 1))
 
 
 def test_a_dropped_socket_does_not_cost_the_verdict(tmp_path: Path) -> None:
@@ -1840,7 +1891,7 @@ def test_a_dropped_socket_does_not_cost_the_verdict(tmp_path: Path) -> None:
         make_context(context, sdk_sha256=sdk_sha256)
         gate = tmp_path / "let-it-finish"
         seen: list[int] = []
-        docker = FakeDocker(run_program=gated_program(gate))
+        docker = FakeDocker(run_program=gated_environment(gate))
         async with real_server(tmp_path, docker=docker) as harness:
             client = client_for(
                 harness, tmp_path, on_event=lambda name, payload: _collect(seen, payload)
@@ -1848,7 +1899,7 @@ def test_a_dropped_socket_does_not_cost_the_verdict(tmp_path: Path) -> None:
             await client.connect()
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             while not seen:
@@ -1921,7 +1972,7 @@ def test_a_sink_that_raises_is_the_callers_problem_and_not_the_sockets(tmp_path:
         ):
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             verdict = await client.wait_finished(invocation_id, timeout=30)
@@ -2045,7 +2096,7 @@ def test_a_replay_from_the_beginning_is_not_delivered_twice(tmp_path: Path) -> N
         ):
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             await client.wait_finished(invocation_id, timeout=30)
@@ -2077,7 +2128,7 @@ def test_a_poisoned_session_is_terminal_and_still_gives_up_its_artifacts(
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             await client.wait_finished(invocation_id, timeout=30)
@@ -2090,49 +2141,6 @@ def test_a_poisoned_session_is_terminal_and_still_gives_up_its_artifacts(
             # Terminal for work, and only for work.
             delivery = await client.get_artifact(invocation_id, into=tmp_path / "salvage")
             assert "firmware.bin" in delivery.files
-            await client.close_session()
-
-    run(scenario())
-
-
-def test_a_verdict_that_poisons_the_session_is_terminal_at_once(tmp_path: Path) -> None:
-    """The *ordinary* way a session poisons is asynchronous (E39; under
-    the legacy container invocation, retired at the switchover).
-
-    A refused command is the loud way, and the client marks the session
-    terminal for it. But an interrupted patch application ends the
-    invocation instead: the server poisons the session while assembling
-    the verdict, and the code arrives in the verdict's error envelope.
-    Reading it there is what keeps ``terminal`` true of the session the
-    moment the client learns it, instead of one refused round trip later.
-    """
-
-    async def scenario() -> None:
-        sdk_sha256 = write_sdk_package(tmp_path / "packages")
-        context = tmp_path / "context"
-        context.mkdir()
-        make_context(context, sdk_sha256=sdk_sha256)
-        docker = FakeDocker(run_program=poisoning_program)
-        async with (
-            real_server(tmp_path, docker=docker) as harness,
-            client_for(harness, tmp_path) as client,
-        ):
-            await client.capabilities()
-            await client.open_session()
-            await send_context(client, context)
-            await client.lock_context()
-            invocation_id = await client.build()
-            verdict = await client.wait_finished(invocation_id, timeout=30)
-            assert verdict["status"] != "success"
-            assert verdict["error"]["code"] == "session.poisoned"
-            assert client.terminal == "session.poisoned"
-            # Refused here, without a frame: the server would refuse it
-            # too, and learning that costs a round trip.
-            before = len(client.sent)
-            with pytest.raises(sc.RemoteError, match="terminal"):
-                await client.build()
-            assert len(client.sent) == before
-            assert harness.state.sessions.require(client.session_id).poisoned
             await client.close_session()
 
     run(scenario())
@@ -2153,14 +2161,14 @@ def test_cancel_is_acknowledged_immediately_and_the_session_survives(tmp_path: P
         context = tmp_path / "context"
         context.mkdir()
         make_context(context, sdk_sha256=sdk_sha256)
-        docker = FakeDocker(run_program=hanging_program)
+        docker = FakeDocker(run_program=hanging_environment)
         async with (
             real_server(tmp_path, docker=docker, cancel_grace_seconds=0) as harness,
             client_for(harness, tmp_path) as client,
         ):
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             started = time.monotonic()
@@ -2269,7 +2277,7 @@ def test_packing_a_context_does_not_block_the_event_loop(
             await client.open_session()
             beat = asyncio.create_task(ticker())
             try:
-                await send_context(client, context)
+                await client.send_context(context)
             finally:
                 beat.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -2375,9 +2383,7 @@ def test_a_nested_artifact_path_is_delivered_not_refused(tmp_path: Path) -> None
     synthesizes no parent-directory members, so the client meets
     ``zephyr/zephyr.hex`` with no ``zephyr/`` before it. Containment that
     answered "not contained" for a missing intermediate segment would
-    report an honest server — precisely the third-party build container
-    the legacy container invocation (retired at the switchover) exists
-    for — as an escape attempt.
+    report an honest build environment as an escape attempt.
     """
 
     async def scenario() -> sc.ArtifactDelivery:
@@ -2391,9 +2397,10 @@ def test_a_nested_artifact_path_is_delivered_not_refused(tmp_path: Path) -> None
             ("build-report.json", json.dumps(BUILD_REPORT).encode()),
         )
 
-        def program(action: str, request: dict[str, Any], on_line) -> FakeProcess:
-            identity = _start_program(action, request, on_line)
-            _finish_program(action, request, on_line, identity=identity, artifacts=nested)
+        def program(request: dict[str, Any], out: Path, on_line) -> FakeProcess:
+            relay = on_line if on_line is not None else (lambda _line: None)
+            relay(f"-- MCUHome {request['action']} starting")
+            _write_result(request, out, on_line, artifacts=nested)
             return FakeProcess(0)
 
         docker = FakeDocker(run_program=program)
@@ -2403,7 +2410,7 @@ def test_a_nested_artifact_path_is_delivered_not_refused(tmp_path: Path) -> None
         ):
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             verdict = await client.wait_finished(invocation_id, timeout=30)
@@ -2444,7 +2451,7 @@ def test_two_sequences_on_one_client_do_not_interleave(tmp_path: Path) -> None:
         async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
             await client.capabilities()
             await client.open_session()
-            await send_context(client, context)
+            await client.send_context(context)
             await client.lock_context()
             invocation_id = await client.build()
             await client.wait_finished(invocation_id, timeout=30)
@@ -2548,12 +2555,7 @@ def test_a_delivered_artifact_that_does_not_hash_is_refused(tmp_path: Path) -> N
 
 
 def _remote_build(tmp_path: Path, **kwargs: Any) -> sc.RemoteBuildResult:
-    """One ``run_remote_build`` against the real server, from a sync test.
-
-    Skips while remote builds are unavailable, for the reason
-    :func:`send_context` gives: this composition sends a context and
-    everything it asserts happens after the server accepted one.
-    """
+    """One ``run_remote_build`` against the real server, from a sync test."""
 
     async def scenario() -> sc.RemoteBuildResult:
         sdk_sha256 = write_sdk_package(tmp_path / "packages")
@@ -2562,19 +2564,14 @@ def _remote_build(tmp_path: Path, **kwargs: Any) -> sc.RemoteBuildResult:
             context.mkdir()
             make_context(context, sdk_sha256=sdk_sha256)
         async with real_server(tmp_path) as harness:
-            try:
-                return await sc.run_remote_build(
-                    context,
-                    url=harness.url,
-                    token=TOKEN,
-                    work_root=tmp_path / "work",
-                    timeout=30,
-                    **kwargs,
-                )
-            except sc.ServerRefusal as refusal:
-                if refusal.code == "version.builder-unsatisfiable":
-                    pytest.skip(REMOTE_BUILDS_UNAVAILABLE)
-                raise
+            return await sc.run_remote_build(
+                context,
+                url=harness.url,
+                token=TOKEN,
+                work_root=tmp_path / "work",
+                timeout=30,
+                **kwargs,
+            )
 
     return run(scenario())
 
@@ -2848,34 +2845,39 @@ def test_the_context_the_remote_method_creates_pins_what_the_resolver_answered(
     assert written.board == _model().device.board
 
 
-def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(
-    tmp_path: Path, pinned_environment
-) -> None:
+def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path) -> None:
     """E65's guarantee, end to end: the hash decides, not the version.
 
-    The index this client resolves from declares a hash the archive next
-    to it does not have — which is what a private or mirrored registry
-    serving other bytes under the same version number looks like from
-    here. The server finds a file named for that version, hashes it,
-    disagrees, and refuses: ``sdk.unavailable``, not retryable, naming
-    the version and the pin. That refusal is the whole reason no
-    capabilities announcement is needed for the SDK — a build against the
-    wrong SDK cannot happen quietly, so the client does not have to ask
-    in advance what the server holds.
+    A context can name a hash its own writer never verified against
+    bytes — the shape a private or mirrored registry serving other bytes
+    under the same version number would produce. The server finds a file
+    named for that version, hashes it, disagrees, and refuses:
+    ``sdk.unavailable``, not retryable, naming the version and the pin.
 
-    The server's own coverage of that check is the server's; what is
-    asserted here is that it *arrives*, typed, through the build method a
-    user calls.
+    Driven with a hand-written context rather than through
+    :func:`~mcuhome.workbench.buildmethods.run_build`'s ``remote``
+    method: that method resolves and verifies every pin locally, SDK
+    included, before a context is ever created (build-environment
+    resolution reads the environment lock out of the SDK's own,
+    already-hashed bytes) — so a wrong hash it was handed never reaches
+    the wire at all. What is asserted here is the server's own half of
+    E65: a build that pins bytes its source does not hold is refused
+    typed, whichever party put the wrong hash in the context.
     """
-    sources = tmp_path / "packages"
-    write_sdk_package(sources, declared_sha256="ab" * 32)
 
     async def scenario() -> None:
-        async with real_server(tmp_path) as harness:
+        write_sdk_package(tmp_path / "packages", declared_sha256="ab" * 32)
+        context = tmp_path / "context"
+        context.mkdir()
+        make_context(context, sdk_sha256="ab" * 32)
+        async with real_server(tmp_path) as harness, client_for(harness, tmp_path) as client:
+            await client.capabilities()
+            await client.open_session()
+            await client.send_context(context)
+            await client.lock_context()
             with pytest.raises(sc.ServerRefusal) as refusal:
-                await buildmethods.run_build(
-                    _remote_request(tmp_path, sources, harness), method=buildmethods.REMOTE
-                )
+                await client.build()
+            await client.close_session()
         assert refusal.value.code == "sdk.unavailable"
         assert refusal.value.retryable is False
         rendered = str(refusal.value)
