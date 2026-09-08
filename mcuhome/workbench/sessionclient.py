@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The ``remote`` build method: the session-protocol client.
+"""The ``remote`` build target: the session-protocol client.
 
-The second build method's whole client half. ``local`` drives a build
+That target's whole client half. ``local`` drives a build
 container on this machine, per the build environment specification
 (:mod:`mcuhome.workbench.containerbuild`); ``remote`` drives *a build
 server* over one WebSocket, which speaks the eleven verbs of the session
@@ -412,7 +412,7 @@ def _require(module: str, what: str):
         return __import__(module)
     except ImportError as error:  # pragma: no cover - exercised by the extras test
         raise RemoteDependencyMissing(
-            f"The remote build method needs {module}, and it is not installed ({what}).",
+            f"A remote build needs {module}, and it is not installed ({what}).",
             hint=(
                 "the WebSocket transport and the tar.zst archive codec are an optional "
                 "extra of this package, so a workbench that never builds remotely does "
@@ -1940,7 +1940,7 @@ class SessionClient:
         silently dropped, but not surfaced any further: the invocation
         id is the whole of what a caller gets back from starting a
         working verb, and :class:`RemoteBuildResult`'s shape is fixed by
-        parity with the local build methods, none of which carry a mode
+        parity with a local build, which carries no mode
         either.
         """
         session_id = self._require_session()
@@ -2215,7 +2215,7 @@ class ArtifactDelivery:
     ``path`` is relative to it — the same relationship
     :attr:`mcuhome.workbench.buildenvsession.LocalOutcome.out` has to its own
     artifact list, so a caller that signs an image afterwards does not
-    have to know which build method produced it — including the *type* of
+    have to know which target produced it — including the *type* of
     that list, which is :class:`mcuhome.model.artifacts.Artifact` on both
     sides.
     """
@@ -2237,7 +2237,7 @@ class ArtifactDelivery:
 class RemoteBuildResult:
     """What one remote invocation produced, in ``LocalOutcome``'s shape.
 
-    The fields a dispatcher over the three build methods reads are the
+    The fields a dispatcher over the two targets reads are the
     same fields with the same meanings and the same *types*:
     :attr:`action`, :attr:`context_id`, :attr:`status`,
     :attr:`successful`, :attr:`artifacts` — a tuple of

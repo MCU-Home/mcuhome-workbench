@@ -357,7 +357,7 @@ def create_build_context(
 ) -> ContextRequest:
     """Resolve every pin and write a fresh base context at *out_dir*.
 
-    The seam **every** build method creates a context through. They
+    The seam **every** build creates a context through. They
     differ in everything after this point — one starts a container and
     locks the context itself, one sends the directory to a build server
     that locks it, one runs an entry point from a store — and in what a
@@ -389,7 +389,7 @@ def create_build_context(
     environment packages somewhere else names that place instead.
 
     *out_dir* is **removed if it exists**, because :func:`create_context`
-    requires an empty directory and a build method's context directory is
+    requires an empty directory and a build's context directory is
     its own scratch area, rebuilt every run. Callers pass a path they own
     (``<work root>/context``), never a directory a user named.
 
@@ -534,7 +534,7 @@ def lock_context(out_dir: Path) -> ContextManifest:
     request.
 
     A remote build server does this from the bytes it received off a
-    socket; a local build method does it over the directory the workbench
+    socket; a local build does it over the directory the workbench
     just created. Both compute the same ID over the same files with
     :func:`mcuhome.model.context.context_id`, which is the whole point of a
     content-addressed identity — so this function is the local side of

@@ -134,7 +134,7 @@ def test_a_build_is_refused_while_the_device_is_being_flashed(tmp_path) -> None:
 def test_one_run_holds_its_directory_through_several_steps(tmp_path) -> None:
     """A ``device build`` compiles and then signs, holding it throughout.
 
-    The nesting is the command line's outer hold plus the build method's
+    The nesting is the command line's outer hold plus the build's
     own — the one case that must not refuse itself — and the directory
     stays taken for everybody else until the outer hold ends.
     """

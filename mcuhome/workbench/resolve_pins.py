@@ -33,7 +33,7 @@ rule serves the container coupling labels or a community registry later.
 :func:`resolve_sdk_pin` is the one above it that walks a list of source
 directories and answers with the pin a context is created from.
 
-**Why the SDK resolver lives here and not beside a build method** (E65).
+**Why the SDK resolver lives here and not beside one build target.**
 Both container-shaped methods need the same pin before a context can
 exist, because ``mcuhome.package.sha256`` is a hashed identity input:
 ``local`` resolves it for the container it starts itself, and ``remote``

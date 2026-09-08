@@ -42,7 +42,7 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_model_golden.py` | the cross-repo contract: stages 1-3 still produce the golden `device-model.json` the SDK's suite consumes |
 | `test_scaffold.py` | `mcuhome new`: the starter configuration and its refusals |
 | `test_api.py` | the supported surface: exports, `validate_device`, `error_dicts`, the version |
-| `test_buildmethods.py` | the three build methods behind `run_build`; the call-time compiler edge |
+| `test_buildmethods.py` | the two build targets behind `run_build`; the call-time compiler edge |
 | `test_localbuild.py` | the container execution's composition (`compose_container_build`) against a scripted container runtime |
 | `test_packagefetch.py` | acquiring a pinned package and the rules its archive is unpacked under |
 | `test_buildprocess.py` | starting a program, streaming its log, and the liveness ladder over it |

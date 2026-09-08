@@ -11,7 +11,7 @@ run*, not what it is about:
 
 | Import package | Distribution | What it is | Where it runs |
 |---|---|---|---|
-| `mcuhome.workbench` | `mcuhome-workbench` | **this repo**: stages 1-3, context creation, the three build methods, the session client, signing | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
+| `mcuhome.workbench` | `mcuhome-workbench` | **this repo**: stages 1-3, context creation, the two build targets, the session client, signing | wherever a build is *driven*: the command line, the dashboard, third-party embedders |
 | `mcuhome.model` | `mcuhome-model` | the shared vocabulary — device model, registry, the context and manifest formats, the frozen context-ID rule, error types | everywhere, including a build server that carries no build logic at all |
 | `mcuhome.compiler` | `mcuhome-compiler` | stages 4-5 and the invocation-ABI adapter | inside the build container, out of the mounted SDK |
 
@@ -51,7 +51,7 @@ pytest                           # the suite in ../tests/python/
 | `workbench/provision.py` | — | `matter-pairing`: drawing a device's commissioning credentials |
 | `workbench/contextdir.py` | — | build-context creation and locking (ADR 0018) |
 | `workbench/resolve_pins.py` | — | SDK pin resolution against an index or directory |
-| `workbench/buildmethods.py` | — | the three build methods behind `run_build` (E53/E64) |
+| `workbench/buildmethods.py` | — | the two build targets behind `run_build` |
 | `workbench/sessionclient.py` | — | the remote method's session-protocol client (ADR 0019) |
 | `workbench/imgtool.py` | — | detached signing over the build report, whose shape the build actions document defines |
 | `workbench/signing.py` | — | the per-project signing key and its refusals (ADR 0015 §8) |

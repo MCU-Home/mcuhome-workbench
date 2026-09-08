@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """One build directory, one operation at a time (PO 2026-08-16).
 
-A build directory is a working area, not an archive: every build method
+A build directory is a working area, not an archive: every build
 wipes and rebuilds its scratch tree at the start of a run, because a
 run's work belongs to that run and inheriting a dead one's leftovers is
 how a build ends up compiling a mixture. That is right for a *finished*
@@ -33,7 +33,7 @@ read without one, and never trusted for the decision.
 
 Within one process the lock is **re-entrant by count**: a command line
 holds the directory for a whole ``device build`` — compile *and* the
-host-side signing that follows it — and the build method it calls takes
+host-side signing that follows it — and the build it calls takes
 the same lock again for embedders that call it directly. One process
 running two operations on one directory at the same time is a program
 error this cannot catch and the CLI cannot make; every consumer that
@@ -93,7 +93,7 @@ OPERATIONS = {
 
 #: Paths this process already holds, and how deep. Guarded by
 #: :data:`_COUNTS_LOCK`, because the count is read-modify-write state and
-#: a build method may be driven from a worker thread.
+#: a build may be driven from a worker thread.
 _COUNTS: dict[Path, int] = {}
 _COUNTS_LOCK = threading.Lock()
 

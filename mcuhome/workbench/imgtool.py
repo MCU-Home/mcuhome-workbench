@@ -246,7 +246,7 @@ def read_build_report(path: Path) -> dict:
         raise BuildError(
             f"MCUHome cannot read the build report {path}: {error.strerror}.",
             hint=(
-                "the local build method delivers one next to the unsigned image "
+                "a local build delivers one next to the unsigned image "
                 f"it produced. Point at a build directory that contains "
                 f"{BUILD_REPORT_FILE}, or build again."
             ),

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Driving a build: stages 1-3, the context, the build methods, signing.
+"""Driving a build: stages 1-3, the context, the build itself, signing.
 
 Everything between a YAML file and something a compiler can be handed:
 finding the project directory, resolving its configuration, parsing a
 device file, validating it, resolving it into a device model, creating
-the build context of ADR 0018, and the build methods of ADR 0020
+the build context, and the build targets
 decision 6 — ``local``, ``remote`` — behind one interface. Client-side
 signing lives here too (ADR 0015 §8), because the private key belongs to
 the person driving the build and to nobody the build talks to.
@@ -26,7 +26,7 @@ already has them.
 :mod:`mcuhome.workbench.validate`      stage 2b: cross-refs, gates, conformance
 :mod:`mcuhome.workbench.resolve`       stage 3: defaults and completion
 :mod:`mcuhome.workbench.contextdir`    creating and verifying a context directory
-:mod:`mcuhome.workbench.buildmethods`  the three build methods, behind one call
+:mod:`mcuhome.workbench.buildmethods`  the two build targets, behind one call
 :mod:`mcuhome.workbench.sessionclient` the ``remote`` method's protocol client
 :mod:`mcuhome.workbench.signing`       the per-project firmware signing key
 :mod:`mcuhome.workbench.imgtool`       signing an image afterwards (ADR 0015 §8)
