@@ -315,6 +315,29 @@ and the SDK read-only, the output directory writable, and the compiler cache
 tiers this machine provides. One fresh container per step, thrown away when the
 step ends.
 
+### What one build may use of this machine
+
+A build is given a CPU and a memory budget. It travels two ways at once:
+into the build environment, which sizes its parallelism from it, and — in a
+container build — onto the container itself, which the runtime holds to it. The
+second exists because the first is a recommendation: a build environment may
+have a bug, and a machine should survive it.
+
+```yaml
+build:
+  cpus: 6            # cores; fractional is allowed, as in `docker run --cpus`
+  memory: 12g        # 512m, 8g, or a plain byte count
+```
+
+Unset means the machine as it is: every core, and the memory that is actually
+free. A container build additionally caps the number of processes in the
+container — nothing that compiles firmware comes near that bound, and a build
+that does is not compiling.
+
+A build without a container states the same budget and enforces nothing: there
+is no container to hold it to a figure. Where a build has to be held to one,
+build it in a container.
+
 ### Building without a container
 
 A local build runs in a build container by default. The other way is to run the

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -294,7 +295,7 @@ def _build(tmp_path, model, public_pem, **overrides):
 
 def test_a_container_build_composes_a_context_and_drives_one_step(tmp_path, model, public_pem):
     make_sdk_source(tmp_path / "src")
-    seam, result = _build(tmp_path, model, public_pem, jobs=2)
+    seam, result = _build(tmp_path, model, public_pem)
     assert result.outcome.successful, result.outcome.problems
     # What a build reports is the image it resolved to, tag and digest —
     # the tag is where it was found, the digest is what ran.
@@ -453,7 +454,8 @@ def test_the_step_is_isolated_and_runs_as_the_calling_user(tmp_path, model, publ
     assert f"MCUHOME_BUILDER_BASE_DIR={containerbuild.BASE_DIR}" in argv
 
 
-def test_the_request_document_is_the_five_fields_of_the_specification(tmp_path, model, public_pem):
+def test_the_request_document_is_the_fields_of_the_specification(tmp_path, model, public_pem):
+    """§6.1's five mandatory fields, and the limits beside them."""
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
     assert result.outcome.successful
@@ -463,10 +465,45 @@ def test_the_request_document_is_the_five_fields_of_the_specification(tmp_path, 
         "invocation_id",
         "action",
         "parameters",
+        "limits",
     }
     assert seam.request["spec_generation"] == SPEC_GENERATION
     assert seam.request["action"] == "build"
     assert seam.request["parameters"] == {}
+
+
+def test_the_recommended_limits_are_the_ones_the_container_is_held_to(tmp_path, model, public_pem):
+    """The two halves of one budget: what the request document
+    recommends to the environment is what the runtime enforces from
+    outside, so a build that honours the recommendation is a build that
+    does not get killed for it."""
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(
+        tmp_path,
+        model,
+        public_pem,
+        options=buildmethods.BuildOptions(cpus=2, memory="4g"),
+    )
+    assert result.outcome.successful
+    assert seam.request["limits"] == {"cpus": 2.0, "memory_bytes": 4 * 1024**3}
+    argv = seam.step
+    assert argv[argv.index("--cpus") + 1] == "2"
+    assert argv[argv.index("--memory") + 1] == str(4 * 1024**3)
+    assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_PIDS)
+
+
+def test_a_build_nobody_bounded_is_given_this_machine(tmp_path, model, public_pem):
+    """Unset is the machine as it is — a local build is not a tenant —
+    and the guard is still there, because it exists against an
+    environment that runs amok rather than against the person who
+    started the build."""
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(tmp_path, model, public_pem)
+    assert result.outcome.successful
+    argv = seam.step
+    assert "--cpus" in argv and "--memory" in argv and "--pids-limit" in argv
+    assert seam.request["limits"]["cpus"] == float(os.cpu_count() or 1)
+    assert seam.request["limits"]["memory_bytes"] > 0
 
 
 # --------------------------------------------------------------------------

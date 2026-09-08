@@ -63,6 +63,7 @@ from typing import Any
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.hashes import sha256_file
+from mcuhome.model.jobs import BuildLimits, available_ram_bytes
 
 from mcuhome.workbench.buildprocess import LineSink, Liveness, Running
 
@@ -83,6 +84,7 @@ __all__ = [
     "SHARED_CACHE_OPTION",
     "STEP_DIR",
     "BuilderSession",
+    "BuildLimits",
     "CacheTier",
     "EnvironmentUnavailable",
     "EnvironmentUnusable",
@@ -91,6 +93,8 @@ __all__ = [
     "Step",
     "cache_tiers",
     "contained",
+    "host_limits",
+    "memory_bytes",
     "judge_step",
     "step_request",
     "verify_step_artifacts",
@@ -254,13 +258,23 @@ def step_request(
     invocation_id: str,
     action: str,
     parameters: Mapping[str, Any] | None = None,
+    limits: BuildLimits | None = None,
 ) -> dict[str, Any]:
     """The request document of one step (§6.1).
 
-    Five fields, all of them mandatory, in the order the specification
-    prints them. ``parameters`` is written even when it is empty, because
-    the specification's own example writes ``{}`` and an environment that
-    reads ``parameters`` without checking for its absence is not wrong.
+    Five mandatory fields in the order the specification prints them,
+    and the optional ``limits`` after them. ``parameters`` is written
+    even when it is empty, because the specification's own example writes
+    ``{}`` and an environment that reads ``parameters`` without checking
+    for its absence is not wrong; ``limits`` is omitted when nothing was
+    limited, because an empty object there would state a bound nobody
+    set.
+
+    **The limits are a recommendation and they are the only channel for
+    one.** What is actually enforced is enforced from outside — the
+    container profile's ``--cpus``/``--memory`` — and this is what the
+    environment is told so that it can size its build to fit rather than
+    to what the machine appears to have.
 
     There is deliberately nothing else in it: §4 fixes the tree relative
     to one environment variable, so a path in this document would be a
@@ -268,13 +282,17 @@ def step_request(
     and generation 3 states limits nowhere because an orchestrator
     enforces them rather than negotiating them (§11).
     """
-    return {
+    document: dict[str, Any] = {
         "spec_generation": SPEC_GENERATION,
         "session_id": session_id,
         "invocation_id": invocation_id,
         "action": action,
         "parameters": dict(parameters or {}),
     }
+    stated = limits.to_dict() if limits is not None else {}
+    if stated:
+        document["limits"] = stated
+    return document
 
 
 def write_request(document: dict[str, Any], path: Path) -> None:
@@ -546,6 +564,63 @@ class CacheTier:
     writable: bool = False
 
 
+#: What a memory figure may be written as, beside a plain byte count:
+#: the suffixes ``docker run --memory`` takes, because that is the
+#: spelling an operator already knows and the one the flag ends up in.
+_MEMORY_UNITS = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+
+
+def memory_bytes(stated: str | int | None, *, option: str = "build.memory") -> int | None:
+    """A configured memory figure in bytes, or ``None`` for nothing stated.
+
+    ``8g``, ``512m``, ``1024k`` and a plain byte count are all accepted,
+    with or without a trailing ``b`` — the spellings ``docker run
+    --memory`` documents. Anything else is a typed refusal naming
+    *option*, because a memory limit that was misread would either
+    strangle every build or bound nothing at all, and both are worse than
+    being told.
+    """
+    if stated is None or stated == "":
+        return None
+    if isinstance(stated, int):
+        return stated if stated > 0 else None
+    text = str(stated).strip().lower().removesuffix("ib")
+    number, unit = (text[:-1], text[-1]) if text and text[-1] in _MEMORY_UNITS else (text, "b")
+    try:
+        value = float(number)
+    except ValueError:
+        value = 0.0
+    if value <= 0:
+        raise ConfigError(
+            f'"{stated}" is not an amount of memory.',
+            hint=(
+                f"{option} takes a byte count or a number with a unit — 512m, 8g, "
+                "2048k — the way a container runtime spells it"
+            ),
+        )
+    return int(value * _MEMORY_UNITS[unit])
+
+
+def host_limits(*, cpus: float | None = None, memory_bytes: int | None = None) -> BuildLimits:
+    """What a step is given on this machine, unless somebody said otherwise.
+
+    All of the CPUs and the memory that is actually available — the same
+    figure the job arithmetic divides by
+    (:func:`mcuhome.model.jobs.available_ram_bytes`), so that the number
+    a step is told and the number it would have worked out for itself
+    come from one place.
+
+    Stating a value replaces that machine's own; stating neither is the
+    machine as it is. This is the *recommendation* in the request
+    document, and — in the container profile — the same figure that is
+    then enforced from outside.
+    """
+    return BuildLimits(
+        cpus=float(cpus) if cpus is not None else float(os.cpu_count() or 1),
+        memory_bytes=int(memory_bytes) if memory_bytes is not None else available_ram_bytes(),
+    )
+
+
 #: The two role directories a cache root is laid out with. One root
 #: serves both profiles — the subprocess profile links these directories
 #: into a step's tree, the container profile mounts them into its
@@ -746,6 +821,7 @@ class BuilderSession:
         context_id: str = "",
         session_id: str | None = None,
         tiers: Mapping[str, CacheTier] | None = None,
+        limits: BuildLimits | None = None,
         deadline_seconds: int = 5400,
         cancel_grace_seconds: int = 0,
     ) -> None:
@@ -765,6 +841,11 @@ class BuilderSession:
                 f"a session id has to be usable in a file name: {self.session_id!r} is not"
             )
         self.tiers = dict(tiers or {})
+        #: What every step of this session is told to fit in (§6.1). A
+        #: recommendation: what is enforced is the profile's business,
+        #: and in the container profile it is enforced by the same
+        #: numbers.
+        self.limits = limits
         self.deadline_seconds = deadline_seconds
         self.cancel_grace_seconds = cancel_grace_seconds
         self._counter = 0
@@ -867,6 +948,7 @@ class BuilderSession:
                 invocation_id=invocation_id,
                 action=action,
                 parameters=parameters,
+                limits=self.limits,
             ),
             step.request,
         )

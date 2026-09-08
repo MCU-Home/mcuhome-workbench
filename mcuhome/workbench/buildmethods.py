@@ -97,7 +97,13 @@ from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenvstore, containerbuild, subprocessbuild
-from mcuhome.workbench.buildenvsession import EnvironmentUnavailable, cache_tiers
+from mcuhome.workbench.buildenvsession import (
+    BuildLimits,
+    EnvironmentUnavailable,
+    cache_tiers,
+    host_limits,
+    memory_bytes,
+)
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
@@ -357,6 +363,12 @@ class BuildOptions:
     #: package set its labels declare, so this list says whose images may
     #: deliver one and never which image is used.
     container_repositories: tuple[str, ...] = DEFAULT_CONTAINER_REPOSITORIES
+    #: ``build.cpus`` / ``build.memory``: what one build may use of this
+    #: machine. ``None`` is the machine as it is. Both travel into the
+    #: request document as the recommendation the environment sizes
+    #: itself from, and the container profile enforces them besides.
+    cpus: float | None = None
+    memory: str | None = None
     #: ``build.env_store``: the store's root. ``None`` is the user's
     #: cache home, which is where a machine nobody configured keeps it.
     env_store: Path | None = None
@@ -385,6 +397,11 @@ class BuildOptions:
     cache_shared: Path | None = None
     cache_session: Path | None = None
     cache_project: Path | None = None
+
+    def limits(self) -> BuildLimits:
+        """What a build of this machine is given, as the two documents
+        and the container flags all state it."""
+        return host_limits(cpus=self.cpus, memory_bytes=memory_bytes(self.memory))
 
     def bound(self, kind: str) -> int | None:
         """The configured unpacking bound for a package *kind*, if any."""
@@ -425,6 +442,8 @@ def build_options(settings: Settings) -> BuildOptions:
         mode=resolve_build_mode(setting.value),
         mode_source=setting.source or setting.origin,
         container_repositories=tuple(settings.value("build.container_repositories")),
+        cpus=settings.value("build.cpus"),
+        memory=settings.value("build.memory") or None,
         env_store=path("build.env_store"),
         dev_workspace=path("build.dev_workspace"),
         python=settings.value("build.python") or None,
@@ -493,7 +512,12 @@ class BuildRequest:
     #: The environment to resolve tools, images and caches from — stated,
     #: never read from the process (:mod:`mcuhome.model.userpaths`).
     env: Mapping[str, str] = field(default_factory=dict)
-    #: Parallel compile jobs.
+    #: Parallel compile jobs. **A local build no longer reads it**: what
+    #: a build may use of this machine is ``build.cpus`` and
+    #: ``build.memory``, the environment derives its parallelism from
+    #: them, and a job count set beside them would be a second answer to
+    #: one question. The field is what the command line's ``--jobs``
+    #: still fills, and it goes with that flag.
     jobs: int = 1
     #: The pristine mode the ``remote`` method's session protocol still
     #: carries. A local build ignores it: under build-environment
@@ -656,6 +680,17 @@ class BuildOutcome:
     image: str = ""
     #: The method's own result object, untouched.
     detail: Any = None
+
+
+def _reported(limits: BuildLimits) -> dict[str, Any]:
+    """What the ``compile`` step says about the budget it hands over.
+
+    Facts a consumer can render, and the ones a person recognizes from
+    the flags: how many cores and how much memory this build may use.
+    The parallelism itself is not among them — the build environment
+    derives that from these two, and this side would be guessing at it.
+    """
+    return {"cpus": limits.cpus, "memory_bytes": limits.memory_bytes}
 
 
 def _work_root(request: BuildRequest, name: str) -> Path:
@@ -937,7 +972,6 @@ def compose_local_build(
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
     image: str | None = None,
-    jobs: int = 1,
     ccache_dir: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
@@ -975,7 +1009,6 @@ def compose_local_build(
             registries=registries,
             environment=environment,
             created=created,
-            jobs=jobs,
             ccache_dir=ccache_dir,
             context_dir=context_dir,
             on_line=on_line,
@@ -992,7 +1025,6 @@ def compose_local_build(
         project_root=project_root,
         registries=registries,
         image=image,
-        jobs=jobs,
         ccache_dir=ccache_dir,
         created=created,
         context_dir=context_dir,
@@ -1015,7 +1047,6 @@ def compose_container_build(
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
     image: str | None = None,
-    jobs: int = 1,
     ccache_dir: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
@@ -1058,6 +1089,7 @@ def compose_container_build(
     """
     options = options if options is not None else BuildOptions()
     refuse_retired_environment_field(model)
+    limits = options.limits()
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = (
@@ -1135,7 +1167,7 @@ def compose_container_build(
         )
     lock_context(context_dir)
     if on_step is not None:
-        on_step("compile", image=resolved.reference, jobs=jobs)
+        on_step("compile", image=resolved.reference, **_reported(limits))
     root = containerbuild.cache_root(env, ccache_dir)
     return containerbuild.run_locked_build(
         context_dir,
@@ -1143,7 +1175,7 @@ def compose_container_build(
         sdk_sources=sources,
         work_root=work_root / "backend",
         env=dict(env),
-        jobs=jobs,
+        limits=limits,
         sdk_max_bytes=options.sdk_max_bytes,
         zephyr_constraint=model.toolchain.zephyr_constraint,
         # The same cache root and the same tiers the subprocess profile
@@ -1173,7 +1205,6 @@ def compose_subprocess_build(
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
     created: datetime | None = None,
-    jobs: int = 1,
     ccache_dir: Path | None = None,
     context_dir: Path | None = None,
     on_line: Any = None,
@@ -1220,6 +1251,7 @@ def compose_subprocess_build(
     """
     options = options if options is not None else BuildOptions()
     refuse_retired_environment_field(model)
+    limits = options.limits()
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = _package_registry(
@@ -1308,7 +1340,7 @@ def compose_subprocess_build(
         on_step("environment", build_environment=environment.described(), fetched=False)
     lock_context(context_dir)
     if on_step is not None:
-        on_step("compile", image="", jobs=jobs)
+        on_step("compile", image="", **_reported(limits))
     cache_root = containerbuild.cache_root(dict(env), ccache_dir)
     return subprocessbuild.run_locked_build(
         context_dir,
@@ -1316,7 +1348,7 @@ def compose_subprocess_build(
         sdk_sources=sources,
         work_root=work_root / "backend",
         env=dict(env),
-        jobs=jobs,
+        limits=limits,
         sdk_max_bytes=options.sdk_max_bytes,
         # The cache root is resolved the way a container build resolves
         # it, so that a machine nobody configured still has a compiler
@@ -1370,7 +1402,6 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
-        jobs=request.jobs,
         ccache_dir=execution.ccache_dir,
         context_dir=request.context_dir,
         on_line=request.on_line,
@@ -1414,7 +1445,6 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         project_root=request.project_root,
         registries=request.registries,
         image=execution.image,
-        jobs=request.jobs,
         ccache_dir=execution.ccache_dir,
         context_dir=request.context_dir,
         on_line=request.on_line,

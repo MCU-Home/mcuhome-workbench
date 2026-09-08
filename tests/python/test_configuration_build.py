@@ -47,6 +47,8 @@ from mcuhome.workbench.project import Project, init_project
 KEYS = {
     "build.mode": "MCUHOME_BUILD_MODE",
     "build.container_repositories": "MCUHOME_BUILD_CONTAINER_REPOSITORIES",
+    "build.cpus": "MCUHOME_BUILD_CPUS",
+    "build.memory": "MCUHOME_BUILD_MEMORY",
     "build.env_store": "MCUHOME_BUILD_ENV_STORE",
     "build.dev_workspace": "MCUHOME_BUILD_DEV_WORKSPACE",
     "build.python": "MCUHOME_BUILD_PYTHON",

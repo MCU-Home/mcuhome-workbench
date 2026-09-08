@@ -162,8 +162,9 @@ class Option:
     #: The values a ``string`` option accepts, if it is a vocabulary
     #: rather than free text. Empty means free text.
     choices: tuple[str, ...] = ()
-    #: The smallest value an ``integer`` option accepts. ``None`` means
-    #: any whole number.
+    #: The smallest value an ``integer`` option accepts, and the value a
+    #: ``number`` option has to be strictly greater than — half a core is
+    #: a share, zero cores is not. ``None`` means any.
     minimum: int | None = None
 
     @property
@@ -298,6 +299,23 @@ OPTIONS: tuple[Option, ...] = (
         kind="strings",
         default=DEFAULT_CONTAINER_REPOSITORIES,
         help="container repositories a build environment may be taken from, in order",
+    ),
+    # What one build may use of this machine. The container profile sets
+    # them on the container and enforces them; both profiles state them
+    # in the request document, where the build environment reads what it
+    # should size itself to. Unset means the machine as it is — a local
+    # build is not a tenant, and the guard exists against an environment
+    # that runs amok rather than against the person who started it.
+    Option(
+        "build.cpus",
+        kind="number",
+        minimum=0,
+        help="how much CPU one build may use, in cores; unset means all of them",
+    ),
+    Option(
+        "build.memory",
+        kind="string",
+        help="how much memory one build may use (512m, 8g, or bytes); unset means what is free",
     ),
     Option(
         "build.env_store",
@@ -546,6 +564,12 @@ def _parse_file_value(
         if opt.minimum is not None and value < opt.minimum:
             raise refuse(f"at least {opt.minimum}")
         return value
+    if opt.kind == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise refuse("a number")
+        if opt.minimum is not None and value <= opt.minimum:
+            raise refuse(f"greater than {opt.minimum}")
+        return float(value)
     if opt.kind == "path":
         if not isinstance(value, str) or not value:
             raise refuse("a path")
@@ -602,6 +626,20 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
                 hint=opt.help or None,
             )
         return number
+    if opt.kind == "number":
+        try:
+            fraction = float(value)
+        except ValueError:
+            raise ConfigError(
+                f"{opt.env_var} must be a number, not {value!r}.",
+                hint=opt.help or None,
+            ) from None
+        if opt.minimum is not None and fraction <= opt.minimum:
+            raise ConfigError(
+                f"{opt.env_var} must be greater than {opt.minimum}, not {fraction:g}.",
+                hint=opt.help or None,
+            )
+        return fraction
     if opt.kind == "path":
         return _resolve_path(value, env=env, base=None)
     if opt.kind == "strings":
@@ -1013,6 +1051,15 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
         except ValueError:
             raise ConfigError(
                 f"{opt.name} must be a whole number, not {text!r}.",
+                location=location,
+                hint=opt.help or None,
+            ) from None
+    if opt.kind == "number":
+        try:
+            return float(text)
+        except ValueError:
+            raise ConfigError(
+                f"{opt.name} must be a number, not {text!r}.",
                 location=location,
                 hint=opt.help or None,
             ) from None

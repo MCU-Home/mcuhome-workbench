@@ -192,7 +192,6 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
             out_dir=tmp_path,
             build_mode=buildmethods.MODE_SUBPROCESS,
             ccache_dir=tmp_path / "ccache",
-            jobs=2,
         ),
         buildmethods.LOCAL,
     )
@@ -203,7 +202,10 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
     # No image ran, and the outcome says so rather than naming one.
     assert outcome.image == ""
     assert seen["ccache_dir"] == tmp_path / "ccache"
-    assert seen["jobs"] == 2
+    # No job count travels: what a build may use of this machine is
+    # `build.cpus`/`build.memory`, and the environment sizes itself from
+    # the limits those become.
+    assert "jobs" not in seen
 
 
 def test_a_subprocess_build_resolves_its_pins_like_every_other_build(model, tmp_path) -> None:
@@ -288,11 +290,14 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
         environment=FakeEnvironment(),
         context_dir=tmp_path / "context",
-        jobs=5,
+        options=buildmethods.BuildOptions(cpus=5, memory="8g"),
         on_step=lambda name, **facts: steps.append((name, facts)),
     )
     assert result.out_dir == tmp_path / "out"
-    assert driven["jobs"] == 5
+    # What this machine gives the build, as the request document states
+    # it: the configured figures, not a job count.
+    assert driven["limits"].cpus == 5
+    assert driven["limits"].memory_bytes == 8 * 1024**3
     # The context's own pins are what the environment is checked against,
     # and the device's Zephyr constraint travels with them.
     assert checked["pin"].workspace.name == "mcuhome-build-workspace"
@@ -396,7 +401,6 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
             signing_pub="-----BEGIN PUBLIC KEY-----\n",
             sdk_sources=(tmp_path / "sdk",),
             image="ghcr.io/mcu-home/build-container:test",
-            jobs=3,
         ),
         buildmethods.LOCAL,
     )
@@ -410,7 +414,7 @@ def test_the_local_method_answers_with_the_backends_own_verdict(model, tmp_path,
     # The scratch area defaults under the build directory, and the public
     # key travelled — no private key is a field of the request at all.
     assert seen["work_root"] == tmp_path / ".mcuhome-local"
-    assert seen["jobs"] == 3
+    assert "jobs" not in seen
     assert seen["signing_pub"] == "-----BEGIN PUBLIC KEY-----\n"
 
 

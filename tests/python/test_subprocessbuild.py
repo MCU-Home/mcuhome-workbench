@@ -28,7 +28,6 @@ import pytest
 import zstandard
 from mcuhome.model.context import DeveloperEnvironment, EnvironmentPin, PackagePin
 from mcuhome.model.hashes import sha256_file
-from mcuhome.model.jobs import JOBS_VAR
 from test_buildenvsession import _PREAMBLE, DELIVERS, entry_point
 
 from mcuhome.workbench import buildenvsession, devworkspace, subprocessbuild
@@ -529,7 +528,7 @@ def test_a_step_runs_against_the_store_and_delivers(tmp_path, environment) -> No
 def test_the_environment_the_child_is_given_is_composed_not_inherited(
     tmp_path, environment
 ) -> None:
-    result = run_one_step(tmp_path, environment, jobs=4)
+    result = run_one_step(tmp_path, environment)
     values = child_environment(result)
 
     assert values["MCUHOME_BUILD_ENV_TOOLS"] == str(environment.tools.path)
@@ -541,7 +540,10 @@ def test_the_environment_the_child_is_given_is_composed_not_inherited(
     assert values["CCACHE_NOHASHDIR"] == "1"
     assert values["CCACHE_COMPILERCHECK"] == "content"
     assert values["CCACHE_IGNOREOPTIONS"] == "-specs=*"
-    assert values["MCUHOME_JOBS"] == "4"
+    # No job count and no limits in the environment: what a step should
+    # fit in travels in the request document, which is the only channel
+    # the specification has for it.
+    assert not [name for name in values if name.startswith("MCUHOME_JOBS")]
     assert values["PATH"].endswith(CALLER_ENV["PATH"])
     assert values["HOME"]
     # The one thing this profile promises about the child's environment:
@@ -932,13 +934,13 @@ def test_the_step_environment_of_a_development_build_is_the_callers_own(
     step = SimpleNamespace(base_dir=tmp_path / "base", session=None, writable_cache=None)
 
     values = subprocessbuild.step_environment(
-        step, environment=environment, env=developer_env(developer), jobs=3
+        step, environment=environment, env=developer_env(developer)
     )
 
     assert values["SECRET_TOKEN"] == "do-not-leak"
     assert values["MCUHOME_BUILDER_BASE_DIR"] == str(tmp_path / "base")
     assert values["MCUHOME_BUILD_ENV_WORKSPACE"] == str(developer.workspace)
-    assert values[JOBS_VAR] == "3"
+    assert "MCUHOME_JOBS" not in values
     assert values["PYTHONDONTWRITEBYTECODE"] == "1"
     assert "MCUHOME_BUILD_ENV_TOOLS" not in values
     assert "GIT_CONFIG_GLOBAL" not in values
@@ -1259,3 +1261,28 @@ def test_a_family_pin_is_compared_by_version_and_not_by_hash(environment) -> Non
             ),
         )
     assert "0.2.0" in caught.value.message
+
+
+def test_the_request_document_carries_the_limits_and_nothing_enforces_them(
+    tmp_path, environment
+) -> None:
+    """This profile states the recommendation and enforces nothing.
+
+    Deliberate: there is no container to hold the build to a figure and
+    this profile does not build a cgroup of its own, so what the builder
+    is told is what it is trusted to do. A machine that has to hold a
+    build to a budget uses the container profile, which enforces the same
+    numbers from outside.
+    """
+    result = run_one_step(
+        tmp_path,
+        environment,
+        limits=buildenvsession.BuildLimits(cpus=2, memory_bytes=4 * 1024**3),
+    )
+    assert result.outcome.successful, result.outcome.problems
+    documents = sorted((tmp_path / "work" / "session" / "steps").glob("*/mcuhome/*.json"))
+    request = json.loads(documents[-1].read_text(encoding="utf-8"))
+    assert request["limits"] == {"cpus": 2.0, "memory_bytes": 4 * 1024**3}
+    # And the child was told nothing about it in its environment.
+    values = child_environment(result)
+    assert not [name for name in values if "JOBS" in name or "LIMIT" in name.upper()]

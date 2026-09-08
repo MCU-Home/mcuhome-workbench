@@ -66,7 +66,6 @@ from mcuhome.model.context import (
 )
 from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.imageref import Reference
-from mcuhome.model.jobs import JOBS_VAR
 from mcuhome.model.userpaths import expand, home
 
 from mcuhome.workbench.buildenvsession import (
@@ -82,12 +81,14 @@ from mcuhome.workbench.buildenvsession import (
     STEP_OUT,
     STEP_SDK,
     BuilderSession,
+    BuildLimits,
     CacheTier,
     EnvironmentUnavailable,
     EnvironmentUnusable,
     Launcher,
     LocalOutcome,
     Step,
+    host_limits,
 )
 from mcuhome.workbench.buildprocess import (
     Completed,
@@ -112,6 +113,7 @@ from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
     "CONTAINER_REPOSITORIES_OPTION",
+    "DEFAULT_PIDS",
     "ENTRY_POINT_PATH",
     "ContainerBuildResult",
     "Mount",
@@ -159,6 +161,12 @@ CONTEXT_TARGET = f"{_TREE}/{STEP_CONTEXT}"
 OUT_TARGET = f"{_TREE}/{STEP_OUT}"
 CACHE_TARGET = f"{_TREE}/{STEP_CACHE}"
 
+#: How many processes one step's container may have. Not a tuning knob:
+#: a build spawns compilers, and a build that has spawned four thousand
+#: of them is not compiling. It is the bound between "many jobs" and "a
+#: fork bomb", and nothing that builds firmware comes near it.
+DEFAULT_PIDS = 4096
+
 #: What every container this profile starts is called: the step's own
 #: invocation id, which §6.1 promises is safe in a file name and which
 #: the naming rules of every runtime accept as well. It exists so that a
@@ -193,21 +201,33 @@ class Mount:
 class ResourceLimits:
     """What one step's container may consume, as ``run`` flags.
 
-    §11 tells an environment that "whatever CPU, memory, disk and time
-    budget the orchestrator has set, it may enforce hard" — so they go on
-    the run that creates the container, where they bound the whole build
-    rather than one process in it.
+    **The hard half of the two.** The request document tells the
+    environment what it should fit in (§6.1); this is what the runtime
+    holds it to, and the two carry the same numbers. The orchestrator
+    cannot trust an environment to stay inside a recommendation — it may
+    have a bug and run amok — so the guard is outside it, and §11 tells
+    the environment plainly that whatever budget was set may be enforced
+    hard.
 
-    **Unset is the local default and it is deliberate.** A build on
-    somebody's own machine is not a tenant: it gets what the machine has,
-    exactly as it did before this profile existed, and a number invented
-    here would be a limit nobody chose. An operator that runs other
-    people's contexts sets them.
+    They are **always set** in this profile. A local build gets the
+    machine it is running on (:func:`~mcuhome.workbench.buildenvsession.host_limits`)
+    and a process count that no build has a use for exceeding, which
+    changes nothing about how a healthy build runs and everything about
+    what an unhealthy one can do to the machine around it.
     """
 
     memory: str | None = None
     cpus: str | None = None
     pids: int | None = None
+
+    @staticmethod
+    def of(limits: BuildLimits, *, pids: int = DEFAULT_PIDS) -> ResourceLimits:
+        """The runtime flags for the limits a step was given."""
+        return ResourceLimits(
+            memory=None if limits.memory_bytes is None else str(limits.memory_bytes),
+            cpus=None if limits.cpus is None else f"{limits.cpus:g}",
+            pids=pids,
+        )
 
     def to_arguments(self) -> list[str]:
         argv: list[str] = []
@@ -472,7 +492,6 @@ def step_command(
     name: str,
     user: str | None = None,
     limits: ResourceLimits | None = None,
-    jobs: int | None = None,
 ) -> list[str]:
     """The ``run`` that is one step of the session.
 
@@ -497,19 +516,18 @@ def step_command(
       name: signalling the client that started it is not the same as
       ending the build inside.
     * ``MCUHOME_BUILDER_BASE_DIR`` — the one variable the specification
-      defines. Everything else in the container's environment is the
-      image's own, which is where ``PATH`` and ``HOME`` come from.
+      defines, and the only one this side sets. Everything else in the
+      container's environment is the image's own, which is where ``PATH``
+      and ``HOME`` come from; what the step should fit in travels in the
+      request document, not here.
+    * ``--cpus``/``--memory``/``--pids-limit``, on the run that creates
+      the container, because a limit anywhere else bounds one process
+      tree instead of the build.
     """
     argv = [program, "run", "--rm", "--init", "--network", "none", "--name", name]
     if user is not None:
         argv += ["--user", user]
     argv += ["--env", f"{BASE_DIR_VAR}={BASE_DIR}"]
-    if jobs is not None and jobs >= 1:
-        # MCUHome's own environment resolves its parallelism from this
-        # variable, exactly as it does in the subprocess profile; an
-        # environment that does not know the name ignores it, which is
-        # the same rule §6.1 gives for a request field.
-        argv += ["--env", f"{JOBS_VAR}={jobs}"]
     argv += (limits or ResourceLimits()).to_arguments()
     for mount in _ordered(step_mounts(step)):
         argv += ["--volume", mount.to_argument()]
@@ -573,7 +591,6 @@ def launcher(
     runtime: Runtime,
     user: str | None = None,
     limits: ResourceLimits | None = None,
-    jobs: int | None = None,
     started: list[str] | None = None,
 ) -> Launcher:
     """How a step is entered in this profile: one fresh container.
@@ -600,7 +617,6 @@ def launcher(
             name=name,
             user=user,
             limits=limits,
-            jobs=jobs,
         )
         if started is not None:
             started.append(name)
@@ -883,12 +899,12 @@ def run_locked_build(
     sdk_sources: Sequence[Path],
     work_root: Path,
     env: Mapping[str, str],
-    jobs: int = 1,
     tiers: Mapping[str, CacheTier] | None = None,
     sdk_max_bytes: int | None = None,
     registry: RegistrySource | None = None,
     deadline_seconds: int = 5400,
-    limits: ResourceLimits | None = None,
+    limits: BuildLimits | None = None,
+    pids: int = DEFAULT_PIDS,
     user: str | None = None,
     zephyr_constraint: str = "",
     runtime: Runtime | None = None,
@@ -911,6 +927,15 @@ def run_locked_build(
     digest and **recorded** in its full form, tag included — the tag is
     documentation for whoever reads the record a year later and is never
     what the runtime resolves.
+
+    *limits* is what this step is given: the same numbers are written
+    into the request document as the recommendation the environment
+    sizes itself from, and set on the container as the hard limits the
+    runtime holds it to. ``None`` is this machine as it is
+    (:func:`~mcuhome.workbench.buildenvsession.host_limits`) — a local
+    build is not a tenant, and the guard exists against a build
+    environment that runs amok rather than against the person who
+    started it.
 
     **What the image declares is checked here as well**
     (:func:`check_image`), for the reason every entry point that a caller
@@ -955,6 +980,7 @@ def run_locked_build(
         max_bytes=sdk_max_bytes,
     ).tree
     started: list[str] = []
+    given = limits if limits is not None else host_limits()
     session = BuilderSession(
         root=work_root / "session",
         context_dir=context_dir,
@@ -967,12 +993,12 @@ def run_locked_build(
             running,
             runtime=seam,
             user=user if user is not None else current_user(),
-            limits=limits,
-            jobs=jobs,
+            limits=ResourceLimits.of(given, pids=pids),
             started=started,
         ),
         context_id=manifest.compute_id(),
         tiers=tiers,
+        limits=given,
         deadline_seconds=deadline_seconds,
     )
     try:

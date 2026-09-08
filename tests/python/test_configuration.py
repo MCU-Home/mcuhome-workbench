@@ -81,6 +81,7 @@ def test_every_option_kind_is_one_the_parsers_know() -> None:
         "paths",
         "strings",
         "integer",
+        "number",
         "builders",
         "registry",
     }

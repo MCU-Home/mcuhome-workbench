@@ -88,7 +88,6 @@ from mcuhome.model.context import (
     format_generator_chain,
 )
 from mcuhome.model.errors import BuildError
-from mcuhome.model.jobs import JOBS_VAR
 
 from mcuhome.workbench import devworkspace
 from mcuhome.workbench.buildenvsession import (
@@ -97,11 +96,13 @@ from mcuhome.workbench.buildenvsession import (
     CCACHE_SUBDIR,
     ENTRY_POINT,
     BuilderSession,
+    BuildLimits,
     CacheTier,
     Launcher,
     LocalOutcome,
     Step,
     cache_tiers,
+    host_limits,
 )
 from mcuhome.workbench.buildenvstore import (
     TOOLS_KIND,
@@ -199,14 +200,6 @@ GIT_CONFIG_VAR = "GIT_CONFIG_GLOBAL"
 #:     ``CCACHE_BASEDIR`` useless on its own.
 CCACHE_COMPILER_CHECK = "content"
 CCACHE_IGNORE_OPTIONS = "-specs=*"
-
-#: The job count travels in :data:`mcuhome.model.jobs.JOBS_VAR`, imported
-#: rather than restated: it is the variable the builder resolves its
-#: parallelism from, and a second spelling of a wire name is a second
-#: thing to keep in step. Generation 3 has no field for a job count —
-#: "the orchestrator enforces its limits rather than negotiating them" —
-#: but this profile has no cgroup to enforce one with, so the number a
-#: person asked for reaches the build the one way the builder reads one.
 
 #: What a child gets when the caller's environment names no ``PATH``. The
 #: host baseline lives on it — git, the C compiler, make, the device-tree
@@ -514,7 +507,6 @@ def step_environment(
     *,
     environment: Environment,
     env: Mapping[str, str],
-    jobs: int | None = None,
 ) -> dict[str, str]:
     """Everything the child process is given, and nothing else.
 
@@ -540,7 +532,7 @@ def step_environment(
     the tools the build is supposed to use.
     """
     if environment.developer:
-        return developer_step_environment(step, environment=environment, env=env, jobs=jobs)
+        return developer_step_environment(step, environment=environment, env=env)
     tools = environment.tools.path if environment.tools is not None else None
     values = {
         "PATH": env.get("PATH") or DEFAULT_PATH,
@@ -566,8 +558,6 @@ def step_environment(
         directory = cache / CCACHE_SUBDIR
         directory.mkdir(parents=True, exist_ok=True)
         values["CCACHE_DIR"] = str(directory)
-    if jobs is not None and jobs >= 1:
-        values[JOBS_VAR] = str(jobs)
     return values
 
 
@@ -576,7 +566,6 @@ def developer_step_environment(
     *,
     environment: Environment,
     env: Mapping[str, str],
-    jobs: int | None = None,
 ) -> dict[str, str]:
     """What the builder is given in a development build: the person's own shell.
 
@@ -587,7 +576,7 @@ def developer_step_environment(
     configuration. A build that closed the environment would be a build
     against tools nobody installed.
 
-    Four things are added, and nothing is taken away except the one
+    Three things are added, and nothing is taken away except the one
     variable that would be actively wrong:
 
     ``MCUHOME_BUILDER_BASE_DIR`` and ``MCUHOME_BUILD_ENV_WORKSPACE``
@@ -600,10 +589,6 @@ def developer_step_environment(
         So that importing it leaves no ``__pycache__`` in somebody's
         working tree. See the code below — this is the one write MCUHome
         itself would otherwise make in there.
-    the job count
-        What the person asked for. It is a request about this build
-        rather than a property of their environment, so it is stated
-        even here.
     ``MCUHOME_BUILD_ENV_TOOLS`` is **removed** when the caller's
         environment carries one: it names a tools package, this build has
         none, and a value left over from another build would put a
@@ -628,14 +613,10 @@ def developer_step_environment(
         values["PYTHONPATH"] = (
             f"{environment.sdk}{os.pathsep}{existing}" if existing else str(environment.sdk)
         )
-    if jobs is not None and jobs >= 1:
-        values[JOBS_VAR] = str(jobs)
     return values
 
 
-def developer_launcher(
-    environment: Environment, *, env: Mapping[str, str], jobs: int | None = None
-) -> Launcher:
+def developer_launcher(environment: Environment, *, env: Mapping[str, str]) -> Launcher:
     """How a step is entered in a development build: the builder, directly.
 
     No entry point. That file is content of the **tools package** and its
@@ -657,7 +638,7 @@ def developer_launcher(
     """
 
     def launch(step: Step, on_line: LineSink | None) -> Running:
-        values = developer_step_environment(step, environment=environment, env=env, jobs=jobs)
+        values = developer_step_environment(step, environment=environment, env=env)
         interpreter = shutil.which(BUILDER_INTERPRETER, path=values.get("PATH"))
         if interpreter is None:
             raise BuildEnvironmentError(
@@ -688,9 +669,7 @@ def developer_launcher(
     return launch
 
 
-def launcher(
-    environment: Environment, *, env: Mapping[str, str], jobs: int | None = None
-) -> Launcher:
+def launcher(environment: Environment, *, env: Mapping[str, str]) -> Launcher:
     """How a step is entered in this profile: one child process.
 
     The entry point is run **by the path the specification fixes** —
@@ -710,7 +689,7 @@ def launcher(
         _require_entry_point(environment.tools)
         child = spawn_process(
             [str(step.entry_point)],
-            env=step_environment(step, environment=environment, env=env, jobs=jobs),
+            env=step_environment(step, environment=environment, env=env),
             cwd=step.work,
             on_line=on_line,
         )
@@ -1047,7 +1026,7 @@ def run_locked_build(
     sdk_sources: tuple[Path, ...] | list[Path],
     work_root: Path,
     env: Mapping[str, str],
-    jobs: int = 1,
+    limits: BuildLimits | None = None,
     ccache_dir: Path | None = None,
     tiers: Mapping[str, CacheTier] | None = None,
     sdk_max_bytes: int | None = None,
@@ -1108,7 +1087,7 @@ def run_locked_build(
             ),
         )
         sdk_tree = environment.sdk
-        launch = developer_launcher(environment, env=env, jobs=jobs)
+        launch = developer_launcher(environment, env=env)
     else:
         check_environment(
             environment,
@@ -1125,7 +1104,7 @@ def run_locked_build(
             registry=registry,
             max_bytes=sdk_max_bytes,
         ).tree
-        launch = launcher(environment, env=env, jobs=jobs)
+        launch = launcher(environment, env=env)
     session = BuilderSession(
         root=work_root / "session",
         context_dir=context_dir,
@@ -1134,6 +1113,13 @@ def run_locked_build(
         launcher=launch,
         context_id=manifest.compute_id(),
         tiers=tiers if tiers is not None else cache_tiers(ccache_dir=ccache_dir),
+        # The recommendation, and in this profile nothing but: there is
+        # no cgroup here and this profile deliberately does not build
+        # one, so what the builder is told is what it is trusted to do.
+        # A machine that has to hold a build to a budget uses the
+        # container profile, which enforces the same numbers from
+        # outside.
+        limits=limits if limits is not None else host_limits(),
         deadline_seconds=deadline_seconds,
     )
     with session:
