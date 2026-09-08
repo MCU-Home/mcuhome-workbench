@@ -55,6 +55,7 @@ from mcuhome.model.context import (
     PackagePin,
     SdkPin,
 )
+from mcuhome.model.errors import BuildError
 
 from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench import (
@@ -3051,27 +3052,32 @@ def test_a_seat_offer_is_read_defensively(tmp_path: Path) -> None:
 
 
 def test_a_remote_build_answers_which_environment_served_it(tmp_path: Path) -> None:
-    """The digest that ran comes back, and it is the pair that cannot move.
+    """The digest that ran comes back, tag included, and it is the pair that cannot move.
 
     A build context pins packages; an image is one delivery of that set,
     and which one served a session is the server's own answer at
     ``send-context``. A client that dropped it would have no record of
     what actually built the firmware — the packages say what was wanted,
     the digest says what ran — so it travels out of the composition in
-    the same ``<repository>@sha256:…`` form a local container build
-    records.
+    the same form a local container build records: the tag the server
+    found the image under stays on as documentation, and the digest is
+    what decides.
     """
     result = _remote_build(tmp_path)
-    assert result.image == IMAGE_RUNNABLE
+    assert result.image == IMAGE_REFERENCE
 
 
 def test_the_environment_answer_is_read_defensively() -> None:
     """A record of a fact, never an invented one.
 
-    The reader takes the digest where there is one and the reference
-    where there is not; a server that answered neither gets the empty
-    string rather than a value this side made up, because "what built
-    this" is worth nothing unless it is what actually built it.
+    The reader composes the reference and the digest the server sent —
+    keeping a tag where the server found one — and a server that
+    answered neither gets the empty string rather than a value this side
+    made up, because "what built this" is worth nothing unless it is
+    what actually built it. The digest is not this side's own
+    observation, only the server's claim about one, so a value that is
+    not a well-formed sha256 digest is refused rather than folded into a
+    record that looks real.
     """
     canonical = {
         "container": {
@@ -3079,7 +3085,7 @@ def test_the_environment_answer_is_read_defensively() -> None:
             "digest": IMAGE_DIGEST,
         }
     }
-    assert sc.served_environment(canonical) == IMAGE_RUNNABLE
+    assert sc.served_environment(canonical) == IMAGE_REFERENCE
     assert sc.served_environment({"container": {"build_environment": IMAGE}}) == IMAGE
     assert sc.served_environment({"container": {}}) == ""
     assert sc.served_environment({}) == ""
@@ -3092,3 +3098,9 @@ def test_the_environment_answer_is_read_defensively() -> None:
         }
     }
     assert sc.served_environment(ported) == f"registry.test:5000/mcuhome/env@{IMAGE_DIGEST}"
+    # The digest is read defensively too: it is the server's claim, not
+    # this side's own measurement, and a value that is not a well-formed
+    # sha256 digest is refused typed rather than silently recorded.
+    malformed = {"container": {"build_environment": IMAGE, "digest": "banana"}}
+    with pytest.raises(BuildError):
+        sc.served_environment(malformed)

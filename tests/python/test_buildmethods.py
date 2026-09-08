@@ -1063,13 +1063,13 @@ def test_a_subprocess_build_refuses_the_retired_device_field_too(model, tmp_path
 
 
 def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, monkeypatch):
-    """What built it, in the same canonical form a local container build records.
+    """What built it, in the same form a local container build records.
 
     A context pins packages, and an image is one delivery of that set:
     which delivery ran is the server's choice and the server's answer, so
     without carrying it back a remote build's record would name the
-    packages and never the bytes. It is the digest that decides — a tag
-    is a location — so the pair recorded is ``<repository>@sha256:…``.
+    packages and never the bytes. Here the server named no tag, so the
+    pair recorded is ``<repository>@sha256:…``.
     """
     digest = "sha256:" + "f" * 64
     context = tmp_path / "context"

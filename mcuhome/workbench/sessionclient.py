@@ -1916,18 +1916,33 @@ class SessionClient:
         return await self._start("verify", {})
 
     async def build(self, *, mode: str = "clean") -> str:
-        """``build [mode]`` — clean or incremental. Answers an invocation id.
+        """``build [mode]`` — answers an invocation id.
 
-        ``clean`` is the default and the safe one: it never silently
-        reuses state, and it is what a release artifact requires. The
-        build itself returns an **unsigned** image plus the build report
-        (the shape the build actions document defines) (E55, E56);
-        signing is a host-side step afterwards and this client never
-        performs it and never carries a key for it.
+        Every build this server runs is clean: a step runs in a fresh
+        container that is thrown away afterwards, which is what makes
+        the pristine tree free and leaves nothing an incremental build
+        could reuse. The server acknowledges ``mode: clean`` whatever
+        *mode* asked for, rather than leaving a caller to assume its
+        ``incremental`` was honoured — see :meth:`_start`, which reads
+        that acknowledgement. The build itself returns an **unsigned**
+        image plus the build report (the shape the build actions
+        document defines) (E55, E56); signing is a host-side step
+        afterwards and this client never performs it and never carries a
+        key for it.
         """
         return await self._start("build", {"mode": mode})
 
     async def _start(self, verb: str, extra: dict[str, Any]) -> str:
+        """Start one working verb (``verify`` or ``build``) and return its invocation id.
+
+        ``build``'s answer also carries the ``mode`` it actually ran
+        (always ``clean``, see :meth:`build`) — read here so it is not
+        silently dropped, but not surfaced any further: the invocation
+        id is the whole of what a caller gets back from starting a
+        working verb, and :class:`RemoteBuildResult`'s shape is fixed by
+        parity with the local build methods, none of which carry a mode
+        either.
+        """
         session_id = self._require_session()
         payload = await self._call(verb, {"session_id": session_id, **extra})
         invocation_id = str(payload.get("invocation_id") or "")
@@ -1935,6 +1950,7 @@ class SessionClient:
             raise RemoteTransportError(
                 f'The build server answered "{verb}" without an invocation id.', hint=""
             )
+        _acknowledged_mode = payload.get("mode")  # read, not surfaced - see the docstring
         self._finished.setdefault(invocation_id, asyncio.get_running_loop().create_future())
         return invocation_id
 
@@ -1948,8 +1964,11 @@ class SessionClient:
         error — a cancel racing a natural completion is legitimate and
         both parties behaved correctly.
 
-        The session and its warm container survive; a closed socket is
-        never a stop signal, which is why the verb exists.
+        The session survives — there is no warm container to keep: every
+        step runs in a fresh one that is thrown away when it ends, so
+        cancelling one leaves nothing behind for the next invocation to
+        inherit. A closed socket is never a stop signal, which is why the
+        verb exists.
         """
         # Deliberately not gated on :attr:`terminal`: cancel stops work
         # rather than doing any, and a session that may no longer start
@@ -2251,10 +2270,12 @@ class RemoteBuildResult:
     error: dict[str, Any] | None = None
     invocation_id: str = ""
     #: The build environment that served this build, as the server named
-    #: it: ``<repository>@sha256:…``, the same canonical form a local
-    #: container build records. It is the digest that decides — a tag is
-    #: a location — so this is what a record of "what built this" is
-    #: worth having. Empty when the server named none.
+    #: it: ``str(Reference)`` — ``<repository>:<tag>@sha256:…`` where the
+    #: server found the image under a tag, ``<repository>@sha256:…`` where
+    #: it did not — the same form a local container build records. It is
+    #: the digest that decides what ran; the tag, where there is one,
+    #: stays as documentation of where it was found. Empty when the
+    #: server named none.
     image: str = ""
 
 
@@ -2262,18 +2283,24 @@ def served_environment(accepted: Mapping[str, Any]) -> str:
     """Which build environment served this session, out of ``send-context``.
 
     The answer carries the environment the server resolved for the
-    packages the context pins — its full explicit form and, separately,
-    the digest of the manifest whose labels were checked. What a build's
-    record wants is the pair that cannot move: ``<repository>@sha256:…``,
-    which is the same canonical form a local container build records, so
-    that "what built this" reads the same whichever side ran it.
+    packages the context pins — its full explicit form, tag included
+    where the server found it under one, and separately the digest of
+    the manifest whose labels were checked. What a build's record wants
+    is composed from the two: ``str(Reference)``, the same form a local
+    container build records, so that "what built this" reads the same
+    whichever side ran it.
 
     A server that names no digest is answered with whatever it did name,
     and one that names nothing at all with the empty string: this is a
     record of a fact, and inventing one would be worse than recording
-    that the fact was not offered. The repository is taken out of the
-    reference by the parser that owns what a reference is, because a
-    registry with a port in it has a colon that is not a tag's.
+    that the fact was not offered. The reference is parsed rather than
+    cut apart by hand, because a registry with a port in it has a colon
+    that is not a tag's; a reference this client cannot parse is returned
+    as the server sent it, unimproved. The digest is not read that
+    leniently: it is not this side's own observation, only the server's
+    claim about one, so a value that is not ``sha256:`` followed by 64
+    lowercase hex digits is refused with the client's typed error rather
+    than folded into a record that looks like a real one.
     """
     from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
@@ -2285,12 +2312,12 @@ def served_environment(accepted: Mapping[str, Any]) -> str:
     if not reference or not digest:
         return reference
     try:
-        repository = parse_reference(reference, default_registry=DOCKER_HUB).repository
+        parsed = parse_reference(reference, default_registry=DOCKER_HUB)
     except BuildError:
         # A name this client cannot parse is a name it does not improve
         # on: what the server said is still the honest record.
         return reference
-    return f"{repository}@{digest}"
+    return str(parsed.with_digest(digest))
 
 
 async def _wait_for_admission(

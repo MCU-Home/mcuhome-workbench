@@ -1654,10 +1654,10 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         artifacts=tuple(result.artifacts),
         out_dir=result.out,
         report=BUILD_REPORT_FILE,
-        # What actually built it, in the same canonical form a local
-        # container build records: the server chose the delivery and is
-        # the only side that can say which one, so a record without this
-        # would name the packages and not the bytes.
+        # What actually built it, in the same form a local container
+        # build records: the server chose the delivery and is the only
+        # side that can say which one, so a record without this would
+        # name the packages and not the bytes.
         image=result.image,
         detail=result,
     )
