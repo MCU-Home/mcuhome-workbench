@@ -17,8 +17,8 @@ The properties, in the order they matter:
 * a target name nobody implements is a refusal that lists the ones that
   exist, rather than a ``KeyError`` or a silent default;
 * ``remote`` refuses in words for the two things it cannot invent — the
-  build server's address (E53) and the SDK source its context is pinned
-  from (E65) — and for the missing transport extra, before any of them
+  build server's address and the SDK source its context is pinned
+  from — and for the missing transport extra, before any of them
   costs a connection.
 
 What ``remote`` *does* once it has both — resolve the pin, write the base
@@ -410,7 +410,7 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="ghcr.io/mcu-home/build-container:test",
+            image="registry.example.test/other/environment:test",
         )
 
     monkeypatch.setattr(buildmethods, "compose_local_build", fake)
@@ -420,7 +420,7 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
             out_dir=tmp_path,
             signing_pub="-----BEGIN PUBLIC KEY-----\n",
             sdk_sources=(tmp_path / "sdk",),
-            image="ghcr.io/mcu-home/build-container:test",
+            image="registry.example.test/other/environment:test",
         ),
         buildmethods.TARGET_LOCAL,
     )
@@ -430,7 +430,7 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
     assert outcome.artifacts == _artifacts()
     assert outcome.out_dir == tmp_path / "delivery"
     assert outcome.report == BUILD_REPORT_FILE
-    assert outcome.image == "ghcr.io/mcu-home/build-container:test"
+    assert outcome.image == "registry.example.test/other/environment:test"
     # The scratch area defaults under the build directory, and the public
     # key travelled — no private key is a field of the request at all.
     assert seen["work_root"] == tmp_path / ".mcuhome-local"
@@ -467,7 +467,7 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="ghcr.io/mcu-home/build-container:test",
+            image="registry.example.test/other/environment:test",
         )
 
     monkeypatch.setattr(buildmethods, "compose_local_build", fake)
@@ -516,7 +516,7 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
     assert outcome.artifacts == _artifacts()
     assert outcome.out_dir == tmp_path / "out"
     # The same report name as the local target: both are deliveries out of
-    # a build container, so one host-side signer reads either (E55, E56).
+    # a build container, so one host-side signer reads either.
     assert outcome.report == BUILD_REPORT_FILE
     assert seen["context_dir"] == context
     assert seen["url"] == "ws://build.example:8080/session"
@@ -530,7 +530,7 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
 
 
 def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> None:
-    """ADR 0023's ladder, as a refusal: a configured builder, or fully manual.
+    """The builder ladder, as a refusal: a configured builder, or fully manual.
 
     There is no default build server and no discovery — the context
     carries the device model, so where it is sent is a decision. The
@@ -556,7 +556,7 @@ def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> N
 
 
 def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> None:
-    """E65's other half: the pin is the client's, so its source must be too.
+    """The other half: the pin is the client's, so its source must be too.
 
     ``remote`` creates its own context now, and a context is
     content-addressed over the SDK package's hash — so the one thing this
@@ -652,7 +652,7 @@ def test_the_container_target_no_longer_asks_for_the_compiler(model, tmp_path, m
 
 
 def test_importing_the_dispatch_does_not_drag_in_the_compiler() -> None:
-    """ADR 0020 decision 3, as the property rather than as syntax.
+    """The compiler-optional edge, as the property rather than as syntax.
 
     ``test_packaging_workbench.py`` asserts no ``import mcuhome.compiler``
     appears in this package's syntax tree; that is the rule, and this is
@@ -680,7 +680,7 @@ def test_importing_the_dispatch_does_not_drag_in_the_compiler() -> None:
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "False", (
         "importing the build-method dispatch loaded mcuhome.compiler — the "
-        "edge is optional (ADR 0020 decision 3) and must stay resolved at "
+        "edge is optional and must stay resolved at "
         "call time"
     )
 
@@ -1229,6 +1229,129 @@ def test_a_subprocess_build_says_the_pin_has_no_effect_rather_than_refusing(
             on_line=said.append,
         )
     assert any(":0.1.10.dev2-r1" in line and "no effect" in line for line in said)
+
+
+def test_an_image_named_for_this_build_is_refused_without_a_container(model, tmp_path) -> None:
+    """``--container-image`` is a statement about *this* build, so it stops it.
+
+    The flag names an image for the build that is running now. Dropping
+    it would compile against something other than what was asked for, so
+    the two statements are put to the person instead of one of them being
+    honoured halfway.
+    """
+    with pytest.raises(ConfigError) as refused:
+        buildmethods.build_target_for(
+            buildmethods.TARGET_LOCAL,
+            buildmethods.BuildRequest(
+                model=model,
+                out_dir=tmp_path,
+                build_mode=buildmethods.MODE_SUBPROCESS,
+                image=":0.1.10.dev2-r1",
+            ),
+        )
+    assert ":0.1.10.dev2-r1" in str(refused.value)
+    assert "build.mode" in refused.value.hint
+
+
+def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
+    model, tmp_path, monkeypatch
+) -> None:
+    """A builder's ``image:`` describes the machine, not this build.
+
+    Refusing over it would refuse *every* build of a machine that is
+    configured to build without a container, which is a configuration
+    question and not a statement about the job in hand. So the target is
+    built, the image travels as something to say once, and the
+    composition says it.
+    """
+    target = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            build_mode=buildmethods.MODE_SUBPROCESS,
+            builder_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
+        ),
+    )
+    assert isinstance(target.execution, buildmethods.SubprocessExecution)
+    assert target.execution.stated_image == "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1"
+
+    said: list[str] = []
+
+    def stop(*args, **kwargs):
+        raise BuildError("stopped after the note", hint="nothing to fix")
+
+    monkeypatch.setattr(subprocessbuild, "environment_from_pins", stop)
+    make_package_source(tmp_path / "sdk")
+    with pytest.raises(BuildError, match="stopped after the note"):
+        buildmethods.compose_subprocess_build(
+            replace(model, sources=replace(model.sources, container_image=None)),
+            sdk_sources=(tmp_path / "sdk",),
+            work_root=tmp_path / "work",
+            env={},
+            signing_pub=_PUBLIC_PEM,
+            on_line=said.append,
+            stated_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
+        )
+    assert any("0.1.10.dev2-r1" in line and "no effect" in line for line in said)
+
+
+def test_the_note_names_the_more_specific_of_the_two_statements(
+    model, tmp_path, monkeypatch
+) -> None:
+    """A builder's image and a device pin can both be there; one is named.
+
+    The one named is the one that would have won had a container run —
+    otherwise the note would tell the person about an image the build
+    would not have used anyway.
+    """
+    said: list[str] = []
+
+    def stop(*args, **kwargs):
+        raise BuildError("stopped after the note", hint="nothing to fix")
+
+    monkeypatch.setattr(subprocessbuild, "environment_from_pins", stop)
+    make_package_source(tmp_path / "sdk")
+    pinned = replace(model, sources=replace(model.sources, container_image=":device-pin"))
+    with pytest.raises(BuildError, match="stopped after the note"):
+        buildmethods.compose_subprocess_build(
+            pinned,
+            sdk_sources=(tmp_path / "sdk",),
+            work_root=tmp_path / "work",
+            env={},
+            signing_pub=_PUBLIC_PEM,
+            on_line=said.append,
+            stated_image=":builder-image",
+        )
+    notes = [line for line in said if "no effect" in line]
+    assert notes and ":builder-image" in notes[0]
+    assert not any(":device-pin" in line for line in notes)
+
+
+def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model, tmp_path) -> None:
+    """Where a container does run, both statements are pins and the flag wins."""
+    from_builder = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
+        buildmethods.BuildRequest(model=model, out_dir=tmp_path, builder_image=":from-the-builder"),
+    )
+    assert from_builder.execution.image == ":from-the-builder"
+    from_flag = buildmethods.build_target_for(
+        buildmethods.TARGET_LOCAL,
+        buildmethods.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            builder_image=":from-the-builder",
+            image=":from-this-build",
+        ),
+    )
+    assert from_flag.execution.image == ":from-this-build"
+    remote = buildmethods.build_target_for(
+        buildmethods.TARGET_REMOTE,
+        buildmethods.BuildRequest(
+            model=model, out_dir=tmp_path, server="attic", builder_image=":from-the-builder"
+        ),
+    )
+    assert remote.image == ":from-the-builder"
 
 
 def test_a_development_build_refuses_the_pin_and_notes_nothing(model, tmp_path) -> None:

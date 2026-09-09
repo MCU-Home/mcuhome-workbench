@@ -580,8 +580,16 @@ class BuildRequest:
     #: ``None`` — the ordinary case — leaves the choice to the search,
     #: which accepts an image by the packages its labels declare. Naming
     #: one for a build that starts no container is refused rather than
-    #: half-honoured.
+    #: half-honoured — a statement about *this* build cannot be quietly
+    #: dropped.
     image: str | None = None
+    #: The build environment a *configured builder* names, in the same
+    #: four pin forms. It is a statement about the machine that builds,
+    #: not about this build, so a build that starts no container does not
+    #: refuse over it: the note says the pin has no effect here and the
+    #: build goes on. :attr:`image` beats it wherever a container does
+    #: run — the more explicit statement wins.
+    builder_image: str | None = None
 
     # -- local ---------------------------------------------------------
     #: What the ``build`` section of this machine's configuration says
@@ -632,7 +640,7 @@ class BuildRequest:
     #: ordinary case, the build creates its own from :attr:`model` and
     #: :attr:`sdk_sources`. Either way it is a *base* context: locking it
     #: is the act of whoever builds it, and a client that sent one checks
-    #: the identity the server answers with (E37).
+    #: the identity the server answers with.
     context_dir: Path | None = None
     #: Wait when the build server has no room. A busy server hands out a
     #: turn instead of a session, and waiting for it is what a person
@@ -815,21 +823,48 @@ def _refuse_developer_remotely(workspace: Path) -> ConfigError:
     )
 
 
-def _note_pin_without_container(model: DeviceModel, *, on_line: Any = None) -> None:
-    """Say once that a device's image pin does not apply to this build.
+def _note_image_without_container(
+    model: DeviceModel | None, stated_image: str | None = None, *, on_line: Any = None
+) -> None:
+    """Say once that an image named for this build does not apply to it.
 
-    A build without a container has no image to pin, and the pin is not
-    wrong — the same device builds in a container on the next machine.
-    So this is neither a refusal nor silence: the build log carries one
-    line, where the person watching the build is already looking.
+    Two statements can name one and neither is wrong: the device's
+    ``sources.container_image`` travels with the device and is about the
+    delivery it gets on a machine that builds in a container, and a
+    configured builder's ``image:`` is about that machine rather than
+    about this build. A build without a container has no image for
+    either of them to name. So this is neither a refusal nor silence:
+    the build log carries one line, where the person watching the build
+    is already looking.
+
+    Whichever is the more specific statement is the one named, because
+    it is also the one that would have won if a container had run.
+
+    *model* is ``None`` where the device's own pin must not be spoken
+    about — a development build is refused over it a moment later, and a
+    note saying it has no effect would say the opposite of what happens
+    next. A builder's image is still noted there, because nothing else
+    ever mentions it.
     """
-    stated = model.sources.container_image
+    stated = stated_image or (model.sources.container_image if model is not None else None)
     if not stated or on_line is None:
         return
     on_line(
-        f"Note: this device pins the container image {stated}, and this build runs "
-        f"without a container — the pin has no effect here."
+        f"Note: this build was given the container image {stated}, and it runs "
+        f"without a container — the image has no effect here."
     )
+
+
+def _stated_image(request: BuildRequest) -> str | None:
+    """The image named for this build, the more specific statement first.
+
+    ``--container-image`` is about this one invocation and a configured
+    builder's ``image:`` is about the machine, so the first beats the
+    second wherever a container actually runs. Neither is the device's
+    own pin: that one is read where the device is
+    (:func:`image_pin`), because it survives this invocation.
+    """
+    return request.image if request.image is not None else request.builder_image
 
 
 def image_pin(model: DeviceModel, override: str | None) -> str | None:
@@ -898,6 +933,11 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                         if request.dev_workspace is not None
                         else options.dev_workspace
                     ),
+                    # Not a refusal: a builder's image says what this
+                    # machine delivers, and a machine configured to build
+                    # without a container would otherwise refuse every
+                    # build it ever runs. The composition notes it.
+                    stated_image=request.builder_image,
                 )
             )
         developing = (
@@ -909,7 +949,9 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                 source="this build" if request.build_mode else options.mode_source,
             )
         return LocalBuild(
-            execution=ContainerExecution(image=request.image, ccache_dir=request.ccache_dir)
+            execution=ContainerExecution(
+                image=_stated_image(request), ccache_dir=request.ccache_dir
+            )
         )
     developing = (
         request.dev_workspace if request.dev_workspace is not None else options.dev_workspace
@@ -926,7 +968,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
         # build in an environment other than the one it was told to,
         # which is the one thing an image pin exists to prevent. What is
         # allowed there stays the server operator's decision.
-        image=image_pin(request.model, request.image),
+        image=image_pin(request.model, _stated_image(request)),
     )
 
 
@@ -1007,6 +1049,7 @@ def compose_local_build(
     build_mode: str = DEFAULT_BUILD_MODE,
     environment: Any = None,
     options: BuildOptions | None = None,
+    stated_image: str | None = None,
 ):
     """The local build, dispatched to the execution this machine uses.
 
@@ -1039,6 +1082,7 @@ def compose_local_build(
             on_step=on_step,
             registry=registry,
             options=options,
+            stated_image=stated_image,
         )
     return compose_container_build(
         model,
@@ -1237,6 +1281,7 @@ def compose_subprocess_build(
     on_step: Any = None,
     registry: Any = None,
     options: BuildOptions | None = None,
+    stated_image: str | None = None,
 ) -> subprocessbuild.SubprocessBuildResult:
     """The subprocess execution's composition: environment, lock, drive.
 
@@ -1275,16 +1320,24 @@ def compose_subprocess_build(
     accepts, the packages it consists of and the Zephyr release it builds
     against).
 
-    A device pinning ``sources.container_image`` is **not** refused here
-    and not honoured either: this build starts no container, so there is
-    no image for the pin to name — it is a statement about the delivery,
-    and the packages it would have delivered are what this build
-    provisions itself. The log says so once rather than leaving the
-    person to wonder (:func:`_note_pin_without_container`). A
-    *development* build is the one place the pin is refused, and the
-    context writer does it with the other ``sources`` entries: nothing
-    there is fetched at all — so the note is not printed there, because
-    the refusal that follows says the opposite of it.
+    An image named for this build is **not** refused here and not
+    honoured either: this build starts no container, so there is no
+    image for it to name. A device's ``sources.container_image`` is a
+    statement about the delivery the device gets on a machine that does
+    start one, and *stated_image* — a configured builder's ``image:`` —
+    is a statement about that machine; the packages either would have
+    delivered are what this build provisions itself. The log says so
+    once rather than leaving the person to wonder
+    (:func:`_note_image_without_container`). An image stated for *this
+    invocation* is the one that is refused, and it is refused before any
+    of this runs (:func:`_refuse_image_without_container`), because that
+    statement is about this build and cannot be dropped without changing
+    what was asked for.
+
+    A *development* build is the one place the device's pin is refused,
+    and the context writer does it with the other ``sources`` entries:
+    nothing there is fetched at all — so the note is not printed there,
+    because the refusal that follows says the opposite of it.
     """
     options = options if options is not None else BuildOptions()
     limits = options.limits()
@@ -1298,12 +1351,10 @@ def compose_subprocess_build(
         on_line=on_line,
     )
     developing = environment is not None and environment.developer
-    # After the development question is settled, and only for the answer
-    # that has an environment to speak of: a development build is refused
-    # over this pin a moment later, and a note saying it has no effect
-    # would be telling the person the opposite of what happens next.
-    if not developing:
-        _note_pin_without_container(model, on_line=on_line)
+    # After the development question is settled, because the answer
+    # decides whether the device's own pin may be spoken about at all: a
+    # development build is refused over that pin a moment later.
+    _note_image_without_container(None if developing else model, stated_image, on_line=on_line)
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
     if not supplied:
@@ -1451,6 +1502,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         build_mode=MODE_SUBPROCESS,
         environment=_developer_environment(execution),
         options=options_for(request),
+        stated_image=execution.stated_image,
     )
     outcome = result.outcome
     return BuildOutcome(

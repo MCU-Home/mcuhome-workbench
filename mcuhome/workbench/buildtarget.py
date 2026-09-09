@@ -50,7 +50,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mcuhome.model.buildimage import ENVIRONMENT_IMAGE_REPOSITORY
+from mcuhome.model.buildenvironment import ENVIRONMENT_IMAGE_REPOSITORY
 
 __all__ = [
     "BUILD_MODES",
@@ -183,6 +183,11 @@ class SubprocessExecution(Execution):
     #: environment. A build context that carries patches is refused in
     #: this form rather than applied to a workspace somebody else owns.
     dev_workspace: Path | None = None
+    #: An image somebody stated for this build although it starts none —
+    #: a configured builder's ``image:``, which is a statement about the
+    #: machine rather than about this build. Carried so the build can say
+    #: once that it has no effect here; nothing reads it as a pin.
+    stated_image: str | None = None
 
 
 @dataclass(frozen=True)
