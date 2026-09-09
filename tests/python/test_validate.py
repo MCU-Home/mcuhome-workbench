@@ -496,7 +496,7 @@ def test_every_problem_is_reported_at_once(write_config) -> None:
 
 
 def test_a_version_field_too_large_for_the_matter_mapping_is_refused(write_config) -> None:
-    """ADR 0015 decision 9 packs each field into one byte.
+    """The version-number mapping packs each field into one byte.
 
     Without this check 256.0.0 would silently become 0.0.0 on the wire —
     a device reporting a version it was not built as, to a controller that

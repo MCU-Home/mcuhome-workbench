@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# `mcuhome-workbench` — driving a build (ADR 0020 decision 1), at the
-# repository root since the ADR 0024 split: this repository is the
+# `mcuhome-workbench` — driving a build, at the
+# repository root since the repository split: this repository is the
 # workbench's home, the SDK (model, compiler, C runtime, west manifest)
 # lives in github.com/mcu-home/mcuhome-sdk.
 
@@ -34,7 +34,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Home Automation",
 ]
-# Cross-repository edges since ADR 0024: unpinned while nothing is
+# Cross-repository edges: unpinned while nothing is
 # published (development runs on editable checkouts); from v1.0 every
 # edge becomes `~=X.Y.0` — same major.minor family, newest patch wins.
 dependencies = [
@@ -62,7 +62,7 @@ dependencies = [
   # hand-rolled serializer would break projects, not just a build.
   "tomli-w>=1.0",
   # MCUboot's own signing tool. The workbench performs the one host-side
-  # signing step (ADR 0015 decision 8), so the tool is a declared
+  # signing step, so the tool is a declared
   # dependency rather than an environment accident (PO 2026-08-15).
   # Pinned to the release line of the MCUboot revision the SDK's west
   # manifest resolves to — bump the two as a pair, like CHIP and Zephyr.
@@ -74,7 +74,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The `remote` build method and nothing else (E18, ADR 0019): the
+# The `remote` build method and nothing else: the
 # session client needs an async HTTP stack. The zstd codec it also needs
 # is a core dependency now — the orchestrator unpacks SDK packages with
 # it on every path. Bound matches the build server's for the same library.
@@ -83,7 +83,7 @@ remote = ["aiohttp>=3.10,<4"]
 # on this machine, for the caller who wants the tree for its own sake
 # (`mcuhome device build --generate-only`). No build method needs it — a
 # build environment generates from the model its context carries — so it
-# is an optional edge resolved at call time (ADR 0020 decision 3), and an
+# is an optional edge resolved at call time, and an
 # install that never generates locally carries no part of stage 4.
 generate = ["mcuhome-compiler"]
 

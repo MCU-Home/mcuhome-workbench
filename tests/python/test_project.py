@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """The project directory: marker, bootstrap ladder, layout, init, hygiene.
 
-The successor of ``test_tree.py``: ADR 0022 replaced the config-tree
-discovery (``devices/`` or ``mcuhome.yaml`` as markers) with the one
+The successor of ``test_tree.py``: the project model replaced the
+config-tree discovery (``devices/`` or ``mcuhome.yaml`` as markers) with
+the one
 dedicated marker ``.mcuhome-project-root``, and this file pins the
 consequences — most importantly the *negative* ones: the two things
 that used to mark a root must not mark one any more, because that is
@@ -69,7 +70,7 @@ def test_the_marker_marks_a_project_root(tmp_path: Path) -> None:
 
 
 def test_a_devices_directory_alone_marks_nothing(tmp_path: Path) -> None:
-    """The old implicit marker is gone — deliberately (ADR 0022 §1)."""
+    """The old implicit marker is gone — deliberately."""
     (tmp_path / "devices" / "a").mkdir(parents=True)
     assert not is_project_root(tmp_path)
     assert find_project_root(tmp_path) is None
@@ -92,7 +93,7 @@ def test_discovery_stops_at_the_filesystem_root(tmp_path: Path) -> None:
     assert find_project_root(tmp_path) is None
 
 
-# --- the bootstrap ladder (ADR 0022 §2) -------------------------------
+# --- the bootstrap ladder ---------------------------------------------
 
 
 def test_no_project_anywhere_is_a_refusal_naming_the_ways_out(tmp_path: Path) -> None:
@@ -235,7 +236,7 @@ def test_missing_path_is_reported(tmp_path: Path) -> None:
     assert "No configuration found" in caught.value.message
 
 
-# --- mcuhome project init (ADR 0022 §1) ---------------------------------------
+# --- mcuhome project init -------------------------------------------------------
 
 
 def test_init_creates_the_durable_layout(tmp_path: Path) -> None:
@@ -308,7 +309,7 @@ def test_init_twice_with_force_changes_nothing_more(tmp_path: Path) -> None:
     assert result.created == ()
 
 
-# --- secrets hygiene (ADR 0022 §5) ------------------------------------
+# --- secrets hygiene ---------------------------------------------------
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")

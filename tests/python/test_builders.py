@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Named builders (ADR 0023): parsing, merge-by-name, selection, credentials."""
+"""Named builders: parsing, merge-by-name, selection, credentials."""
 
 from __future__ import annotations
 
@@ -136,7 +136,7 @@ def test_builders_cannot_come_from_the_environment(project: Project) -> None:
     assert settings.value("builders") == ()
 
 
-# --- merge by name (ADR 0023 §3) --------------------------------------
+# --- merge by name ------------------------------------------------------
 
 
 def test_layers_merge_by_name_nearer_wins_whole(tmp_path: Path, project: Project) -> None:
@@ -180,7 +180,7 @@ def test_config_print_shows_each_builders_layer(tmp_path: Path, project: Project
     assert printed["attic"]["server"] == "10.0.0.5:8291"
 
 
-# --- selection (ADR 0023 §2) ------------------------------------------
+# --- selection ------------------------------------------------------------
 
 
 def test_no_builder_and_no_default_falls_back_to_local(project: Project) -> None:
@@ -249,7 +249,7 @@ def test_an_unknown_default_says_it_was_the_default(project: Project) -> None:
     assert "none are defined" in (caught.value.hint or "")
 
 
-# --- credentials (ADR 0023 §4) ----------------------------------------
+# --- credentials ----------------------------------------------------------
 
 
 def test_the_token_comes_from_the_projects_secrets(project: Project) -> None:
@@ -302,7 +302,7 @@ def test_a_non_string_token_is_refused_with_the_quoting_hint(project: Project) -
 def test_the_token_may_reference_its_own_file(project: Project) -> None:
     """`token: !file <name>` — the generic mechanism, free of extra code.
 
-    The referenced file follows the old token-file rule (E63): a
+    The referenced file follows the old token-file rule: a
     trailing newline is an editor's habit and ignored, the content is
     the token.
     """

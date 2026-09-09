@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The firmware signing key: where it lives, what it is, how refusals read.
 
-ADR 0015 decision 8 as implemented after the ADR 0022 project model:
+The signing-key invariant as implemented after the project model:
 the key is **per project** — its own file,
 ``secrets/firmware/mcuboot.pem``, referenced from ``mcuboot.yaml``
 under ``firmware_signing_key`` with the loader's ``!file`` tag —

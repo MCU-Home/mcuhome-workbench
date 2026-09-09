@@ -13,8 +13,8 @@ Plus, at the bottom, this repository's half of that file's whole-package
 invariant, created from the recipe it left behind: the seven Kconfig
 symbols that carry a device's commissioning identity are emitted by one
 function, and the search that proves no second spelling exists runs over
-``conftest.PACKAGES`` — which names the workbench alone since ADR 0024,
-so the claim has to be made once on each side of the split.
+``conftest.PACKAGES`` — which names the workbench alone since the
+repository split, so the claim has to be made once on each side of it.
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def test_the_values_stay_out_of_the_committable_file(write_config) -> None:
     assert f"matter_passcode: {FIXED.passcode}" in secrets_text
     assert f'matter_salt: "{FIXED.salt}"' in secrets_text
     assert (result.secrets_file.stat().st_mode & 0o777) == 0o600
-    # The directories the command created are owner-only too (ADR 0022 §5).
+    # The directories the command created are owner-only too.
     assert (result.secrets_file.parent.stat().st_mode & 0o777) == 0o700
     assert (result.secrets_file.parent.parent.stat().st_mode & 0o777) == 0o700
 

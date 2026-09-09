@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The project directory (ADR 0022).
+"""The project directory.
 
 A user's work lives in a **project directory**: the folder that carries
 the **project marker** ``.mcuhome-project-root``. The marker is a
@@ -28,8 +28,8 @@ The layout inside a project::
     secrets/                  # ALL secrets, no exceptions (mode 700)
       main.yaml               #   project-wide secrets (`!secret`)
       devices/<name>.yaml     #   per-device secrets (future)
-      build-server/<name>.yaml #  per-builder credentials (ADR 0023)
-      firmware/mcuboot.yaml   #   the MCUboot signing key (ADR 0015 §8)
+      build-server/<name>.yaml #  per-builder credentials
+      firmware/mcuboot.yaml   #   the MCUboot signing key
     build/                    # build output (disposable)
     .gitignore                # keeps secrets/ and build/ out of git
 
@@ -40,19 +40,19 @@ project layer even is: an explicit ``--project-dir`` argument and, as
 its fallback, the ``MCUHOME_PROJECT_DIR`` environment variable. Both
 disable the search, and both are an error when the named directory
 carries no marker — a directory that never asked to be a project must
-never be treated as one. They stand outside the five-layer merge of
-ADR 0022 §2 and can never themselves be set from a configuration file.
+never be treated as one. They stand outside the five-layer configuration
+merge and can never themselves be set from a configuration file.
 
-**Why the working directory and the environment are arguments.** ADR
-0020 makes this library one process serving several sessions, each with
+**Why the working directory and the environment are arguments.** This
+library is one process serving several sessions, each with
 its own environment (:mod:`mcuhome.model.userpaths`): "where the caller
 stands" is the caller's to state, and a server handling two requests
 from two projects stands in neither.
 
 This module also owns the two duties that come with the layout:
 ``mcuhome project init`` (:func:`init_project` — the durable part of the layout,
-created once, refusing a non-empty directory) and the secrets hygiene of
-ADR 0022 §5 (:func:`check_secret_file` — ``secrets/`` is created mode
+created once, refusing a non-empty directory) and the secrets hygiene
+(:func:`check_secret_file` — ``secrets/`` is created mode
 700 and its files 600; every reader checks, insecure permissions draw a
 warning, and for key material the tools refuse).
 """
@@ -105,7 +105,7 @@ __all__ = [
 #: project without one simply has an empty project layer.
 PROJECT_CONFIG_FILE = "mcuhome.yaml"
 
-#: The environment fallback of ``--project-dir`` (ADR 0022 §2). A
+#: The environment fallback of ``--project-dir``. A
 #: bootstrap exception: read before any configuration layer, never
 #: settable from one.
 PROJECT_DIR_VAR = "MCUHOME_PROJECT_DIR"
@@ -114,13 +114,13 @@ PROJECT_DIR_VAR = "MCUHOME_PROJECT_DIR"
 DEVICES_DIR = "devices"
 #: Entry point inside a device folder.
 DEVICE_ENTRY = "main.yaml"
-#: ALL secrets live under this directory, no exceptions (ADR 0022 §5).
+#: ALL secrets live under this directory, no exceptions.
 SECRETS_DIR = "secrets"
 #: Project-wide secrets inside ``secrets/`` — what ``!secret`` reads.
 MAIN_SECRETS_FILE = "main.yaml"
 
 #: What ``mcuhome project init`` keeps out of git. ``secrets/`` is the point of
-#: the file (ADR 0022 §5); ``build/`` is disposable output that would
+#: the file; ``build/`` is disposable output that would
 #: otherwise be the first accidental commit of every new project.
 GITIGNORE_LINES = ("secrets/", "build/")
 
@@ -167,11 +167,11 @@ class Project:
 
     @property
     def firmware_secrets_file(self) -> Path:
-        """``secrets/firmware/mcuboot.yaml`` — the signing key's home (ADR 0015 §8)."""
+        """``secrets/firmware/mcuboot.yaml`` — the signing key's home."""
         return self.secrets_dir / "firmware" / "mcuboot.yaml"
 
     def builder_secrets_file(self, name: str) -> Path:
-        """``secrets/build-server/<name>.yaml`` — one builder's credentials (ADR 0023 §4)."""
+        """``secrets/build-server/<name>.yaml`` — one builder's credentials."""
         return self.secrets_dir / "build-server" / f"{name}.yaml"
 
     def device_secrets_file(self, name: str) -> Path:
@@ -250,7 +250,7 @@ def resolve_project(
     cwd: Path,
     require_version: bool = True,
 ) -> Project:
-    """Resolve the project directory: the bootstrap ladder of ADR 0022 §2.
+    """Resolve the project directory: the bootstrap ladder.
 
     ``--project-dir`` (*explicit*) first, ``MCUHOME_PROJECT_DIR`` as its
     fallback; either disables the search and is an error when the named
@@ -383,7 +383,7 @@ def resolve_device(
 
 
 # --------------------------------------------------------------------------
-# Secrets hygiene (ADR 0022 §5)
+# Secrets hygiene
 # --------------------------------------------------------------------------
 
 #: Permission bits a secrets file must not carry: anything that lets the
@@ -477,7 +477,7 @@ class InitResult:
 
 
 def init_project(target: Path, *, force: bool = False) -> InitResult:
-    """Create the durable part of a project in *target* (ADR 0022 §1).
+    """Create the durable part of a project in *target*.
 
     The marker, ``mcuhome.yaml``, ``devices/``, ``secrets/`` (mode 700),
     the trust anchors of the package registries this workbench ships one

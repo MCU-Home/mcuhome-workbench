@@ -1,7 +1,7 @@
 # tests/python/
 
 Python tests for `mcuhome.workbench` — the one package this repository
-publishes (ADR 0024) — run with pytest:
+publishes — run with pytest:
 
 ```sh
 # from the repository root, with the SDK siblings cloned next to it:
@@ -34,7 +34,7 @@ so a bare `pytest` from the repo root does the right thing.
 |---|---|
 | `test_project.py` | the project marker and its bootstrap ladder, layout, `mcuhome project init`, secrets hygiene, device resolution (name, folder, bare file) |
 | `test_configuration.py` | the five-layer option model: precedence, origins, per-option channels, `config print` data |
-| `test_builders.py` | named builders (ADR 0023): parsing, merge-by-name, selection, credentials |
+| `test_builders.py` | named builders: parsing, merge-by-name, selection, credentials |
 | `test_loader.py` | YAML parsing, `!secret` and `!file` resolution, including their error messages |
 | `test_schema.py` | shape errors: unknown keys, wrong types, malformed durations |
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
@@ -48,9 +48,9 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_buildprocess.py` | starting a program, streaming its log, and the liveness ladder over it |
 | `test_resolve_pins.py` | SDK pin resolution: index, directory, refusals |
 | `test_sessionclient.py` | the session protocol end to end against a live build server |
-| `test_signing.py` | the per-project signing key: where it is, what it is, how the refusals read (ADR 0015 §8) |
+| `test_signing.py` | the per-project signing key: where it is, what it is, how the refusals read |
 | `test_imgtool.py` | detached signing over the build report, whose shape the build actions document defines |
-| `test_context_workbench.py` | context creation/locking, the frozen context-ID rule (ADR 0018 §6) |
+| `test_context_workbench.py` | context creation/locking, the frozen context-ID rule |
 | `test_export_workbench.py` | registry data and the `main.yaml` JSON schema as data |
 | `test_ota_workbench.py` | the Matter OTA image wrap around a freshly signed image |
 | `test_pairing_workbench.py` | `matter-pairing` plus the identity-symbol invariant (no workbench module spells `CONFIG_CHIP_DEVICE_SPAKE2_*`) |

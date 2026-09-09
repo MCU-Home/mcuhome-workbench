@@ -10,7 +10,7 @@ and stays there; what it forbids is bigger than one module and has to be
 asserted once per repository, because the search runs over
 ``conftest.PACKAGES`` and the two lists no longer overlap.
 
-ADR 0020 turns this library into one process serving several sessions,
+This library is one process serving several sessions,
 and a call-time read of ``os.environ``, ``Path.home()`` or ``Path.cwd()``
 is what makes two sessions in one process answer each other's questions.
 The workbench is where that is most tempting: it is the half that runs in
@@ -104,7 +104,7 @@ def _process_reads(source: str) -> list[str]:
 
 
 def test_no_workbench_module_reads_process_state() -> None:
-    """One process, several sessions, one environment each (ADR 0020).
+    """One process, several sessions, one environment each.
 
     ``signing.py`` is asserted to be among the modules examined because
     it is the module that used to hold exactly this read — it resolved

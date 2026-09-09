@@ -3,8 +3,8 @@
 """The supported programmatic surface of the MCUHome builder.
 
 **This module is the API. Everything else is an implementation detail.**
-Names exported here are covered by the project's SemVer promise (ADR
-0005): they do not change shape within a major version, and a breaking
+Names exported here are covered by the project's SemVer promise: they
+do not change shape within a major version, and a breaking
 change to one of them is a breaking change to the builder. Names anywhere
 else in the package may move between releases without notice, and a
 caller that imports them is on its own. The ``mcuhome`` command line is
@@ -13,8 +13,8 @@ such a caller too: it lives in its own repository
 version-locked to the builder rather than the other way around.
 
 The intended consumer is a program that embeds the builder rather than
-running it: the MCUHome dashboard imports it in-process (dashboard ADR
-0011 decision 1) so that a configuration error arrives in an editor's
+running it: the MCUHome dashboard imports it in-process so that a
+configuration error arrives in an editor's
 gutter as a marker with a fix hint rather than in a log pane as a line of
 text. The dependency has exactly one direction — the dashboard declares
 the builder versions it supports and follows the builder's releases; the
@@ -24,7 +24,7 @@ What is here, in the order a caller needs it:
 
 ``resolve_project`` / ``init_project`` / ``find_device``
     Where the user's work lives (the ``.mcuhome-project-root`` marker
-    and its bootstrap ladder, ADR 0022), how a project comes into
+    and its bootstrap ladder), how a project comes into
     being, and which file is a given device's. Resolution also enforces
     the project's **layout version**: a project older than
     ``PROJECT_VERSION`` is refused with ``ProjectUpgradeRequired``, a
@@ -45,7 +45,7 @@ What is here, in the order a caller needs it:
     The five-layer configuration model over the declared option
     registry (``OPTIONS``), each value with the layer it came from.
 ``resolve_builder``
-    Which builder this invocation uses (ADR 0023): an explicit name,
+    Which builder this invocation uses: an explicit name,
     the configured ``default_builder``, or the built-in ``local``
     fallback — credentials from ``secrets/build-server/<name>.yaml``
     included.
@@ -68,8 +68,8 @@ What is here, in the order a caller needs it:
 ``read_model``
     A canonical model back from JSON — the other end of the wire. A build
     server receives one of these and starts at stage 4; it never sees
-    the project directory and never sees a secrets file (dashboard ADR
-    0007 decision 4). ``mcuhome device build --model <file>`` is the same thing
+    the project directory and never sees a secrets file.
+    ``mcuhome device build --model <file>`` is the same thing
     as a command.
 ``validate_device``
     The same three stages, returning **every** problem as typed errors
@@ -147,11 +147,11 @@ What is here, in the order a caller needs it:
 
 Synchrony is a property of each operation here, not of the whole
 supported surface. Stages 1-3 are synchronous and CPU-bound (YAML
-parsing, mostly), and ADR 0020 decision 5 keeps them that way on purpose:
+parsing, mostly), and this is deliberate:
 making 40 ms of pure computation awaitable buys nothing against a build
 that blocks for minutes, and a synchronous core is what keeps synchronous
 embedding possible at all (an ``asyncio.run`` facade over an async core
-raises inside a caller that already has a loop). What that decision makes
+raises inside a caller that already has a loop). What is made
 awaitable is the *waiting* — :func:`run_build`, which drives a
 subprocess, a container or a socket. So a caller with an event loop
 awaits the build directly and offloads one of the synchronous operations
@@ -405,7 +405,7 @@ __all__ = [
 
 #: The workbench's own version, for a consumer that declares a supported
 #: range — deliberately not the model's, which versions with the SDK
-#: repository (ADR 0024).
+#: repository.
 VERSION = __version__
 
 
@@ -421,7 +421,7 @@ def find_device(
     The same resolution the CLI's ``<device>`` argument gets: a folder
     name under the project's ``devices/``, or an explicit path to a
     device folder or a YAML file. The project itself comes from the
-    bootstrap ladder of ADR 0022 §2 — *project_dir* first,
+    bootstrap ladder — *project_dir* first,
     ``MCUHOME_PROJECT_DIR`` in *env* second, the upward marker search
     from *cwd* last.
     """
@@ -442,7 +442,7 @@ def load_model(
     single problem and :class:`ConfigErrorGroup` when validation found
     several; :func:`validate_device` is the same work without the raise.
     *on_warning* receives the non-fatal findings of the run — today the
-    secrets-file permission warning of ADR 0022 §5.
+    secrets-file permission warning.
     """
     data = load_config(entry, secrets_file=project.secrets_file, on_warning=on_warning)
     config = parse_config(data, file=entry)

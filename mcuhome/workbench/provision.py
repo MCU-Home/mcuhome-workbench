@@ -366,7 +366,7 @@ def _write_secrets(
     text.lines += [f"{name}: {value}" for name, value in values.items()]
     if created:
         # A fresh secrets file starts owner-only, and so does any missing
-        # directory on the way to it (ADR 0022 §5) — exactly the missing
+        # directory on the way to it — exactly the missing
         # ones (secrets/devices/ typically): an existing directory's
         # permissions are the user's. Rewriting an existing file goes
         # through its inode and keeps whatever the user set.

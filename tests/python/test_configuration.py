@@ -339,7 +339,7 @@ def test_a_stated_system_directory_is_the_layer_that_is_read(
     assert resolve_settings(project=project, env=empty).origin("build.sdk_max_bytes") == "default"
 
 
-# --- writing configuration (config set/unset, ADR 0022 §3) ------------
+# --- writing configuration (config set/unset) --------------------------
 
 
 def test_set_writes_a_value_the_next_resolve_reads_back(project: Project) -> None:

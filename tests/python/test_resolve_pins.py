@@ -151,7 +151,7 @@ def test_an_index_without_the_package_is_refused() -> None:
 
 
 # --------------------------------------------------------------------------
-# What a context document records about the pin (E65)
+# What a context document records about the pin
 # --------------------------------------------------------------------------
 #
 # `resolve_sdk` answers more than the three values a pin is, because
@@ -193,7 +193,7 @@ def test_an_unstated_constraint_is_recorded_verbatim_and_empty(tmp_path) -> None
 
 
 def test_a_stated_constraint_is_recorded_verbatim(tmp_path) -> None:
-    """Intent and resolution stay two things wherever there are two (ADR 0018)."""
+    """Intent and resolution stay two things wherever there are two."""
     _sdk_source(tmp_path / "src", versions={"2.3.6": "a" * 64, "2.4.0": "b" * 64})
     found = resolve_sdk((tmp_path / "src",), constraint="~=2.3")
     assert found.intent == "~=2.3"

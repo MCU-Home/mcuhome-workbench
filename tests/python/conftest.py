@@ -4,8 +4,9 @@
 
 Everything here is the tools repository's half of what used to be one
 suite. :mod:`mcuhome.model` and :mod:`mcuhome.compiler` moved to
-``mcuhome-sdk`` with ADR 0024 and are *installed dependencies* now, not
-sources in this tree — so they are imported freely and never searched.
+``mcuhome-sdk`` with the repository split and are *installed
+dependencies* now, not sources in this tree — so they are imported
+freely and never searched.
 Every whole-package invariant runs over :data:`PACKAGES`, which names
 :mod:`mcuhome.workbench` and nothing else.
 
@@ -24,7 +25,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from mcuhome.model import buildimage
+from mcuhome.model import buildenvironment
 from mcuhome.model.errors import ConfigError, ConfigErrorGroup
 from mcuhome.model.model import DeviceModel
 
@@ -38,7 +39,7 @@ DATA_DIR = TESTS_DIR / "data"
 EXAMPLES_DIR = DATA_DIR / "examples"
 GOLDEN_DIR = DATA_DIR / "golden"
 
-#: The import package the distributions of ADR 0020 share, and the
+#: The import package the three distributions share, and the
 #: directory it is assembled from in this checkout. It is a PEP 420
 #: namespace package, which is why the directory is named here at all:
 #: the import system cannot enumerate one. ``find_spec("mcuhome")``
@@ -49,10 +50,10 @@ NAMESPACE = "mcuhome"
 NAMESPACE_DIR = REPO_ROOT / NAMESPACE
 
 #: The packages the whole-package invariant searches must cover — the one
-#: distribution of ADR 0020 decision 1 this repository ships, by import
+#: distribution this repository ships, by import
 #: name. ``mcuhome.model`` and ``mcuhome.compiler`` are the SDK
-#: repository's since ADR 0024 and are covered by the same searches
-#: there; a copy of either appearing in this tree would be the defect,
+#: repository's since the repository split and are covered by the same
+#: searches there; a copy of either appearing in this tree would be the defect,
 #: which is what the enumeration in :func:`package_modules` catches.
 PACKAGES = ("mcuhome.workbench",)
 
@@ -62,7 +63,7 @@ def package_modules() -> list[Path]:
 
     Derived from the importable packages rather than from one module's
     directory. A directory glob reads "every module there is" only while
-    there is one package; after the ADR 0020 split it would keep passing
+    there is one package; after the split into three it would keep passing
     while quietly examining fewer files, which is worse than not
     searching at all. Callers assert that a module they know must be
     examined came back, so the day this list falls behind is the day a
@@ -81,7 +82,7 @@ def package_modules() -> list[Path]:
       imported *from this checkout*. The second half matters as much as
       the first: against a non-editable install the searches would read
       copies in ``site-packages`` while the tests exercise the tree. Since
-      ADR 0024 it does a third job — a leftover ``mcuhome/model/`` or
+      the repository split it does a third job — a leftover ``mcuhome/model/`` or
       ``mcuhome/compiler/`` directory here is not inert: it is an earlier
       portion of the same namespace and shadows the SDK's real package,
       so the enumeration failing is the only warning anybody gets.
@@ -128,8 +129,8 @@ def package_modules() -> list[Path]:
 def _no_real_signing_key(monkeypatch, tmp_path):
     """No test may touch the developer's own firmware signing key.
 
-    The key lives per project since ADR 0022 (``secrets/firmware/
-    mcuboot.yaml``, ADR 0015 decision 8), but ``MCUHOME_SIGNING_KEY``
+    The key lives per project (``secrets/firmware/
+    mcuboot.yaml``), but ``MCUHOME_SIGNING_KEY``
     still names a real, long-lived private key file wherever the
     developer set it. A test that reaches one would either read a
     secret it has no business reading or — worse — create one silently
@@ -220,7 +221,7 @@ def _no_docker(monkeypatch):
 #: one the fixture tree's model resolves against.
 ENVIRONMENT_DIGEST = "sha256:" + "ab" * 32
 ENVIRONMENT_TAG = "0.1.0-r1"
-ENVIRONMENT_REPOSITORY = buildimage.ENVIRONMENT_IMAGE_REPOSITORY
+ENVIRONMENT_REPOSITORY = buildenvironment.ENVIRONMENT_IMAGE_REPOSITORY
 ENVIRONMENT_PIN = f"{ENVIRONMENT_REPOSITORY}:{ENVIRONMENT_TAG}@{ENVIRONMENT_DIGEST}"
 
 # --------------------------------------------------------------------------
@@ -368,15 +369,15 @@ def environment_labels(
     the same package under other bytes.
     """
     labels = {
-        f"{buildimage.LABEL_PREFIX}.spec-generation": generation,
-        f"{buildimage.LABEL_PREFIX}.zephyr.version": zephyr,
-        f"{buildimage.LABEL_PREFIX}.build-context.generator-constraint": constraint,
-        f"{buildimage.LABEL_PREFIX}.packages.{WORKSPACE_PACKAGE}": (
+        f"{buildenvironment.LABEL_PREFIX}spec-generation": generation,
+        f"{buildenvironment.LABEL_PREFIX}zephyr.version": zephyr,
+        f"{buildenvironment.LABEL_PREFIX}build-context.generator-constraint": constraint,
+        f"{buildenvironment.LABEL_PREFIX}packages.{WORKSPACE_PACKAGE}": (
             workspace
             if workspace is not None
             else f"{ENVIRONMENT_VERSION}@sha256:{_package_hash(WORKSPACE_PACKAGE)}"
         ),
-        f"{buildimage.LABEL_PREFIX}.packages.{TOOLS_PACKAGE}": (
+        f"{buildenvironment.LABEL_PREFIX}packages.{TOOLS_PACKAGE}": (
             tools
             if tools is not None
             else f"{ENVIRONMENT_VERSION}@sha256:{_package_hash(TOOLS_PACKAGE)}"
@@ -464,8 +465,8 @@ def _no_registry(monkeypatch):
 
 # --- resolving a configuration (stages 1-3) --------------------------
 #
-# The cut of ADR 0024 ran through this file and everything from here down
-# is what stayed: resolving a configuration is stages 1-3, which is
+# The repository split ran through this file and everything from here
+# down is what stayed: resolving a configuration is stages 1-3, which is
 # `mcuhome.workbench`. The half that travelled took the context writer
 # and the golden-model reader with it; what those two repositories still
 # share is `data/golden/00-bmp180-two-endpoints.device-model.json` —

@@ -7,7 +7,7 @@
 # builder's regression fixture in the strongest possible sense: its
 # resolved model AND the files stage 4 generates from it are golden, and
 # samples/matter-node/src/mcuhome_config.{c,h} IS that generator output,
-# compared byte for byte by the test suite (ADR 0014). Editing this file
+# compared byte for byte by the test suite. Editing this file
 # therefore changes the sample — regenerate it in the same commit.
 #
 # nRF7002-DK (nRF5340 application core), one Bosch BMP180 on the Arduino

@@ -93,7 +93,7 @@ __all__ = [
     "upgrade_session",
 ]
 
-#: Where builds put their directories, one per device (ADR 0022 §1).
+#: Where builds put their directories, one per device.
 BUILD_DIR = "build"
 
 

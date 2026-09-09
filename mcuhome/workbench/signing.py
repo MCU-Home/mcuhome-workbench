@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The firmware signing key (ADR 0015 decision 8).
+"""The firmware signing key.
 
 Every MCUHome image is signed, and **each MCUHome user is their own
 firmware vendor**: the builder draws one ECDSA P-256 key pair on first
@@ -17,16 +17,15 @@ user under ``$XDG_CONFIG_HOME``): the key material is its own file,
 ``secrets/firmware/mcuboot.yaml`` references it under
 ``firmware_signing_key`` with the loader's ``!file`` tag — never as an
 inline PEM block (PO 2026-08-14; the inline form is refused with the
-migration in the hint). ADR 0022 §5's rules apply to **both** files:
+migration in the hint). The secrets-hygiene rules apply to **both** files:
 directories 700, files 600, and key material other users can read is
 refused, not warned about. All devices of a project share the key; a
 user who wants one vendor key across projects copies the pair.
 ``--signing-key`` and :data:`KEY_VAR` point somewhere else, at a plain
 PEM file — that is the dashboard's path, which keeps the key in its own
 state directory (in a Home Assistant add-on,
-``/config/mcuhome/signing.key``, dashboard ADR 0008). The rule the ADR
-fixes is *where the user's controlling instance runs, never on a build
-server*.
+``/config/mcuhome/signing.key``). The rule that fixes is *where the
+user's controlling instance runs, never on a build server*.
 
 Either way the resolved key **is a file** (:attr:`SigningKey.path` —
 the referenced ``mcuboot.pem``, or the override's PEM), so ``imgtool``'s
@@ -38,12 +37,13 @@ detached post-build step: ``imgtool`` runs over the finished binary, so a
 build and a signature do not have to happen on the same machine. This
 module therefore owns the key and nothing else — no build directory, no
 device model, no Zephyr. A remote builder that returns an *unsigned*
-image (ADR 0015 decision 8) needs exactly this module plus imgtool, and
+image needs exactly this module plus imgtool, and
 nothing else that is in this package.
 
 **Rotation is a bootstrap, not an update.** MCUboot verifies against a
 public key compiled into the bootloader, so replacing the key means
-running the ADR 0016 bootstrap again, with the board in hand. That is an
+running the device's onboarding bootstrap again, with the board in
+hand. That is an
 argument for generating the key well once, which is what happens here,
 rather than for rotating it often.
 
@@ -88,7 +88,7 @@ __all__ = [
 ]
 
 #: The YAML key in the project's ``secrets/firmware/mcuboot.yaml`` that
-#: references the private key file (ADR 0015 decision 8).
+#: references the private key file.
 FIRMWARE_KEY = "firmware_signing_key"
 
 #: File name of the project's private key, next to the YAML that
@@ -98,7 +98,7 @@ PRIVATE_KEY_FILE = "mcuboot.pem"
 #: Conventional file name of the *public* half — the only part of the key
 #: pair that ever leaves the machine it was generated on. A build server
 #: needs it (MCUboot verifies against a public key compiled into the
-#: bootloader) and must never see the other half (ADR 0015 decision 8),
+#: bootloader) and must never see the other half,
 #: which is what ``mcuhome device build --no-sign --public-key`` is for.
 PUBLIC_KEY_FILE = "signing.pub"
 
@@ -277,7 +277,7 @@ def _pem_der(text: str, labels: tuple[str, ...]) -> bytes | None:
 def public_key_pem(private_pem: str) -> str:
     """The public half of a P-256 private key, as SubjectPublicKeyInfo PEM.
 
-    The file a build server is given (ADR 0015 decision 8): MCUboot
+    The file a build server is given: MCUboot
     compiles the public key into the bootloader, and a builder that never
     signs never needs the private half. Byte-for-byte the format
     ``imgtool getpub -k <key> --output <file>`` writes in PEM mode, and
@@ -429,8 +429,8 @@ def signing_key(
 
     Resolution order: *override* (``--signing-key``), then
     :data:`KEY_VAR` — both name a plain PEM file — then the *project*'s
-    ``secrets/firmware/mcuboot.yaml`` under :data:`FIRMWARE_KEY`
-    (ADR 0015 decision 8). With no override and no project there is
+    ``secrets/firmware/mcuboot.yaml`` under :data:`FIRMWARE_KEY`.
+    With no override and no project there is
     nothing to resolve against, and that is a refusal in words rather
     than a guess at a directory.
 
@@ -482,8 +482,8 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
     """The project's key: ``mcuboot.pem``, referenced from ``mcuboot.yaml``.
 
     The YAML holds a ``!file`` reference and nothing key-shaped; the
-    material lives in its own file (ADR 0015 §8, PO 2026-08-14). Both
-    are under the key-material rule of ADR 0022 §5 — insecure
+    material lives in its own file (PO 2026-08-14). Both
+    are under the key-material rule — insecure
     permissions are a refusal, never a warning, checked before the
     first byte is used. An inline PEM block is refused with the
     migration in the hint: the two-file shape is the only one.

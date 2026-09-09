@@ -13,7 +13,7 @@ and there is no build to stand in for.
 
 **There is no hand-rolled server left.** One existed for a single shape
 the real one could not be bent into — a ``capabilities`` payload that
-*announces* ingress caps — and E57 made the real server announce them out
+*announces* ingress caps — and the real server now announces them out
 of its own configuration, so the caps are now tested where every other
 verb is: against the peer that has to get them right. The one number that
 is not configurable, the endpoint's maximum WebSocket frame, is lowered
@@ -46,7 +46,7 @@ from typing import Any
 
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
-from mcuhome.model import buildenvironment, buildimage
+from mcuhome.model import buildenvironment
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import (
     BUILD_CONTEXT_FILE,
@@ -132,7 +132,7 @@ TOOLS_SHA256 = "b9" * 32
 #: publishes it: MCUHome's own repository, one tag, one digest. The tag
 #: is a location and the digest is the identity — what a build runs and
 #: what a verdict records is the digest.
-IMAGE = buildimage.ENVIRONMENT_IMAGE_REPOSITORY
+IMAGE = buildenvironment.ENVIRONMENT_IMAGE_REPOSITORY
 IMAGE_TAG = f"{ENVIRONMENT_VERSION}-r1"
 IMAGE_DIGEST = "sha256:" + "b" * 64
 IMAGE_REFERENCE = f"{IMAGE}:{IMAGE_TAG}@{IMAGE_DIGEST}"
@@ -602,15 +602,15 @@ def archive_members(spool: Path) -> list[str]:
 def write_sdk_package(directory: Path, *, declared_sha256: str | None = None) -> str:
     """Put one SDK package where the server's source list will find it.
 
-    And its static ``index.json`` beside it, because since E65 one
+    And its static ``index.json`` beside it, because one
     directory serves both parties of the pin: the **client** resolves
     ``(version, sha256)`` out of the index before a context can exist,
     and the **server** finds the archive by the version in its name and
-    checks the bytes against the hash. That is the local-source shape E48
-    configures, with the two readers it actually has.
+    checks the bytes against the hash. That is the local-source shape
+    with the two readers it actually has.
 
     *declared_sha256* overrides what the index declares, which is the one
-    way to arrange the case E65 exists for: a context pinning bytes the
+    way to arrange the case of a context pinning bytes the
     server's source does not hold. The **real** hash is returned either
     way — a caller writing a context by hand pins that one.
 
@@ -937,7 +937,7 @@ def test_capabilities_is_the_handshake_and_carries_no_session(tmp_path: Path) ->
         assert [entry["digest"] for entry in answer.containers] == [IMAGE_DIGEST]
         # Deny by default: the server was configured with no layers.
         assert answer.allows_patch_layer("zephyr") is False
-        # E57: the caps are announced, and this server's are its own
+        # The caps are announced, and this server's are its own
         # configuration. Nothing here is a default of the client's.
         assert answer.ingress() == sc.IngressCaps(
             compressed_bytes=harness.config.max_compressed_bytes,
@@ -994,7 +994,7 @@ def test_the_full_session_runs_end_to_end_against_the_real_server(tmp_path: Path
 
         assert set(delivery.files) == {"firmware.hex", "firmware.bin", "build-report.json"}
         # The build delivers an UNSIGNED image plus the parameters a host
-        # signer needs (E55/E56) — the signature is never part of what
+        # signer needs — the signature is never part of what
         # comes back over this wire. Asserted on what the *server*
         # decided rather than on the fixture's own constant: the roles it
         # required of a successful build (exactly one report, at least
@@ -1082,7 +1082,7 @@ def test_a_container_image_pin_naming_a_denied_repository_is_refused_typed(
 
 
 def test_a_second_base_context_is_refused_typed(tmp_path: Path) -> None:
-    """E43: one base context per session; a fresh start is a new session."""
+    """One base context per session; a fresh start is a new session."""
 
     async def scenario() -> None:
         sdk_sha256 = write_sdk_package(tmp_path / "packages")
@@ -1103,10 +1103,10 @@ def test_a_second_base_context_is_refused_typed(tmp_path: Path) -> None:
 
 
 def test_extend_context_adds_and_removes_in_one_call(tmp_path: Path) -> None:
-    """E42: the archive and the remove list travel together.
+    """The archive and the remove list travel together.
 
     And the client's own integrity ledger follows both halves, which is
-    what makes the E37 comparison after an extension mean anything.
+    what makes the context-ID comparison after an extension mean anything.
     """
 
     async def scenario() -> None:
@@ -1212,7 +1212,7 @@ def test_an_extension_of_the_whole_directory_is_a_legal_extension(tmp_path: Path
 
 
 # --------------------------------------------------------------------------
-# E37 — the comparison duty, both ways
+# The context-ID comparison duty, both ways
 # --------------------------------------------------------------------------
 
 
@@ -1247,7 +1247,7 @@ def test_a_matching_context_id_lets_the_session_proceed(tmp_path: Path) -> None:
 
 
 def test_a_wrong_context_id_closes_the_session_and_raises(tmp_path: Path) -> None:
-    """E37's other half, and the one the server can never raise itself.
+    """The comparison's other half, and the one the server can never raise itself.
 
     The minimal wire shape means the server never sees the client's
     value, so nothing on that side can notice a disagreement. This makes
@@ -1300,12 +1300,11 @@ def test_a_wrong_context_id_closes_the_session_and_raises(tmp_path: Path) -> Non
 def test_no_frame_this_client_sends_carries_the_private_signing_key(tmp_path: Path) -> None:
     """The security invariant, in its sharpest form.
 
-    ADR 0015 decision 8 as the product owner restated it on 2026-08-10:
+    As the product owner restated it on 2026-08-10:
     the private signing key never leaves the local machine. For the
     ``remote`` target that means it appears in **no frame sent to the
     build server** — the server is not trusted, which is the whole reason
-    the build returns an unsigned image and the host signs afterwards
-    (E55, E56).
+    the build returns an unsigned image and the host signs afterwards.
 
     A real key pair is generated on disk and the scenario is the hostile
     one: the private half is placed **inside the context directory**, at
@@ -1583,7 +1582,7 @@ def test_an_oversized_file_is_refused_before_a_frame_goes_out(tmp_path: Path) ->
 
 
 def test_the_caps_are_counted_across_the_session_not_per_archive(tmp_path: Path) -> None:
-    """E44's caps are cumulative, so the client's arithmetic has to be too.
+    """``sc.E44_CAPS``'s caps are cumulative, so the client's arithmetic has to be too.
 
     The server's ledger charges the base context and every extension of
     one session against one budget, and it charges entries *while it
@@ -1669,12 +1668,12 @@ def test_the_packer_refuses_a_path_that_leaves_the_context(tmp_path: Path) -> No
 def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) -> None:
     """And the server's own answer, surfaced as the typed refusal it is.
 
-    **The announcement is a courtesy and never the enforcement.** Since
-    E57 a client that applies what it was told refuses this context at
+    **The announcement is a courtesy and never the enforcement.** A
+    client that applies what it was told refuses this context at
     home, which is the point of announcing — so this test puts the
     client's caps back where an announcement-blind client would have
-    them (E44's defaults, what an older client or one talking to a
-    silent third-party server uses) and sends anyway. What is asserted is
+    them (``sc.E44_CAPS``'s defaults, what an older client or one talking
+    to a silent third-party server uses) and sends anyway. What is asserted is
     the far side: the server enforces its own configuration while the
     bytes arrive and answers a typed refusal, rather than dropping the
     connection or accepting what it advertised against.
@@ -1703,7 +1702,7 @@ def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) 
 
 
 def test_an_announced_cap_is_refused_at_home_before_a_byte_leaves(tmp_path: Path) -> None:
-    """The other half of E57, and the reason the caps are announced at all.
+    """The other half of the announcement, and the reason the caps are announced at all.
 
     The same server and the same context as the test above, with the
     client applying what it was told: the refusal is local, typed as
@@ -1732,10 +1731,10 @@ def test_an_announced_cap_is_refused_at_home_before_a_byte_leaves(tmp_path: Path
 
 
 def test_the_announced_caps_are_the_ones_the_client_applies(tmp_path: Path) -> None:
-    """E57 end to end: the server's configuration sizes the client's checks.
+    """End to end: the server's configuration sizes the client's checks.
 
     Every cap is given a distinctive value, and none of them is one of
-    E44's defaults — an assertion against the defaults would pass on a
+    ``sc.E44_CAPS``'s defaults — an assertion against the defaults would pass on a
     client that read nothing at all. What is asserted is the *effective*
     caps: what ``capabilities`` left on the client, which is what
     :func:`~mcuhome.workbench.sessionclient.pack_context` then refuses
@@ -1778,8 +1777,8 @@ def test_a_frame_cap_sizes_the_upload(tmp_path: Path) -> None:
     server's configuration, because it is not configurable there — it is
     the endpoint's ``max_msg_size``. A peer with a smaller one is the
     case this covers, and the previous version of this test built a
-    hand-rolled server to speak it; the real one announces its own now
-    (E57), so what is left to prove is that the number does the
+    hand-rolled server to speak it; the real one announces its own now,
+    so what is left to prove is that the number does the
     chunking. The archive still arrives whole, which is the half a
     smaller frame could break.
     """
@@ -1821,7 +1820,7 @@ async def _await_file(path: Path, *, timeout: float = 30.0) -> None:
 
 
 def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
-    """E46: the events file is the replay buffer, and there is no other.
+    """The events file is the replay buffer, and there is no other.
 
     An invocation carries exactly two events of this server's own —
     ``invocation.started`` then ``invocation.verdict`` — because there is
@@ -2129,7 +2128,7 @@ def test_a_replay_from_the_beginning_is_not_delivered_twice(tmp_path: Path) -> N
 
 
 def test_cancel_is_acknowledged_immediately_and_the_session_survives(tmp_path: Path) -> None:
-    """E38: the answer means "the stop signal is set", never "it stopped".
+    """The answer means "the stop signal is set", never "it stopped".
 
     The program here never finishes on its own, which is the case the
     verb exists for: killing a ``docker exec`` client does not stop the
@@ -2226,8 +2225,8 @@ def test_packing_a_context_does_not_block_the_event_loop(
     else — including this client's own pong, which aiohttp emits from
     inside the reader's ``async for``, so a server with ``heartbeat=30``
     can tear the connection down before the upload starts. And a process
-    that embeds this client (E16/E21's whole reason for asyncio) freezes
-    for the duration.
+    that embeds this client — the whole reason it is built on asyncio —
+    freezes for the duration.
 
     The pack here is a stand-in that blocks for a fifth of a second; what
     is asserted is that another task kept being scheduled while it ran.
@@ -2507,7 +2506,7 @@ def test_extraction_refuses_a_member_that_leaves_the_directory(tmp_path: Path) -
 
 
 def test_a_delivered_artifact_that_does_not_hash_is_refused(tmp_path: Path) -> None:
-    """E45's per-file half: the archive hash is a transport check only.
+    """The per-file half of download integrity: the archive hash is a transport check only.
 
     The hashes that say whether a firmware image is the one that was
     built are the ones the client already holds from the verdict, and
@@ -2571,7 +2570,7 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
     results, which is what "one answer rather than three" actually means.
 
     And the build report comes back beside the unsigned image, because
-    the host signer is the next step for every method alike (E55, E56).
+    the host signer is the next step for every method alike.
     """
     lines: list[str] = []
     result = _remote_build(tmp_path, on_line=lines.append)
@@ -2673,8 +2672,8 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
 #
 # Everything above drives the session client directly, from a context
 # somebody already wrote. These drive `run_build(target="remote")` — the
-# supported entry point — from a resolved device model and nothing else,
-# which is the gap E65 closed: the SDK pin is resolved on this side, from
+# supported entry point — from a resolved device model and nothing else:
+# the SDK pin is resolved on this side, from
 # this side's source directories, and the context is created here.
 #
 # The peer stays the real build server. That matters more here than
@@ -2711,7 +2710,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
 ) -> None:
     """Model in, unsigned image out — no context written by the caller.
 
-    The whole of E65 in one path: the SDK pin is resolved from a local
+    The whole path in one test: the SDK pin is resolved from a local
     source directory, a base context is created from the model and the
     **public** signing key, a real session sends it, the server freezes
     it and answers a context ID this client agreed with, and the
@@ -2719,7 +2718,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
     anything but context content, and no step of it asked the server what
     it had.
 
-    The last assertion is the E56 seam: what a build delivers is an
+    The last assertion is the signing seam: what a build delivers is an
     unsigned image plus a build report the one host-side signer reads —
     the same report name, in the same relationship to the same directory,
     as the ``local`` target's delivery.
@@ -2758,7 +2757,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
     assert not [path for path in outcome.out_dir.iterdir() if "sign" in path.name]
 
     # And what the target created on the way: a base context, carrying the
-    # public key and no manifest — freezing it is the server's act (E7).
+    # public key and no manifest — freezing it is the server's act.
     context = work_root / "context"
     assert (context / "keys" / "signing.pub").read_text(encoding="utf-8") == _public_pem()
     assert (context / "model" / "device-model.json").is_file()
@@ -2828,7 +2827,7 @@ def test_the_context_the_remote_target_creates_pins_what_the_resolver_answered(
 
 
 def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path) -> None:
-    """E65's guarantee, end to end: the hash decides, not the version.
+    """The guarantee, end to end: the hash decides, not the version.
 
     A context can name a hash its own writer never verified against
     bytes — the shape a private or mirrored registry serving other bytes
@@ -2843,8 +2842,8 @@ def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path)
     resolution reads the environment lock out of the SDK's own,
     already-hashed bytes) — so a wrong hash it was handed never reaches
     the wire at all. What is asserted here is the server's own half of
-    E65: a build that pins bytes its source does not hold is refused
-    typed, whichever party put the wrong hash in the context.
+    the guarantee: a build that pins bytes its source does not hold is
+    refused typed, whichever party put the wrong hash in the context.
     """
 
     async def scenario() -> None:

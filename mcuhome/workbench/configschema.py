@@ -6,8 +6,7 @@ Everything MCUHome knows about the shape of a device configuration lives
 in :mod:`mcuhome.workbench.schema` as a hand-written parser whose error messages
 are user interface. This module exports the *shape* of it — sections,
 key names, types, and the enumerations the registry knows — as a JSON
-Schema an editor can validate and autocomplete against (dashboard
-ADR 0005).
+Schema an editor can validate and autocomplete against.
 
 **What it is not: the validator.** Cross-references (does this cluster's
 source name a channel this peripheral has?), board capabilities and
@@ -20,9 +19,9 @@ the same way and for the same consumer: this one reads
 :mod:`mcuhome.workbench.schema` for the name rules it must not restate, and that
 parser is the front of the build pipeline (stage 1). The registry export
 is registry data rendered as JSON and belongs where the registry does;
-this one belongs where the parser does (ADR 0020 draws the line by
-execution site, and putting both model-side would make the model package
-import the pipeline that imports it).
+this one belongs where the parser does (the model/pipeline split draws
+the line by execution site, and putting both model-side would make the
+model package import the pipeline that imports it).
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ __all__ = [
 #: nothing fetches it, and nothing may depend on fetching it.
 SCHEMA_ID = "https://docs.mcuhome.org/schema/main.schema.json"
 
-#: JSON Schema dialect. 2020-12 is what the editors of dashboard ADR 0005
+#: JSON Schema dialect. 2020-12 is what the dashboard's editors
 #: speak, and the last dialect to change anything relevant here.
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -154,7 +153,7 @@ def _endpoint_schema() -> dict[str, Any]:
 def config_json_schema() -> dict[str, Any]:
     """A JSON Schema for ``devices/<name>/main.yaml``.
 
-    Editor validation and autocomplete (dashboard ADR 0005). See the
+    Editor validation and autocomplete. See the
     module docstring for what this deliberately does not check.
     """
     return {

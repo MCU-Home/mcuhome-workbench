@@ -49,7 +49,7 @@ def test_the_generated_tree_is_written_and_every_file_named(model, tmp_path) -> 
 
 
 def test_a_missing_compiler_distribution_is_the_named_refusal(model, tmp_path, monkeypatch):
-    """The compiler is optional (ADR 0020 decision 3), so its absence is a sentence."""
+    """The compiler is optional, so its absence is a sentence."""
     _failing_import(
         monkeypatch,
         ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler"),

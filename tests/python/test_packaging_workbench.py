@@ -3,7 +3,7 @@
 """The ``mcuhome-workbench`` distribution, alone in its own repository.
 
 One repository, one distribution, one project file — at the root, since
-ADR 0024. There is no ``packaging/`` directory here any more: it existed
+the repository split. There is no ``packaging/`` directory here any more: it existed
 to keep three project files apart inside one repository, and two of the
 three left with ``mcuhome-sdk``. What the SDK repository's
 ``test_packaging.py`` still holds is everything that is a claim about
@@ -11,7 +11,7 @@ three left with ``mcuhome-sdk``. What the SDK repository's
 distributions share; nothing there says anything about this one.
 
 The claims that matter here are the mirror image of the split. Before
-ADR 0024 ``mcuhome.model`` and ``mcuhome.compiler`` were files in this
+it, ``mcuhome.model`` and ``mcuhome.compiler`` were files in this
 tree, and a project file could — and the old ``packaging/`` layout did —
 reach across to them with a ``package-dir`` of ``../..``. They are
 installed distributions now, and the difference has to be *declared*
@@ -37,8 +37,8 @@ from conftest import NAMESPACE, NAMESPACE_DIR, PACKAGES, REPO_ROOT
 
 import mcuhome.workbench
 
-#: The one distribution this repository publishes (ADR 0020 decision 1,
-#: ADR 0024's assignment of it to the tools repository).
+#: The one distribution this repository publishes, assigned to the
+#: tools repository in the repository split.
 DISTRIBUTION = "mcuhome-workbench"
 
 #: The import package it ships, and the only one.
@@ -73,11 +73,11 @@ def test_the_distribution_is_the_one_the_adr_names() -> None:
 
 
 def test_the_project_file_is_the_root_one_and_there_is_no_packaging_directory() -> None:
-    """ADR 0024's shape: nothing to keep apart, so nothing keeping it apart.
+    """The shape after the repository split: nothing to keep apart, so nothing keeping it apart.
 
     The root file used to ship nothing — it held the tool configuration
-    and said so, because ADR 0020 decision 2 reserves the plain name
-    ``mcuhome`` for the command line and the three distributions lived
+    and said so, because the plain name
+    ``mcuhome`` is reserved for the command line and the three distributions lived
     under ``packaging/``. With one distribution left in this repository
     the indirection buys nothing, so the project table moved up. The tool
     configuration is still here, which is the half that must not have
@@ -88,8 +88,7 @@ def test_the_project_file_is_the_root_one_and_there_is_no_packaging_directory() 
     assert "build-system" in root
     assert {"ruff", "pytest", "codespell"} <= set(root["tool"])
     assert not (REPO_ROOT / "packaging").exists(), (
-        "packaging/ is back — one repository with one distribution declares "
-        "it at the root (ADR 0024)"
+        "packaging/ is back — one repository with one distribution declares it at the root"
     )
 
 
@@ -166,7 +165,7 @@ def test_it_ships_exactly_the_workbench_subpackage() -> None:
 
 
 def test_the_model_is_a_declared_dependency_and_not_a_neighbouring_directory() -> None:
-    """ADR 0024's packaging half, from this side.
+    """The repository split's packaging half, from this side.
 
     ``mcuhome.model`` used to be a directory in this tree; it is a
     distribution now. The whole risk of a split like this is that the
@@ -220,8 +219,8 @@ def test_the_import_edges_follow_the_dependency_arrows() -> None:
     """The workbench imports the model, the packagetool and itself. As syntax.
 
     The mirror of the SDK repository's assertion about its own two
-    packages, and the reason ADR 0020 decision 3 can call the compiler
-    edge optional at all: ``mcuhome-compiler`` is not a dependency here
+    packages, and the reason the compiler
+    edge can be optional at all: ``mcuhome-compiler`` is not a dependency here
     at all — not even an extra — so no install carries it, and one
     ``import mcuhome.compiler`` anywhere in this tree — module level or inside a
     function, which is why this reads the syntax tree rather than a fresh

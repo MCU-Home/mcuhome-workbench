@@ -179,7 +179,7 @@ def test_new_then_init_pairing_then_validate(tmp_path) -> None:
 
 
 def test_the_starter_takes_a_friendly_name_and_quotes_it() -> None:
-    """`device new --name` (cli ADR 0003): the human name for the Matter identity."""
+    """`device new --name`: the human name for the Matter identity."""
     text = scaffold.render_starter("bench-node", board=BOARD, friendly_name='Bench: "A"')
     assert 'friendly_name: "Bench: \\"A\\""' in text
     plain = scaffold.render_starter("bench-node", board=BOARD)

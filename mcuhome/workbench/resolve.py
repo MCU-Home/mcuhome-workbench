@@ -13,7 +13,7 @@ need", and to make every derived value explicit exactly once:
   and the full attribute set of every cluster it mandates, including the
   constant Min/MaxMeasuredValue pair that carries the sensor's range;
 * **endpoint numbering** — endpoint IDs (1-based; the root endpoint 0 is
-  the framework's, ADR 0014) and the RAM cell names the generated tables
+  the framework's) and the RAM cell names the generated tables
   and the channel table will share;
 * **unit conversion** — the YAML speaks °C and hPa, the Matter attributes
   are 0.01 °C and 0.1 kPa, and the Zephyr sensor API speaks a third
@@ -405,7 +405,7 @@ def _resolve_endpoint(
     model = EndpointModel(
         id=endpoint_id,
         # MCUHome nodes are native composed nodes, never bridges: every
-        # application endpoint sits directly under the root (ADR 0014).
+        # application endpoint sits directly under the root.
         parent_id=0,
         alias=endpoint.alias,
         device_types=[
@@ -515,7 +515,7 @@ def _resolve_build(
         # fact of stage 4's layout and not of the device. The prj.conf
         # emitter appends it (mcuhome/compiler/generate.py).
         if endpoints:
-            # ADR 0014: the CHIP-side dynamic endpoint count derives from
+            # The CHIP-side dynamic endpoint count derives from
             # this symbol, so the builder only has to state the number of
             # endpoints it actually generated.
             kconfig.append(f"CONFIG_MCUHOME_MATTER_MAX_DYNAMIC_ENDPOINTS={len(endpoints)}")
@@ -535,13 +535,13 @@ def _resolve_build(
     kconfig += list(board.kconfig)
     # MCUboot's image version and, on a Matter device, the SoftwareVersion
     # a controller compares against the image an OTA provider offers. One
-    # group from one string (ADR 0015 decision 9, mcuhome.model.ota): a build in
+    # group from one string (mcuhome.model.ota): a build in
     # which those two disagree updates to an image the controller then
     # reports as the wrong version, and nothing warns.
     kconfig += ota.kconfig_lines(version, matter=network.matter_enabled)
     if board.update_scheme is not None:
         # Snippets the board's update scheme needs in the *application*
-        # image (ADR 0015 decision 2). They come last so a device's own
+        # image. They come last so a device's own
         # snippets stay in front: Zephyr lets a later fragment override an
         # earlier one, and board wiring is the more specific statement.
         snippets += [
@@ -550,7 +550,7 @@ def _resolve_build(
             if snippet not in snippets
         ]
         # Matter OTA is board-class data, never a global constant and
-        # never a device's own choice (ADR 0015 decision 5): a board with
+        # never a device's own choice: a board with
         # a staging slot can receive one, a board without cannot, and a
         # device with no Matter stack has nothing to receive it with.
         if network.matter_enabled:

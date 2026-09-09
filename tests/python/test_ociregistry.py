@@ -33,7 +33,7 @@ from mcuhome.workbench.ociregistry import (
 #: guard is there to catch the tests that forgot, not this one.
 REAL_URLOPEN = Registry._urlopen
 
-REPO = "ghcr.io/mcu-home/build-container"
+REPO = "ghcr.io/other/environment"
 DIGEST = "sha256:" + "ab" * 32
 CONFIG_DIGEST = "sha256:" + "cd" * 32
 
@@ -86,7 +86,7 @@ def test_a_401_is_answered_by_asking_the_realm_it_names() -> None:
                 headers={
                     "WWW-Authenticate": (
                         'Bearer realm="https://ghcr.io/token",service="ghcr.io",'
-                        'scope="repository:mcu-home/build-container:pull"'
+                        'scope="repository:other/environment:pull"'
                     )
                 },
             )
@@ -218,12 +218,12 @@ def test_an_answer_without_a_digest_header_cannot_pin_anything() -> None:
 def test_a_tag_listing_follows_the_link_header_to_the_end() -> None:
     """Registries paginate; a resolution that read page one would miss releases."""
     pages = {
-        "https://ghcr.io/v2/mcu-home/build-container/tags/list?n=100": Response(
+        "https://ghcr.io/v2/other/environment/tags/list?n=100": Response(
             status=200,
-            headers={"Link": '</v2/mcu-home/build-container/tags/list?n=100&last=b>; rel="next"'},
+            headers={"Link": '</v2/other/environment/tags/list?n=100&last=b>; rel="next"'},
             body=json.dumps({"tags": ["a", "b"]}).encode(),
         ),
-        "https://ghcr.io/v2/mcu-home/build-container/tags/list?n=100&last=b": Response(
+        "https://ghcr.io/v2/other/environment/tags/list?n=100&last=b": Response(
             status=200, body=json.dumps({"tags": ["c"]}).encode()
         ),
     }

@@ -27,10 +27,10 @@ difference paid for here.
 itself, because most of the projects are not in the SDK's ``west.yml`` at
 all — they arrive through the ``import:`` of the ``zephyr`` project and
 their paths are Zephyr's choice. The SDK carries a second implementation
-of this document, ``containers/build-container/workspace-record.py``,
-which writes it while a *package* is being built. The two are not shared
-code: this package depends on ``mcuhome-model`` and not on the compiler,
-and that script runs inside an image build where no MCUHome package is on
+of this document in the SDK's own package-build tooling, which writes
+it while the ``mcuhome-build-workspace`` *package* is being built. The
+two are not shared code: this package depends on ``mcuhome-model`` and
+not on the compiler, and that script runs where no MCUHome package is on
 the interpreter's path. What they do share is the mapping below, and it is
 the SDK's manifest that decides it.
 """

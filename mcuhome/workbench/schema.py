@@ -55,7 +55,7 @@ def assign_endpoint_ids(node: RawNodeModel | None) -> dict[int, int]:
 
     ``id:`` is optional; endpoints without one are numbered from 1 in
     document order. Endpoint 0 is never assigned — it is the root node,
-    statically compiled into the framework (ADR 0014).
+    statically compiled into the framework.
     """
     if node is None:
         return {}

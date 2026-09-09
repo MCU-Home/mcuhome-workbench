@@ -4,15 +4,15 @@
 
 A device configuration pins the SDK as a **constraint** — a range of
 acceptable versions — which something must resolve to a single exact
-version at context-creation time (ADR 0018 decision 3). This is that
+version at context-creation time. This is that
 step. The constraint grammar is fixed: constraints are
 **PEP 440**, resolved with :class:`packaging.specifiers.SpecifierSet`,
 because ``packaging`` is already a dependency and PEP 440 is the one
 version grammar the Python ecosystem already agrees on — a caret/tilde
 dialect of our own would be a second thing to specify, implement and get
-wrong. (This is *not* ADR 0013, which is binary-blob policy and per-device
-*Zephyr* pinning; the SDK-constraint grammar is recorded in ADR 0018's
-PEP 440 amendment.)
+wrong. (This is *not* the binary-blob policy and per-device
+*Zephyr* pinning that governs firmware blobs; the SDK-constraint grammar
+is its own, separate PEP 440 rule.)
 
 **Resolution picks; it does not follow.** The input is a set of versions
 that already exist somewhere the caller can name — the keys of the static
@@ -44,7 +44,7 @@ hash is the byte-identity guard — same version number, other bytes, is a
 typed refusal there rather than a silently different SDK. One resolver
 for both is what makes the client's pin and the server's check statements
 about the same rule; and it has to be in the workbench, because a
-workbench must not import the compiler (ADR 0020 decision 3) and
+workbench must not import the compiler and
 ``remote`` is a workbench-only method.
 
 Pre-release rule (stated so a reader need not reverse-engineer
@@ -138,7 +138,7 @@ from mcuhome.workbench.packageregistry import (  # noqa: E402
 
 #: The SDK constraint a build resolves with when the caller states none:
 #: "the newest the configured sources offer". A device configuration can
-#: pin the SDK as a PEP 440 constraint (ADR 0018), but a plain ``mcuhome
+#: pin the SDK as a PEP 440 constraint, but a plain ``mcuhome
 #: build`` has no such intent — it takes whatever SDK package the
 #: ``--sdk-sources`` directories hold, exactly as the empty
 #: :class:`~packaging.specifiers.SpecifierSet` matches every version.
@@ -476,8 +476,8 @@ class SdkResolution:
     def url(self) -> str:
         """The location hint to record — empty unless a public one exists.
 
-        ``mcuhome.package.url`` is a hint only ("never hashed", and ADR
-        0019 §8 forbids any backend to follow it). A package resolved
+        ``mcuhome.package.url`` is a hint only ("never hashed", and no
+        backend may follow it). A package resolved
         from a local directory has no URL worth recording: a ``file://``
         URI of the source would carry the creator's local filesystem
         layout — home directory, username — into a document that is
@@ -516,8 +516,8 @@ def resolve_sdk(
     the package locally therefore never touches the network, which is
     what makes an air-gapped build a configuration rather than a mode.
 
-    **Both halves of the answer are load-bearing, and differently so**
-    (E65). The *version* is a resolution key: whoever fetches the package
+    **Both halves of the answer are load-bearing, and differently so.**
+    The *version* is a resolution key: whoever fetches the package
     looks it up by that number, here or on a build server whose sources
     are its operator's, not this machine's. The *sha256* is the
     byte-identity guard: it is what the context ID hashes, and what the

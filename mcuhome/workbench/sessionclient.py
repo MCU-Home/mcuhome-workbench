@@ -10,7 +10,7 @@ protocol. This module is that conversation, and nothing else: it uploads
 a build context, freezes it, starts an invocation, follows its events and
 takes the artifacts back.
 
-**The build always returns an unsigned image** (E55, E56). Signing is a
+**The build always returns an unsigned image.** Signing is a
 single host-side step that happens after the artifacts are back, over the
 ``build-report.json`` the build container declares, in the build actions
 document's report shape, and it is the same step for either method. Which leads to the one
@@ -21,8 +21,8 @@ invariant this module is built around:
     sends — not as a value, not as a path, not as a configuration slot.
     The API below therefore has no parameter that could carry one: the
     only key a build ever sees is ``keys/signing.pub``, which is context
-    content the caller already placed (ADR 0015 decision 8, ADR 0018's
-    2026-08-09 amendment). A key that cannot be passed cannot be sent.
+    content the caller already placed. A key that cannot be passed cannot
+    be sent.
 
 **Shape, so slice 4 can dispatch uniformly.** :func:`run_remote_build`
 mirrors :func:`mcuhome.workbench.containerbuild.run_locked_build`: a locked-
@@ -32,7 +32,7 @@ Turning a device model into a context directory is the shared step above
 both of them and deliberately not repeated here.
 
 **Layering.** This module is in the workbench and must not import the
-compiler (ADR 0020 decision 3), so the two disciplines it shares with
+compiler, so the two disciplines it shares with
 :mod:`mcuhome.workbench.packagefetch` — safe extraction and strict
 containment — are re-stated here rather than imported. Both copies name
 each other; the rule they implement is the one the legacy container
@@ -50,7 +50,7 @@ naming the install rather than an ``ImportError``.
 Three things this client owes the protocol that the protocol does not
 enforce:
 
-* **One announce-then-stream sequence at a time** (E41, E45). An
+* **One announce-then-stream sequence at a time.** An
   announcement and the BINARY frames that follow it are correlated by
   order and by nothing else, in both directions, so two uploads or two
   downloads interleaved on one socket are two byte streams nobody can
@@ -58,31 +58,31 @@ enforce:
   side with a per-connection lock; :class:`SessionClient` holds the
   mirror of it (:attr:`SessionClient._sequence`), which is what makes
   concurrent calls on one client safe rather than forbidden.
-* **The context-ID comparison is the client's duty** (E37). The product
+* **The context-ID comparison is the client's duty.** The product
   owner chose the minimal wire shape for ``lock-context``: the request
   carries the session id, the answer carries the context ID, and the
   server never sees the client's own value — so it can never raise that
   mismatch. :meth:`SessionClient.lock_context` computes the ID from the
   bytes it sent, compares, and **closes the session** on a disagreement.
-  ADR 0019's "observable moment at which both sides compare values they
+  The "observable moment at which both sides compare values they
   computed independently" exists only because this method does that.
-* **Per-file integrity of a download is checked here** (E45). The
+* **Per-file integrity of a download is checked here.** The
   ``get-artifact`` announcement carries the *archive's* hash, computed at
   egress; the per-file hashes are the ones the client already holds from
   the ``invocation.verdict`` frame, and checking them is what keeps
   the announced hash a transport check rather than a second integrity
   claim.
 
-**The ingress caps are announced, and this client sizes itself by them**
-(E44, E57). ``capabilities`` carries an ``ingress`` block with the five
-caps of ADR 0019 decision 8 — read from the server's own configuration,
+**The ingress caps are announced, and this client sizes itself by them.**
+``capabilities`` carries an ``ingress`` block with the five
+caps :data:`E44_CAPS` fixes — read from the server's own configuration,
 so an operator who lowered one has lowered what a client is told — plus
 ``frame_bytes``, the largest WebSocket message the endpoint accepts. The
 last one is announced because it is the only bound whose overrun is a
 dropped connection rather than a typed refusal: it cannot be discovered
 by hitting it and surviving. :meth:`Capabilities.ingress` reads all six
-and falls back to E44's decided defaults for anything a peer leaves out
-— never to a number of this client's own invention.
+and falls back to :data:`E44_CAPS`'s decided defaults for anything a peer
+leaves out — never to a number of this client's own invention.
 """
 
 from __future__ import annotations
@@ -167,8 +167,8 @@ SESSION_PROTOCOL_VERSION = 2
 #: How many bytes of an archive go into one outbound BINARY frame, absent
 #: a smaller announced limit. A quarter of a megabyte, which is the same
 #: number the build server streams *downloads* at and well under the
-#: 8 MiB ``max_msg_size`` its ``/ws`` endpoint accepts and announces
-#: (E57). It stays this client's own conservative choice rather than
+#: 8 MiB ``max_msg_size`` its ``/ws`` endpoint accepts and announces.
+#: It stays this client's own conservative choice rather than
 #: knowledge of the peer: a peer that announces a larger frame has given
 #: a licence and not an instruction, and one that announces none — an
 #: older or third-party server — is a peer nothing is known about.
@@ -185,8 +185,8 @@ DEFAULT_CHUNK_BYTES = 256 * 1024
 #: 8 KiB, download chunks at 256 KiB and every other frame is small JSON.
 MAX_INBOUND_FRAME_BYTES = 8 * 1024 * 1024
 
-#: What one artifact delivery may cost this machine. E44's caps size what
-#: goes *up*; nothing announces a ceiling for what comes down, so these
+#: What one artifact delivery may cost this machine. :data:`E44_CAPS`
+#: sizes what goes *up*; nothing announces a ceiling for what comes down, so these
 #: are this client's own — an artifact archive above the first number is
 #: refused from its announcement, before a byte reaches the spool, and an
 #: archive that expands past the second is refused mid-stream. A firmware
@@ -213,7 +213,7 @@ _BLOCK = 1 << 20
 #: been received, hashed and unpacked; bounded, because a server that
 #: stopped answering must not leave a caller hanging forever. A ``build``
 #: is *not* bounded by this: the verb answers immediately with an
-#: invocation id and the completion arrives as an event (E46).
+#: invocation id and the completion arrives as an event.
 DEFAULT_CALL_TIMEOUT = 300.0
 
 
@@ -353,7 +353,7 @@ def seat_offer(refusal: ServerRefusal) -> SeatOffer | None:
 
 
 class ContextIdMismatch(RemoteError):
-    """E37: the server's context ID is not the one the client computed.
+    """The server's context ID is not the one the client computed.
 
     Terminal, and the session is closed before this is raised. The two
     values are on the exception because the whole worth of the freeze is
@@ -439,19 +439,20 @@ def _zstandard():
 class IngressCaps:
     """What one upload may cost, as the client applies it before sending.
 
-    **These numbers belong to the server** (E44: "the config is the
-    policy"), and this client uses an announced value wherever it finds
-    one. The build server announces all six in ``capabilities`` (E57),
+    **These numbers belong to the server** — "the config is the
+    policy" — and this client uses an announced value wherever it finds
+    one. The build server announces all six in ``capabilities``,
     out of its own configuration. Where a peer announces none — an older
-    or a third-party server — E44's decided defaults stand
-    (:data:`E44_CAPS`), because a client that invented a cap of its own
+    or a third-party server — :data:`E44_CAPS`'s decided defaults stand,
+    because a client that invented a cap of its own
     would refuse contexts a server would have taken.
 
-    :attr:`frame_bytes` is not one of E44's five. It is the largest
+    :attr:`frame_bytes` is not one of the five compressed/decompressed/
+    entries/file/path-depth caps :data:`E44_CAPS` fixes. It is the largest
     single WebSocket message the peer accepts, which bounds the *chunk*
     an archive is streamed in rather than the archive — and it is the one
     limit whose overrun is a dropped connection instead of a typed
-    refusal, which is why E57 made it part of the announcement beside the
+    refusal, which is why it travels in the same announcement as the
     caps. A peer that states none leaves this client's conservative
     :data:`DEFAULT_CHUNK_BYTES` in place.
     """
@@ -464,7 +465,7 @@ class IngressCaps:
     frame_bytes: int = DEFAULT_CHUNK_BYTES
 
     #: The names read out of an announcement, in the order they are
-    #: tried. **This is the wire shape** since E57: the product owner
+    #: tried. **This is the wire shape:** the product owner
     #: fixed the ``capabilities`` payload's ``ingress`` block on the
     #: names this client had guessed, so one server changed and nothing
     #: here did. A peer that announces other names, or none, simply
@@ -480,7 +481,7 @@ class IngressCaps:
 
     @staticmethod
     def announced(payload: dict[str, Any]) -> IngressCaps:
-        """The caps a ``capabilities`` payload states, over E44's defaults."""
+        """The caps a ``capabilities`` payload states, over :data:`E44_CAPS`'s defaults."""
         found = payload.get("ingress")
         if not isinstance(found, dict):
             return E44_CAPS
@@ -500,8 +501,8 @@ class IngressCaps:
 class IngressSpent:
     """What one session has already spent of its ingress budget.
 
-    E44's caps are **cumulative across the base context and every
-    extension of one session** — that is what the build server's ledger
+    :data:`E44_CAPS`'s caps are **cumulative across the base context and
+    every extension of one session** — that is what the build server's ledger
     charges, and a client that checked each archive in isolation would
     pass its own check and then be refused at
     ``policy.ingress-limit-exceeded`` after the whole upload had arrived,
@@ -532,7 +533,7 @@ class IngressSpent:
 #: session behind it.
 _NOTHING_SPENT = IngressSpent()
 
-#: E44's decided defaults: 64 MiB compressed, 256 MiB decompressed
+#: The decided defaults: 64 MiB compressed, 256 MiB decompressed
 #: cumulative, 4096 entries, 64 MiB per file, path depth 16. They are the
 #: build server's own defaults, so a client that has heard no
 #: announcement and applies these refuses exactly what an unconfigured
@@ -572,7 +573,7 @@ class Capabilities:
 
     @property
     def containers(self) -> tuple[dict[str, Any], ...]:
-        """Every build-container image this server can serve, with its digest."""
+        """Every build environment image this server can serve, with its digest."""
         found = self.payload.get("containers")
         return tuple(found) if isinstance(found, list) else ()
 
@@ -591,7 +592,7 @@ class Capabilities:
 
 
 # --------------------------------------------------------------------------
-# Packing a context (E41) and its extensions (E42)
+# Packing a context and its extensions
 # --------------------------------------------------------------------------
 
 #: What is never in a context archive. ``manifest.yaml`` is written by the
@@ -605,9 +606,9 @@ class PackedContext:
     """One tar.zst on disk, plus what the client must remember about it.
 
     :attr:`files` is the integrity list of exactly what went into the
-    archive — the E37 comparison is computed from it, which is what makes
-    "the ID of the bytes I sent" a statement about bytes rather than
-    about a directory somebody may have edited since.
+    archive — the context-ID comparison is computed from it, which is
+    what makes "the ID of the bytes I sent" a statement about bytes
+    rather than about a directory somebody may have edited since.
 
     :attr:`members` is the *archive's* member list, which is a different
     statement and deliberately so: ``context.yaml`` is an archive member
@@ -711,7 +712,7 @@ def pack_context(
 ) -> PackedContext:
     """Pack *root* into a deterministic ``tar.zst`` at *spool*.
 
-    The wire format of E41, and the only one: tar.zst in both directions,
+    The wire format, and the only one: tar.zst in both directions,
     chosen for family consistency with the SDK package the legacy
     container invocation (retired at the switchover) pins. There is no
     format negotiation, so there is no format field.
@@ -732,7 +733,7 @@ def pack_context(
     the cheaper half of the same answer.
 
     *only* packs exactly the named context-relative paths — that is
-    ``extend-context``'s add/overwrite half (E42). Left ``None``, the
+    ``extend-context``'s add/overwrite half. Left ``None``, the
     whole context is packed, which is ``send-context``'s.
 
     *for_extension* excludes ``context.yaml`` from the **archive**, not
@@ -838,7 +839,7 @@ _PRIVATE_KEY_MARKER = b"PRIVATE KEY-----"
 
 #: File names this workbench has ever kept private key material under:
 #: a plain key file (the ``--signing-key``/dashboard form) and the
-#: project's ``secrets/firmware/mcuboot.yaml`` (ADR 0015 decision 8).
+#: project's ``secrets/firmware/mcuboot.yaml``.
 _PRIVATE_KEY_NAMES = ("signing.key", "mcuboot.yaml", "mcuboot.pem")
 
 
@@ -885,7 +886,7 @@ def _check_member(name: str, source: Path, caps: IngressCaps) -> None:
     # name under `keys/`. So the packer looks — by name, because these
     # are the names this workbench has ever kept private key material
     # under (the plain file of a --signing-key override, and the
-    # project's secrets YAML of ADR 0015 §8) — and at the bytes, because
+    # project's secrets YAML) — and at the bytes, because
     # a stray key under another name is the same accident. The content
     # check catches the YAML form too: the PEM block inside it carries
     # the same marker.
@@ -910,8 +911,8 @@ def _safe_member_name(name: str) -> str:
     """A tar member's path, or a refusal. Never normalized — refused.
 
     The same rule as :func:`mcuhome.workbench.packagefetch._safe_member_name`,
-    re-stated because a workbench must not import the compiler (ADR 0020
-    decision 3). ``..`` and absolute paths are the escape; rewriting
+    re-stated because a workbench must not import the compiler.
+    ``..`` and absolute paths are the escape; rewriting
     ``./x`` to ``x`` would accept a tree a stricter reader then refuses.
     """
     cleaned = name.rstrip("/")
@@ -1226,7 +1227,7 @@ class _Download:
 class SessionClient:
     """One conversation with one build server: all eleven verbs.
 
-    Async throughout (E16, E21): a build blocks for minutes to hours,
+    Async throughout: a build blocks for minutes to hours,
     every answer a caller waits on is awaitable, and cancellation is a
     verb rather than a closed socket. The state machine mirrors the
     server's — no context, unlocked, locked — because a client that
@@ -1300,8 +1301,8 @@ class SessionClient:
         self.terminal: str | None = None
 
         #: The integrity list of everything sent, path -> sha256. This is
-        #: what the E37 comparison is computed over: "the ID of the bytes
-        #: I sent" rather than "the ID of a directory as it is now".
+        #: what the context-ID comparison is computed over: "the ID of the
+        #: bytes I sent" rather than "the ID of a directory as it is now".
         self._files: dict[str, str] = {}
         self._pins: Any = None
         #: Highest ``seq`` seen per invocation, which is what makes a
@@ -1453,8 +1454,8 @@ class SessionClient:
             # only for the wire.
             return
         if name == "invocation.verdict" and isinstance(invocation_id, str):
-            # E46's *verdict*, and since E58 a name of its own. It used to
-            # share `invocation.finished` with the program's own
+            # The *verdict* event, which now has a name of its own. It used
+            # to share `invocation.finished` with the program's own
             # event-stream announcement and was told from it by the absence of `seq` —
             # so a program that omitted its counter had its own event read
             # as the server's judgement. The program's numbered
@@ -1605,8 +1606,8 @@ class SessionClient:
         It carries no session id because there is no session yet, and it
         is what tells this client which build containers the server has,
         which patch layers it allows and the ingress caps that size every
-        upload afterwards (E57 — a peer that announces none leaves E44's
-        defaults in place).
+        upload afterwards — a peer that announces none leaves
+        :data:`E44_CAPS`'s defaults in place.
         """
         payload = await self._call("capabilities")
         self.capabilities_payload = Capabilities(payload)
@@ -1666,7 +1667,7 @@ class SessionClient:
         return self.session_id
 
     async def send_context(self, context_dir: Path, *, image: str | None = None) -> dict[str, Any]:
-        """``send-context`` — the base context and its pins, once (E41, E43).
+        """``send-context`` — the base context and its pins, once.
 
         The archive is announced in the JSON payload — its compressed size
         and its SHA-256 — and the bytes follow as BINARY frames; the
@@ -1675,8 +1676,8 @@ class SessionClient:
         a fresh start is a new session, which is cheap.
 
         The context's ``context.yaml`` is read here as well, because its
-        pins are two of the three inputs of the context ID and the E37
-        comparison needs them locally.
+        pins are two of the three inputs of the context ID and the
+        context-ID comparison needs them locally.
 
         *image* is the build-environment pin for **this build**, in the
         four forms
@@ -1728,7 +1729,7 @@ class SessionClient:
         paths: Sequence[str] | None = None,
         remove: Iterable[str] = (),
     ) -> dict[str, Any]:
-        """``extend-context`` — an archive and a remove list, in one call (E42).
+        """``extend-context`` — an archive and a remove list, in one call.
 
         Both halves are optional and at least one is required; an
         extension that changes nothing is a command that meant something
@@ -1847,12 +1848,12 @@ class SessionClient:
         return self._answer(verb, frame)
 
     async def lock_context(self) -> str:
-        """``lock-context`` — freeze the context, and **check the ID** (E37).
+        """``lock-context`` — freeze the context, and **check the ID**.
 
         The verb's own wire shape is minimal by explicit product-owner
         choice: the request carries the session id, the answer carries the
         context ID, and the server never sees this client's value. The
-        comparison ADR 0019 requires therefore happens **here**, and this
+        comparison this requires therefore happens **here**, and this
         method is the reason the freeze is an "observable moment" at all.
 
         The local value is computed over the integrity list of the bytes
@@ -1926,7 +1927,7 @@ class SessionClient:
         ``incremental`` was honoured — see :meth:`_start`, which reads
         that acknowledgement. The build itself returns an **unsigned**
         image plus the build report (the shape the build actions
-        document defines) (E55, E56); signing is a host-side step
+        document defines); signing is a host-side step
         afterwards and this client never performs it and never carries a
         key for it.
         """
@@ -1955,7 +1956,7 @@ class SessionClient:
         return invocation_id
 
     async def cancel(self, invocation_id: str) -> dict[str, Any]:
-        """``cancel(invocation id)`` — acknowledged immediately (E38).
+        """``cancel(invocation id)`` — acknowledged immediately.
 
         The answer means "the stop signal is set", never "the invocation
         has stopped": the actual end travels on the event stream and the
@@ -1983,7 +1984,7 @@ class SessionClient:
     async def wait_finished(
         self, invocation_id: str, *, timeout: float | None = None
     ) -> dict[str, Any]:
-        """Wait for the server's ``invocation.verdict`` (E46, E58).
+        """Wait for the server's ``invocation.verdict``.
 
         Not a verb — a build is minutes to hours, and a command frame that
         waited for it would make every client's socket a build timer. The
@@ -1996,11 +1997,13 @@ class SessionClient:
         document is written — arrives first and is delivered as an
         ordinary event; it is not what this method returns. Only the
         verdict carries the status, the artifact list, the context ID the
-        server computed and, on a failure, the error envelope. E46 first
-        gave both frames one name and left ``seq`` to separate them, which
+        server computed and, on a failure, the error envelope. This
+        distinction did not always exist: an earlier design gave both
+        frames one name and left ``seq`` to separate them, which
         made a program's violation of the legacy container invocation's
         event-stream rule (retired at the switchover) readable as the
-        server's judgement; E58 replaced that with the name.
+        server's judgement; the verdict was later given a name of its own
+        instead.
         """
         future = self._finished.setdefault(
             invocation_id, asyncio.get_running_loop().create_future()
@@ -2023,7 +2026,7 @@ class SessionClient:
         path: str | None = None,
         expected: dict[str, str] | None = None,
     ) -> ArtifactDelivery:
-        """``get-artifact`` — a tar.zst, announced then streamed (E45).
+        """``get-artifact`` — a tar.zst, announced then streamed.
 
         The mirror of the upload: the result frame *is* the announcement
         (the archive's size, its SHA-256 and what is in it) and the BINARY
@@ -2122,7 +2125,7 @@ class SessionClient:
         Re-joins the session's live stream and, when an invocation is
         named, replays its events from the sequence number this client
         last saw — out of the NDJSON file on disk, which **is** the replay
-        buffer (E46); there is no in-memory ring behind it and therefore
+        buffer; there is no in-memory ring behind it and therefore
         nothing a long reconnect can find already evicted.
 
         The replayed events arrive **before** this verb's own answer, so
@@ -2180,7 +2183,8 @@ def _check_members(
 ) -> None:
     """Re-hash every delivered artifact against what the invocation declared.
 
-    E45's per-file half: the announced hash covers the archive, and the
+    The per-file half of the download integrity check: the announced hash
+    covers the archive, and the
     hashes that say whether a *firmware image* is the one that was built
     are the ones the client already holds from the verdict. *expected*
     overrides the announcement's own list where a caller has one, which
@@ -2246,7 +2250,7 @@ class RemoteBuildResult:
     — and :attr:`out`, where those files are on this machine.
     :attr:`context_id` is the identity the work is attributed to, the one
     the *server* computed and this client already compared against its
-    own (E37).
+    own.
 
     Two fields are this target's own and have no local counterpart:
     :attr:`error`, the refusal envelope out of the verdict, and
@@ -2403,7 +2407,7 @@ async def run_remote_build(
 
     The composition, in order: connect, ``capabilities`` (which sizes the
     upload), ``open-session``, ``send-context``, ``lock-context`` with the
-    E37 comparison, the working verb, follow the events until the
+    context-ID comparison, the working verb, follow the events until the
     verdict, ``get-artifact`` into ``work_root/out``, ``close-session``.
 
     *action* is ``build`` or ``verify``; *mode* applies to ``build``
@@ -2413,8 +2417,8 @@ async def run_remote_build(
 
     It mirrors that method: a context directory and a work root in, an
     **unsigned** artifact set plus the build report out, progress through
-    a line sink. Signing is the shared host-side step afterwards (E55,
-    E56) and no key is a parameter of this function, of the client it
+    a line sink. Signing is the shared host-side step afterwards
+    and no key is a parameter of this function, of the client it
     drives, or of any frame either of them sends.
 
     A server with no room hands out a turn instead of a session, and this

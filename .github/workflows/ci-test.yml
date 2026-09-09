@@ -52,8 +52,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Plain public checkouts — both repositories are public (ADR 0024
-      # §3), so no token or deploy key is needed for either.
+      # Plain public checkouts — both repositories are public,
+      # so no token or deploy key is needed for either.
       - name: Checkout mcu-home/mcuhome-sdk
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

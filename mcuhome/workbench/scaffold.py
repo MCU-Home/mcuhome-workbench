@@ -390,7 +390,7 @@ def render_starter(
     Pure, so the test suite reads it without touching a filesystem and the
     dashboard's new-device wizard can show it before anything is written.
     *friendly_name* is the human-readable name destined for the device's
-    Matter identity (cli ADR 0003: ``device new --name``); left unset, a
+    Matter identity (``device new --name``); left unset, a
     title-cased spelling of *name* stands in.
 
     *outline* is what the caller already knows about the device's
@@ -466,8 +466,8 @@ def new_device(
 
     The project comes from :func:`mcuhome.workbench.project.resolve_project`'s
     ladder, and outside any project that resolver's refusal already
-    points at ``mcuhome project init``: creating a *project* is init's job (ADR
-    0022 §1), a device scaffold only ever fills one in. The ``devices/``
+    points at ``mcuhome project init``: creating a *project* is init's
+    job, a device scaffold only ever fills one in. The ``devices/``
     directory itself is created when missing — it is part of the layout
     the marker promises, not a decision.
 

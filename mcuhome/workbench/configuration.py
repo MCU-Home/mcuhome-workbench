@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The configuration model: five layers, one option registry (ADR 0022).
+"""The configuration model: five layers, one option registry.
 
 Every option is declared exactly once, in :data:`OPTIONS` — name, type,
 default, and **which channels may set it** — and the ``MCUHOME_*``
@@ -22,12 +22,12 @@ The five layers, ascending — later wins::
 The system/user files are deliberately **not** named ``mcuhome.yaml``:
 only a project directory may look like a project directory, and a
 config directory must never be mistaken for one — by the upward search
-or by a user working inside it (ADR 0022 §2). The directories follow
-the platformdirs conventions the ADR names, computed here from the
+or by a user working inside it. The directories follow
+the platformdirs conventions, computed here from the
 *stated* environment rather than through the platformdirs library,
 because that library answers out of the process environment and this
-package serves several sessions from one process (ADR 0020,
-:mod:`mcuhome.model.userpaths`). On Windows the conventional homes are
+package serves several sessions from one process
+(:mod:`mcuhome.model.userpaths`). On Windows the conventional homes are
 ``%ProgramData%\\mcuhome`` and ``%APPDATA%\\mcuhome``, from the stated
 environment too; a layer whose directory the environment cannot name
 simply does not exist for that resolution.
@@ -217,7 +217,7 @@ def option(name: str, registry: tuple[Option, ...] | None = None) -> Option:
 #: The platform's option registry. Tools may resolve additional
 #: registries of their own through the same machinery (the CLI's
 #: presentation options, say) — these are the options the *platform*
-#: owns, shared by every tool (ADR 0022 §4).
+#: owns, shared by every tool.
 OPTIONS: tuple[Option, ...] = (
     Option(
         "project_dir",
@@ -242,7 +242,7 @@ OPTIONS: tuple[Option, ...] = (
         kind="path",
         help="where the compiler cache lives; unset means the user cache directory",
     ),
-    # ADR 0023: builders are deployment configuration and live in files
+    # Builders are deployment configuration and live in files
     # only — the fully manual rung (--build-mode plus its flags) is the
     # per-invocation channel and bypasses the list entirely.
     Option(
@@ -787,7 +787,7 @@ def resolve_settings(
     args: Mapping[str, Any] | None = None,
     registry: tuple[Option, ...] = OPTIONS,
 ) -> Settings:
-    """Resolve *registry* through the five layers of ADR 0022 §2.
+    """Resolve *registry* through the five layers.
 
     *project* is the already-resolved project directory (or ``None``
     outside any project — the project layer is then simply absent), and
@@ -868,7 +868,7 @@ def resolve_settings(
 
 
 # --------------------------------------------------------------------------
-# Builder selection (ADR 0023 §2/§4)
+# Builder selection
 # --------------------------------------------------------------------------
 
 
@@ -937,13 +937,13 @@ def _builder_token(
         token = data.get(CREDENTIALS_TOKEN_KEY)
         if token is None:
             # The file may legitimately carry only future material
-            # (TLS pinning, certificates — ADR 0023 §4); an unknown
+            # (TLS pinning, certificates); an unknown
             # key is the future, not a typo worth refusing.
             return None
         if isinstance(token, FileRef):
             # `token: !file <name>`: the referenced file is the secret,
-            # so it gets the same §5 check as this one — and the old
-            # token-file rule (E63) holds for its content: surrounding
+            # so it gets the same permission check as this one — and the
+            # old token-file rule holds for its content: surrounding
             # whitespace is an editor's newline, whitespace inside is a
             # file with something else in it.
             check_secret_file(token.path, key_material=False, on_warning=on_warning)
@@ -970,7 +970,7 @@ def _builder_token(
 
 
 # --------------------------------------------------------------------------
-# Writing configuration (`mcuhome config set`/`unset`, ADR 0022 §3)
+# Writing configuration (`mcuhome config set`/`unset`)
 # --------------------------------------------------------------------------
 
 

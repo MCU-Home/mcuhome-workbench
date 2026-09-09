@@ -10,12 +10,12 @@ whole validation layer is built around pointing at the offending line
 ``!secret name`` reads ``name`` from the device's own
 ``secrets/devices/<name>.yaml`` first and the project-wide
 ``secrets/main.yaml`` second (yaml-schema.md §9, deliberately
-ESPHome-shaped UX; the ladder is ADR 0022's layout, PO 2026-08-15 —
+ESPHome-shaped UX; the ladder is the project layout's, PO 2026-08-15 —
 commissioning identity per device, shared values project-wide).
 Resolution happens here, before validation, so no later stage ever sees
 a secret reference — and an unknown secret is reported with the line of
 the ``!secret`` tag, not of the file it should have been in. Reading the
-secrets file runs the permission check of ADR 0022 §5: a file other
+secrets file runs the secrets-hygiene permission check: a file other
 users can reach draws a warning through the caller's *on_warning*.
 
 ``!file path`` makes a value out of an external file (PO 2026-08-14):
@@ -30,7 +30,7 @@ strict — a relative path resolves against the referencing YAML file's
 directory, ``path`` is always the real absolute path, and a file that
 does not exist or cannot be read is a located refusal at load time,
 before any value is consumed. A consumer that treats such a value as a
-secret extends its ADR 0022 §5 permission check to ``value.path``.
+secret extends its secrets-hygiene permission check to ``value.path``.
 """
 
 from __future__ import annotations
@@ -218,7 +218,7 @@ def load_yaml_file(path: Path) -> Any:
 def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
     """``secrets/devices/<name>.yaml``, next to the project's main secrets file.
 
-    The per-device secrets file of ADR 0022's layout (PO 2026-08-15) —
+    The per-device secrets file of the project layout (PO 2026-08-15) —
     where ``mcuhome device matter-pairing`` puts a device's commissioning
     values. For a device inside the project layout the name is the
     device *folder's*, never the configuration's own ``device.name``
@@ -267,7 +267,7 @@ def _load_secrets(
 ) -> dict[str, Any]:
     """Every secret this configuration may name, device values winning.
 
-    The ladder (ADR 0022, PO 2026-08-15): the device's own
+    The ladder (PO 2026-08-15): the device's own
     ``secrets/devices/<name>.yaml`` answers first — its commissioning
     identity lives there — and the project-wide ``secrets/main.yaml``
     answers for everything shared between devices (a WiFi password).
@@ -297,7 +297,7 @@ def resolve_secrets(
     """Replace every :class:`SecretRef` in *data* with its value.
 
     The secrets file is read at most once, and only when the config
-    actually uses a secret — so the permission check of ADR 0022 §5
+    actually uses a secret — so the secrets-hygiene permission check
     runs exactly when the file's content is actually about to be used.
     """
     secrets: dict[str, Any] | None = None

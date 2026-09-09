@@ -5,17 +5,17 @@
 **Written here rather than shelled out to CHIP**, and that is a
 deliberate departure from the obvious answer. CHIP's
 ``src/app/ota_image_tool.py`` does exactly this job and lives in the west
-workspace — but the workspace is where the *build* happens, and ADR 0015
-decision 8 puts signing somewhere else entirely: the private key lives
+workspace — but the workspace is where the *build* happens, and
+signing happens somewhere else entirely: the private key lives
 where the user's controlling instance runs, and a detached build's signed
 image therefore only comes into existence during ``mcuhome device sign-firmware``, on a
-machine that per ADR 0003 has no compiler, no west workspace and no Matter
+machine that has no compiler, no west workspace and no Matter
 SDK. An .ota wraps the *signed* image, so a builder that could only
 produce it during the build could not produce it for the delivery path the
 product owner actually asked for.
 
 That same sentence is why this module sits beside signing rather than
-inside the compiler package (ADR 0020): the machine that wraps an image
+inside the compiler package: the machine that wraps an image
 is the machine that signed it, and it has no toolchain. What it needs
 from the build is the device's OTA identity, nothing more.
 
@@ -155,7 +155,7 @@ def write_ota_image(
     perfectly valid .ota that the device downloads, stages, reboots into
     and then rejects at the bootloader — the digest in the header proves
     nothing about origin, and CHIP does not check it on any platform
-    anyway (ADR 0015 decision 6). MCUboot's signature is the only trust
+    anyway. MCUboot's signature is the only trust
     anchor in this path, so the wrapper's job is to carry it, not to
     replace it.
     """

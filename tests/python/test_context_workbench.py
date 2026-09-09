@@ -6,8 +6,8 @@ The workbench half of the subject. ``mcuhome-sdk``'s ``test_context.py``
 pins the format and the normative ID rule (:mod:`mcuhome.model.context`);
 this file pins the directory the rule is applied to — what ``create_context``
 writes, what ``lock_context`` freezes, and what ``verify_context`` makes
-of a directory that has since been edited. ADR 0020 puts the two in
-different packages on purpose: a build server recomputes the ID from
+of a directory that has since been edited. The two are deliberately in
+different packages: a build server recomputes the ID from
 bytes off a socket and carries no build logic at all.
 """
 
@@ -61,7 +61,7 @@ EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 # The fixed synthetic inputs, spelled the same way mcuhome-sdk's
 # test_context.py spells
 # them — duplicated rather than imported, because the two files are two
-# repositories after ADR 0024.
+# separate repositories.
 DIGEST = "sha256:" + "ab" * 32
 SDK_SHA = "cd" * 32
 
@@ -192,7 +192,7 @@ def test_the_informational_fields_do_not_influence_the_id(model, tmp_path: Path)
 
 
 def test_the_manifest_carries_no_timestamp(model, tmp_path: Path) -> None:
-    """ "The one field that does not travel is `created`" (ADR 0018).
+    """ "The one field that does not travel is `created`".
 
     It dates the *request* and lives in context.yaml alone; the
     manifest's own moment is the lock. So two creations of the same
@@ -249,7 +249,7 @@ def test_a_created_context_carries_the_model_verbatim(model, tmp_path: Path) -> 
 
 
 def test_the_signing_key_lands_in_the_context(model, tmp_path: Path) -> None:
-    """keys/signing.pub is context content (ADR 0018 amendment)."""
+    """keys/signing.pub is context content."""
     out_dir = tmp_path / "context"
     _create(model, out_dir)
     assert (out_dir / SIGNING_KEY_FILE).read_text(encoding="utf-8") == SIGNING_PUB
@@ -391,7 +391,7 @@ def test_two_creations_of_the_same_inputs_are_byte_identical(model, tmp_path: Pa
 
 
 def test_a_private_key_in_place_of_the_public_one_is_refused(model, tmp_path: Path) -> None:
-    """The private half must never reach a build (ADR 0015 decision 8)."""
+    """The private half must never reach a build."""
     with pytest.raises(BuildError) as caught:
         _create(model, tmp_path / "context", signing_pub=_PRIVATE_PEM)
     assert "public key" in caught.value.message
@@ -656,7 +656,7 @@ def test_a_manifest_with_a_spoofable_hash_spelling_is_a_refusal(model, tmp_path:
 
 
 # --------------------------------------------------------------------------
-# Context format 2: the requirement, and the backend's answer to it (E61)
+# Context format 2: the requirement, and the backend's answer to it
 # --------------------------------------------------------------------------
 
 

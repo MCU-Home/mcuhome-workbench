@@ -31,8 +31,8 @@ from mcuhome.workbench import api
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
 #: Exactly what the serialized form of one error carries. The dashboard's
-#: editor addresses a marker by these names (dashboard ADR 0011 decision
-#: 4), so adding a field is additive and renaming one is breaking.
+#: editor addresses a marker by these names, so adding a field is
+#: additive and renaming one is breaking.
 ERROR_FIELDS = {"message", "file", "line", "column", "key", "hint", "kind"}
 
 
@@ -55,8 +55,8 @@ def test_the_version_is_the_package_version() -> None:
     """The API states the workbench's version, not the model's.
 
     The two version literals are equal today, so equality with the model
-    would pass by coincidence — the import is the assertion (ADR 0024:
-    the workbench versions independently of the SDK repository).
+    would pass by coincidence — the import is the assertion: the
+    workbench versions independently of the SDK repository.
     """
     from mcuhome.workbench import __version__
 
@@ -65,7 +65,7 @@ def test_the_version_is_the_package_version() -> None:
 
 
 def test_the_build_targets_are_part_of_the_surface() -> None:
-    """E64: driving a build is supported, not an implementation detail.
+    """Driving a build is supported, not an implementation detail.
 
     Re-exported rather than reimplemented — the same objects
     :mod:`mcuhome.workbench.buildmethods` defines, so a caller that
@@ -315,7 +315,7 @@ def test_read_model_round_trips_a_resolved_model(tmp_path) -> None:
 
 
 def test_read_model_refuses_another_model_version(tmp_path) -> None:
-    """Negotiated, never guessed (dashboard ADR 0007 decision 4)."""
+    """Negotiated, never guessed."""
     path = tmp_path / "device-model.json"
     path.write_text(json.dumps({"model_version": api.MODEL_VERSION + 1}), encoding="utf-8")
     with pytest.raises(api.BuildError) as error:
@@ -330,9 +330,9 @@ def test_read_model_refuses_another_model_version(tmp_path) -> None:
 def test_the_supported_surface_pulls_in_no_compiler() -> None:
     """The dashboard imports this module, and must not get a toolchain.
 
-    ADR 0017 §2 states it plainly: depending on the package must not drag
-    in the toolchain, the C sources or the west manifest. Before the
-    boundary work of ADR 0020, ``import mcuhome.workbench.api`` reached
+    Depending on the package must not drag
+    in the toolchain, the C sources or the west manifest. Before this
+    boundary work, ``import mcuhome.workbench.api`` reached
     ``manifest`` → ``workspace`` → ``generate``, so every dashboard
     install carried the code generator and the west driver it can never
     run — silently, because nothing failed.

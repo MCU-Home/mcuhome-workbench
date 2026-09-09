@@ -10,7 +10,7 @@ code generator has to reproduce, so if this model ever stops matching
 them, the generator would emit a different device than the one that was
 commissioned into a real Home Assistant.
 
-**This is the cross-repository contract of ADR 0024.** The golden model
+**This is the cross-repository contract of the repository split.** The golden model
 document in ``data/golden/`` is pinned here — against the real resolver,
 which is this repository's — and read over there as the model itself, by
 a suite that has no resolver to run. Both halves of the split therefore

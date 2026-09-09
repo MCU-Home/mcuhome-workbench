@@ -185,8 +185,8 @@ def test_the_file_is_byte_identical_to_the_one_chips_tool_writes(
     """The check that keeps the reimplementation honest.
 
     MCUHome writes the .ota itself so that ``mcuhome sign`` can produce one
-    on a machine with no Matter SDK (ADR 0015 decision 8 puts signing where
-    the key is). That is only defensible if the result is the same file
+    on a machine with no Matter SDK — signing runs where the key is.
+    That is only defensible if the result is the same file
     CHIP's tool would have written, so wherever the SDK *is* available —
     a contributor's workspace, CI — this compares the bytes.
     """

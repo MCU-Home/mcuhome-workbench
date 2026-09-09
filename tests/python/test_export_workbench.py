@@ -6,7 +6,7 @@ The workbench half of the subject: :mod:`mcuhome.workbench.configschema`
 builds the ``main.yaml`` JSON Schema, and it has to describe exactly the
 configuration :mod:`mcuhome.workbench.schema`'s parser accepts. Like the
 registry in ``mcuhome-sdk``'s ``test_export.py``, the document is a contract with
-a consumer that is not in this repository (dashboard ADR 0011): an editor
+a consumer that is not in this repository — the dashboard: an editor
 validates against it. It is therefore golden-tested byte for byte — a
 change to it is a change a human approves, not one that happens.
 """
