@@ -53,12 +53,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from mcuhome.model.buildenvironment import (
+    ENVIRONMENT_IMAGE_REPOSITORY,
     PACKAGE_MEMBER_PREFIX,
     Declaration,
     PackageMember,
     declaration_from_labels,
 )
-from mcuhome.model.buildimage import ENVIRONMENT_IMAGE_REPOSITORY
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 

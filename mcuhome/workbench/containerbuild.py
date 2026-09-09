@@ -56,7 +56,6 @@ from mcuhome.model.buildenvironment import (
     Declaration,
     PackageMember,
 )
-from mcuhome.model.buildimage import CCACHE_DIR_VAR, DOCKER_VAR
 from mcuhome.model.context import (
     BUILD_CONTEXT_FILE,
     MANIFEST_FILE,
@@ -112,8 +111,10 @@ from mcuhome.workbench.resolve_image import (
 from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
+    "CCACHE_DIR_VAR",
     "CONTAINER_REPOSITORIES_OPTION",
     "DEFAULT_PIDS",
+    "DOCKER_VAR",
     "ENTRY_POINT_PATH",
     "ContainerBuildResult",
     "Mount",
@@ -142,6 +143,16 @@ CONTAINER_REPOSITORIES_OPTION = "build.container_repositories"
 #: for everything used here; it is not tested, hence a variable and not a
 #: documented feature.
 DEFAULT_RUNTIME = "docker"
+
+#: Overrides the container program. Same reasoning as
+#: :data:`DEFAULT_RUNTIME`: an escape hatch, not a documented feature.
+DOCKER_VAR = "MCUHOME_DOCKER"
+
+#: Overrides where the compiler cache lives on the host. Useful for
+#: putting it on a faster disk, or for sharing one cache between
+#: checkouts. A host fact, and therefore stated by the side that runs the
+#: container rather than by the environment it runs.
+CCACHE_DIR_VAR = "MCUHOME_CCACHE_DIR"
 
 #: Where §4's tree is inside the container. ``MCUHOME_BUILDER_BASE_DIR``
 #: is ``/`` here, which is what makes every mount target the same string
