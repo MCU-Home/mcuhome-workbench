@@ -1447,7 +1447,7 @@ def _select(shelf: _Shelf, demand: _Demand, *, platform: str | None) -> _Found:
         )
     except BuildError:
         raise _NotHere(f"publishes {', '.join(sorted(candidates))}") from None
-    return _pinned(shelf, demand, name, version, candidates[version], platform=platform)
+    return _pinned(shelf, name, version, candidates[version], platform=platform)
 
 
 def _by_hash(
@@ -1477,13 +1477,12 @@ def _by_hash(
             resolved = resolve_entry(shelf.entries, name, version, platform=platform)
         except PackageRegistryError:  # pragma: no cover - pin_entry answered a moment ago
             continue
-        return _pinned(shelf, demand, name, version, resolved, platform=platform)
+        return _pinned(shelf, name, version, resolved, platform=platform)
     raise _NotHere(f"publishes no {demand.name} with that hash")
 
 
 def _pinned(
     shelf: _Shelf,
-    demand: _Demand,
     name: str,
     version: str,
     entry: ResolvedEntry,
@@ -1491,7 +1490,6 @@ def _pinned(
     platform: str | None,
 ) -> _Found:
     """The pin for one selected version, and the meta file behind it."""
-    del demand
     pinned = pin_entry(shelf.entries, name, version, platform=platform)
     meta = None if entry.meta_file is None else _read_meta(shelf, entry)
     pin = PackagePin(
