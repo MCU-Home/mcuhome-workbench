@@ -70,12 +70,14 @@ from mcuhome.model.userpaths import expand
 from mcuhome.packagetool.verify import (
     INDEX_FILE,
     KEYS_FILE,
+    META_FILE_KEY,
     MIRRORS_FILE,
     SIGNATURE_SUFFIX,
     KeySet,
     Refused,
     all_entries,
     check_meta_entry,
+    check_meta_file,
     load_anchor,
     verify_source,
 )
@@ -87,6 +89,7 @@ __all__ = [
     "BUNDLED_ANCHOR_DIR",
     "OFFICIAL_BASE_DOMAIN",
     "TRUST_ANCHOR_DIR",
+    "MetaFile",
     "PackageRegistry",
     "PackageRegistryError",
     "RegistrySettings",
@@ -99,13 +102,16 @@ __all__ = [
     "host_platform",
     "install_trust_anchors",
     "load_trust_anchor",
+    "check_meta_bytes",
     "check_platform",
     "matching_version",
     "merge_registries",
+    "meta_file_of",
     "opened",
     "pin_entry",
     "parse_registries",
     "registry_factory",
+    "registry_opener",
     "registry_for",
     "resolve_entry",
     "settings_for",
@@ -557,6 +563,85 @@ def _is_url(location: str) -> bool:
 
 
 @dataclass(frozen=True)
+class MetaFile:
+    """The sidecar an index records beside an archive: file, hash, size.
+
+    ``<archive>.meta.json`` is what a package says about itself — what it
+    requires of the stage below it above all — and the index records it
+    exactly the way it records the archive: by name, hash and size, never
+    by content. That is what keeps "which version satisfies this
+    constraint" a question the index answers on its own, with one small
+    fetch after it for the one version that won.
+
+    The three members are the whole type. What is *in* the document is
+    :class:`~mcuhome.model.buildenvironment.PackageMeta`'s business, and
+    the two are deliberately apart: this one says where the bytes are and
+    which bytes are right, that one says what they mean.
+    """
+
+    file: str
+    sha256: str
+    size: int
+
+
+def meta_file_of(entry: Mapping[str, Any], *, name: str, version: str) -> MetaFile | None:
+    """The ``meta_file`` record of *entry*, or ``None`` where it has none.
+
+    Absent is a legitimate answer: the member is optional in the index
+    format, and a package published before it existed simply has none.
+    What a *caller* does with that absence is its own rule — a chain
+    resolution refuses such a version as a candidate, because a version
+    that does not say what it requires cannot be resolved through.
+
+    Present and malformed is not absent: the shape is checked by the same
+    verifier the registry's own publish pipeline runs
+    (:func:`~mcuhome.packagetool.verify.check_meta_file`), so a damaged
+    record is a refusal rather than a silently ignored member.
+    """
+    if META_FILE_KEY not in entry:
+        return None
+    try:
+        check_meta_file(name, version, dict(entry))
+    except Refused as broken:
+        raise PackageRegistryError(
+            f"The index entry for {name} {version} records a damaged meta file: {broken}.",
+            hint=(
+                "the index is damaged or was tampered with. Try another mirror, "
+                "and report it to the registry's operator."
+            ),
+        ) from broken
+    record = entry[META_FILE_KEY]
+    return MetaFile(
+        file=str(record["file"]), sha256=str(record["sha256"]), size=int(record["size"])
+    )
+
+
+def check_meta_bytes(payload: bytes, meta: MetaFile, *, where: str) -> bytes:
+    """*payload* held against the size and hash the index records for it.
+
+    The one check that makes the transport irrelevant, on the document
+    rather than on an archive: a meta file decides which version of the
+    next stage a build resolves to, so bytes that are not the ones the
+    index was signed for are a refusal, not a fallback.
+    """
+    if len(payload) != meta.size:
+        raise PackageRegistryError(
+            f"{meta.file} is {len(payload)} bytes and the index says {meta.size}.",
+            hint="the copy is incomplete, or the source serves something else",
+        )
+    measured = hashlib.sha256(payload).hexdigest()
+    if measured != meta.sha256:
+        raise PackageRegistryError(
+            f"{meta.file} hashes to {measured} and the index says {meta.sha256}.",
+            hint=(
+                f"these are not the bytes {where} was signed for. Try another mirror; "
+                "if every one says this, tell the registry's operator."
+            ),
+        )
+    return payload
+
+
+@dataclass(frozen=True)
 class ResolvedEntry:
     """One concrete package: the name it is published under and its entry.
 
@@ -574,6 +659,8 @@ class ResolvedEntry:
     size: int
     #: ``True`` when the answer came out of a meta entry.
     through_meta: bool = False
+    #: The ``<archive>.meta.json`` beside it, where the index records one.
+    meta_file: MetaFile | None = None
 
 
 def matching_version(
@@ -784,6 +871,7 @@ def _concrete(
             sha256=str(entry["sha256"]),
             size=int(entry["size"]),
             through_meta=through_meta,
+            meta_file=meta_file_of(entry, name=name, version=version),
         )
     except (KeyError, TypeError, ValueError) as broken:
         raise PackageRegistryError(
@@ -1143,6 +1231,36 @@ class PackageRegistry:
 
     # -- the bytes -----------------------------------------------------
 
+    def fetch_meta(self, index: VerifiedIndex, meta: MetaFile) -> bytes:
+        """One package's ``meta.json`` from the mirror *index* came from.
+
+        The same mirror, the same anchor, the same arithmetic as an
+        archive: the bytes are held against the size and the sha256 the
+        **verified index** records, so a document that decides which
+        version of the next stage a build resolves to is trusted for
+        exactly as much as the archive beside it. Whole in memory rather
+        than streamed to disk, because a meta file is kilobytes and the
+        caller parses it immediately.
+        """
+        self._loudly_unverified(index.source, index.base)
+        name = _usable_name(meta.file, "the package meta file")
+        if _is_url(index.base):
+            with self._stream(f"{index.base}{name}") as answer:
+                payload = answer.read(meta.size + 1)
+        else:
+            origin = Path(index.base) / name
+            if not origin.is_file():
+                raise PackageRegistryError(
+                    f"{origin} is missing from this mirror.",
+                    hint=(
+                        "the mirror's index records a meta file beside the archive and "
+                        "the file is not there — the copy is incomplete. Synchronise "
+                        "it again."
+                    ),
+                )
+            payload = origin.read_bytes()
+        return check_meta_bytes(payload, meta, where=index.base)
+
     def fetch_package(self, index: VerifiedIndex, entry: ResolvedEntry, *, into: Path) -> Path:
         """*entry*'s archive from the mirror *index* came from, into *into*.
 
@@ -1294,6 +1412,49 @@ def registry_factory(
         return held[0]
 
     return build
+
+
+def registry_opener(
+    *,
+    project_root: Path,
+    settings: Sequence[RegistrySettings] = (),
+    into: Path,
+    opener: Callable[[str, float], IO[bytes]] | None = None,
+    on_warning: Callable[[str], None] | None = None,
+    now: datetime | None = None,
+) -> Callable[[str], PackageRegistry]:
+    """:func:`registry_for` for whichever base domain is asked for, once each.
+
+    A build reads one host almost always, and the exception is the reason
+    this exists: a device may point one package at another registry, and
+    that registry has a trust anchor and mirrors of its own — per base
+    domain, which is what an anchor *is* per. So the answer cannot be one
+    client; it is a function from a domain to its client, with each one
+    built at the first question asked of it and kept for the rest of the
+    build.
+
+    Each domain lays its documents down in its own directory under
+    *into*, so two registries that happen to publish a source of the same
+    name cannot read each other's copies.
+    """
+    held: dict[str, PackageRegistry] = {}
+
+    def open_for(base_domain: str) -> PackageRegistry:
+        client = held.get(base_domain)
+        if client is None:
+            client = registry_for(
+                base_domain,
+                project_root=project_root,
+                settings=settings,
+                into=Path(into) / _usable_domain(base_domain),
+                opener=opener,
+                on_warning=on_warning,
+                now=now,
+            )
+            held[base_domain] = client
+        return client
+
+    return open_for
 
 
 def opened(source: RegistrySource | None) -> PackageRegistry | None:

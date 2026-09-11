@@ -17,6 +17,7 @@ flake on somebody's aeroplane.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import shutil
@@ -53,6 +54,7 @@ from mcuhome.workbench.packageregistry import (
     install_trust_anchors,
     matching_version,
     merge_registries,
+    meta_file_of,
     parse_registries,
     registry_factory,
     registry_for,
@@ -187,16 +189,46 @@ def anchor_document(keys: dict[str, SigningKey], names: tuple[str, ...]) -> dict
     }
 
 
+def build_meta_document(
+    name: str, version: str, *, requires: dict[str, str] | None = None
+) -> bytes:
+    """A schema-1 package meta document, just valid enough for the publishing tool to accept it.
+
+    Its *content* is not this suite's subject: the registry client records
+    and verifies the sidecar's bytes without ever reading what is inside
+    them, and what the members mean once they are parsed is
+    ``test_resolve_pins.py``'s business. This exists so a test can put
+    something the real publishing tool actually accepts beside an
+    archive, rather than an arbitrary blob it would refuse to record.
+    """
+    document = {
+        "schema": 1,
+        "package": {"name": name, "version": version, "architecture": None},
+        "requires": requires if requires is not None else {"mcuhome-build-workspace": "~=0.1.0"},
+        "inputs_sha256": "b" * 64,
+        "contents": {},
+    }
+    return json.dumps(document).encode()
+
+
 def build_source(
     directory: Path,
     keys: dict[str, SigningKey],
     *,
     packages: tuple[tuple[str, str, bytes], ...] = ((SDK, VERSION, SDK_ARCHIVE),),
     meta: tuple[str, str, dict] | None = None,
+    meta_files: dict[str, bytes] | None = None,
     mirrors: tuple[str, ...] = (MIRROR,),
     issued: datetime = ISSUED,
 ) -> Path:
-    """A complete served source, built by the tool that builds the real ones."""
+    """A complete served source, built by the tool that builds the real ones.
+
+    *meta_files* puts a ``<archive>.meta.json`` sidecar beside a package's
+    archive before it is recorded, keyed by package name. Writing the file
+    is all a caller has to do: :func:`add_package` looks for it beside the
+    archive on its own and records it into the index, exactly as the real
+    publishing tool does for a real release.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     roots = [keys["root-a"], keys["root-b"], keys["root-c"]]
     publishers = [keys["publisher"]]
@@ -215,6 +247,9 @@ def build_source(
         moment = moment + timedelta(minutes=1)
         filename = f"{name}-{version}.tar.zst"
         (directory / filename).write_bytes(payload)
+        sidecar = (meta_files or {}).get(name)
+        if sidecar is not None:
+            (directory / (filename + ".meta.json")).write_bytes(sidecar)
         add_package(
             directory,
             name=name,
@@ -330,6 +365,85 @@ def test_an_archive_whose_bytes_are_not_the_signed_ones_is_refused(
     with pytest.raises(PackageRegistryError, match="hashes to"):
         client.fetch_package(index, entry, into=tmp_path / "packages")
     assert not (tmp_path / "packages" / entry.file).exists()
+
+
+# --------------------------------------------------------------------------
+# The meta file sidecar: recorded by the index, fetched and hashed like a package
+# --------------------------------------------------------------------------
+
+
+def test_a_resolved_entry_carries_its_meta_file_record(
+    tmp_path: Path, keys: dict[str, SigningKey], anchor: Path
+) -> None:
+    """The index records the sidecar exactly as it records the archive.
+
+    Not its content — a client resolving a chain never has to fetch a
+    meta file to learn a version even exists — but the file name, hash
+    and size, which is what makes a later :meth:`fetch_meta` checkable
+    against the same verified index the archive is checked against.
+    """
+    sidecar = build_meta_document(SDK, VERSION)
+    src = build_source(tmp_path / "served" / SOURCE, keys, meta_files={SDK: sidecar})
+    served = bootstrap(Served().publish(MIRROR, src))
+    entry = registry(tmp_path, anchor, served).index(SOURCE).resolve(SDK, VERSION)
+
+    assert entry.meta_file is not None
+    assert entry.meta_file.file == f"{SDK}-{VERSION}.tar.zst.meta.json"
+    assert entry.meta_file.sha256 == hashlib.sha256(sidecar).hexdigest()
+    assert entry.meta_file.size == len(sidecar)
+
+
+def test_fetch_meta_answers_with_exactly_the_sidecar_bytes(
+    tmp_path: Path, keys: dict[str, SigningKey], anchor: Path
+) -> None:
+    sidecar = build_meta_document(SDK, VERSION)
+    src = build_source(tmp_path / "served" / SOURCE, keys, meta_files={SDK: sidecar})
+    served = bootstrap(Served().publish(MIRROR, src))
+    client = registry(tmp_path, anchor, served)
+    index = client.index(SOURCE)
+    entry = index.resolve(SDK, VERSION)
+
+    assert entry.meta_file is not None
+    assert client.fetch_meta(index, entry.meta_file) == sidecar
+
+
+def test_a_meta_file_whose_bytes_are_not_the_signed_ones_is_refused(
+    tmp_path: Path, keys: dict[str, SigningKey], anchor: Path
+) -> None:
+    """A meta file decides what a build resolves to next, so it is held to
+    the same arithmetic as an archive — same length is not enough."""
+    sidecar = build_meta_document(SDK, VERSION)
+    src = build_source(tmp_path / "served" / SOURCE, keys, meta_files={SDK: sidecar})
+    served = bootstrap(Served().publish(MIRROR, src))
+    client = registry(tmp_path, anchor, served)
+    index = client.index(SOURCE)
+    entry = index.resolve(SDK, VERSION)
+    assert entry.meta_file is not None
+
+    # Same length, other bytes: the size check cannot see this one.
+    served.put(MIRROR + entry.meta_file.file, bytes(len(sidecar)))
+    with pytest.raises(PackageRegistryError, match="hashes to"):
+        client.fetch_meta(index, entry.meta_file)
+
+
+def test_a_malformed_meta_file_record_is_refused() -> None:
+    """A damaged index member is a refusal, not a member silently treated
+    as absent — the two are different failures for a reader to tell apart."""
+    entry = {
+        "file": f"{SDK}-{VERSION}.tar.zst",
+        "sha256": "a" * 64,
+        "size": 1,
+        "meta_file": {"file": "x.meta.json"},
+    }
+    with pytest.raises(PackageRegistryError, match="damaged meta file"):
+        meta_file_of(entry, name=SDK, version=VERSION)
+
+
+def test_an_entry_without_a_meta_file_answers_none() -> None:
+    """Absent is a legitimate answer: a package published before the member
+    existed carries none, and that is not the same as a damaged one."""
+    entry = {"file": f"{SDK}-{VERSION}.tar.zst", "sha256": "a" * 64, "size": 1}
+    assert meta_file_of(entry, name=SDK, version=VERSION) is None
 
 
 # --------------------------------------------------------------------------
