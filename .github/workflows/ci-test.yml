@@ -70,7 +70,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mcu-home/mcuhome-packagetool
-          ref: aaa6cf559281f2ef468015918267d13d6af88622 # main as of 2026-09-06
+          ref: 7ce85fce47b89532dfa1585f0790e0820a1fbc71 # main as of 2026-09-11
           path: .deps/mcuhome-packagetool
 
       - name: Set up Python
