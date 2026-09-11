@@ -13,9 +13,10 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from conftest import VALID_CONFIG, build_package_archive, resolve_file
+from conftest import VALID_CONFIG, build_package_archive, package_meta, resolve_file
 from mcuhome.model.buildenvironment import DEFAULT_BUILD_TOOLS, DEFAULT_BUILD_WORKSPACE
 from mcuhome.model.context import PackagePin
 from mcuhome.model.errors import BuildError
@@ -289,70 +290,113 @@ def test_the_sdk_constraint_still_comes_out_of_the_same_reader() -> None:
 
 
 # --------------------------------------------------------------------------
-# The environment lock, and the two pins derived from it
+# The chain: the SDK requires a workspace, the workspace requires tools
 # --------------------------------------------------------------------------
 
+SDK = "mcuhome-sdk"
 WORKSPACE = "mcuhome-build-workspace"
 TOOLS = "mcuhome-build-tools"
-_LOCK_VERSION = "0.1.10.dev1"
+PLATFORM = "linux-amd64"
+CONCRETE_TOOLS = f"{TOOLS}_{PLATFORM}"
 
 
-def _sdk_with_lock(directory: Path, *, version: str = "0.1.0", lock: dict | None = None) -> str:
-    """A source directory holding an SDK archive whose lock names *lock*.
+class Source:
+    """A package source directory a test publishes into.
 
-    Answers the archive's real sha256, which is what a resolution pins
-    and what the acquisition checks the bytes against.
+    The production shape and nothing simulated: every archive gets its
+    ``<archive>.meta.json`` beside it and the index records it under
+    ``meta_file``, because that is what a chain resolution reads. What a
+    test varies is what the documents *say* — which constraint, which
+    versions, and whether a version states anything at all.
     """
-    members = {
-        "mcuhome-sdk.json": (b'{"sdk": 1}', False),
-        "mcuhome/model/__init__.py": (f'__version__ = "{version}"\n'.encode(), False),
-    }
-    if lock is not None:
-        members["build-environment.lock.json"] = (json.dumps(lock).encode(), False)
-    directory.mkdir(parents=True, exist_ok=True)
-    archive = build_package_archive(members)
-    filename = f"mcuhome-sdk-{version}.tar.zst"
-    (directory / filename).write_bytes(archive)
-    digest = hashlib.sha256(archive).hexdigest()
-    index = {
-        "packages": {
-            "mcuhome-sdk": {version: {"file": filename, "sha256": digest, "size": len(archive)}}
+
+    def __init__(self, directory: Path) -> None:
+        self.path = Path(directory)
+        self.path.mkdir(parents=True, exist_ok=True)
+        self.packages: dict[str, dict[str, dict]] = {}
+        self.hashes: dict[str, str] = {}
+        self._write()
+
+    def sdk(
+        self, version: str = "0.1.0", *, requires: dict | None = None, meta: bool = True
+    ) -> str:
+        """One SDK release, whose archive carries the first link of the chain."""
+        members = {
+            "mcuhome-sdk.json": (b'{"sdk": 1}', False),
+            "mcuhome/model/__init__.py": (f'__version__ = "{version}"\n'.encode(), False),
         }
-    }
-    (directory / "index.json").write_text(json.dumps(index), encoding="utf-8")
-    return digest
-
-
-def _environment_index(directory: Path, *, meta: bool = False, platform: str = "linux-amd64"):
-    """Extend a source directory's index with the two environment packages.
-
-    With *meta*, the tools package is published the way it really is: a
-    family entry naming one concrete package per architecture, and a hash
-    over the members it points at.
-    """
-    index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
-    hashes = {}
-    for name in (WORKSPACE, TOOLS):
-        payload = f"{name} {_LOCK_VERSION}\n".encode()
-        filename = f"{name}-{_LOCK_VERSION}.tar.zst"
-        (directory / filename).write_bytes(payload)
-        hashes[name] = hashlib.sha256(payload).hexdigest()
-        index["packages"][name] = {
-            _LOCK_VERSION: {"file": filename, "sha256": hashes[name], "size": len(payload)}
+        if meta:
+            members["meta.json"] = (package_meta("mcuhome-sdk", version, requires=requires), False)
+        archive = build_package_archive(members)
+        filename = f"mcuhome-sdk-{version}.tar.zst"
+        (self.path / filename).write_bytes(archive)
+        digest = hashlib.sha256(archive).hexdigest()
+        self.packages.setdefault("mcuhome-sdk", {})[version] = {
+            "file": filename,
+            "sha256": digest,
+            "size": len(archive),
         }
-    if meta:
-        concrete = f"{TOOLS}_{platform}"
-        index["packages"][concrete] = index["packages"].pop(TOOLS)
-        entry = {"meta": {"arch": {platform: concrete}}}
-        entry["sha256"] = meta_hash(index["packages"], entry["meta"])
-        index["packages"][TOOLS] = {_LOCK_VERSION: entry}
-        hashes[TOOLS] = entry["sha256"]
-        hashes[concrete] = index["packages"][concrete][_LOCK_VERSION]["sha256"]
-    (directory / "index.json").write_text(json.dumps(index), encoding="utf-8")
-    return hashes
+        self.hashes[f"mcuhome-sdk {version}"] = digest
+        self._write()
+        return digest
+
+    def publish(
+        self,
+        name: str,
+        version: str,
+        *,
+        requires: dict | None = None,
+        meta: bool = True,
+        architecture: str | None = None,
+        broken: str = "",
+    ) -> str:
+        """One package archive, its sidecar, and the index entry for both.
+
+        *meta* ``False`` publishes a version that says nothing about what
+        it requires — the shape of everything published before meta files
+        existed. *broken* replaces what the index records the sidecar's
+        hash as, which is how a test arranges bytes that do not verify.
+        """
+        payload = f"{name} {version}\n".encode()
+        filename = f"{name}-{version}.tar.zst"
+        (self.path / filename).write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        entry: dict = {"file": filename, "sha256": digest, "size": len(payload)}
+        if meta:
+            document = package_meta(
+                name.split("_", 1)[0], version, requires=requires, architecture=architecture
+            )
+            (self.path / f"{filename}.meta.json").write_bytes(document)
+            entry["meta_file"] = {
+                "file": f"{filename}.meta.json",
+                "sha256": broken or hashlib.sha256(document).hexdigest(),
+                "size": len(document),
+            }
+        self.packages.setdefault(name, {})[version] = entry
+        self.hashes[f"{name} {version}"] = digest
+        self._write()
+        return digest
+
+    def family(self, family: str, version: str, *, platform: str = PLATFORM) -> str:
+        """The meta entry that makes a family name resolve per platform."""
+        members = {platform: f"{family}_{platform}"}
+        entry = {"meta": {"arch": members}}
+        entry["sha256"] = meta_hash(self.packages, entry["meta"], version)
+        self.packages.setdefault(family, {})[version] = entry
+        self.hashes[f"{family} {version}"] = entry["sha256"]
+        self._write()
+        return entry["sha256"]
+
+    def hash_of(self, name: str, version: str) -> str:
+        return self.hashes[f"{name} {version}"]
+
+    def _write(self) -> None:
+        (self.path / "index.json").write_text(
+            json.dumps({"packages": self.packages}), encoding="utf-8"
+        )
 
 
-def meta_hash(packages: dict, meta: dict) -> str:
+def meta_hash(packages: dict, meta: dict, version: str) -> str:
     """The frozen meta-entry hash: the members expanded, canonically encoded.
 
     Spelled out here rather than imported, because the value under test is
@@ -364,7 +408,7 @@ def meta_hash(packages: dict, meta: dict) -> str:
 
     expanded = {
         dimension: {
-            key: {"name": package, "sha256": packages[package][_LOCK_VERSION]["sha256"]}
+            key: {"name": package, "sha256": packages[package][version]["sha256"]}
             for key, package in members.items()
         }
         for dimension, members in meta.items()
@@ -372,33 +416,325 @@ def meta_hash(packages: dict, meta: dict) -> str:
     return hashlib.sha256(canonical_json(expanded)).hexdigest()
 
 
-def test_the_environment_versions_come_out_of_the_sdk_release(tmp_path) -> None:
-    """A device that states nothing gets the pair its SDK was tested with.
+def chained(tmp_path: Path, *, sdk_requires: str = "~=0.1.0", tools_requires: str = "~=0.1.0"):
+    """The ordinary source: one SDK, one workspace, one tools package."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: sdk_requires})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: tools_requires})
+    source.publish(TOOLS, "0.1.0")
+    return source
 
-    This is the whole default: the SDK release carries the versions, the
-    index carries the hashes, and nothing about either is written into
-    the device.
-    """
-    source = tmp_path / "src"
-    _sdk_with_lock(
-        source,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
-    )
-    hashes = _environment_index(source)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=DEFAULT_BUILD_WORKSPACE,
-        tools=DEFAULT_BUILD_TOOLS,
-        sdk_source=DEFAULT_SDK,
+
+def resolved(source: Source, tmp_path: Path, **kwargs):
+    """What a device with no ``sources:`` at all resolves to, through the chain."""
+    found = resolve_sdk((source.path,), constraint="==0.1.0", prereleases=True)
+    return resolve_environment(
+        workspace=kwargs.pop("workspace", DEFAULT_BUILD_WORKSPACE),
+        tools=kwargs.pop("tools", DEFAULT_BUILD_TOOLS),
+        sdk_source=kwargs.pop("sdk_source", DEFAULT_SDK),
         sdk=found,
-        sources=(source,),
+        sources=kwargs.pop("sources", (source.path,)),
         work_root=tmp_path / "work",
+        **kwargs,
     )
-    assert pin.workspace.name == WORKSPACE
-    assert pin.workspace.version == _LOCK_VERSION
-    assert pin.workspace.sha256 == hashes[WORKSPACE]
-    assert pin.tools.name == TOOLS
-    assert pin.tools.sha256 == hashes[TOOLS]
+
+
+def test_the_chain_resolves_two_hops_from_the_index(tmp_path) -> None:
+    """The whole default: SDK to workspace to tools, one constraint per link.
+
+    The SDK's own meta file states which *range* of build workspaces it
+    was built with; the newest published workspace in that range wins,
+    and that package's own meta file states the range of build tools.
+    Nothing in the middle is a version somebody wrote down twice.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.4", requires={TOOLS: "~=0.2.0"})
+    source.publish(WORKSPACE, "0.2.0", requires={TOOLS: "~=0.3.0"})
+    source.publish(TOOLS, "0.1.9")
+    source.publish(TOOLS, "0.2.0")
+    source.publish(TOOLS, "0.2.3")
+    source.publish(TOOLS, "0.3.0")
+
+    pin = resolved(source, tmp_path)
+    # 0.2.0 is outside the SDK's ~=0.1.0, so the newest inside it wins —
+    # and the tools follow *that* workspace's own constraint, not the
+    # newest tools package there is.
+    assert (pin.workspace.name, pin.workspace.version) == (WORKSPACE, "0.1.4")
+    assert pin.workspace.sha256 == source.hash_of(WORKSPACE, "0.1.4")
+    assert (pin.tools.name, pin.tools.version) == (TOOLS, "0.2.3")
+    assert pin.tools.sha256 == source.hash_of(TOOLS, "0.2.3")
+
+
+def test_a_range_constraint_resolves_the_same_way(tmp_path) -> None:
+    """``>=,<`` is PEP 440 as much as ``~=`` is, in a meta file too."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: ">=0.1.4,<0.2"})
+    for version in ("0.1.0", "0.1.4", "0.1.9", "0.2.0"):
+        source.publish(WORKSPACE, version, requires={TOOLS: ">=0.1,<0.3"})
+    source.publish(TOOLS, "0.2.7")
+    source.publish(TOOLS, "0.3.0")
+
+    pin = resolved(source, tmp_path)
+    assert pin.workspace.version == "0.1.9"
+    assert pin.tools.version == "0.2.7"
+
+
+def test_a_version_without_a_meta_file_is_no_candidate(tmp_path) -> None:
+    """A version that does not say what it requires cannot be resolved through.
+
+    It would leave the next stage with nothing to go on — so the newest
+    version *that states something* wins, even where a newer one exists.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.7", meta=False)
+    source.publish(TOOLS, "0.1.0")
+
+    pin = resolved(source, tmp_path)
+    assert pin.workspace.version == "0.1.0"
+
+
+def test_a_stage_whose_versions_all_state_nothing_is_refused_legibly(tmp_path) -> None:
+    """Everything published before meta files existed, in one sentence."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", meta=False)
+    source.publish(WORKSPACE, "0.1.7", meta=False)
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "says what it requires" in caught.value.message
+    assert WORKSPACE in caught.value.message
+    assert "meta.json" in caught.value.hint
+    assert "0.1.7" in caught.value.hint
+    assert "sources.build_workspace" in caught.value.hint
+
+
+def test_nothing_satisfying_the_constraint_is_refused_with_what_there_is(tmp_path) -> None:
+    """The other refusal: versions with meta files, none of them in range."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.9.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "~=0.9.0" in caught.value.message
+    assert "0.1.0" in caught.value.hint
+
+
+def test_a_release_that_states_no_requirement_is_refused(tmp_path) -> None:
+    """A package that ends the chain early cannot have a constraint guessed for it."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires=None)
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert WORKSPACE in caught.value.message
+    assert "sources" in caught.value.hint
+
+
+def test_a_release_without_a_meta_file_is_refused_legibly(tmp_path) -> None:
+    """An SDK that does not say which environment it wants cannot be guessed at."""
+    source = Source(tmp_path / "src")
+    source.sdk(meta=False)
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "meta.json" in caught.value.message
+    assert "sources.build_workspace" in caught.value.hint
+
+
+def test_a_meta_file_whose_bytes_do_not_verify_is_refused(tmp_path) -> None:
+    """The hash the index records is what decides which bytes are the right ones."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"}, broken="ff" * 32)
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "hashes to" in caught.value.message
+
+
+def test_a_meta_file_of_another_schema_is_refused(tmp_path) -> None:
+    """A reader that guessed at a shape it does not know would resolve from a
+    document it misunderstood."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    sidecar = source.path / f"{WORKSPACE}-0.1.0.tar.zst.meta.json"
+    document = json.loads(sidecar.read_text(encoding="utf-8"))
+    document["schema"] = 2
+    payload = json.dumps(document).encode()
+    sidecar.write_bytes(payload)
+    source.packages[WORKSPACE]["0.1.0"]["meta_file"] = {
+        "file": sidecar.name,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
+    source._write()
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "schema" in caught.value.message
+
+
+def test_a_meta_file_that_describes_another_package_is_refused(tmp_path) -> None:
+    """A sidecar is held against the archive it sits beside."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    sidecar = source.path / f"{WORKSPACE}-0.1.0.tar.zst.meta.json"
+    payload = package_meta("mcuhome-something-else", "0.1.0", requires={TOOLS: "~=0.1.0"})
+    sidecar.write_bytes(payload)
+    source.packages[WORKSPACE]["0.1.0"]["meta_file"] = {
+        "file": sidecar.name,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+    }
+    source._write()
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "mcuhome-something-else" in caught.value.message
+
+
+def test_a_host_prefixed_requirement_names_the_package_it_is_about(tmp_path) -> None:
+    """``requires`` keys may carry the host the package comes from.
+
+    The constraint is the same constraint; the prefix says where, and a
+    build that reads one host resolves it there.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={f"{OFFICIAL_BASE_DOMAIN}/{WORKSPACE}": "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={f"{OFFICIAL_BASE_DOMAIN}/{TOOLS}": "~=0.1.0"})
+    source.publish(TOOLS, "0.1.0")
+
+    pin = resolved(source, tmp_path)
+    assert (pin.workspace.version, pin.tools.version) == ("0.1.0", "0.1.0")
+
+
+# --------------------------------------------------------------------------
+# What a device may override, and what it is told about it
+# --------------------------------------------------------------------------
+
+
+def test_a_device_may_narrow_the_range_with_a_constraint(tmp_path) -> None:
+    """``:~=0.1.4`` is a device deciding for itself inside what the chain allows."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    for version in ("0.1.0", "0.1.4", "0.1.9"):
+        source.publish(WORKSPACE, version, requires={TOOLS: "~=0.1.0"})
+    source.publish(TOOLS, "0.1.0")
+
+    lines: list[str] = []
+    pin = resolved(source, tmp_path, workspace=f"{WORKSPACE}:>=0.1.4,<0.1.9", on_line=lines.append)
+    assert pin.workspace.version == "0.1.4"
+    # Inside the declared range, so nothing to say about it.
+    assert lines == []
+
+
+def test_an_override_outside_the_declared_range_builds_and_says_so(tmp_path) -> None:
+    """Never a refusal: the stage above knows what it was tested with, not
+    what is allowed."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.9.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(TOOLS, "0.1.0")
+
+    lines: list[str] = []
+    pin = resolved(source, tmp_path, workspace=f"{WORKSPACE}:0.9.0", on_line=lines.append)
+    assert pin.workspace.version == "0.9.0"
+    assert len(lines) == 1
+    assert lines[0].startswith("Note: ")
+    assert "sources.build_workspace" in lines[0]
+    assert "~=0.1.0" in lines[0]
+    assert "0.9.0" in lines[0]
+
+
+def test_an_override_naming_another_package_builds_and_says_so(tmp_path) -> None:
+    """The chain cannot speak about a package nobody required."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish("acme-workspace", "2.0.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(TOOLS, "0.1.0")
+
+    lines: list[str] = []
+    pin = resolved(source, tmp_path, workspace="acme-workspace", on_line=lines.append)
+    assert (pin.workspace.name, pin.workspace.version) == ("acme-workspace", "2.0.0")
+    assert len(lines) == 1
+    assert f"{SDK} 0.1.0 requires {WORKSPACE} ~=0.1.0" in lines[0]
+    assert "acme-workspace 2.0.0" in lines[0]
+
+
+def test_an_override_pinning_a_hash_selects_that_archive(tmp_path) -> None:
+    """``@sha256:`` with no version: the bytes decide, the index says which
+    release they are — and the chain goes on from that version's meta file."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    wanted = source.publish(WORKSPACE, "0.1.4", requires={TOOLS: "~=0.2.0"})
+    source.publish(TOOLS, "0.1.0")
+    source.publish(TOOLS, "0.2.0")
+
+    pin = resolved(source, tmp_path, workspace=f"@sha256:{wanted}")
+    assert (pin.workspace.version, pin.workspace.sha256) == ("0.1.4", wanted)
+    assert pin.tools.version == "0.2.0"
+
+
+def test_a_fully_pinned_reference_needs_no_index_at_all(tmp_path) -> None:
+    """The offline escape hatch: a device that states version and hash.
+
+    Nothing is looked up — not the SDK's meta file, not an index — so an
+    operator who has the bytes can build with no package source
+    configured for them at all. The chain ends there, so the next stage
+    has to be stated too.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+
+    pin = resolved(
+        source,
+        tmp_path,
+        workspace=f"build-workspace/{WORKSPACE}:1.0.0@sha256:{'11' * 32}",
+        tools=f"build-tools/{TOOLS}:1.0.0@sha256:{'22' * 32}",
+    )
+    assert (pin.workspace.version, pin.workspace.sha256) == ("1.0.0", "11" * 32)
+    assert (pin.tools.version, pin.tools.sha256) == ("1.0.0", "22" * 32)
+
+
+def test_a_pinned_workspace_leaves_the_tools_unstated_and_says_so(tmp_path) -> None:
+    """A package that was never looked up cannot say what it needs."""
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(TOOLS, "0.1.0")
+
+    with pytest.raises(BuildError) as caught:
+        resolved(
+            source,
+            tmp_path,
+            workspace=f"build-workspace/{WORKSPACE}:1.0.0@sha256:{'11' * 32}",
+        )
+    assert TOOLS in caught.value.message
+    assert "sources.build_tools" in caught.value.hint
+
+
+def test_a_device_override_replaces_one_derivation_only(tmp_path) -> None:
+    """Each ``sources.*`` entry overrides its own package and nothing else."""
+    source = chained(tmp_path)
+    pin = resolved(source, tmp_path, tools=f"build-tools/{TOOLS}:0.1.0@sha256:{'cd' * 32}")
+    assert pin.tools.sha256 == "cd" * 32
+    assert pin.workspace.sha256 == source.hash_of(WORKSPACE, "0.1.0")
+
+
+# --------------------------------------------------------------------------
+# Where the packages are looked for
+# --------------------------------------------------------------------------
 
 
 def test_a_family_pin_keeps_the_family_name_and_the_meta_hash(tmp_path) -> None:
@@ -409,31 +745,43 @@ def test_a_family_pin_keeps_the_family_name_and_the_meta_hash(tmp_path) -> None:
     package — which is what lets one context build the same firmware on
     hosts of two architectures.
     """
-    source = tmp_path / "src"
-    _sdk_with_lock(
-        source,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
-    )
-    hashes = _environment_index(source, meta=True)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=DEFAULT_BUILD_WORKSPACE,
-        tools=DEFAULT_BUILD_TOOLS,
-        sdk_source=DEFAULT_SDK,
-        sdk=found,
-        sources=(source,),
-        work_root=tmp_path / "work",
-        platform="linux-amd64",
-    )
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(CONCRETE_TOOLS, "0.1.0", architecture=PLATFORM)
+    family = source.family(TOOLS, "0.1.0")
+
+    pin = resolved(source, tmp_path, platform=PLATFORM)
     assert pin.tools.name == TOOLS
-    assert pin.tools.sha256 == hashes[TOOLS]
+    assert pin.tools.sha256 == family
     # And resolving that pin for this host answers with the platform's
     # own package and its own bytes.
     concrete = concrete_package(
-        pin.tools, source="build-tools", sources=(source,), platform="linux-amd64"
+        pin.tools, source="build-tools", sources=(source.path,), platform=PLATFORM
     )
-    assert concrete.name == f"{TOOLS}_linux-amd64"
-    assert concrete.sha256 == hashes[f"{TOOLS}_linux-amd64"]
+    assert concrete.name == CONCRETE_TOOLS
+    assert concrete.sha256 == source.hash_of(CONCRETE_TOOLS, "0.1.0")
+
+
+def test_a_local_directory_without_a_family_entry_still_answers(tmp_path) -> None:
+    """An operator's directory holds what one machine needs, and that is enough.
+
+    A directory that carries this host's tools package and no family
+    entry used to be skipped silently, and the pin resolved through the
+    registry instead — which is the opposite of what pointing at a
+    directory means. It is pinned by the concrete name, because that is
+    the name those bytes are published under there.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    tools = Source(tmp_path / "tools")
+    tools.publish(CONCRETE_TOOLS, "0.1.0", architecture=PLATFORM)
+
+    pin = resolved(source, tmp_path, tools_sources=(tools.path,), platform=PLATFORM)
+    assert pin.tools.name == CONCRETE_TOOLS
+    assert pin.tools.version == "0.1.0"
+    assert pin.tools.sha256 == tools.hash_of(CONCRETE_TOOLS, "0.1.0")
 
 
 def test_each_package_may_be_looked_for_in_its_own_directories(tmp_path) -> None:
@@ -442,96 +790,166 @@ def test_each_package_may_be_looked_for_in_its_own_directories(tmp_path) -> None
 
     The SDK directory here holds only the SDK, and each environment
     package is published in a directory of its own — which resolves only
-    if each pin searched the directories it was given rather than the
+    if each stage searched the directories it was given rather than the
     SDK's.
     """
-    sdk_dir = tmp_path / "sdk"
-    _sdk_with_lock(
-        sdk_dir,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
-    )
-    workspace_dir = tmp_path / "workspaces"
-    tools_dir = tmp_path / "tools"
-    for directory in (workspace_dir, tools_dir):
-        directory.mkdir()
-        (directory / "index.json").write_text('{"packages": {}}', encoding="utf-8")
-    workspace_hashes = _environment_index(workspace_dir)
-    tools_hashes = _environment_index(tools_dir)
+    sdk_dir = Source(tmp_path / "sdk")
+    sdk_dir.sdk(requires={WORKSPACE: "~=0.1.0"})
+    workspaces = Source(tmp_path / "workspaces")
+    workspaces.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    tools = Source(tmp_path / "tools")
+    tools.publish(TOOLS, "0.1.0")
 
-    found = resolve_sdk((sdk_dir,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=DEFAULT_BUILD_WORKSPACE,
-        tools=DEFAULT_BUILD_TOOLS,
-        sdk_source=DEFAULT_SDK,
-        sdk=found,
-        sources=(sdk_dir,),
-        workspace_sources=(workspace_dir,),
-        tools_sources=(tools_dir,),
-        work_root=tmp_path / "work",
+    pin = resolved(
+        sdk_dir,
+        tmp_path,
+        workspace_sources=(workspaces.path,),
+        tools_sources=(tools.path,),
     )
-    assert pin.workspace.sha256 == workspace_hashes[WORKSPACE]
-    assert pin.tools.sha256 == tools_hashes[TOOLS]
+    assert pin.workspace.sha256 == workspaces.hash_of(WORKSPACE, "0.1.0")
+    assert pin.tools.sha256 == tools.hash_of(TOOLS, "0.1.0")
 
     # And without the per-package directories the same call cannot pin
     # anything, because the SDK's directory publishes neither.
     with pytest.raises(BuildError):
-        resolve_environment(
-            workspace=DEFAULT_BUILD_WORKSPACE,
-            tools=DEFAULT_BUILD_TOOLS,
-            sdk_source=DEFAULT_SDK,
-            sdk=found,
-            sources=(sdk_dir,),
-            work_root=tmp_path / "work",
+        resolved(sdk_dir, tmp_path)
+
+
+def test_a_source_that_holds_the_package_but_not_the_version_is_not_the_end(tmp_path) -> None:
+    """A stale operator directory must not stop a build the next source answers.
+
+    The SDK's own resolution has always fallen through such a source; the
+    environment packages do the same, or one forgotten mirror directory
+    turns every build into a refusal.
+    """
+    stale = Source(tmp_path / "stale")
+    stale.publish(WORKSPACE, "0.0.9", requires={TOOLS: "~=0.1.0"})
+    source = chained(tmp_path)
+
+    pin = resolved(source, tmp_path, sources=(stale.path, source.path))
+    assert pin.workspace.sha256 == source.hash_of(WORKSPACE, "0.1.0")
+
+
+def test_a_second_registry_is_refused_where_no_host_can_be_opened(tmp_path) -> None:
+    """A build server resolves for one host by decision, and says which two it got.
+
+    A trust anchor is per base domain. Without a way to open the second
+    domain's registry, a reference pointing there would be looked up on
+    the first — which is a pin resolved against a registry nobody chose.
+    """
+    source = chained(tmp_path)
+    with pytest.raises(BuildError) as caught:
+        resolved(
+            source,
+            tmp_path,
+            workspace=f"packages.example.test/build-workspace/{WORKSPACE}",
         )
+    assert "packages.example.test" in caught.value.message
+    assert OFFICIAL_BASE_DOMAIN in caught.value.message
 
 
-def test_a_device_override_replaces_one_derivation_only(tmp_path) -> None:
-    """Each `sources.*` entry overrides its own package and nothing else."""
-    source = tmp_path / "src"
-    _sdk_with_lock(
+def test_a_second_registry_resolves_through_its_own_host(tmp_path) -> None:
+    """A device that points one package at another registry is honoured there.
+
+    The host decides which trust anchor and which mirrors apply, so the
+    reference is resolved by a client built for *that* domain — and the
+    build says once that the device went outside what the SDK declared.
+    """
+    source = chained(tmp_path)
+    foreign = Source(tmp_path / "foreign")
+    foreign.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    # The workspace is looked for where the device says, and the local
+    # directories searched first hold none — otherwise the foreign host
+    # would never be asked, which is the tiering working as it should.
+    empty = Source(tmp_path / "empty")
+    opened_for: list[str] = []
+
+    class _Elsewhere:
+        """The one method a resolution asks of a registry client."""
+
+        def index(self, name: str):
+            return SimpleNamespace(
+                entries=json.loads((foreign.path / "index.json").read_text(encoding="utf-8"))[
+                    "packages"
+                ],
+                base=str(foreign.path),
+                source=name,
+                url_for=lambda entry: "",
+            )
+
+        def fetch_meta(self, index, meta):
+            del index
+            return (foreign.path / meta.file).read_bytes()
+
+    def hosts(domain: str):
+        opened_for.append(domain)
+        return _Elsewhere()
+
+    lines: list[str] = []
+    pin = resolved(
         source,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
+        tmp_path,
+        workspace=f"packages.example.test/build-workspace/{WORKSPACE}",
+        workspace_sources=(empty.path,),
+        hosts=hosts,
+        on_line=lines.append,
     )
-    hashes = _environment_index(source)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=DEFAULT_BUILD_WORKSPACE,
-        tools=f"build-tools/{TOOLS}:{_LOCK_VERSION}@sha256:{'cd' * 32}",
-        sdk_source=DEFAULT_SDK,
-        sdk=found,
-        sources=(source,),
-        work_root=tmp_path / "work",
-    )
-    # The stated half is the device's word, hash and all; the other half
-    # still comes from the release.
-    assert pin.tools.sha256 == "cd" * 32
-    assert pin.workspace.sha256 == hashes[WORKSPACE]
+    assert opened_for == ["packages.example.test"]
+    assert pin.workspace.sha256 == foreign.hash_of(WORKSPACE, "0.1.0")
+    # The SDK required this package from its own host, and the device
+    # took it from another — worth the one line, and not a refusal.
+    assert len(lines) == 1
 
 
-def _source_with_environment(tmp_path: Path):
-    """A source directory holding the SDK release and the two packages."""
-    source = tmp_path / "src"
-    _sdk_with_lock(
-        source,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
-    )
-    return source, _environment_index(source)
+def test_a_pin_the_index_disagrees_with_is_refused(tmp_path) -> None:
+    """Same version, other bytes, is a refusal and never a substitution.
+
+    The guard against a mirror that publishes different bytes under the
+    version a context was created against.
+    """
+    source = chained(tmp_path)
+    with pytest.raises(BuildError) as caught:
+        concrete_package(
+            PackagePin(name=WORKSPACE, version="0.1.0", sha256="ff" * 32),
+            source="build-workspace",
+            sources=(source.path,),
+        )
+    assert "pinned to" in caught.value.message
 
 
-def _pins_of(model, source: Path, work_root: Path):
+def test_a_source_that_publishes_other_bytes_under_the_pinned_version_is_refused(
+    tmp_path,
+) -> None:
+    """The one thing that is never shopped around for: same version, other bytes."""
+    source = chained(tmp_path)
+    with pytest.raises(BuildError) as caught:
+        concrete_package(
+            PackagePin(name=WORKSPACE, version="0.1.0", sha256="ff" * 32),
+            source="build-workspace",
+            sources=(source.path, source.path),
+        )
+    assert "pinned to" in caught.value.message
+
+
+# --------------------------------------------------------------------------
+# Through a device file
+# --------------------------------------------------------------------------
+
+
+def _pins_of(model, source: Source, work_root: Path):
     """The two pins a device model resolves to, through the production path.
 
     The same three model fields ``create_build_context`` hands over, in
     the same order, so what this asserts is what a build would get.
     """
     constraint, prereleases = sdk_constraint(model.sources.sdk)
-    found = resolve_sdk((source,), constraint=constraint, prereleases=prereleases)
+    found = resolve_sdk((source.path,), constraint=constraint, prereleases=prereleases)
     return (constraint, prereleases), resolve_environment(
         workspace=model.sources.build_workspace,
         tools=model.sources.build_tools,
         sdk_source=model.sources.sdk,
         sdk=found,
-        sources=(source,),
+        sources=(source.path,),
         work_root=work_root,
     )
 
@@ -542,13 +960,13 @@ def test_a_device_without_sources_states_no_pin_and_gets_the_defaults(
     """The ordinary device: nothing written down, everything resolved.
 
     A device file that names no ``sources:`` carries the three default
-    references — a package and no version — so the SDK resolves against
-    the minor this workbench was released alongside and the environment
-    against what that SDK release states. Nothing is written back into the
-    device, which is what keeps it from being frozen onto whatever was
-    current on the day it was created.
+    references — a package and no constraint — so the SDK resolves
+    against the minor this workbench was released alongside and the
+    environment against the chain that SDK release states. Nothing is
+    written back into the device, which is what keeps it from being
+    frozen onto whatever was current on the day it was created.
     """
-    source, hashes = _source_with_environment(tmp_path)
+    source = chained(tmp_path)
     model = resolve_file(write_config(VALID_CONFIG))
 
     assert (model.sources.sdk, model.sources.build_workspace, model.sources.build_tools) == (
@@ -558,8 +976,8 @@ def test_a_device_without_sources_states_no_pin_and_gets_the_defaults(
     )
     assert sdk_constraint(model.sources.sdk) == (DEFAULT_SDK_CONSTRAINT, True)
     _, pin = _pins_of(model, source, tmp_path / "work")
-    assert pin.workspace.sha256 == hashes[WORKSPACE]
-    assert pin.tools.sha256 == hashes[TOOLS]
+    assert pin.workspace.sha256 == source.hash_of(WORKSPACE, "0.1.0")
+    assert pin.tools.sha256 == source.hash_of(TOOLS, "0.1.0")
 
 
 def test_a_device_file_can_pin_the_sdk(tmp_path, write_config) -> None:
@@ -569,15 +987,15 @@ def test_a_device_file_can_pin_the_sdk(tmp_path, write_config) -> None:
     the pre-release rule goes back to the ordinary one — which is
     :func:`sdk_constraint`'s answer, not this test's own arithmetic.
     """
-    source, hashes = _source_with_environment(tmp_path)
+    source = chained(tmp_path)
     model = resolve_file(write_config(VALID_CONFIG + f"\nsources:\n  sdk: {DEFAULT_SDK}:0.1.0\n"))
 
     assert model.sources.sdk == f"{DEFAULT_SDK}:0.1.0"
     stated, pin = _pins_of(model, source, tmp_path / "work")
     assert stated == ("==0.1.0", None)
-    # The other two entries were not stated and still come from the release.
-    assert pin.workspace.sha256 == hashes[WORKSPACE]
-    assert pin.tools.sha256 == hashes[TOOLS]
+    # The other two entries were not stated and still come from the chain.
+    assert pin.workspace.sha256 == source.hash_of(WORKSPACE, "0.1.0")
+    assert pin.tools.sha256 == source.hash_of(TOOLS, "0.1.0")
 
 
 @pytest.mark.parametrize(
@@ -589,15 +1007,22 @@ def test_a_device_file_can_pin_one_environment_package(
 ) -> None:
     """Each environment override reaches the resolution, and alone.
 
-    The stated package is the device's word — version and hash, so no
-    index is consulted for it at all — while the other one still comes
-    out of the SDK release's lock. That the two are independent is the
-    property: a device that pins one package must not silently pin the
-    other to today's version with it.
+    The stated package is the device's word — version and hash, so
+    nothing is resolved for it — while the other one still comes out of
+    the chain. That the two are independent is the property: a device
+    that pins one package must not silently pin the other to today's
+    version with it.
+
+    The workspace is pinned to the bytes the source really publishes,
+    because the stage below it reads what *that* package requires: an
+    override replaces one package and not the statement it makes about
+    the next one. Pinning the tools needs no such thing — the chain ends
+    there.
     """
-    source, hashes = _source_with_environment(tmp_path)
+    source = chained(tmp_path)
     kind = "build-workspace" if key == "build_workspace" else "build-tools"
-    reference = f"{kind}/{package}:{_LOCK_VERSION}@sha256:{'cd' * 32}"
+    digest = source.hash_of(WORKSPACE, "0.1.0") if key == "build_workspace" else "cd" * 32
+    reference = f"{kind}/{package}:0.1.0@sha256:{digest}"
     model = resolve_file(write_config(VALID_CONFIG + f"\nsources:\n  {key}: {reference}\n"))
 
     assert getattr(model.sources, key) == reference
@@ -606,181 +1031,5 @@ def test_a_device_file_can_pin_one_environment_package(
         (pin.workspace, pin.tools) if key == "build_workspace" else (pin.tools, pin.workspace)
     )
     other = TOOLS if key == "build_workspace" else WORKSPACE
-    assert stated.sha256 == "cd" * 32
-    assert derived.sha256 == hashes[other]
-
-
-def test_a_release_without_a_lock_is_refused_legibly(tmp_path) -> None:
-    """An SDK that does not say which environment it wants cannot be guessed at."""
-    source = tmp_path / "src"
-    _sdk_with_lock(source, lock=None)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    with pytest.raises(BuildError) as caught:
-        resolve_environment(
-            workspace=DEFAULT_BUILD_WORKSPACE,
-            tools=DEFAULT_BUILD_TOOLS,
-            sdk_source=DEFAULT_SDK,
-            sdk=found,
-            sources=(source,),
-            work_root=tmp_path / "work",
-        )
-    assert "build-environment.lock.json" in caught.value.message
-    assert "sources.build_workspace" in caught.value.hint
-
-
-def test_a_lock_that_names_no_such_package_is_refused(tmp_path) -> None:
-    """The refusal names the package and lists what the release does state."""
-    source = tmp_path / "src"
-    _sdk_with_lock(source, lock={f"packages.{WORKSPACE}": _LOCK_VERSION})
-    _environment_index(source)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    with pytest.raises(BuildError) as caught:
-        resolve_environment(
-            workspace=DEFAULT_BUILD_WORKSPACE,
-            tools=DEFAULT_BUILD_TOOLS,
-            sdk_source=DEFAULT_SDK,
-            sdk=found,
-            sources=(source,),
-            work_root=tmp_path / "work",
-        )
-    assert TOOLS in caught.value.message
-    assert WORKSPACE in caught.value.hint
-
-
-def test_a_pin_the_index_disagrees_with_is_refused(tmp_path) -> None:
-    """Same version, other bytes, is a refusal and never a substitution.
-
-    The guard against a mirror that publishes different bytes under the
-    version a context was created against.
-    """
-    source = tmp_path / "src"
-    _sdk_with_lock(
-        source,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
-    )
-    _environment_index(source)
-    with pytest.raises(BuildError) as caught:
-        concrete_package(
-            PackagePin(name=WORKSPACE, version=_LOCK_VERSION, sha256="ff" * 32),
-            source="build-workspace",
-            sources=(source,),
-        )
-    assert "pinned to" in caught.value.message
-
-
-def test_a_fully_pinned_reference_needs_no_index_at_all(tmp_path) -> None:
-    """The offline escape hatch: a device that states version and hash.
-
-    Nothing is looked up — not the lock, not an index — so an operator
-    who has the bytes can build with no package source configured for
-    them at all.
-    """
-    source = tmp_path / "src"
-    _sdk_with_lock(source, lock={})
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=f"build-workspace/{WORKSPACE}:1.0.0@sha256:{'11' * 32}",
-        tools=f"build-tools/{TOOLS}:1.0.0@sha256:{'22' * 32}",
-        sdk_source=DEFAULT_SDK,
-        sdk=found,
-        sources=(source,),
-        work_root=tmp_path / "work",
-    )
-    assert (pin.workspace.version, pin.workspace.sha256) == ("1.0.0", "11" * 32)
-    assert (pin.tools.version, pin.tools.sha256) == ("1.0.0", "22" * 32)
-
-
-def test_a_second_registry_for_the_environment_packages_is_refused(tmp_path) -> None:
-    """A build reads one package host, and the refusal says which two it was given.
-
-    A trust anchor is per base domain and the resolution is handed one
-    client — the SDK's. A device that pointed its environment packages at
-    another domain would have them looked up on the SDK's host, which is a
-    pin resolved against a registry nobody chose. Refused, not
-    substituted.
-    """
-    source = tmp_path / "src"
-    _sdk_with_lock(source, lock={f"packages.{WORKSPACE}": _LOCK_VERSION})
-    _environment_index(source)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    with pytest.raises(BuildError) as caught:
-        resolve_environment(
-            workspace=f"packages.example.test/build-workspace/{WORKSPACE}",
-            tools=DEFAULT_BUILD_TOOLS,
-            sdk_source=DEFAULT_SDK,
-            sdk=found,
-            sources=(source,),
-            work_root=tmp_path / "work",
-        )
-    assert "packages.example.test" in caught.value.message
-    assert OFFICIAL_BASE_DOMAIN in caught.value.message
-
-
-def test_a_fully_pinned_reference_may_name_any_registry(tmp_path) -> None:
-    """It needs no host at all, so there is nothing for a second one to break."""
-    source = tmp_path / "src"
-    _sdk_with_lock(source, lock={})
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=f"packages.example.test/build-workspace/{WORKSPACE}:1.0.0@sha256:{'11' * 32}",
-        tools=f"other.example.test/build-tools/{TOOLS}:1.0.0@sha256:{'22' * 32}",
-        sdk_source=DEFAULT_SDK,
-        sdk=found,
-        sources=(source,),
-        work_root=tmp_path / "work",
-    )
-    assert pin.workspace.sha256 == "11" * 32
-
-
-def test_a_source_that_holds_the_package_but_not_the_version_is_not_the_end(tmp_path) -> None:
-    """A stale operator directory must not stop a build the next source answers.
-
-    The SDK's own resolution has always fallen through such a source; the
-    environment packages do the same, or one forgotten mirror directory
-    turns every build into a refusal.
-    """
-    stale = tmp_path / "stale"
-    stale.mkdir()
-    (stale / "index.json").write_text(
-        json.dumps(
-            {
-                "packages": {
-                    WORKSPACE: {"0.0.9": {"file": "old.tar.zst", "sha256": "9" * 64, "size": 1}}
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    source = tmp_path / "src"
-    _sdk_with_lock(
-        source,
-        lock={f"packages.{WORKSPACE}": _LOCK_VERSION, f"packages.{TOOLS}": _LOCK_VERSION},
-    )
-    hashes = _environment_index(source)
-    found = resolve_sdk((source,), constraint="==0.1.0", prereleases=True)
-    pin = resolve_environment(
-        workspace=DEFAULT_BUILD_WORKSPACE,
-        tools=DEFAULT_BUILD_TOOLS,
-        sdk_source=DEFAULT_SDK,
-        sdk=found,
-        sources=(stale, source),
-        work_root=tmp_path / "work",
-    )
-    assert pin.workspace.sha256 == hashes[WORKSPACE]
-
-
-def test_a_source_that_publishes_other_bytes_under_the_pinned_version_is_refused(
-    tmp_path,
-) -> None:
-    """The one thing that is never shopped around for: same version, other bytes."""
-    source = tmp_path / "src"
-    _sdk_with_lock(source, lock={})
-    hashes = _environment_index(source)
-    del hashes
-    with pytest.raises(BuildError) as caught:
-        concrete_package(
-            PackagePin(name=WORKSPACE, version=_LOCK_VERSION, sha256="ff" * 32),
-            source="build-workspace",
-            sources=(source, source),
-        )
-    assert "pinned to" in caught.value.message
+    assert stated.sha256 == digest
+    assert derived.sha256 == source.hash_of(other, "0.1.0")

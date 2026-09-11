@@ -232,7 +232,7 @@ ENVIRONMENT_PIN = f"{ENVIRONMENT_REPOSITORY}:{ENVIRONMENT_TAG}@{ENVIRONMENT_DIGE
 # to resolve to a hash out of an index — that is the format, and a test
 # that shortcut it would be testing a context nothing can build. So the
 # package sources these tests write carry three packages, not one: the
-# SDK, and the two the SDK's environment lock names.
+# SDK, and the two its chain of meta files resolves to.
 #
 # The tools package here is named WITHOUT an architecture suffix, which
 # makes it an ordinary concrete package on every host and keeps the
@@ -241,26 +241,44 @@ ENVIRONMENT_PIN = f"{ENVIRONMENT_REPOSITORY}:{ENVIRONMENT_TAG}@{ENVIRONMENT_DIGE
 # test_resolve_pins.py, where the platform is stated rather than
 # inherited from whoever runs the suite.
 
-#: The version the SDK archives in this suite carry, and the one their
-#: environment lock names for both environment packages.
+#: The version the SDK archives in this suite carry, and the one both
+#: environment packages are published under.
 SDK_VERSION = "0.1.0"
 ENVIRONMENT_VERSION = "0.1.0"
 WORKSPACE_PACKAGE = "mcuhome-build-workspace"
 TOOLS_PACKAGE = "mcuhome-build-tools"
 
-#: The lock document an SDK archive carries — the abstract package set of
-#: the build environment specification §5.1, exactly as
-#: ``scripts/build_sdk_archive.py`` writes it.
-ENVIRONMENT_LOCK = {
-    f"packages.{TOOLS_PACKAGE}": ENVIRONMENT_VERSION,
-    f"packages.{WORKSPACE_PACKAGE}": ENVIRONMENT_VERSION,
-}
+#: The constraint each stage of the chain declares on the next one. The
+#: SDK archive carries the first inside its ``meta.json``, the workspace
+#: package's sidecar carries the second, and the tools package ends the
+#: chain and requires nothing — which is the production shape, at the one
+#: version this suite publishes.
+ENVIRONMENT_CONSTRAINT = f"~={ENVIRONMENT_VERSION}"
+
+
+def package_meta(
+    name: str,
+    version: str,
+    *,
+    requires: dict[str, str] | None = None,
+    architecture: str | None = None,
+) -> bytes:
+    """One package's ``meta.json``, as the package build writes it."""
+    import json as _json
+
+    document: dict[str, object] = {
+        "schema": 1,
+        "package": {"name": name, "version": version, "architecture": architecture},
+        "inputs_sha256": "0" * 64,
+        "contents": {},
+    }
+    if requires:
+        document["requires"] = requires
+    return (_json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
 
 
 def sdk_members(version: str = SDK_VERSION) -> dict[str, tuple[bytes, bool]]:
-    """What a minimal but complete SDK archive holds, lock included."""
-    import json as _json
-
+    """What a minimal but complete SDK archive holds, meta file included."""
     return {
         "mcuhome-sdk.json": (
             b'{"sdk": 1, "generate": {"program": "bin/generate", "runtime": "python3"}}',
@@ -268,8 +286,12 @@ def sdk_members(version: str = SDK_VERSION) -> dict[str, tuple[bytes, bool]]:
         ),
         "bin/generate": (b"#!/usr/bin/env python3\n", True),
         "mcuhome/model/__init__.py": (f'__version__ = "{version}"\n'.encode(), False),
-        "build-environment.lock.json": (
-            (_json.dumps(ENVIRONMENT_LOCK, indent=2, sort_keys=True) + "\n").encode(),
+        "meta.json": (
+            package_meta(
+                "mcuhome-sdk",
+                version,
+                requires={WORKSPACE_PACKAGE: ENVIRONMENT_CONSTRAINT},
+            ),
             False,
         ),
     }
@@ -295,9 +317,11 @@ def build_package_archive(members: dict[str, tuple[bytes, bool]]) -> bytes:
 def make_package_source(directory: Path, *, version: str = SDK_VERSION) -> str:
     """A source directory holding all three packages a context needs.
 
-    The SDK — whose archive carries the environment lock — and the two
-    environment packages its lock names. Answers the SDK archive's real
-    sha256, which is what a context created against this directory pins.
+    The SDK — whose archive carries the meta file that opens the chain —
+    and the two environment packages that chain resolves to, each with
+    the sidecar the index records beside it. Answers the SDK archive's
+    real sha256, which is what a context created against this directory
+    pins.
     """
     import hashlib
     import json as _json
@@ -330,14 +354,29 @@ def write_environment_packages(
     import hashlib
 
     hashes: dict[str, str] = {}
+    requires = {WORKSPACE_PACKAGE: {TOOLS_PACKAGE: ENVIRONMENT_CONSTRAINT}, TOOLS_PACKAGE: None}
     for name in (WORKSPACE_PACKAGE, TOOLS_PACKAGE):
         payload = f"{name} {version}\n".encode()
         filename = f"{name}-{version}.tar.zst"
         (directory / filename).write_bytes(payload)
         digest = hashlib.sha256(payload).hexdigest()
         hashes[name] = digest
+        # The sidecar beside the archive, recorded in the index the way a
+        # registry records it: a version that states none is no candidate
+        # for a chain resolution at all.
+        meta = package_meta(name, version, requires=requires[name])
+        (directory / f"{filename}.meta.json").write_bytes(meta)
         index.setdefault("packages", {})[name] = {
-            version: {"file": filename, "sha256": digest, "size": len(payload)}
+            version: {
+                "file": filename,
+                "sha256": digest,
+                "size": len(payload),
+                "meta_file": {
+                    "file": f"{filename}.meta.json",
+                    "sha256": hashlib.sha256(meta).hexdigest(),
+                    "size": len(meta),
+                },
+            }
         }
     return hashes
 

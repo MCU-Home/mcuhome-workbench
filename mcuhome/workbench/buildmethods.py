@@ -92,7 +92,6 @@ from mcuhome.model.context import (
     format_generator_chain,
 )
 from mcuhome.model.errors import BuildError, ConfigError
-from mcuhome.model.imageref import parse_reference
 from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenvstore, containerbuild, subprocessbuild
@@ -132,7 +131,12 @@ from mcuhome.workbench.contextdir import (
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.project import Project
-from mcuhome.workbench.resolve_pins import package_reference
+from mcuhome.workbench.resolve_pins import (
+    SDK_STAGE,
+    TOOLS_STAGE,
+    WORKSPACE_STAGE,
+    package_reference,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     # Imported for the annotations alone. The registry client is reached
@@ -741,11 +745,42 @@ def _package_registry(
     """
     if project_root is None:
         return None
-    from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, registry_factory
+    from mcuhome.workbench.packageregistry import registry_factory
 
-    reference = parse_reference(model.sources.sdk, default_registry=OFFICIAL_BASE_DOMAIN)
+    # Read by the resolver's own parser rather than the image one: a
+    # `sources.sdk` may carry a version *constraint* where an image
+    # reference carries a tag, and `~=0.1.9` is not a tag.
+    reference = package_reference(model.sources.sdk, stage=SDK_STAGE)
     return registry_factory(
-        reference.registry,
+        reference.base_domain,
+        project_root=Path(project_root),
+        settings=tuple(registries),
+        into=Path(work_root) / "registry",
+        on_warning=on_line,
+    )
+
+
+def _package_hosts(
+    *,
+    project_root: Path | None,
+    registries: Sequence[RegistrySettings],
+    work_root: Path,
+    on_line: LineSink | None,
+) -> Callable[[str], Any] | None:
+    """A registry per base domain, for a device that points one package elsewhere.
+
+    The SDK's host is what :func:`_package_registry` opens and what
+    almost every build reads. A ``sources.*`` reference may name another
+    one, and that registry has its own trust anchor and its own mirrors —
+    so the resolution is handed a way to open one per domain rather than
+    one client. Built lazily per domain: a build that never names a
+    second host never reads a second anchor.
+    """
+    if project_root is None:
+        return None
+    from mcuhome.workbench.packageregistry import registry_opener
+
+    return registry_opener(
         project_root=Path(project_root),
         settings=tuple(registries),
         into=Path(work_root) / "registry",
@@ -1189,6 +1224,13 @@ def compose_container_build(
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
+            hosts=_package_hosts(
+                project_root=project_root,
+                registries=registries,
+                work_root=work_root,
+                on_line=on_line,
+            ),
+            on_line=on_line,
         )
         if on_step is not None:
             # What the context turned out to be, read back off the
@@ -1204,8 +1246,10 @@ def compose_container_build(
         env=env,
         repositories=options.container_repositories,
         image_pin=pin_wanted,
-        workspace_source=package_reference(model.sources.build_workspace).source,
-        tools_source=package_reference(model.sources.build_tools).source,
+        workspace_source=package_reference(
+            model.sources.build_workspace, stage=WORKSPACE_STAGE
+        ).source,
+        tools_source=package_reference(model.sources.build_tools, stage=TOOLS_STAGE).source,
         sources=sources,
         workspace_sources=options.workspace_sources,
         tools_sources=options.tools_sources,
@@ -1404,8 +1448,10 @@ def compose_subprocess_build(
         environment = subprocessbuild.environment_from_pins(
             pin,
             env=dict(env),
-            workspace_source=package_reference(model.sources.build_workspace).source,
-            tools_source=package_reference(model.sources.build_tools).source,
+            workspace_source=package_reference(
+                model.sources.build_workspace, stage=WORKSPACE_STAGE
+            ).source,
+            tools_source=package_reference(model.sources.build_tools, stage=TOOLS_STAGE).source,
             sources=sources,
             workspace_sources=options.workspace_sources,
             tools_sources=options.tools_sources,
@@ -1624,6 +1670,13 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
             work_root=Path(work_root),
             on_line=request.on_line,
         ),
+        hosts=_package_hosts(
+            project_root=request.project_root,
+            registries=request.registries,
+            work_root=Path(work_root),
+            on_line=request.on_line,
+        ),
+        on_line=request.on_line,
     )
     if request.on_step is not None:
         request.on_step(

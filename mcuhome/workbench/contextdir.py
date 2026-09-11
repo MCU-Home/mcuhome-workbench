@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,7 +63,7 @@ from mcuhome.model.sdkindex import DEFAULT_SDK
 from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench import __version__
-from mcuhome.workbench.packageregistry import RegistrySource
+from mcuhome.workbench.packageregistry import PackageRegistry, RegistrySource
 from mcuhome.workbench.resolve_pins import resolve_environment, resolve_sdk, sdk_constraint
 from mcuhome.workbench.signing import looks_like_p256_public_key
 
@@ -352,8 +352,10 @@ def create_build_context(
     created: datetime | None = None,
     constraint: str | None = None,
     registry: RegistrySource | None = None,
+    hosts: Callable[[str], PackageRegistry] | None = None,
     platform: str | None = None,
     developer: bool = False,
+    on_line: Callable[[str], None] | None = None,
 ) -> ContextRequest:
     """Resolve every pin and write a fresh base context at *out_dir*.
 
@@ -366,21 +368,27 @@ def create_build_context(
     assembling that by hand is two places for the pins and the layout to
     drift apart, under an identity that claims they cannot have.
 
-    **Both pins are resolved here, and the second follows the first.**
-    The SDK constraint resolves to one release; that release states which
-    build-environment packages it was built and tested with, and those
-    versions resolve to hashes through the same package index the SDK
-    came from (:func:`~mcuhome.workbench.resolve_pins.resolve_environment`).
-    A device that says nothing therefore gets an SDK and an environment
-    that were released together, and one that pins either
+    **Every pin is resolved here, and each one follows the last.** The
+    SDK constraint resolves to one release; that release's own meta file
+    states which range of build workspaces it was built and tested with,
+    the newest published one inside that range wins, and its meta file
+    states the range of build tools
+    (:func:`~mcuhome.workbench.resolve_pins.resolve_environment`). A
+    device that says nothing therefore gets an SDK and an environment
+    that were declared to belong together, and one that pins either
     (``sources.build_workspace``, ``sources.build_tools``) overrides that
-    package alone.
+    package alone — outside the declared range too, with a note on
+    *on_line* rather than a refusal.
 
     *work_root* is a directory this function may use as scratch; the SDK
-    package is unpacked there to read its environment lock out of bytes
-    that were verified against the pin — under *sdk_max_bytes*, the
-    operator's bound on that unpacking, which is the store's own default
-    when nobody moved it.
+    package is unpacked there to read its meta file out of bytes that
+    were verified against the pin — under *sdk_max_bytes*, the operator's
+    bound on that unpacking, which is the store's own default when nobody
+    moved it.
+
+    *hosts* opens a registry for a base domain other than the SDK's, for
+    a device that points one package at another package host; *registry*
+    is the client for the SDK's own.
 
     *workspace_sources* and *tools_sources* are the operator directories
     the two environment packages are looked up in. Empty means "wherever
@@ -494,7 +502,9 @@ def create_build_context(
         max_bytes=sdk_max_bytes,
         work_root=Path(work_root),
         registry=registry,
+        hosts=hosts,
         platform=platform,
+        on_line=on_line,
     )
     out_dir = Path(out_dir)
     if out_dir.exists():

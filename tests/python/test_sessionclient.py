@@ -45,7 +45,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import pytest
-from conftest import EXAMPLES_DIR, resolve_file
+from conftest import EXAMPLES_DIR, package_meta, resolve_file
 from mcuhome.model import buildenvironment
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import (
@@ -619,23 +619,23 @@ def write_sdk_package(directory: Path, *, declared_sha256: str | None = None) ->
     resolves every pin a context can make, and it is what
     ``sdk_sources`` names in :func:`real_server`, so the server's own
     resolution of the build environment a context pins never reaches a
-    network either. The SDK's own archive carries a
-    ``build-environment.lock.json`` naming the same two packages at
-    :data:`ENVIRONMENT_VERSION`, which is what lets the ``remote`` build
-    *target* (as opposed to a context written by hand) resolve a device's
-    unpinned ``sources.build_workspace``/``sources.build_tools`` the way
-    a local build does.
+    network either. The SDK's own archive carries a ``meta.json`` stating
+    a constraint on :data:`WORKSPACE_PACKAGE` at :data:`ENVIRONMENT_VERSION`;
+    the workspace package's sidecar (recorded under the index's
+    ``meta_file`` for that entry) in turn states the constraint on
+    :data:`TOOLS_PACKAGE`, which ends the chain. That is what lets the
+    ``remote`` build *target* (as opposed to a context written by hand)
+    resolve a device's unpinned
+    ``sources.build_workspace``/``sources.build_tools`` the way a local
+    build does.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    lock = json.dumps(
-        {
-            f"packages.{WORKSPACE_PACKAGE}": ENVIRONMENT_VERSION,
-            f"packages.{TOOLS_PACKAGE}": ENVIRONMENT_VERSION,
-        }
-    ).encode()
-    archive = make_archive(
-        {"mcuhome/__init__.py": b"# the SDK\n", "build-environment.lock.json": lock}
+    meta = package_meta(
+        "mcuhome-sdk",
+        SDK_VERSION,
+        requires={WORKSPACE_PACKAGE: f"~={ENVIRONMENT_VERSION}"},
     )
+    archive = make_archive({"mcuhome/__init__.py": b"# the SDK\n", "meta.json": meta})
     name = f"mcuhome-sdk-{SDK_VERSION}.tar.zst"
     (directory / name).write_bytes(archive)
     real = hashlib.sha256(archive).hexdigest()
@@ -652,8 +652,23 @@ def write_sdk_package(directory: Path, *, declared_sha256: str | None = None) ->
         content = f"{package} {ENVIRONMENT_VERSION}\n".encode()
         filename = f"{package}-{ENVIRONMENT_VERSION}.tar.zst"
         (directory / filename).write_bytes(content)
+        requires = (
+            {TOOLS_PACKAGE: f"~={ENVIRONMENT_VERSION}"} if package == WORKSPACE_PACKAGE else None
+        )
+        package_meta_bytes = package_meta(package, ENVIRONMENT_VERSION, requires=requires)
+        meta_filename = f"{filename}.meta.json"
+        (directory / meta_filename).write_bytes(package_meta_bytes)
         packages[package] = {
-            ENVIRONMENT_VERSION: {"file": filename, "sha256": digest, "size": len(content)}
+            ENVIRONMENT_VERSION: {
+                "file": filename,
+                "sha256": digest,
+                "size": len(content),
+                "meta_file": {
+                    "file": meta_filename,
+                    "sha256": hashlib.sha256(package_meta_bytes).hexdigest(),
+                    "size": len(package_meta_bytes),
+                },
+            }
         }
     (directory / "index.json").write_text(json.dumps({"packages": packages}), encoding="utf-8")
     return real
@@ -748,9 +763,9 @@ def pinned_environment() -> PinnedEnvironment:
 
     Nothing to set up here beyond the value itself: every test that asks
     for this fixture also calls :func:`write_sdk_package`, which is what
-    makes the pin resolvable — the SDK's own
-    ``build-environment.lock.json`` and the package index beside it live
-    in one place (see its docstring). The fixture stays a fixture, and
+    makes the pin resolvable — the SDK's own ``meta.json``, the workspace
+    package's sidecar, and the package index beside them all live in one
+    place (see its docstring). The fixture stays a fixture, and
     keeps its name, so a test that asks for "the pin every context here
     is built against" says so rather than repeating :data:`ENVIRONMENT`.
     """
@@ -2839,7 +2854,7 @@ def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path)
     :func:`~mcuhome.workbench.buildmethods.run_build`'s ``remote``
     target: that target resolves and verifies every pin locally, SDK
     included, before a context is ever created (build-environment
-    resolution reads the environment lock out of the SDK's own,
+    resolution reads the chain's first constraint out of the SDK's own,
     already-hashed bytes) — so a wrong hash it was handed never reaches
     the wire at all. What is asserted here is the server's own half of
     the guarantee: a build that pins bytes its source does not hold is

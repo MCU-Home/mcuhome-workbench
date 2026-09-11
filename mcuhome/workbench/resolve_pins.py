@@ -33,6 +33,20 @@ rule serves the container coupling labels or a community registry later.
 :func:`resolve_sdk_pin` is the one above it that walks a list of source
 directories and answers with the pin a context is created from.
 
+**The build environment is a chain of those resolutions, not a list.**
+The SDK, the build workspace and the build tools are released on lines of
+their own, and each package states a *range* of the next one in its
+``meta.json`` — inside the archive for the SDK, beside the archive as
+``<archive>.meta.json`` for what an index publishes. So
+:func:`resolve_environment` resolves twice: the SDK release's range to the
+newest published workspace version, that package's range to the newest
+published tools version, pinning each exactly by name, version and hash.
+Only a version whose index entry records a meta file is a candidate,
+because a version that does not say what it requires cannot be resolved
+*through* — and a device may override any link of it, including outside
+what the link above declared, which is built and noted rather than
+refused.
+
 **Why the SDK resolver lives here and not beside one build target.**
 Both container-shaped methods need the same pin before a context can
 exist, because ``mcuhome.package.sha256`` is a hashed identity input:
@@ -76,17 +90,20 @@ pre-release rule above asks.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from mcuhome.model.buildenvironment import (
-    LOCK_FILE,
+    ARCH_SEPARATOR,
+    META_FILE,
+    TOOLS_FAMILY,
     TOOLS_SOURCE,
+    WORKSPACE_PACKAGE,
     WORKSPACE_SOURCE,
-    EnvironmentLock,
-    family_of,
-    parse_lock,
+    PackageMeta,
+    parse_meta,
 )
 from mcuhome.model.context import EnvironmentPin, PackagePin
 from mcuhome.model.errors import BuildError
@@ -99,11 +116,14 @@ __all__ = [
     "INDEX_FILE",
     "SDK_ANY",
     "SDK_PACKAGE_NAME",
+    "SDK_STAGE",
+    "TOOLS_STAGE",
+    "WORKSPACE_STAGE",
     "PackageReference",
+    "PackageStage",
     "ResolvedPackage",
     "SdkResolution",
     "concrete_package",
-    "environment_lock",
     "package_reference",
     "resolve_environment",
     "resolve_from_entries",
@@ -112,6 +132,7 @@ __all__ = [
     "resolve_sdk_pin",
     "resolve_version",
     "sdk_constraint",
+    "sdk_package_meta",
 ]
 
 # The index file and package name are shared vocabulary — a backend
@@ -127,10 +148,14 @@ SDK_SOURCE = DEFAULT_SDK.split("/")[0]
 
 from mcuhome.workbench.packageregistry import (  # noqa: E402
     OFFICIAL_BASE_DOMAIN,
+    MetaFile,
     PackageRegistry,
     PackageRegistryError,
     RegistrySource,
+    ResolvedEntry,
     VerifiedIndex,
+    check_meta_bytes,
+    host_platform,
     opened,
     pin_entry,
     resolve_entry,
@@ -158,15 +183,71 @@ DEFAULT_SDK_CONSTRAINT = "==0.1.*"
 
 
 @dataclass(frozen=True)
+class PackageStage:
+    """One link of the chain, as the workbench expects to find it.
+
+    A ``sources.*`` reference may leave out everything but the part its
+    author cares about, and these three values are what the omissions
+    mean: which shelf of a registry the package is published under, which
+    package it is when the reference names none, and what to call it in a
+    refusal. The stage is what makes ``:~=0.2`` a complete statement.
+    """
+
+    #: How the stage is named in a message ("build workspace package").
+    what: str
+    #: The source within a registry the stage's packages are published under.
+    source: str
+    #: The package name a reference that names none is understood as.
+    family: str
+    #: The device file key that states this reference, for a fix line.
+    key: str
+
+
+#: The three stages a build resolves, in the order the chain links them.
+#: They are the defaults a ``sources.*`` reference is completed with, and
+#: the vocabulary a refusal names the missing piece in.
+SDK_STAGE = PackageStage(what="SDK package", source=SDK_SOURCE, family=SDK_PACKAGE_NAME, key="sdk")
+WORKSPACE_STAGE = PackageStage(
+    what="build workspace package",
+    source=WORKSPACE_SOURCE,
+    family=WORKSPACE_PACKAGE,
+    key="build_workspace",
+)
+TOOLS_STAGE = PackageStage(
+    what="build tools package",
+    source=TOOLS_SOURCE,
+    family=TOOLS_FAMILY,
+    key="build_tools",
+)
+
+#: A content hash as every document spells it: 64 lowercase hex digits.
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+
+
+@dataclass(frozen=True)
 class PackageReference:
     """A ``sources.*`` reference, taken apart once.
 
     Every one of them is spelled the same way —
-    ``[base-domain/]<source>/<package>[:version][@sha256:…]`` — and every
-    part of it is read by somebody: the base domain selects the registry
-    and its trust anchor, the source is the shelf inside that registry,
-    the package name is the index key, and the two optional halves are
-    what a device pinned itself to.
+    ``[registry/][source/]<package>[:<constraint>][@sha256:…]`` — and
+    every part of it is read by somebody: the registry's base domain
+    selects the trust anchor and the mirrors, the source is the shelf
+    inside that registry, the package name is the index key, the
+    constraint is the range of versions the device will accept, and a
+    hash decides the bytes outright.
+
+    **Everything but the package is optional, and so is the package.**
+    What is left out is the stage's own default (:class:`PackageStage`) —
+    a reference that states only ``:~=0.2`` narrows the range and says
+    nothing else, exactly as ``:<tag>`` does for a container image.
+
+    :attr:`custom` is the one derived answer that matters afterwards:
+    whether this reference points somewhere other than the package the
+    stage expects on the host it expects. "The device asked for another
+    package" and "the device asked for nothing" resolve differently —
+    only the first is honoured against a chain that says nothing about
+    it, and only a device that stated *something* is ever told that it
+    went outside what the stage above declared.
 
     It exists because those parts used to be read in three places with
     three partial parsers, and the one that resolved the version dropped
@@ -182,10 +263,26 @@ class PackageReference:
     source: str
     #: The package name, architecture suffix and all.
     name: str
-    #: The version the reference stated, or ``""``.
+    #: The constraint to resolve with, as a PEP 440 specifier — a stated
+    #: version appears here as ``==<version>``. Empty where the reference
+    #: stated none and the chain decides.
+    constraint: str = ""
+    #: The bare version the reference stated, or ``""``. A reference that
+    #: states a range states no version.
     version: str = ""
     #: The content hash the reference stated, or ``""``.
     sha256: str = ""
+    #: Whether the reference points at another package, source or host
+    #: than the stage's own — every device carries the stage's defaults
+    #: written out, so "named" and "chosen" are not the same question.
+    custom: bool = False
+    #: Whether the reference named the registry rather than defaulting.
+    hosted: bool = False
+
+    @property
+    def stated(self) -> bool:
+        """Did this reference decide anything the stage would not have?"""
+        return bool(self.custom or self.constraint or self.sha256)
 
     @property
     def pinned(self) -> bool:
@@ -198,33 +295,136 @@ class PackageReference:
         return bool(self.version and self.sha256)
 
 
-def package_reference(reference: str, *, what: str = "package") -> PackageReference:
+def package_reference(
+    reference: str, *, what: str = "", stage: PackageStage | None = None
+) -> PackageReference:
     """Take a ``sources.*`` reference apart, or refuse in plain language.
 
-    The path is split at its first component: that is the source, and
-    what follows is the package. A reference naming only a package —
-    without a source — cannot be resolved, because a registry has no
-    single shelf and no default one.
+    The grammar is docker's, with the tag position carrying a **PEP 440
+    constraint** instead of a tag: ``~=1.8.3`` and ``>=1.7,<2`` are as
+    valid there as ``0.1.9``, and a bare version is read as the exact pin
+    it obviously is (``:0.1.9`` resolves under ``==0.1.9``). Everything
+    before the package is optional. A path of two components is
+    ``<source>/<package>``; a path of one is the package on the stage's
+    own shelf; none at all — a reference that opens with ``:`` or ``@`` —
+    is the stage's own package, narrowed or pinned.
+
+    *stage* supplies those defaults. Without one, a reference must name
+    its source and its package outright, because nothing else can say
+    which shelf of a registry to look on.
     """
-    parsed = parse_reference(reference, default_registry=OFFICIAL_BASE_DOMAIN, what=what)
-    source, separator, name = parsed.path.partition("/")
-    if not separator or not name or "/" in name:
+    what = what or (stage.what if stage is not None else "package")
+    stated = reference.strip() if isinstance(reference, str) else ""
+    if not stated:
+        raise BuildError(
+            f"The {what} reference is empty.",
+            hint=(
+                "name it as [registry/][source/]<package>[:<constraint>][@sha256:…] — "
+                "everything but the package is optional, and so is the package"
+            ),
+        )
+
+    head, at_sign, digest = stated.partition("@")
+    sha256 = ""
+    if at_sign:
+        if not digest.startswith("sha256:") or _SHA256_HEX.fullmatch(digest[7:]) is None:
+            raise BuildError(
+                f'The {what} "{reference}" names a hash that is not one: "{digest}".',
+                hint="a hash is sha256: followed by 64 lowercase hex digits",
+            )
+        sha256 = digest[7:]
+
+    # The constraint sits after the last path component's colon, which is
+    # the one place a colon cannot belong to a registry's port.
+    last = head.rpartition("/")[2]
+    marker = last.find(":")
+    path, text = head, ""
+    if marker >= 0:
+        text = last[marker + 1 :]
+        path = head[: len(head) - len(last)] + last[:marker]
+    constraint, version = _stated_constraint(text, what=what, reference=reference)
+
+    if not path:
+        if stage is None:
+            raise BuildError(
+                f'"{reference}" does not name a {what} MCUHome can resolve.',
+                hint=(
+                    "the form is <source>/<package>, optionally with a registry in "
+                    "front, a :constraint and an @sha256: — for example "
+                    "sdk/mcuhome-sdk:0.1.10"
+                ),
+            )
+        return PackageReference(
+            base_domain=OFFICIAL_BASE_DOMAIN,
+            source=stage.source,
+            name=stage.family,
+            constraint=constraint,
+            version=version,
+            sha256=sha256,
+        )
+
+    parsed = parse_reference(path, default_registry=OFFICIAL_BASE_DOMAIN, what=what)
+    components = parsed.path.split("/")
+    if len(components) == 1 and stage is not None:
+        source, name = stage.source, components[0]
+    elif len(components) == 2:
+        source, name = components
+    else:
         raise BuildError(
             f'"{reference}" does not name a {what} MCUHome can resolve.',
             hint=(
-                "the form is <source>/<package>, optionally with a registry in "
-                "front, a :version and an @sha256: — for example "
-                "sdk/mcuhome-sdk:0.1.10"
+                "the form is [registry/][source/]<package>, optionally with a "
+                ":constraint and an @sha256: — for example sdk/mcuhome-sdk:0.1.10"
             ),
         )
-    digest = parsed.digest or ""
+    hosted = path.startswith(f"{parsed.registry}/")
     return PackageReference(
         base_domain=parsed.registry,
         source=source,
         name=name,
-        version=parsed.tag or "",
-        sha256=digest.removeprefix("sha256:"),
+        constraint=constraint,
+        version=version,
+        sha256=sha256,
+        custom=stage is None
+        or (name, source) != (stage.family, stage.source)
+        or parsed.registry != OFFICIAL_BASE_DOMAIN,
+        hosted=hosted,
     )
+
+
+def _stated_constraint(text: str, *, what: str, reference: str) -> tuple[str, str]:
+    """What a reference states after its colon: the constraint, and the version.
+
+    Two spellings, told apart by parsing rather than by looking for an
+    operator: a bare **version** is the exact pin a device that froze
+    itself means (``0.1.9`` → ``==0.1.9``, and the version is answered
+    beside it so a fully pinned reference needs no index), and anything
+    else is a **PEP 440 specifier** read verbatim. Nothing at all — an
+    absent colon, or one with nothing behind it — is the empty
+    constraint, which is this function's way of saying "the chain
+    decides".
+    """
+    if not text:
+        return "", ""
+    try:
+        Version(text)
+    except InvalidVersion:
+        pass
+    else:
+        return f"=={text}", text
+    try:
+        SpecifierSet(text)
+    except InvalidSpecifier as error:
+        raise BuildError(
+            f'The {what} "{reference}" states "{text}", which is neither a version '
+            "nor a version constraint.",
+            hint=(
+                "state a version (0.1.9) to pin one exactly, or a PEP 440 "
+                'constraint — a compatible release "~=0.1.0", a range '
+                '">=0.1,<0.2". npm-style carets and tildes are not PEP 440.'
+            ),
+        ) from error
+    return text, ""
 
 
 def sdk_constraint(reference: str = "") -> tuple[str, bool | None]:
@@ -233,9 +433,10 @@ def sdk_constraint(reference: str = "") -> tuple[str, bool | None]:
     Naming a version is a device *pinning* itself and is honoured
     exactly: ``:0.1.9`` resolves under ``==0.1.9`` — a **stated**
     constraint, so the pre-release rule applies to it unchanged and a dev
-    version satisfies it only if the pin itself names one. Naming none —
-    the default, and what a device carries unless somebody asks otherwise
-    — resolves under :data:`DEFAULT_SDK_CONSTRAINT`, so a device is not
+    version satisfies it only if the pin itself names one. A range is
+    honoured the same way and for the same reason. Naming none — the
+    default, and what a device carries unless somebody asks otherwise —
+    resolves under :data:`DEFAULT_SDK_CONSTRAINT`, so a device is not
     frozen onto whatever version happened to be current on the day it was
     created.
 
@@ -255,9 +456,9 @@ def sdk_constraint(reference: str = "") -> tuple[str, bool | None]:
     """
     if not reference:
         return DEFAULT_SDK_CONSTRAINT, True
-    version = package_reference(reference, what="SDK package").version
-    if version:
-        return f"=={version}", None
+    constraint = package_reference(reference, stage=SDK_STAGE).constraint
+    if constraint:
+        return constraint, None
     return DEFAULT_SDK_CONSTRAINT, True
 
 
@@ -662,7 +863,7 @@ def resolve_sdk_pin(
 # --------------------------------------------------------------------------
 
 
-def environment_lock(
+def sdk_package_meta(
     *,
     version: str,
     sha256: str,
@@ -670,22 +871,25 @@ def environment_lock(
     into: Path,
     registry: RegistrySource | None = None,
     max_bytes: int | None = None,
-) -> EnvironmentLock:
-    """What the SDK release *version* states about its build environment.
+) -> PackageMeta:
+    """What the SDK release *version* says it needs below it.
 
-    Read out of the SDK package itself, and deliberately not from
-    anywhere else: the archive is acquired by ``(version, sha256)``
-    through the tiered, hash-checked path every package takes
-    (:func:`~mcuhome.workbench.packagefetch.acquire_package`), so the
-    lock a build derives its environment from comes out of bytes that
-    were already verified against the pin the context is identified by.
-    A sidecar beside the archive would be a second copy nobody checked.
+    The first link of the chain, read out of the SDK package itself and
+    deliberately not from anywhere else: the archive is acquired by
+    ``(version, sha256)`` through the tiered, hash-checked path every
+    package takes
+    (:func:`~mcuhome.workbench.packagefetch.acquire_package`), so what a
+    build derives its environment from comes out of bytes that were
+    already verified against the pin the context is identified by. The
+    sidecar beside the archive carries the same document, and for the SDK
+    it is not the one read: a copy nobody checked would decide which
+    build workspace a build resolves to.
 
     *into* is a scratch directory the caller owns; the SDK is small and
     the unpack costs milliseconds.
 
-    Raises a typed refusal when the release carries no lock at all — that
-    is an SDK this workbench cannot derive an environment for, and
+    Raises a typed refusal when the release carries no meta file at all —
+    that is an SDK this workbench cannot derive an environment for, and
     guessing one would pin packages nobody tested together.
     """
     from mcuhome.workbench.packagefetch import acquire_package
@@ -700,12 +904,12 @@ def environment_lock(
         registry=registry,
         max_bytes=max_bytes,
     )
-    path = acquired.tree / LOCK_FILE
+    path = acquired.tree / META_FILE
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except OSError as missing:
         raise BuildError(
-            f"The SDK package {SDK_PACKAGE_NAME} {version} carries no {LOCK_FILE}.",
+            f"The SDK package {SDK_PACKAGE_NAME} {version} carries no {META_FILE}.",
             hint=(
                 "the SDK release states which build environment it was built and "
                 "tested with, and this one does not. Use an SDK release that does, "
@@ -715,10 +919,10 @@ def environment_lock(
         ) from missing
     except ValueError as broken:
         raise BuildError(
-            f"The {LOCK_FILE} in {SDK_PACKAGE_NAME} {version} is not readable JSON: {broken}.",
+            f"The {META_FILE} in {SDK_PACKAGE_NAME} {version} is not readable JSON: {broken}.",
             hint="the package is damaged — remove it from the source directory and refetch it",
         ) from broken
-    return parse_lock(document)
+    return parse_meta(document, what=f"The {META_FILE} of {SDK_PACKAGE_NAME} {version}")
 
 
 def _entries_from_directory(directory: Path) -> Mapping[str, Mapping[str, Mapping[str, object]]]:
@@ -750,90 +954,627 @@ def _entries_from_directory(directory: Path) -> Mapping[str, Mapping[str, Mappin
     }
 
 
-def _same_registry(reference: PackageReference, sdk: PackageReference, *, what: str) -> None:
-    """Both references have to name one registry, or the pin is refused.
+# --------------------------------------------------------------------------
+# Where a stage can be resolved from
+# --------------------------------------------------------------------------
 
-    A registry client is built for **one** base domain — that is what a
-    trust anchor is per — and a build resolves its packages through the
-    one its SDK reference names. A device that pointed its environment
-    packages at a second domain would have them looked up on the first,
-    which is a pin resolved against a registry nobody chose. Until a
-    build can hold two clients, that is a refusal rather than a silent
-    substitution.
+
+@dataclass(frozen=True)
+class _Shelf:
+    """One place a stage may be resolved from: a directory, or a mirror.
+
+    The two are deliberately the same shape. An operator's directory and
+    a registry source both answer "which versions are there" out of an
+    ``index.json`` and "what does this one require" out of the meta file
+    recorded beside the archive; the difference is where the bytes come
+    from and whether a signature was checked, and both of those are
+    settled before this type exists.
     """
-    if reference.base_domain == sdk.base_domain:
-        return
-    raise BuildError(
-        f"This device takes its SDK from {sdk.base_domain} and its {what} package "
-        f"from {reference.base_domain}, and a build reads one package host.",
-        hint=(
-            "point sources.sdk, sources.build_workspace and sources.build_tools at "
-            "the same registry, or state the version and the hash of the package "
-            "outright so that nothing has to be looked up"
-        ),
+
+    #: What to call this place in a refusal — a path, or a mirror base.
+    label: str
+    entries: Mapping[str, Mapping[str, Mapping[str, object]]]
+    directory: Path | None = None
+    client: PackageRegistry | None = None
+    index: VerifiedIndex | None = None
+
+    def meta_document(self, meta_file: MetaFile, *, what: str) -> object:
+        """The meta file beside an archive, read and checked as the index records it."""
+        if self.client is not None and self.index is not None:
+            payload = self.client.fetch_meta(self.index, meta_file)
+        else:
+            path = Path(self.directory or ".") / meta_file.file
+            try:
+                payload = path.read_bytes()
+            except OSError as missing:
+                raise BuildError(
+                    f"{self.label} lists a meta file for {what} and does not carry it.",
+                    hint=(
+                        f"the index records {meta_file.file} beside the archive and the "
+                        "file is not there — the copy is incomplete. Synchronise the "
+                        "directory again."
+                    ),
+                ) from missing
+            check_meta_bytes(payload, meta_file, where=self.label)
+        try:
+            return json.loads(payload)
+        except ValueError as broken:
+            raise BuildError(
+                f"The meta file of {what} on {self.label} is not readable JSON: {broken}.",
+                hint="the package source is damaged — synchronise it again, or use another",
+            ) from broken
+
+    def url_for(self, entry: object) -> str:
+        """The location hint to record — an https mirror's, or nothing.
+
+        A package found in a local directory has no URL worth recording:
+        a ``file://`` of it would carry this machine's filesystem layout
+        into a document that may be uploaded to a build server.
+        """
+        if self.index is None or not self.index.base.startswith("https://"):
+            return ""
+        return self.index.url_for(entry)  # type: ignore[arg-type]
+
+
+def _shelves(
+    *,
+    sources: Sequence[Path],
+    registry: RegistrySource | None,
+    source_name: str,
+) -> Iterable[_Shelf]:
+    """The operator's directories, in order, and then the registry.
+
+    Lazily, and that is the point: a machine that holds the packages
+    never opens a socket, because the registry's index is only asked for
+    when the directories have all answered "not here".
+    """
+    for directory in sources:
+        entries = _entries_from_directory(Path(directory))
+        if not entries:
+            continue
+        yield _Shelf(label=str(directory), entries=entries, directory=Path(directory))
+    client = opened(registry)
+    if client is not None:
+        index = client.index(source_name)
+        yield _Shelf(label=index.base, entries=index.entries, client=client, index=index)
+
+
+# --------------------------------------------------------------------------
+# What a stage demands, and what satisfies it
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Requirement:
+    """One entry of a meta file's ``requires``: where, what, which versions."""
+
+    host: str
+    name: str
+    specifier: str
+
+    def describes(self, *, name: str, base_domain: str, default_host: str) -> bool:
+        """Whether this requirement is about that package on that host.
+
+        A key without a host prefix means the host the *requiring*
+        package itself came from — so the same package name taken from
+        somewhere else is not what was required, and is told so.
+        """
+        return self.name == name and (self.host or default_host) == base_domain
+
+    def described(self) -> str:
+        """How this requirement reads in a note."""
+        return f"{self.host}/{self.name}" if self.host else self.name
+
+
+def _requirements(meta: PackageMeta | None) -> tuple[_Requirement, ...]:
+    """A meta file's ``requires``, with the optional host prefix split off.
+
+    The key is ``[<host>/]<package name>``: a package may require
+    something from another host, and where it names none the host is the
+    one the requiring package itself came from.
+    """
+    if meta is None:
+        return ()
+    found = []
+    for key, specifier in meta.requires.items():
+        host, slash, name = key.rpartition("/")
+        found.append(_Requirement(host=host if slash else "", name=name, specifier=specifier))
+    return tuple(found)
+
+
+@dataclass(frozen=True)
+class _Demand:
+    """One stage, as the build is about to resolve it.
+
+    :attr:`constraint` is what will actually be resolved — the device's
+    word where it stated one, the chain's where it did not.
+    :attr:`required` is what the stage above declared, kept beside it so
+    that the two can be compared once the version is known: an override
+    outside the declared range is built, and said out loud.
+    """
+
+    reference: PackageReference
+    stage: PackageStage
+    name: str
+    base_domain: str
+    constraint: str
+    #: What the stage above declared about this stage, or ``None``.
+    required: _Requirement | None
+    #: The package that declared it, for the note ("mcuhome-sdk 0.1.10").
+    declared_by: str
+    #: The base domain that package itself came from — what an unprefixed
+    #: ``requires`` key means.
+    declared_host: str = OFFICIAL_BASE_DOMAIN
+    #: Whether the stage above said anything at all — ``False`` where its
+    #: own reference was pinned outright and nothing was ever read.
+    declared: bool = False
+    #: Everything the stage above requires, for a note that has to say
+    #: what it asked for instead.
+    requirements: tuple[_Requirement, ...] = ()
+
+    @property
+    def identity(self) -> str:
+        """The package this demand is about, with its host where that differs."""
+        if self.base_domain != self.declared_host:
+            return f"{self.base_domain}/{self.name}"
+        return self.name
+
+    def note_for(self, pin: PackagePin) -> str | None:
+        """The one line a device override outside the declared range prints.
+
+        Never a refusal: a device that names another version, another
+        package or another host is making a deliberate statement, and the
+        stage above it is in no position to forbid it — it only knows what
+        it was tested against. So the build goes on and the log says which
+        of the two it followed, because the difference is invisible in the
+        result.
+
+        Silence is the normal case, and deliberately so: a device that
+        stated nothing, or stated something the stage above declared, has
+        nothing worth a line in a build log.
+        """
+        if not self.reference.stated or not self.declared:
+            return None
+        if self.required is None:
+            if not self.reference.custom:
+                return None
+            asked = (
+                ", ".join(
+                    f"{requirement.described()} {requirement.specifier}"
+                    for requirement in self.requirements
+                )
+                or "no package at all"
+            )
+            return (
+                f"Note: the device names {self.identity} in sources.{self.stage.key}, and "
+                f"{self.declared_by} requires {asked} — building with "
+                f"{pin.name} {pin.version} as the device asks."
+            )
+        if _satisfies(self.required.specifier, pin.version):
+            return None
+        return (
+            f"Note: the device pins {pin.name} {pin.version} in sources.{self.stage.key}, "
+            f'and {self.declared_by} was built and tested with "{self.required.specifier}" '
+            f"— building with the version the device names."
+        )
+
+
+def _satisfies(specifier: str, version: str) -> bool:
+    """Whether *version* is inside *specifier* — pre-releases included.
+
+    Pre-releases count here because the question is "is this what the
+    stage above declared", not "what should be resolved": a declared
+    ``~=0.1.0`` and a device pinning ``0.1.1.dev3`` are the same
+    intention, and a note saying otherwise would be noise.
+    """
+    try:
+        return SpecifierSet(specifier).contains(Version(version), prereleases=True)
+    except (InvalidSpecifier, InvalidVersion):
+        return True
+
+
+def _demand_for(
+    reference: PackageReference,
+    *,
+    stage: PackageStage,
+    chain: PackageMeta | None,
+    declared_by: str,
+    declared_host: str = OFFICIAL_BASE_DOMAIN,
+) -> _Demand:
+    """What to resolve for one stage: which package, from where, in which range.
+
+    Three sources of an answer, in this order: what the **device** stated,
+    what the **stage above** requires, and the stage's own defaults. A
+    device that stated nothing defers to the chain entirely — including
+    which package and which host, because a requirement may name both. A
+    device that named a package the chain does not require is honoured
+    with nothing to narrow it, which is what makes "any host, any package"
+    an override rather than a refusal.
+
+    Raises when the device deferred and the chain says nothing: "any
+    version" and "this one forgot to say" look identical from here and
+    mean entirely different things.
+    """
+    required = _requirements(chain)
+    if reference.custom:
+        base_domain = reference.base_domain if reference.hosted else declared_host
+        match = next(
+            (
+                requirement
+                for requirement in required
+                if requirement.describes(
+                    name=reference.name, base_domain=base_domain, default_host=declared_host
+                )
+            ),
+            None,
+        )
+        name = reference.name
+    else:
+        # The device deferred: the chain decides the package and the host
+        # as well as the range, because a requirement may name all three.
+        match = next(
+            (requirement for requirement in required if requirement.name == stage.family), None
+        )
+        if match is None and len(required) == 1:
+            # The chain redirected: the stage above requires something
+            # else, and a device that said nothing follows it there.
+            match = required[0]
+        name = match.name if match is not None else stage.family
+        base_domain = (match.host if match is not None and match.host else "") or declared_host
+
+    if reference.constraint:
+        constraint = reference.constraint
+    elif reference.sha256:
+        # The hash decides which archive, and the index says which
+        # version that archive is. Nothing to narrow.
+        constraint = ""
+    elif match is not None:
+        constraint = match.specifier
+    elif reference.custom:
+        # An override naming a package nobody required: honoured, and the
+        # note says so once the version is known.
+        constraint = ""
+    elif chain is not None:
+        # The device deferred and the chain is silent about the stage it
+        # is supposed to describe. The model's own refusal names what the
+        # package does require.
+        chain.constraint_on(name)
+        raise AssertionError  # pragma: no cover - constraint_on always raises here
+    else:
+        raise BuildError(
+            f"MCUHome cannot say which version of {name} to build with.",
+            hint=(
+                f"nothing states which one this build needs — name it in the device's "
+                f"sources.{stage.key}, as {stage.source}/{name}:<version>."
+            ),
+        )
+    return _Demand(
+        reference=reference,
+        stage=stage,
+        name=name,
+        base_domain=base_domain,
+        constraint=constraint,
+        required=match,
+        declared_by=declared_by,
+        declared_host=declared_host,
+        declared=chain is not None,
+        requirements=required,
     )
 
 
-def _pin_package(
-    reference: PackageReference,
-    version: str,
+class _NotHere(Exception):
+    """One shelf did not answer, and what it did have instead."""
+
+    def __init__(self, reason: str, *, silent: bool = False) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        #: ``True`` where the shelf has the package and no version of it
+        #: says what it requires — the one miss worth its own refusal.
+        self.silent = silent
+
+
+@dataclass(frozen=True)
+class _Found:
+    """One stage resolved: the pin a context records, and the next link."""
+
+    pin: PackagePin
+    meta: PackageMeta | None
+
+
+def _resolve_stage(
+    demand: _Demand,
     *,
     sources: Sequence[Path],
     registry: RegistrySource | None,
     platform: str | None,
-    what: str,
-) -> PackagePin:
-    """One environment package as a context pins it: name, version, hash.
+    on_line: Callable[[str], None] | None = None,
+    chain_wanted: bool = False,
+) -> _Found:
+    """*demand* resolved to one package: the operator's directories, then the registry.
 
-    Two tiers in the order every other acquisition uses — the operator's
-    own directories first, the registry's verified index second — so a
-    machine that already holds the packages never opens a socket.
+    The answer is the newest published version satisfying the constraint,
+    pinned exactly — name, version, hash — plus that package's own meta
+    file, which is what the next stage is resolved from. A reference that
+    states a version **and** a hash decides everything on its own and its
+    pin is answered without reading anything at all.
 
-    A **meta** entry is kept as one rather than followed: the family name
-    and its hash over every platform's package are what a context pins,
-    which is what lets one context build the same firmware on hosts of
-    two architectures. A concrete name is checked against this host's
-    platform, because a pin naming a foreign one is a mistake worth
-    catching where it is written.
+    *chain_wanted* is the one thing such a pin may still cost a lookup:
+    the stage below it stated nothing, so somebody has to say what this
+    package requires, and the answer — if a source publishes exactly
+    these bytes — is that package's own meta file. Not finding one is no
+    refusal here; the stage below refuses for itself, where the message
+    can name the key to fix.
     """
-    if reference.sha256:
-        # The reference decided both halves; nothing to look up, and
-        # nothing that could disagree with it.
-        return PackagePin(name=reference.name, version=version, sha256=reference.sha256)
-    for directory in sources:
-        entries = _entries_from_directory(Path(directory))
-        if reference.name not in entries:
+    reference = demand.reference
+    if reference.pinned:
+        pin = PackagePin(name=demand.name, version=reference.version, sha256=reference.sha256)
+        _say(on_line, demand.note_for(pin))
+        meta = (
+            _meta_for(
+                pin,
+                sources=sources,
+                registry=registry,
+                source_name=reference.source,
+                platform=platform,
+            )
+            if chain_wanted
+            else None
+        )
+        return _Found(pin=pin, meta=meta)
+
+    problems: list[str] = []
+    silent = 0
+    for shelf in _shelves(sources=sources, registry=registry, source_name=reference.source):
+        try:
+            found = _select(shelf, demand, platform=platform)
+        except _NotHere as miss:
+            problems.append(f"  {shelf.label}: {miss.reason}")
+            silent += 1 if miss.silent else 0
+            continue
+        _say(on_line, demand.note_for(found.pin))
+        return found
+
+    listed = "\n".join(problems) or f"  (no source and no registry offers {demand.name})"
+    if silent and silent == len(problems):
+        raise BuildError(
+            f"No published version of {demand.name} says what it requires.",
+            hint=(
+                f"MCUHome reads that from the {META_FILE} a package index records beside "
+                f"each archive, and no offered version has one — a package published "
+                f"before MCUHome recorded them carries none:\n{listed}\n"
+                f"Use a source that publishes them, or state the version and the hash "
+                f"in the device's sources.{demand.stage.key}."
+            ),
+        )
+    wanted = demand.constraint or "any version"
+    raise BuildError(
+        f'No package source offers a {demand.stage.what} matching "{wanted}".',
+        hint=(
+            f"{demand.name} was looked for in:\n{listed}\n"
+            f"Add the package to one of them, configure the registry, or name a "
+            f"version the sources have in the device's sources.{demand.stage.key}."
+        ),
+    )
+
+
+def _meta_for(
+    pin: PackagePin,
+    *,
+    sources: Sequence[Path],
+    registry: RegistrySource | None,
+    source_name: str,
+    platform: str | None,
+) -> PackageMeta | None:
+    """What a package pinned outright says about itself, where a source has it.
+
+    A device that pins one package by hash still overrides that package
+    **and nothing else** — so the stage below it keeps resolving through
+    the chain, as long as a source publishes exactly these bytes and
+    records a meta file beside them. The hash is what decides: an entry
+    of the same version under other bytes is a different package and its
+    meta file describes something this build is not using.
+    """
+    try:
+        for shelf in _shelves(sources=sources, registry=registry, source_name=source_name):
+            try:
+                pinned = pin_entry(shelf.entries, pin.name, pin.version, platform=platform)
+                if pinned.sha256 != pin.sha256:
+                    continue
+                entry = resolve_entry(shelf.entries, pin.name, pin.version, platform=platform)
+            except PackageRegistryError:
+                continue
+            if entry.meta_file is None:
+                continue
+            return _read_meta(shelf, entry)
+    except PackageRegistryError:
+        # A registry that cannot be reached is not an answer, and this
+        # question is an opportunistic one.
+        return None
+    return None
+
+
+def _select(shelf: _Shelf, demand: _Demand, *, platform: str | None) -> _Found:
+    """One shelf's answer to *demand*, or :class:`_NotHere`.
+
+    **Only a version that says what it requires is a candidate.** The
+    chain is resolved through a package's meta file, so a version whose
+    index entry records none cannot be resolved *through* — picking it
+    would leave the next stage with nothing to go on, one fetch later and
+    with a worse message.
+
+    **A family a directory publishes only per platform is still that
+    family.** An operator's directory holds the packages one machine
+    needs, and a directory that carries ``mcuhome-build-tools_linux-amd64``
+    and no family entry is a complete source for this host. It is then
+    pinned by the concrete name, because that is the name those bytes are
+    published under here and a family hash cannot be recomputed from one
+    member.
+    """
+    name = demand.name
+    versions = shelf.entries.get(name)
+    if not versions:
+        concrete = f"{name}{ARCH_SEPARATOR}{platform or host_platform()}"
+        if not shelf.entries.get(concrete):
+            raise _NotHere(f"publishes no {demand.name}")
+        name = concrete
+        versions = shelf.entries[concrete]
+
+    candidates: dict[str, ResolvedEntry] = {}
+    silent: list[str] = []
+    for version in versions:
+        try:
+            resolved = resolve_entry(shelf.entries, name, version, platform=platform)
+        except PackageRegistryError:
+            # Not published for this platform, or an entry this client
+            # cannot read. Another version may well be fine.
+            continue
+        if resolved.meta_file is None:
+            silent.append(version)
+            continue
+        candidates[version] = resolved
+
+    if demand.reference.sha256:
+        return _by_hash(shelf, demand, name, versions, platform=platform)
+    if not candidates:
+        offered = ", ".join(sorted(silent)) or "nothing this machine can use"
+        raise _NotHere(f"publishes {offered}, and no meta file for any of them", silent=True)
+    try:
+        version = resolve_version(
+            demand.constraint,
+            candidates,
+            prereleases=_allow(demand.constraint, None),
+            name=name,
+        )
+    except BuildError:
+        raise _NotHere(f"publishes {', '.join(sorted(candidates))}") from None
+    return _pinned(shelf, demand, name, version, candidates[version], platform=platform)
+
+
+def _by_hash(
+    shelf: _Shelf,
+    demand: _Demand,
+    name: str,
+    versions: Mapping[str, Mapping[str, object]],
+    *,
+    platform: str | None,
+) -> _Found:
+    """The version whose entry carries the hash the reference stated.
+
+    A reference that names a hash and no version selects those bytes and
+    lets the index say which release they are. The comparison is against
+    the *pin* the index would hand out — a family's hash over its members
+    as readily as one archive's — so ``@sha256:`` works for both.
+    """
+    stated = demand.reference.sha256
+    for version in versions:
+        try:
+            pinned = pin_entry(shelf.entries, name, version, platform=platform)
+        except PackageRegistryError:
+            continue
+        if pinned.sha256 != stated:
             continue
         try:
-            found = pin_entry(entries, reference.name, version, platform=platform)
-        except PackageRegistryError:
-            # The directory carries the package but not this version — a
-            # legitimate not-here, exactly as a directory without an index
-            # is. The search goes on, the same way the SDK's does; a
-            # stale mirror must not be able to stop a build that the
-            # registry could have answered.
+            resolved = resolve_entry(shelf.entries, name, version, platform=platform)
+        except PackageRegistryError:  # pragma: no cover - pin_entry answered a moment ago
             continue
-        return PackagePin(name=found.name, version=found.version, sha256=found.sha256)
+        return _pinned(shelf, demand, name, version, resolved, platform=platform)
+    raise _NotHere(f"publishes no {demand.name} with that hash")
 
-    client = opened(registry)
-    if client is not None:
-        index = client.index(reference.source)
-        found = pin_entry(index.entries, reference.name, version, platform=platform)
-        return PackagePin(
-            name=found.name,
-            version=found.version,
-            sha256=found.sha256,
-            url=index.url_for(found) if index.base.startswith("https://") else "",
+
+def _pinned(
+    shelf: _Shelf,
+    demand: _Demand,
+    name: str,
+    version: str,
+    entry: ResolvedEntry,
+    *,
+    platform: str | None,
+) -> _Found:
+    """The pin for one selected version, and the meta file behind it."""
+    del demand
+    pinned = pin_entry(shelf.entries, name, version, platform=platform)
+    meta = None if entry.meta_file is None else _read_meta(shelf, entry)
+    pin = PackagePin(
+        name=pinned.name,
+        version=pinned.version,
+        sha256=pinned.sha256,
+        url=shelf.url_for(pinned),
+    )
+    return _Found(pin=pin, meta=meta)
+
+
+def _read_meta(shelf: _Shelf, entry: ResolvedEntry) -> PackageMeta:
+    """One package's meta file, verified as the index records it and as its own.
+
+    Two checks, and the second is the one a mirror cannot fake its way
+    past: the bytes against the hash the signed index states, and the
+    document against the archive it sits beside. A sidecar describing
+    another package would decide the next stage from something this build
+    is not using.
+    """
+    what = f"{entry.name} {entry.version}"
+    meta = parse_meta(
+        shelf.meta_document(entry.meta_file, what=what),  # type: ignore[arg-type]
+        what=f"The {META_FILE} of {what}",
+    )
+    if meta.package != entry.name or not _same_version(meta.version, entry.version):
+        raise BuildError(
+            f"{shelf.label} records a meta file for {what} that describes "
+            f"{meta.package} {meta.version}.",
+            hint=(
+                "the package source is inconsistent — synchronise it again, or "
+                "report it to whoever publishes it"
+            ),
         )
+    return meta
 
-    listed = ", ".join(str(directory) for directory in sources) or "none"
+
+def _same_version(one: str, other: str) -> bool:
+    """PEP 440 equality, falling back to the spelling for unparseable versions."""
+    try:
+        return Version(one) == Version(other)
+    except InvalidVersion:
+        return one == other
+
+
+def _say(on_line: Callable[[str], None] | None, line: str | None) -> None:
+    if on_line is not None and line:
+        on_line(line)
+
+
+def _registry_for(
+    reference: PackageReference,
+    *,
+    sdk: PackageReference,
+    registry: RegistrySource | None,
+    hosts: Callable[[str], PackageRegistry] | None,
+    what: str,
+) -> RegistrySource | None:
+    """The registry this reference resolves through — its own host's.
+
+    The ordinary case is one host for the whole build and the client the
+    SDK's reference already opened. A device that points one package at
+    **another** base domain gets another client, built for that domain
+    from the project's own configuration: a trust anchor is per base
+    domain, and so are the mirrors, so this is the only way such a
+    reference can be honoured at all.
+
+    Where no such factory was handed over — a build server resolves for
+    one host by decision — a foreign domain is refused rather than looked
+    up on the wrong one.
+    """
+    if reference.base_domain == sdk.base_domain or reference.pinned:
+        return registry
+    if hosts is not None:
+        domain = reference.base_domain
+        return lambda: hosts(domain)
     raise BuildError(
-        f"MCUHome cannot pin the {what} package {reference.name} {version}: "
-        "no configured source publishes it.",
+        f"This device takes its SDK from {sdk.base_domain} and its {what} package "
+        f"from {reference.base_domain}, and this build reads one package host.",
         hint=(
-            f"searched: {listed}. Put the package and its {INDEX_FILE} in one of "
-            "them, configure the registry, or state the hash in the device's "
-            f"sources reference as {reference.name}:{version}@sha256:<hash>."
+            "point sources.sdk, sources.build_workspace and sources.build_tools at "
+            "the same registry, or state the version and the hash of the package "
+            "outright so that nothing has to be looked up"
         ),
     )
 
@@ -850,7 +1591,9 @@ def resolve_environment(
     tools_sources: Sequence[Path] = (),
     max_bytes: int | None = None,
     registry: RegistrySource | None = None,
+    hosts: Callable[[str], PackageRegistry] | None = None,
     platform: str | None = None,
+    on_line: Callable[[str], None] | None = None,
 ) -> EnvironmentPin:
     """The two packages a context pins its build environment to.
 
@@ -858,81 +1601,104 @@ def resolve_environment(
     and ``sources.build_tools`` references, *sdk_source* is its
     ``sources.sdk`` reference and *sdk* is what that already resolved to.
 
-    All three references have to name the same registry, because a build
-    reads one package host: the base domain is what a trust anchor is per,
-    and the client this resolution is handed was built for the SDK's. A
-    reference that states both a version and a hash is exempt — it needs
-    no host at all.
+    **The chain decides, one link at a time.** The resolved SDK release's
+    own ``meta.json`` states which *range* of build workspaces it was
+    built and tested with; the newest published workspace version
+    satisfying it wins and is pinned exactly, and *that* package's meta
+    file states which range of build tools it needs, which is resolved the
+    same way. Three release lines, two constraints, and no version
+    anywhere in the middle: a workspace release that fixes something
+    reaches an existing device without the SDK being re-cut.
 
-    **The versions come from the SDK, the hashes from an index.** A
-    reference that names no version — the default every device carries —
-    is answered by the resolved SDK release's own
-    ``build-environment.lock.json``: the SDK and its environment are
-    released together, so the release states which environment it was
-    built and tested with, and a device that says nothing gets exactly
-    that pair. A reference that *does* name a version overrides that
-    derivation for its package alone; one that also names a hash decides
-    the whole pin and no index is consulted at all.
+    **A device overrides any of it, and is never refused for it.** A
+    reference may narrow the range (``:~=0.2``), pin a version, name
+    another package, another host, or exact bytes; what it states wins,
+    and where it lands outside what the stage above declared the build
+    says so in one line and goes on. The stage above knows what it was
+    tested with, not what is allowed.
 
-    The lock cannot carry hashes — the workspace package is built from
-    the SDK's own tag, and the tools package's bytes differ per platform
-    — so the hash always comes from a package index: an operator
-    directory's, or the one a registry mirror served and the project's
-    trust anchor accepted.
+    **Versions come from an index, hashes with them.** A meta file
+    carries no hashes — a package cannot state its own, and the one below
+    it may not be built yet — so both halves of a pin come from a package
+    index: an operator directory's, or the one a registry mirror served
+    and the project's trust anchor accepted. Only a version whose index
+    entry records a meta file is a candidate, because a version that does
+    not say what it requires cannot be resolved through.
 
     *sources* are the operator directories, and *workspace_sources* /
     *tools_sources* replace them for their own package when the
     environment packages are kept somewhere else than the SDK — they are
     two orders of magnitude larger, and a machine may well keep them on
     another disk. Empty means "the same directories the SDK comes from".
+
+    *hosts* opens a registry for a base domain other than the SDK's;
+    without it a foreign host is a refusal rather than a lookup on the
+    wrong registry. *on_line* is where the override note goes — the build
+    log, where the person watching is already looking.
     """
-    workspace_reference = package_reference(workspace, what="build workspace package")
-    tools_reference = package_reference(tools, what="build tools package")
-    sdk_reference = package_reference(sdk_source, what="SDK package")
-    # A reference that decides its own pin needs no registry at all, so
-    # only the ones that will be looked up have to agree about where.
+    workspace_reference = package_reference(workspace, stage=WORKSPACE_STAGE)
+    tools_reference = package_reference(tools, stage=TOOLS_STAGE)
+    sdk_reference = package_reference(sdk_source, stage=SDK_STAGE)
+
+    sdk_meta: PackageMeta | None = None
     if not workspace_reference.pinned:
-        _same_registry(workspace_reference, sdk_reference, what="build workspace")
-    if not tools_reference.pinned:
-        _same_registry(tools_reference, sdk_reference, what="build tools")
-    lock: EnvironmentLock | None = None
-    if not (workspace_reference.version and tools_reference.version):
-        lock = environment_lock(
+        # A reference that states a version *and* a hash decides
+        # everything and reads nothing — that is the offline case. Every
+        # other one wants the SDK's own statement: to resolve by, or to
+        # hold a device's own choice against.
+        sdk_meta = sdk_package_meta(
             version=sdk.package.version,
             sha256=sdk.package.sha256,
             sources=sources,
-            into=Path(work_root) / "sdk-lock",
+            into=Path(work_root) / "sdk-meta",
             registry=registry,
             max_bytes=max_bytes,
         )
-    return EnvironmentPin(
-        workspace=_pin_package(
+
+    workspace_demand = _demand_for(
+        workspace_reference,
+        stage=WORKSPACE_STAGE,
+        chain=sdk_meta,
+        declared_by=f"{SDK_PACKAGE_NAME} {sdk.package.version}",
+        declared_host=sdk_reference.base_domain,
+    )
+    workspace_found = _resolve_stage(
+        workspace_demand,
+        sources=tuple(workspace_sources) or sources,
+        registry=_registry_for(
             workspace_reference,
-            workspace_reference.version or _locked(lock, workspace_reference.name),
-            sources=tuple(workspace_sources) or sources,
+            sdk=sdk_reference,
             registry=registry,
-            platform=platform,
+            hosts=hosts,
             what="build workspace",
         ),
-        tools=_pin_package(
+        platform=platform,
+        on_line=on_line,
+        # The tools stage says nothing, so the workspace has to — even
+        # where the device pinned it by hash and nothing was looked up
+        # for the pin itself.
+        chain_wanted=not tools_reference.stated,
+    )
+    tools_found = _resolve_stage(
+        _demand_for(
             tools_reference,
-            tools_reference.version or _locked(lock, family_of(tools_reference.name)),
-            sources=tuple(tools_sources) or sources,
+            stage=TOOLS_STAGE,
+            chain=workspace_found.meta,
+            declared_by=f"{workspace_found.pin.name} {workspace_found.pin.version}",
+            declared_host=workspace_demand.base_domain,
+        ),
+        sources=tuple(tools_sources) or sources,
+        registry=_registry_for(
+            tools_reference,
+            sdk=sdk_reference,
             registry=registry,
-            platform=platform,
+            hosts=hosts,
             what="build tools",
         ),
+        platform=platform,
+        on_line=on_line,
     )
-
-
-def _locked(lock: EnvironmentLock | None, package: str) -> str:
-    """The version *lock* names for *package* — with the lock guaranteed present."""
-    if lock is None:  # pragma: no cover - the caller reads the lock whenever it needs one
-        raise BuildError(
-            f"MCUHome cannot say which version of {package} to build with.",
-            hint="name it in the device's sources, or use an SDK release that states one",
-        )
-    return lock.version_of(package)
+    return EnvironmentPin(workspace=workspace_found.pin, tools=tools_found.pin)
 
 
 #: The registry sources the two environment packages are published under,
