@@ -426,6 +426,25 @@ def test_a_meta_file_whose_bytes_are_not_the_signed_ones_is_refused(
         client.fetch_meta(index, entry.meta_file)
 
 
+def test_a_meta_file_of_another_length_is_refused_before_it_is_parsed(
+    tmp_path: Path, keys: dict[str, SigningKey], anchor: Path
+) -> None:
+    """The cheap half of the same check, and the one that catches a truncated
+    copy: a document of the wrong size is refused by its length, so nothing
+    ever parses bytes the index did not record."""
+    sidecar = build_meta_document(SDK, VERSION)
+    src = build_source(tmp_path / "served" / SOURCE, keys, meta_files={SDK: sidecar})
+    served = bootstrap(Served().publish(MIRROR, src))
+    client = registry(tmp_path, anchor, served)
+    index = client.index(SOURCE)
+    entry = index.resolve(SDK, VERSION)
+    assert entry.meta_file is not None
+
+    served.put(MIRROR + entry.meta_file.file, sidecar[:-1])
+    with pytest.raises(PackageRegistryError, match="and the index says"):
+        client.fetch_meta(index, entry.meta_file)
+
+
 def test_a_malformed_meta_file_record_is_refused() -> None:
     """A damaged index member is a refusal, not a member silently treated
     as absent — the two are different failures for a reader to tell apart."""

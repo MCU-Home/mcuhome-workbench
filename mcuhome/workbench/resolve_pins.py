@@ -103,6 +103,7 @@ from mcuhome.model.buildenvironment import (
     WORKSPACE_PACKAGE,
     WORKSPACE_SOURCE,
     PackageMeta,
+    family_of,
     parse_meta,
 )
 from mcuhome.model.context import EnvironmentPin, PackagePin
@@ -1055,11 +1056,19 @@ class _Requirement:
     def describes(self, *, name: str, base_domain: str, default_host: str) -> bool:
         """Whether this requirement is about that package on that host.
 
+        The name is compared as a **family**: a requirement is stated
+        about ``mcuhome-build-tools`` and a device may name this
+        platform's ``mcuhome-build-tools_linux-amd64`` of it, which is
+        the same package with the coordinate written out — so the
+        declared range still narrows it, and the note stays quiet.
+
         A key without a host prefix means the host the *requiring*
         package itself came from — so the same package name taken from
         somewhere else is not what was required, and is told so.
         """
-        return self.name == name and (self.host or default_host) == base_domain
+        if family_of(self.name) != family_of(name):
+            return False
+        return (self.host or default_host) == base_domain
 
     def described(self) -> str:
         """How this requirement reads in a note."""
@@ -1541,14 +1550,21 @@ def _say(on_line: Callable[[str], None] | None, line: str | None) -> None:
 
 
 def _registry_for(
-    reference: PackageReference,
+    demand: _Demand,
     *,
     sdk: PackageReference,
     registry: RegistrySource | None,
     hosts: Callable[[str], PackageRegistry] | None,
     what: str,
 ) -> RegistrySource | None:
-    """The registry this reference resolves through — its own host's.
+    """The registry this stage resolves through — its own host's.
+
+    The host is the **demand's**, not the reference's: a reference that
+    names none is understood against the package that required it, and
+    that package may itself live somewhere other than the official
+    domain. Reading the reference here instead would refuse a device
+    that named one host for its SDK and nothing at all for the rest,
+    over a second host the person never wrote.
 
     The ordinary case is one host for the whole build and the client the
     SDK's reference already opened. A device that points one package at
@@ -1561,14 +1577,14 @@ def _registry_for(
     one host by decision — a foreign domain is refused rather than looked
     up on the wrong one.
     """
-    if reference.base_domain == sdk.base_domain or reference.pinned:
+    if demand.base_domain == sdk.base_domain or demand.reference.pinned:
         return registry
     if hosts is not None:
-        domain = reference.base_domain
+        domain = demand.base_domain
         return lambda: hosts(domain)
     raise BuildError(
         f"This device takes its SDK from {sdk.base_domain} and its {what} package "
-        f"from {reference.base_domain}, and this build reads one package host.",
+        f"from {demand.base_domain}, and this build reads one package host.",
         hint=(
             "point sources.sdk, sources.build_workspace and sources.build_tools at "
             "the same registry, or state the version and the hash of the package "
@@ -1664,7 +1680,7 @@ def resolve_environment(
         workspace_demand,
         sources=tuple(workspace_sources) or sources,
         registry=_registry_for(
-            workspace_reference,
+            workspace_demand,
             sdk=sdk_reference,
             registry=registry,
             hosts=hosts,
@@ -1677,17 +1693,18 @@ def resolve_environment(
         # for the pin itself.
         chain_wanted=not tools_reference.stated,
     )
+    tools_demand = _demand_for(
+        tools_reference,
+        stage=TOOLS_STAGE,
+        chain=workspace_found.meta,
+        declared_by=f"{workspace_found.pin.name} {workspace_found.pin.version}",
+        declared_host=workspace_demand.base_domain,
+    )
     tools_found = _resolve_stage(
-        _demand_for(
-            tools_reference,
-            stage=TOOLS_STAGE,
-            chain=workspace_found.meta,
-            declared_by=f"{workspace_found.pin.name} {workspace_found.pin.version}",
-            declared_host=workspace_demand.base_domain,
-        ),
+        tools_demand,
         sources=tuple(tools_sources) or sources,
         registry=_registry_for(
-            tools_reference,
+            tools_demand,
             sdk=sdk_reference,
             registry=registry,
             hosts=hosts,

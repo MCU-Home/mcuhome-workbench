@@ -560,6 +560,25 @@ def test_a_meta_file_whose_bytes_do_not_verify_is_refused(tmp_path) -> None:
     assert "hashes to" in caught.value.message
 
 
+def test_a_source_that_lists_a_meta_file_and_does_not_carry_it_is_refused(tmp_path) -> None:
+    """An incomplete copy is said out loud rather than resolved around.
+
+    The index is the record of what a directory holds; a sidecar it names
+    and does not have is a synchronisation that stopped half way, and
+    quietly falling through to the next source would hide it for as long
+    as another source answers.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    (source.path / f"{WORKSPACE}-0.1.0.tar.zst.meta.json").unlink()
+
+    with pytest.raises(BuildError) as caught:
+        resolved(source, tmp_path)
+    assert "does not carry it" in caught.value.message
+    assert "Synchronise" in caught.value.hint
+
+
 def test_a_meta_file_of_another_schema_is_refused(tmp_path) -> None:
     """A reader that guessed at a shape it does not know would resolve from a
     document it misunderstood."""
@@ -670,6 +689,53 @@ def test_an_override_naming_another_package_builds_and_says_so(tmp_path) -> None
     assert len(lines) == 1
     assert f"{SDK} 0.1.0 requires {WORKSPACE} ~=0.1.0" in lines[0]
     assert "acme-workspace 2.0.0" in lines[0]
+
+
+def test_naming_this_platform_s_package_keeps_the_family_s_constraint(tmp_path) -> None:
+    """``mcuhome-build-tools_linux-amd64`` is the required family, spelled out.
+
+    A requirement is stated about the family, and a device that names one
+    platform's package of it is asking for the same thing with the
+    coordinate written down. Reading the two as different packages would
+    silently drop the declared range — and resolve to whatever the newest
+    published version happens to be, which is the opposite of what
+    naming a package more precisely means.
+    """
+    source = Source(tmp_path / "src")
+    source.sdk(requires={WORKSPACE: "~=0.1.0"})
+    source.publish(WORKSPACE, "0.1.0", requires={TOOLS: "~=0.1.0"})
+    source.publish(CONCRETE_TOOLS, "0.1.0", architecture=PLATFORM)
+    source.publish(CONCRETE_TOOLS, "0.9.9", architecture=PLATFORM)
+
+    lines: list[str] = []
+    pin = resolved(
+        source,
+        tmp_path,
+        tools=f"build-tools/{CONCRETE_TOOLS}",
+        platform=PLATFORM,
+        on_line=lines.append,
+    )
+    assert (pin.tools.name, pin.tools.version) == (CONCRETE_TOOLS, "0.1.0")
+    # Inside what the workspace declared, so there is nothing to say.
+    assert lines == []
+
+
+def test_a_device_that_names_one_host_is_not_told_it_named_two(tmp_path) -> None:
+    """A reference that says nothing takes the host of whoever required it.
+
+    A device pointing its *SDK* at another registry and leaving the
+    environment packages alone has named one host, not two — and the
+    chain says where those packages come from: the SDK's own. Refusing it
+    over a second host would refuse a device for something nobody wrote.
+    """
+    source = chained(tmp_path)
+    pin = resolved(
+        source,
+        tmp_path,
+        sdk_source=f"packages.example.test/sdk/{SDK}",
+    )
+    assert pin.workspace.version == "0.1.0"
+    assert pin.tools.version == "0.1.0"
 
 
 def test_an_override_pinning_a_hash_selects_that_archive(tmp_path) -> None:
