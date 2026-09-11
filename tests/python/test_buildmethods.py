@@ -1383,3 +1383,88 @@ def test_a_development_build_refuses_the_pin_and_notes_nothing(model, tmp_path) 
         )
     assert "build.dev_workspace" in refused.value.hint
     assert not any("no effect" in line for line in said)
+
+
+def test_a_subprocess_build_prints_the_override_note_the_container_one_prints(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The note travels in both profiles, or it is not a guarantee.
+
+    A device may pin an environment package outside what the resolved SDK
+    declares; that is built and said out loud rather than refused. The
+    line reaches the build log only if the composition hands the context
+    creation somewhere to say it — which the subprocess profile once did
+    not, and which is the profile the sdk's own CI builds in.
+    """
+
+    def fake_run(context_dir, **kwargs):
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=kwargs["environment"],
+        )
+
+    monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
+    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    monkeypatch.setattr(subprocessbuild, "check_environment", lambda environment, **facts: None)
+
+    class FakeEnvironment:
+        developer = False
+
+        def described(self) -> str:
+            return "mcuhome-build-workspace 0.9.0"
+
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    _publish_workspace(source, "0.9.0")
+    pinned = replace(
+        model,
+        sources=replace(
+            model.sources, build_workspace="build-workspace/mcuhome-build-workspace:0.9.0"
+        ),
+    )
+    lines: list[str] = []
+    buildmethods.compose_subprocess_build(
+        pinned,
+        sdk_sources=(source,),
+        work_root=tmp_path / "work",
+        env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
+        signing_pub=_PUBLIC_PEM,
+        environment=FakeEnvironment(),
+        on_line=lines.append,
+    )
+    note = [line for line in lines if line.startswith("Note: ")]
+    assert len(note) == 1
+    assert "sources.build_workspace" in note[0]
+    assert "0.9.0" in note[0]
+    manifest = read_context_request(tmp_path / "work" / "context" / "context.yaml")
+    assert manifest.build_environment.workspace.version == "0.9.0"
+
+
+def _publish_workspace(directory: Path, version: str) -> None:
+    """A second build workspace release in a source directory, sidecar and all."""
+    import hashlib
+    import json
+
+    from conftest import ENVIRONMENT_CONSTRAINT, TOOLS_PACKAGE, WORKSPACE_PACKAGE, package_meta
+
+    payload = f"{WORKSPACE_PACKAGE} {version}\n".encode()
+    filename = f"{WORKSPACE_PACKAGE}-{version}.tar.zst"
+    (directory / filename).write_bytes(payload)
+    meta = package_meta(
+        WORKSPACE_PACKAGE, version, requires={TOOLS_PACKAGE: ENVIRONMENT_CONSTRAINT}
+    )
+    (directory / f"{filename}.meta.json").write_bytes(meta)
+    index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
+    index["packages"][WORKSPACE_PACKAGE][version] = {
+        "file": filename,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size": len(payload),
+        "meta_file": {
+            "file": f"{filename}.meta.json",
+            "sha256": hashlib.sha256(meta).hexdigest(),
+            "size": len(meta),
+        },
+    }
+    (directory / "index.json").write_text(json.dumps(index), encoding="utf-8")

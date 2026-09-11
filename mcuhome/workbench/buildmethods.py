@@ -1415,7 +1415,14 @@ def compose_subprocess_build(
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
+            hosts=_package_hosts(
+                project_root=project_root,
+                registries=registries,
+                work_root=work_root,
+                on_line=on_line,
+            ),
             developer=developing,
+            on_line=on_line,
         )
         if on_step is not None:
             on_step("context", **context_facts(context_dir))
