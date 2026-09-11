@@ -73,6 +73,7 @@ from mcuhome.model.buildenvironment import (
     TOOLS_SOURCE,
     WORKSPACE_SOURCE,
     Declaration,
+    PackageMember,
     family_of,
     member_name,
     parse_declaration,
@@ -839,8 +840,15 @@ def _check_packages(
 
     **The declaration against the entry**: does the environment agree
     about what it is made of? The declaration is the abstract set — its
-    carrier cannot state its own hash and its tools member may name the
-    family — so a hash is compared only where the declaration states one.
+    carrier cannot state its own hash and its tools member names the
+    family — so a hash is compared only where the declaration states one,
+    and the family member states a **range** rather than a version. Which
+    build tools a build workspace is delivered with is not the workspace's
+    to fix: the two lines are released on their own cadences, and a tools
+    patch inside the declared range reaching an environment without a new
+    workspace release is the case the range exists for. So a ranged member
+    is satisfied by any version inside it, and an equality check here would
+    break every build the day that patch is published.
     """
     for package, entry in ((pin.workspace, environment.workspace), (pin.tools, environment.tools)):
         _check_pinned(package, entry)
@@ -864,10 +872,10 @@ def _check_packages(
                     "container, or recreate the context."
                 ),
             )
-        if member.version != entry.version:
+        if not _admits(member, entry.version):
             raise BuildEnvironmentError(
                 f"The build environment states {member_name(entry.name)} "
-                f"{member.version} and the unpacked package is {entry.version}.",
+                f"{member.value()} and the unpacked package is {entry.version}.",
                 hint=f"delete the entry and let MCUHome unpack it again — "
                 f"chmod -R u+w {entry.path} && rm -rf {entry.path}",
             )
@@ -878,6 +886,26 @@ def _check_packages(
                 hint=f"delete the entry and let MCUHome unpack it again — "
                 f"chmod -R u+w {entry.path} && rm -rf {entry.path}",
             )
+
+
+def _admits(member: PackageMember, version: str) -> bool:
+    """Does *member* name this version, or a range that contains it?
+
+    A range is PEP 440 and is evaluated here rather than in the model,
+    which has no dependencies by construction. A range that does not parse
+    is not a reason to refuse a build: the member would then admit nothing,
+    and the refusal above names what the environment states, which is the
+    sentence somebody can act on.
+    """
+    if not member.ranged:
+        return member.version == version
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    from packaging.version import InvalidVersion
+
+    try:
+        return SpecifierSet(member.constraint).contains(version)
+    except (InvalidSpecifier, InvalidVersion):
+        return False
 
 
 def _check_pinned(package: PackagePin, entry: StoreEntry) -> None:

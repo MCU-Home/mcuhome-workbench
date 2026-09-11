@@ -1100,6 +1100,45 @@ def test_a_declared_version_that_is_not_the_unpacked_one_is_refused(store, envir
     assert "0.2.0" in caught.value.message
 
 
+def test_a_declared_range_is_satisfied_by_any_version_inside_it(store, environment) -> None:
+    """The case the range exists for, and it is not a relaxation.
+
+    A build workspace declares the range of build tools it accepts, not the
+    one version that happened to be newest the day it was packed — the two
+    lines are released on their own cadences. An equality check here would
+    refuse every environment built after the first tools patch inside that
+    range, which is exactly what the range is there to allow.
+    """
+    _declared(store, **{"packages.mcuhome-build-tools": "~=0.1.0"})
+    declaration = subprocessbuild.check_environment(environment, pin=_pin())
+    assert declaration.packages["mcuhome-build-tools"].ranged
+
+
+def test_a_declared_range_the_unpacked_package_is_outside_is_refused(store, environment) -> None:
+    """A range is a range, not "anything"."""
+    _declared(store, **{"packages.mcuhome-build-tools": "~=0.9.0"})
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, pin=_pin())
+    # The message names the range, not a version the declaration never
+    # stated — that is the sentence somebody can act on.
+    assert "~=0.9.0" in caught.value.message
+    assert "0.1.0" in caught.value.message
+
+
+def test_a_range_that_does_not_parse_admits_nothing_and_says_so(store, environment) -> None:
+    """`~=1` is a spelling the model accepts and PEP 440 does not.
+
+    The model checks a constraint as a spelling — it has no dependencies,
+    by construction — so a string that looks like a range and is not one
+    reaches the party that evaluates it. It admits nothing, and the refusal
+    names what the environment states rather than a parser error.
+    """
+    _declared(store, **{"packages.mcuhome-build-tools": "~=1"})
+    with pytest.raises(BuildEnvironmentError) as caught:
+        subprocessbuild.check_environment(environment, pin=_pin())
+    assert "~=1" in caught.value.message
+
+
 def test_a_declared_hash_that_is_not_the_unpacked_one_is_refused(store, environment) -> None:
     """Where the declaration states bytes, they have to be the bytes present.
 
