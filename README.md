@@ -214,9 +214,29 @@ its own package and nothing else. **Nothing writes this block for you**: a
 device created by `mcuhome device new` carries no `sources:` at all, and a build
 never adds one. Write an entry when you want a device pinned; leave it out — the
 normal case — and the version is resolved at build time, as the next two
-sections describe. The form of a reference is
-`[registry/]<source>/<package>[:version][@sha256:…]`, the spelling you already
-know from docker.
+sections describe.
+
+The form of a reference is
+`[registry/][source/]<package>[:<constraint>][@sha256:…]`, the spelling you
+already know from docker, with a **version constraint** where docker has a tag:
+
+```yaml
+sources:
+  sdk: sdk/mcuhome-sdk:>=0.1.9,<0.2                      # a range
+  build_workspace: mcuhome-build-workspace:~=0.1.0       # patch releases of 0.1
+  build_tools: "build-tools/mcuhome-build-tools:0.1.4"   # that version, exactly
+```
+
+Everything but the package name is optional, and so is the package name: a value
+that starts with the separator says the rest about the package the entry is
+already about — `":~=0.1.0"` narrows the range, `"@sha256:<hash>"` selects one
+archive outright — exactly as `sources.container_image` takes a bare `:tag`. A
+bare version (`0.1.4`) is the exact pin it looks like; anything else is a
+[PEP 440](https://peps.python.org/pep-0440/) specifier (`~=0.1.0`, `>=0.1,<0.2`,
+`==0.1.*`). A registry in front of the reference points that one package at
+another host, which is then read with that host's own trust anchor and mirrors
+(`registry.<base-domain>.*` in `mcuhome.yaml`). Quote any value that starts with
+a colon or contains one, as YAML asks.
 
 ### Which SDK a build uses
 
@@ -242,13 +262,21 @@ mapping is checked against the members it points at before anything is fetched.
 
 ### Which build environment a build uses
 
-The same rule, one step further along: a device that names no version in
-`sources.build_workspace` or `sources.build_tools` is built with the environment
-the **resolved SDK release** was built and tested with. Every SDK release carries
-a `build-environment.lock.json` stating those two versions, and their hashes come
-from the same package index the SDK came from — so a device without any
-`sources.*` entry gets an SDK and an environment that were released together, and
-neither is written into the device.
+The same rule, one step further along, and it is a **chain**. The SDK, the build
+workspace and the build tools are released on lines of their own, and each one
+states a *range* of the next rather than a version: the resolved SDK release's
+`meta.json` names which build workspaces it was built and tested with, the
+workspace package that resolves to names which build tools it needs, and the
+tools end the chain. Each range resolves to the newest published version inside
+it, which is then pinned exactly — name, version and hash — into the build
+context. So a workspace release that fixes something reaches an existing device
+without the SDK being re-cut, and nothing is written into the device either way.
+
+Both halves of a pin come from a package index: the versions and the hashes. Only
+a version whose index entry records its `<archive>.meta.json` can be resolved
+*through* — a package that does not say what it requires would leave the next
+stage with nothing to go on — so a source that publishes packages without those
+sidecars is refused by name rather than silently skipped.
 
 Each entry overrides its own package and nothing else:
 
@@ -256,6 +284,18 @@ Each entry overrides its own package and nothing else:
 sources:
   build_tools: build-tools/mcuhome-build-tools:0.1.10.dev1
 ```
+
+An override is never refused for being outside what the chain declares: a device
+may name another version, another package or another host, and the build says so
+in one line and goes on —
+
+```
+Note: the device pins mcuhome-build-workspace 0.9.0 in sources.build_workspace,
+and mcuhome-sdk 0.1.10 was built and tested with "~=0.1.0" — building with the
+version the device names.
+```
+
+The stage above knows what it was tested with, not what is allowed.
 
 The tools package is published per architecture and the bare family name is the
 normal pin: it resolves to this host's package, and pinning the family still
@@ -271,9 +311,11 @@ sources:
   build_workspace: build-workspace/mcuhome-build-workspace:0.1.10.dev1@sha256:7c31…
 ```
 
-That decides the whole pin, and nothing is looked up at all — no release lock, no
-index. It is what an air-gapped machine states when it has the archives but no
-package index for them.
+That decides the whole pin, and nothing is resolved for it — no chain, no index.
+It is what an air-gapped machine states when it has the archives but no package
+index for them. The stage below it still resolves as usual where a source
+publishes exactly those bytes, because the pinned package's own meta file is
+found beside them; where none does, that stage has to be stated too.
 
 Everything else needs an index that lists the two packages, because a hash can
 come from nowhere else: put them in one of the operator's own package
