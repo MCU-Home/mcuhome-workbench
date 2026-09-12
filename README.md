@@ -229,7 +229,7 @@ sources:
 ```
 
 The registry host and the source shelf default to the ones the package is
-normally served from, so a plain package name is the usual spelling.
+normally served from, so a package name alone resolves.
 Everything but the package name is optional, and so is the package name: a value
 that starts with the separator says the rest about the package the entry is
 already about — `":~=0.1.0"` narrows the range, `"@sha256:<hash>"` selects one
