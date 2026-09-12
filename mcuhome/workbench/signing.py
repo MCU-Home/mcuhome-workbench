@@ -21,8 +21,8 @@ migration in the hint). The secrets-hygiene rules apply to **both** files:
 directories 700, files 600, and key material other users can read is
 refused, not warned about. All devices of a project share the key; a
 user who wants one vendor key across projects copies the pair.
-``--signing-key`` and :data:`KEY_VAR` point somewhere else, at a plain
-PEM file — that is the dashboard's path, which keeps the key in its own
+``--signing-key`` and the option ``signing.key`` it carries point
+somewhere else, at a plain PEM file — that is the dashboard's path, which keeps the key in its own
 state directory (in a Home Assistant add-on,
 ``/config/mcuhome/signing.key``). The rule that fixes is *where the
 user's controlling instance runs, never on a build server*.
@@ -76,7 +76,6 @@ from mcuhome.workbench.project import Project, check_secret_file, ensure_secrets
 
 __all__ = [
     "FIRMWARE_KEY",
-    "KEY_VAR",
     "PRIVATE_KEY_FILE",
     "PUBLIC_KEY_FILE",
     "SigningKey",
@@ -101,10 +100,6 @@ PRIVATE_KEY_FILE = "mcuboot.pem"
 #: bootloader) and must never see the other half,
 #: which is what ``mcuhome device build --no-sign --public-key`` is for.
 PUBLIC_KEY_FILE = "signing.pub"
-
-#: Overrides where the key lives. ``--signing-key`` beats it, it beats the
-#: XDG default. This is the knob a dashboard or an add-on sets once.
-KEY_VAR = "MCUHOME_SIGNING_KEY"
 
 #: PEM label of a PKCS#8 private key, and of the older SEC1 spelling that
 #: OpenSSL writes with ``-----BEGIN EC PRIVATE KEY-----``. Both are
@@ -138,9 +133,6 @@ def _override_path(override: Path | str | None, env: dict[str, str]) -> Path | N
     """
     if override:
         return expand(override, env)
-    from_env = env.get(KEY_VAR)
-    if from_env:
-        return expand(from_env, env)
     return None
 
 
@@ -357,10 +349,10 @@ def _refuse_unreadable(path: Path, reason: str) -> BuildError:
         hint=(
             "every MCUHome image is signed with your own key. Point "
             "--signing-key at the right file, or move the unreadable one aside "
-            f"and let MCUHome generate a new one — but note that a device already "
-            f"running firmware signed with the old key will refuse the new one "
-            f"until it is bootstrapped again.\n"
-            f"The {KEY_VAR} environment variable selects the file too."
+            "and let MCUHome generate a new one — but note that a device already "
+            "running firmware signed with the old key will refuse the new one "
+            "until it is bootstrapped again.\n"
+            "The option signing.key selects the file too."
         ),
     )
 
@@ -385,8 +377,8 @@ def _refuse_unwritable(path: Path, reason: str) -> BuildError:
         hint=(
             "the key has to live outside every repository and every build "
             "directory, so it survives a clean checkout and never reaches a "
-            f"build server. Pick a writable location with "
-            f"--signing-key, or set {KEY_VAR}."
+            "build server. Pick a writable location with "
+            "--signing-key, or set the option signing.key."
         ),
     )
 
@@ -399,7 +391,7 @@ def _refuse_no_project() -> BuildError:
             "the project's key lives in secrets/firmware/mcuboot.yaml under "
             f"{FIRMWARE_KEY} and is generated on first need. "
             "Run inside a project (or create one with `mcuhome project init`), point "
-            f"--signing-key at a PEM key file, or set {KEY_VAR}."
+            "--signing-key at a PEM key file, or set the option signing.key."
         ),
     )
 
@@ -427,9 +419,13 @@ def signing_key(
 ) -> SigningKey:
     """The key to sign with, generating one on first need.
 
-    Resolution order: *override* (``--signing-key``), then
-    :data:`KEY_VAR` — both name a plain PEM file — then the *project*'s
-    ``secrets/firmware/mcuboot.yaml`` under :data:`FIRMWARE_KEY`.
+    Resolution order: *override* — the resolved ``signing.key``, which
+    a caller states however its user set it (the flag, the variable, a
+    configuration file) — then the *project*'s
+    ``secrets/firmware/mcuboot.yaml`` under :data:`FIRMWARE_KEY`. This
+    module reads no environment variable of its own: the configuration
+    layer reads ``signing.key`` once, and what arrives here is its
+    value.
     With no override and no project there is
     nothing to resolve against, and that is a refusal in words rather
     than a guess at a directory.

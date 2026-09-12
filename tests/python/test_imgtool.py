@@ -57,15 +57,15 @@ def test_the_installed_package_wins(tmp_path) -> None:
     assert imgtool.find_imgtool(env={"PATH": str(tmp_path)}) == [str(beside)]
 
 
-def test_the_environment_variable_beats_the_installed_package(tmp_path) -> None:
+def test_the_stated_program_beats_the_installed_package(tmp_path) -> None:
     other = tmp_path / "other-imgtool.py"
     other.write_text("", "utf-8")
-    found = imgtool.find_imgtool(env={imgtool.IMGTOOL_VAR: str(other)})
+    found = imgtool.find_imgtool(env={}, stated=str(other))
     assert found == [sys.executable, str(other)]
 
 
 def test_a_program_name_is_taken_as_a_program() -> None:
-    assert imgtool.find_imgtool(env={imgtool.IMGTOOL_VAR: "imgtool"}) == ["imgtool"]
+    assert imgtool.find_imgtool(env={}, stated="imgtool") == ["imgtool"]
 
 
 def test_path_answers_when_no_script_sits_beside_the_interpreter(tmp_path, monkeypatch) -> None:
@@ -85,7 +85,7 @@ def test_no_imgtool_anywhere_is_a_refusal_that_names_the_dependency(tmp_path, mo
         imgtool.require_imgtool(env={"PATH": str(tmp_path)})
     assert "declared dependency" in caught.value.hint
     assert "mcuhome-workbench" in caught.value.hint
-    assert imgtool.IMGTOOL_VAR in caught.value.hint
+    assert "signing.imgtool" in caught.value.hint
 
 
 # --------------------------------------------------------------------------
@@ -374,7 +374,7 @@ def test_plan_report_signing_signs_both_firmware_encodings(tmp_path) -> None:
     """
     out = _report_dir(tmp_path)
     key = _key(tmp_path)
-    plan = imgtool.plan_report_signing(out, key=key, env={imgtool.IMGTOOL_VAR: "imgtool"})
+    plan = imgtool.plan_report_signing(out, key=key, env={}, imgtool="imgtool")
     assert {path.name for path in plan.outputs} == {"firmware.signed.bin", "firmware.signed.hex"}
     for _form, command, _dest in plan.commands:
         assert command[command.index("--version") + 1] == "1.2.3+4"
@@ -389,7 +389,7 @@ def test_plan_report_signing_needs_a_firmware_to_sign(tmp_path) -> None:
     out.mkdir()
     (out / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(_report()), "utf-8")
     with pytest.raises(BuildError) as caught:
-        imgtool.plan_report_signing(out, key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"})
+        imgtool.plan_report_signing(out, key=_key(tmp_path), env={}, imgtool="imgtool")
     assert "firmware" in caught.value.message
 
 
@@ -403,7 +403,7 @@ def test_sign_report_runs_the_plan_and_never_generates_a_key(tmp_path) -> None:
         return 0, ""
 
     key = _key(tmp_path)
-    plan = imgtool.sign_report(out, env={imgtool.IMGTOOL_VAR: "imgtool"}, key=key, runner=runner)
+    plan = imgtool.sign_report(out, env={}, key=key, imgtool="imgtool", runner=runner)
     assert len(commands) == 2
     assert (out / "firmware.signed.bin").is_file()
     assert (out / "firmware.signed.hex").is_file()
@@ -435,9 +435,7 @@ def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
         Path(command[-1]).write_bytes(b"signed")
         return 0, ""
 
-    plan = imgtool.sign_report(
-        out, env={imgtool.IMGTOOL_VAR: "imgtool"}, project=project, runner=runner
-    )
+    plan = imgtool.sign_report(out, env={}, project=project, imgtool="imgtool", runner=runner)
     assert used_keys and all(path == generated.path for path in used_keys)
     assert generated.path.is_file()  # the durable home, untouched
     assert plan.key == generated.path
@@ -450,15 +448,13 @@ def test_sign_report_refuses_a_missing_key_rather_than_making_one(tmp_path) -> N
     out = _report_dir(tmp_path)
     empty = tmp_path / "empty"
     with pytest.raises(BuildError):
-        imgtool.sign_report(
-            out, env={"XDG_CONFIG_HOME": str(empty), imgtool.IMGTOOL_VAR: "imgtool"}, key=None
-        )
+        imgtool.sign_report(out, env={"XDG_CONFIG_HOME": str(empty)}, key=None, imgtool="imgtool")
     assert not (out / "firmware.signed.bin").exists()
 
 
 def test_imgtool_failure_carries_imgtools_own_words(tmp_path) -> None:
     plan = imgtool.plan_report_signing(
-        _report_dir(tmp_path), key=_key(tmp_path), env={imgtool.IMGTOOL_VAR: "imgtool"}
+        _report_dir(tmp_path), key=_key(tmp_path), env={}, imgtool="imgtool"
     )
     with pytest.raises(BuildError) as caught:
         imgtool.run_signing(plan, runner=lambda command: (2, "Image size too large"))

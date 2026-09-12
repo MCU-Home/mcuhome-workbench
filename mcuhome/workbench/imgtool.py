@@ -34,7 +34,7 @@ signature, both verifying.
 **Where imgtool comes from.** It is a **declared dependency** of
 ``mcuhome-workbench`` — the package MCUboot publishes itself, pinned in
 ``pyproject.toml`` to the release line of the MCUboot revision the SDK's
-west manifest carries. The lookup is: :data:`IMGTOOL_VAR` as the escape
+west manifest carries. The lookup is: the option ``signing.imgtool`` as the escape
 hatch, then the installed package's console script (next to the running
 interpreter first, then ``PATH``). Nothing here runs the west
 workspace's checkout script any more: that script's requirements
@@ -65,7 +65,6 @@ from mcuhome.workbench.project import Project
 
 __all__ = [
     "BUILD_REPORT_FILE",
-    "IMGTOOL_VAR",
     "REPORT_FIRMWARE",
     "REPORT_VERSION",
     "Runner",
@@ -101,11 +100,6 @@ REPORT_VERSION = 1
 #: ``firmware``", so both are signed with the one set of arguments.
 REPORT_FIRMWARE = (("firmware.bin", "firmware.signed.bin"), ("firmware.hex", "firmware.signed.hex"))
 
-#: Overrides how imgtool is found: a path to an ``imgtool.py`` script,
-#: or the name of a program. The escape hatch for a machine where the
-#: installed package is not the right answer.
-IMGTOOL_VAR = "MCUHOME_IMGTOOL"
-
 #: Runs one imgtool invocation and answers with its exit status and
 #: whatever it printed. Injectable so the test suite can watch the
 #: commands without starting a process — the same shape
@@ -114,22 +108,27 @@ IMGTOOL_VAR = "MCUHOME_IMGTOOL"
 Runner = Callable[[list[str]], tuple[int, str]]
 
 
-def find_imgtool(*, env: dict[str, str]) -> list[str] | None:
+def find_imgtool(*, env: dict[str, str], stated: str | None = None) -> list[str] | None:
     """The argv prefix that runs imgtool, or None if there is none.
 
-    A list rather than a path because an override may name a script that
+    A list rather than a path because *stated* may name a script that
     needs an interpreter in front of it.
 
-    *env* is stated, never read from the process: which imgtool runs is
-    part of what a build is, and one process may serve several callers
-    with different answers.
+    *stated* is the resolved ``signing.imgtool`` — a path or a program
+    name — and this module reads no variable of its own: the
+    configuration layer reads that key once, through whichever channel
+    its user set it in. Without it the declared dependency answers (the
+    console script beside this interpreter), and failing that ``PATH``.
+
+    *env* is stated too, never read from the process: which imgtool runs
+    is part of what a build is, and one process may serve several
+    callers with different answers.
     """
-    override = env.get(IMGTOOL_VAR)
-    if override:
-        candidate = expand(override, env)
+    if stated:
+        candidate = expand(stated, env)
         if candidate.suffix == ".py" or candidate.is_file():
             return [sys.executable, str(candidate)]
-        return [override]
+        return [stated]
     # The declared dependency: pip puts the console script next to the
     # interpreter it installed for — the venv this process runs in.
     beside = Path(sys.executable).parent / "imgtool"
@@ -141,9 +140,9 @@ def find_imgtool(*, env: dict[str, str]) -> list[str] | None:
     return None
 
 
-def require_imgtool(*, env: dict[str, str]) -> list[str]:
+def require_imgtool(*, env: dict[str, str], stated: str | None = None) -> list[str]:
     """:func:`find_imgtool`, or a refusal that says where to get one."""
-    program = find_imgtool(env=env)
+    program = find_imgtool(env=env, stated=stated)
     if program is not None:
         return program
     raise BuildError(
@@ -152,7 +151,7 @@ def require_imgtool(*, env: dict[str, str]) -> list[str]:
             "imgtool is MCUboot's signing tool and a declared dependency of "
             "mcuhome-workbench, so this installation is incomplete. Reinstall\n"
             "    pip install --force-reinstall mcuhome-workbench\n"
-            f"or point {IMGTOOL_VAR} at a specific imgtool."
+            "or point the option signing.imgtool at a specific imgtool."
         ),
     )
 
@@ -301,6 +300,7 @@ def plan_report_signing(
     *,
     key: Path,
     env: dict[str, str],
+    imgtool: str | None = None,
 ) -> SignPlan:
     """Read a §2.2 build report and decide how to sign the firmware beside it.
 
@@ -310,14 +310,16 @@ def plan_report_signing(
         parameters the build was linked for. Every refusal is raised here,
         before imgtool runs, so the step's own failure mode is "imgtool said
         no" and nothing else. *key* is already resolved — this plans the
-        command, it does not choose the key (:func:`sign_report` does).
+        command, it does not choose the key (:func:`sign_report` does) —
+        and *imgtool* is the resolved ``signing.imgtool``, for the same
+        reason: this module reads no configuration of its own.
     """
     report_path = _resolve_report(target)
     out_dir = report_path.parent
     report = read_build_report(report_path)
     parameters = SigningParameters.from_dict(report["signing"]["arguments"])
 
-    program = require_imgtool(env=env)
+    program = require_imgtool(env=env, stated=imgtool)
     commands: list[tuple[str, tuple[str, ...], Path]] = []
     for source_name, output_name in REPORT_FIRMWARE:
         source = out_dir / source_name
@@ -359,19 +361,20 @@ def sign_report(
     env: dict[str, str],
     key: Path | str | None = None,
     project: Project | None = None,
+    imgtool: str | None = None,
     runner: Runner | None = None,
 ) -> SignPlan:
     """Sign the firmware a build container delivered, from its §2.2 report.
 
-    The key is resolved exactly as a build resolves it (``--signing-key``, then
-    :data:`~mcuhome.workbench.signing.KEY_VAR`, then the *project*'s
+    The key is resolved exactly as a build resolves it (*key* — the
+    resolved ``signing.key`` — then the *project*'s
     ``secrets/firmware/mcuboot.yaml`` reference) and, as there, **never
     generated** here: a delivered build has to be signed with the key
     its device's bootloader already carries. The resolved key is a file
     either way, and imgtool gets exactly that file.
     """
     resolved = signing.signing_key(key, env=env, project=project, create=False)
-    plan = plan_report_signing(target, key=resolved.path, env=env)
+    plan = plan_report_signing(target, key=resolved.path, env=env, imgtool=imgtool)
     run_signing(plan, runner=runner)
     return plan
 

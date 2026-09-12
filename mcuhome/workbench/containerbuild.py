@@ -99,7 +99,10 @@ from mcuhome.workbench.buildprocess import (
     run_command,
     spawn_process,
 )
-from mcuhome.workbench.buildtarget import DEFAULT_CONTAINER_REPOSITORIES
+from mcuhome.workbench.buildtarget import (
+    DEFAULT_CONTAINER_PROGRAM,
+    DEFAULT_CONTAINER_REPOSITORIES,
+)
 from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
 from mcuhome.workbench.packagefetch import acquire_sdk
 from mcuhome.workbench.packageregistry import RegistrySource
@@ -111,10 +114,8 @@ from mcuhome.workbench.resolve_image import (
 from mcuhome.workbench.resolve_pins import concrete_package
 
 __all__ = [
-    "CCACHE_DIR_VAR",
     "CONTAINER_REPOSITORIES_OPTION",
     "DEFAULT_PIDS",
-    "DOCKER_VAR",
     "ENTRY_POINT_PATH",
     "ContainerBuildResult",
     "Mount",
@@ -124,7 +125,6 @@ __all__ = [
     "cache_root",
     "check_image",
     "ccache_directory",
-    "docker_program",
     "ensure_image",
     "image_for_context",
     "launcher",
@@ -138,21 +138,6 @@ __all__ = [
 #: be taken from, in search order. Quoted in the refusal that comes when
 #: none of them has an image for the pinned package set.
 CONTAINER_REPOSITORIES_OPTION = "build.container_repositories"
-
-#: The container program to drive. ``podman`` is command-line compatible
-#: for everything used here; it is not tested, hence a variable and not a
-#: documented feature.
-DEFAULT_RUNTIME = "docker"
-
-#: Overrides the container program. Same reasoning as
-#: :data:`DEFAULT_RUNTIME`: an escape hatch, not a documented feature.
-DOCKER_VAR = "MCUHOME_DOCKER"
-
-#: Overrides where the compiler cache lives on the host. Useful for
-#: putting it on a faster disk, or for sharing one cache between
-#: checkouts. A host fact, and therefore stated by the side that runs the
-#: container rather than by the environment it runs.
-CCACHE_DIR_VAR = "MCUHOME_CCACHE_DIR"
 
 #: Where §4's tree is inside the container. ``MCUHOME_BUILDER_BASE_DIR``
 #: is ``/`` here, which is what makes every mount target the same string
@@ -291,7 +276,7 @@ class Runtime:
 
     def __init__(
         self,
-        program: str = DEFAULT_RUNTIME,
+        program: str = DEFAULT_CONTAINER_PROGRAM,
         *,
         runner: Runner | None = None,
         spawner: Spawner | None = None,
@@ -329,11 +314,6 @@ class Runtime:
     def remove(self, container: str) -> None:
         """Reap a container. Never raises: teardown must not become the news."""
         self.run([self.program, "rm", "--force", "--volumes", container])
-
-
-def docker_program(env: Mapping[str, str]) -> str:
-    """The container program to drive."""
-    return env.get(DOCKER_VAR) or DEFAULT_RUNTIME
 
 
 def preflight(runtime: Runtime, *, env: Mapping[str, str]) -> None:
@@ -440,10 +420,7 @@ def ccache_directory(env: Mapping[str, str]) -> Path:
     same compilation, and a per-project split would cost the sharing
     while protecting nothing.
     """
-    override = env.get(CCACHE_DIR_VAR)
     values = dict(env)
-    if override:
-        return expand(override, values)
     if os.name == "nt":
         # LOCALAPPDATA, not APPDATA: the latter roams, and a five-gigabyte
         # compiler cache has no business being copied to a file server at
@@ -464,8 +441,9 @@ def cache_root(env: Mapping[str, str], stated: Path | None) -> Path | None:
     The compiler cache belongs to the person building rather than to the
     build directory: it holds the same objects for every device and every
     project, and the working area it used to live in is wiped before each
-    build. A caller that resolved a location through the configuration
-    layers states it; otherwise the user's cache directory answers.
+    build. A caller that resolved ``build.cache_root`` through the
+    configuration layers states it; otherwise the user's cache directory
+    answers — nothing here reads a variable of its own.
 
     **A home directory nobody named is not a refusal here.** A cache is
     an optimization, and a caller with no ``HOME`` — a service, a
@@ -884,6 +862,7 @@ def prepare_environment(
     tools_sources: Sequence[Path] = (),
     registry: RegistrySource | None = None,
     images: Any = None,
+    container_program: str = DEFAULT_CONTAINER_PROGRAM,
     runtime: Runtime | None = None,
     on_line: LineSink | None = None,
 ) -> ResolvedImage:
@@ -895,7 +874,7 @@ def prepare_environment(
     registry question, answered without pulling anything). And finally:
     is it on this machine, or does it have to be fetched.
     """
-    seam = runtime if runtime is not None else Runtime(docker_program(env))
+    seam = runtime if runtime is not None else Runtime(container_program)
     preflight(seam, env=env)
     match = image_for_context(
         pin,
@@ -948,6 +927,7 @@ def run_locked_build(
     pids: int = DEFAULT_PIDS,
     user: str | None = None,
     zephyr_constraint: str = "",
+    container_program: str = DEFAULT_CONTAINER_PROGRAM,
     runtime: Runtime | None = None,
     on_line: LineSink | None = None,
 ) -> ContainerBuildResult:
@@ -1011,7 +991,7 @@ def run_locked_build(
             ),
             zephyr_constraint=zephyr_constraint,
         )
-    seam = runtime if runtime is not None else Runtime(docker_program(env))
+    seam = runtime if runtime is not None else Runtime(container_program)
     sdk_tree = acquire_sdk(
         version=manifest.sdk.version,
         sha256=manifest.sdk.sha256,

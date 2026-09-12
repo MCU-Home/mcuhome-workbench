@@ -27,7 +27,6 @@ from mcuhome.workbench.loader import FileRef, load_yaml_file
 from mcuhome.workbench.project import Project, init_project
 from mcuhome.workbench.signing import (
     FIRMWARE_KEY,
-    KEY_VAR,
     PRIVATE_KEY_FILE,
     generate_key_pem,
     looks_like_p256_key,
@@ -65,27 +64,19 @@ def test_no_project_and_no_override_is_a_refusal_in_words(tmp_path: Path) -> Non
     assert FIRMWARE_KEY in hint
     assert "mcuhome project init" in hint
     assert "--signing-key" in hint
-    assert KEY_VAR in hint
+    assert "signing.key" in hint
 
 
-def test_the_flag_beats_the_variable_beats_the_project(tmp_path: Path, project: Project) -> None:
+def test_the_override_beats_the_project(tmp_path: Path, project: Project) -> None:
+    # One override channel, and it is this argument: whichever way the
+    # user stated `signing.key` — the flag, the variable, a file — the
+    # configuration layer resolved it before this module saw it.
     by_flag = tmp_path / "flag.key"
-    by_var = tmp_path / "var.key"
     flag_pem = write_key_file(by_flag)
-    write_key_file(by_var)
-    key = signing_key(by_flag, env={KEY_VAR: str(by_var)}, project=project)
+    key = signing_key(by_flag, env={}, project=project)
     assert key.path == by_flag
     assert key.pem == flag_pem
     assert not key.in_secrets
-    assert not project.firmware_secrets_file.exists()
-
-
-def test_the_variable_beats_the_project(tmp_path: Path, project: Project) -> None:
-    by_var = tmp_path / "var.key"
-    var_pem = write_key_file(by_var)
-    key = signing_key(env={KEY_VAR: str(by_var)}, project=project)
-    assert key.path == by_var
-    assert key.pem == var_pem
     assert not project.firmware_secrets_file.exists()
 
 

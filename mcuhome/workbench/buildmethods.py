@@ -108,6 +108,7 @@ from mcuhome.workbench.buildtarget import (
     BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
     DEFAULT_BUILD_TARGET,
+    DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
     DEFAULT_MAX_WAIT_SECONDS,
     MODE_CONTAINER,
@@ -381,21 +382,29 @@ class BuildOptions:
     #: ``build.dev_workspace``: a west workspace the developer maintains,
     #: built against instead of the environment MCUHome provisions.
     dev_workspace: Path | None = None
+    #: ``build.container_program``: the program a container build drives.
+    container_program: str = DEFAULT_CONTAINER_PROGRAM
     #: ``build.python``: the interpreter that creates a build
     #: environment's virtual environment. ``None`` is the one MCUHome
     #: itself runs on, which is right whenever the host's Python is the
     #: one the tools package was built for.
     python: str | None = None
-    #: ``build.workspace_sources`` / ``build.tools_sources``: operator
-    #: directories per package kind. Empty falls back to
-    #: ``build.sdk_sources``, so one directory holding everything keeps
-    #: working.
+    #: ``build.workspace_sources`` / ``build.tools_sources``: the
+    #: operator directories of those two package kinds, and of no other.
+    #: A kind is never looked for under another kind's key, so empty
+    #: means "no operator directory for this one" and the package is
+    #: resolved through the registry; a machine that keeps all three in
+    #: one place names it in all three keys.
     workspace_sources: tuple[Path, ...] = ()
     tools_sources: tuple[Path, ...] = ()
     #: ``build.<kind>_max_bytes``: how much each package may unpack to.
     sdk_max_bytes: int | None = None
     workspace_max_bytes: int | None = None
     tools_max_bytes: int | None = None
+    #: ``build.cache_root``: where this machine keeps its compiler
+    #: cache. ``None`` is the user's cache directory, which is where a
+    #: machine nobody configured keeps it.
+    cache_root: Path | None = None
     #: ``build.cache_*``: the compiler cache tiers. ``cache_local`` and
     #: ``cache_shared`` name a tier outright; unset, both are laid out
     #: under the cache root the build already resolves.
@@ -455,12 +464,14 @@ def build_options(settings: Settings) -> BuildOptions:
         memory=settings.value("build.memory") or None,
         env_store=path("build.env_store"),
         dev_workspace=path("build.dev_workspace"),
+        container_program=settings.value("build.container_program"),
         python=settings.value("build.python") or None,
         workspace_sources=tuple(settings.value("build.workspace_sources")),
         tools_sources=tuple(settings.value("build.tools_sources")),
         sdk_max_bytes=number("build.sdk_max_bytes"),
         workspace_max_bytes=number("build.workspace_max_bytes"),
         tools_max_bytes=number("build.tools_max_bytes"),
+        cache_root=path("build.cache_root"),
         cache_local=path("build.cache_local"),
         cache_shared=path("build.cache_shared"),
         cache_session=path("build.cache_session"),
@@ -632,7 +643,7 @@ class BuildRequest:
     #: configured path — and an address is what arrives here.
     server: str | None = None
     #: The bearer token for it, from the builder's
-    #: ``secrets/build-server/<name>.yaml`` (or the manual rung's
+    #: ``secrets/builder/<name>.yaml`` (or the manual rung's
     #: ``--build-token``). ``None`` sends no ``Authorization`` header at
     #: all, which this package permits because a third-party server may
     #: want none.
@@ -1255,6 +1266,7 @@ def compose_container_build(
         tools_sources=options.tools_sources,
         registry=packages,
         images=images,
+        container_program=options.container_program,
         runtime=runtime,
         on_line=on_line,
     )
@@ -1282,7 +1294,7 @@ def compose_container_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", image=resolved.reference, **_reported(limits))
-    root = containerbuild.cache_root(env, ccache_dir)
+    root = containerbuild.cache_root(env, ccache_dir or options.cache_root)
     return containerbuild.run_locked_build(
         context_dir,
         image=resolved,
@@ -1292,6 +1304,7 @@ def compose_container_build(
         limits=limits,
         sdk_max_bytes=options.sdk_max_bytes,
         zephyr_constraint=model.toolchain.zephyr_constraint,
+        container_program=options.container_program,
         # The same cache root and the same tiers the subprocess profile
         # is given: one cache per user, laid out once, mounted here and
         # linked there.
@@ -1739,12 +1752,12 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
             "A remote build needs the address of a build server, and none is set.",
             hint=(
                 "configure a builder once, or name the server outright:\n"
-                "    builders:                    # mcuhome.yaml, or your user/system\n"
-                "      - name: attic              # configuration.yaml\n"
-                "        type: remote\n"
+                "    builder:                     # mcuhome.yaml, or your user/system\n"
+                "      attic:                     # configuration.yaml\n"
+                "        target: remote\n"
                 "        server: <host[:port]>\n"
-                "    with its token in secrets/build-server/attic.yaml, selected via\n"
-                "    --builder attic or once via default_builder;\n"
+                "    with its token in secrets/builder/attic.yaml, selected via\n"
+                "    --builder attic or once via build.builder;\n"
                 "or fully manually:\n"
                 "    --build-target remote --build-server <host[:port]> "
                 "[--build-token <token>]\n"
