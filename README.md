@@ -615,8 +615,9 @@ What is refused rather than half-done:
 - a build context that carries a **patch**, because your workspace is yours and
   a build that quietly patched it — or quietly ignored the patch — would be
   wrong either way;
-- a device that states any `sources.*` entry: the package references name
-  something to fetch and this build fetches nothing, and `sources.container_image`
+- a device that states a `sources.*` entry that differs from its default: the
+  package references name something to fetch and this build fetches nothing, and
+  `sources.container_image` — empty by default, so any stated value differs —
   names an image for a build that starts no container;
 - `build.mode: container` together with `build.dev_workspace`, because a
   container has neither your workspace nor your tools;
