@@ -34,11 +34,12 @@ def _documented() -> dict[str, dict[str, str]]:
         found = _ROW.match(line.strip())
         if found is None:
             continue
-        key, kind, _declared, _derived, files, environment, arguments, variable, flag = (
+        key, kind, declared, _derived, files, environment, arguments, variable, flag = (
             found.groups()
         )
         rows[key] = {
             "kind": kind,
+            "declared": declared,
             "files": files,
             "environment": environment,
             "arguments": arguments,
@@ -61,11 +62,18 @@ def documented() -> dict[str, dict[str, str]]:
     return rows
 
 
-def test_the_reference_documents_every_declared_option(documented):
-    # The map options are documented per key a user writes
-    # (`builder.<name>.target`), so they are matched by their area below.
+def test_the_reference_and_the_registry_hold_the_same_keys(documented):
+    """Both directions: a key in one and not the other is a broken promise.
+
+    A key the registry has and the reference does not is an undocumented
+    option; a key the reference has and the registry does not is a
+    promise nothing keeps. The map options are documented per key a user
+    writes (`builder.<name>.target`), so they are matched by their area.
+    """
     scalar = {opt.name for opt in OPTIONS if opt.leaf}
-    assert scalar <= set(documented)
+    areas = tuple(f"{opt.name}." for opt in OPTIONS if not opt.leaf)
+    documented_scalar = {key for key in documented if not key.startswith(areas)}
+    assert documented_scalar == scalar
 
 
 def test_every_declared_option_has_the_documented_spellings(documented):
@@ -78,6 +86,45 @@ def test_every_declared_option_has_the_documented_spellings(documented):
         assert opt.files is (row["files"] == "y"), opt.name
         assert opt.environment is (row["environment"] == "y"), opt.name
         assert opt.arguments is (row["arguments"] == "y"), opt.name
+
+
+def test_every_declared_option_has_the_documented_kind(documented):
+    """The kind, and every value a restricted option accepts.
+
+    The cell's backticks are not always a vocabulary — ``build.memory``
+    spells its units that way — so the rule is one-sided on purpose:
+    whatever the option restricts itself to has to be named there, and a
+    cell may say more.
+    """
+    for opt in OPTIONS:
+        if not opt.leaf:
+            continue
+        cell = documented[opt.name]["kind"]
+        assert cell.split()[0] == opt.kind, opt.name
+        listed = set(re.findall(r"`([a-z_-]+)`", cell))
+        assert set(opt.choices) <= listed, opt.name
+
+
+def test_the_declared_defaults_are_the_ones_the_reference_states(documented):
+    """A declared default is stated; a derived fallback is not one.
+
+    The column holds either a dash, a literal in backticks, or prose for
+    a value computed from the platform. What it must never do is stay
+    empty for an option that *has* a declared default, or name one for an
+    option whose value a consumer derives — that is the distinction the
+    whole column exists for.
+    """
+    for opt in OPTIONS:
+        if not opt.leaf:
+            continue
+        cell = documented[opt.name]["declared"].strip()
+        # An empty list *is* a declared default: "no directories", not
+        # "the consumer decides".
+        stated = opt.default is not None
+        assert stated is (cell != "–"), opt.name
+        literal = re.fullmatch(r"`(.+)`", cell)
+        if literal is not None:
+            assert literal.group(1) == str(opt.default), opt.name
 
 
 def test_every_map_option_is_documented_by_its_keys(documented):

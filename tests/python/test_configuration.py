@@ -520,3 +520,30 @@ def test_an_unnameable_scope_directory_is_a_refusal_when_editing(project: Projec
     assert "names no user configuration directory" in caught.value.message
     with pytest.raises(ValueError):
         configuration.scope_config_file("galaxy", project=project, env={})
+
+
+#: Keys whose unset value is answered by whoever consumes them — the
+#: user's cache directory, the interpreter this process runs on, the
+#: machine's own cores. None of them may look configured.
+DERIVED = (
+    "build.cache_root",
+    "build.env_store",
+    "build.python",
+    "build.cpus",
+    "build.memory",
+)
+
+
+@pytest.mark.parametrize("name", DERIVED)
+def test_a_derived_fallback_is_not_a_declared_default(name: str, project: Project) -> None:
+    """`config print` shows these as `default`, with no value of their own.
+
+    A key carrying its consumer's fallback would look configured when
+    nobody configured it, and the fallback would then live in two places
+    at once.
+    """
+    settings = resolve_settings(project=project, env={})
+    assert settings.value(name) is None
+    assert settings.origin(name) == "default"
+    entry = settings.to_dict()[name]
+    assert entry == {"value": None, "origin": "default", "source": None}

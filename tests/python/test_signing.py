@@ -6,9 +6,10 @@ The signing-key invariant as implemented after the project model:
 the key is **per project** — its own file,
 ``secrets/firmware/mcuboot.pem``, referenced from ``mcuboot.yaml``
 under ``firmware_signing_key`` with the loader's ``!file`` tag —
-generated on first need; ``--signing-key``
-and ``MCUHOME_SIGNING_KEY`` point at a plain PEM file instead (the
-dashboard's path). There is deliberately no per-user default any more —
+generated on first need; the option ``signing.key`` points at a plain
+PEM file instead (the dashboard's path), through whichever channel its
+user set it — this module is handed the resolved value and reads no
+environment variable of its own. There is deliberately no per-user default any more —
 and no fallback when neither a project nor an override is given,
 because guessing a directory for a private key is how two things end up
 signed with keys nobody meant.
@@ -332,3 +333,20 @@ def test_no_refusal_ever_prints_the_key(project: Project) -> None:
     for line in filter(None, scalars.splitlines()):
         assert line not in caught.value.message
         assert line not in (caught.value.hint or "")
+
+
+def test_the_variable_is_not_a_channel_this_module_reads(tmp_path: Path, project: Project) -> None:
+    """`MCUHOME_SIGNING_KEY` is `signing.key`, and the layer reads it.
+
+    Set in the environment and handed straight to this module, it does
+    nothing: the configuration layer resolves that key once, through
+    whichever channel its user chose, and what arrives here is the value
+    — never a variable to look up a second time.
+    """
+    elsewhere = tmp_path / "elsewhere.key"
+    write_key_file(elsewhere)
+    key = signing_key(env={"MCUHOME_SIGNING_KEY": str(elsewhere)}, project=project)
+    assert key.path != elsewhere
+    assert key.in_secrets  # the project's own, as if the variable were not set
+    # Stated as the resolved option, it answers.
+    assert signing_key(elsewhere, env={}, project=project).path == elsewhere
