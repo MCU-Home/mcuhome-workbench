@@ -122,7 +122,8 @@ What is here, in the order a caller needs it:
     the point: the registry derives no command-line flag for these keys.
     The section's ``build.sdk_sources`` is the one key that travels on
     the request instead (``BuildRequest.sdk_sources``), because a remote
-    build needs it as well.
+    build resolves its pins from it too — both targets look there first
+    and at the registry second.
 ``BuilderSession`` / ``LocalOutcome``
     The **backend role**, for the caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a
