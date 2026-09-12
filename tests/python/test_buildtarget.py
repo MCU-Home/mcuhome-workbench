@@ -3,13 +3,13 @@
 """Where a build runs and how it is executed (``buildtarget.py``).
 
 Two axes rather than one name, and this file is about the seam that
-carries them: :func:`~mcuhome.workbench.buildmethods.build_firmware`
-takes a target, :func:`~mcuhome.workbench.buildmethods.run_build` takes a
+carries them: :func:`~mcuhome.workbench.build.build_firmware`
+takes a target, :func:`~mcuhome.workbench.build.run_build` takes a
 target name and translates it, and both reach the same composition with
 the same arguments.
 
 Nothing here builds anything. Every composition is stubbed at its own
-backend seam, exactly as in ``test_buildmethods.py`` — what those
+backend seam, exactly as in ``test_build.py`` — what those
 compositions do is asserted there and in ``test_localbuild.py``. The
 properties asserted here are the ones the two-axis vocabulary is *for*:
 
@@ -33,8 +33,8 @@ import dataclasses
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
+from mcuhome.workbench import build, buildtarget, containerbuild, sessionclient
 from mcuhome.workbench import buildenvsession as lb
-from mcuhome.workbench import buildmethods, buildtarget, containerbuild, sessionclient
 from mcuhome.workbench.buildlock import holder_of
 
 
@@ -43,9 +43,9 @@ def model():
     return resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
 
 
-def _build(request: buildmethods.BuildRequest, target) -> buildmethods.BuildOutcome:
+def _build(request: build.BuildRequest, target) -> build.BuildOutcome:
     """What a caller does at its entry point: one ``asyncio.run``."""
-    return asyncio.run(buildmethods.build_firmware(request, target=target))
+    return asyncio.run(build.build_firmware(request, target=target))
 
 
 def _local_result(tmp_path, seen: dict):
@@ -112,13 +112,13 @@ def test_a_remote_build_carries_no_execution() -> None:
 
 
 def test_the_local_target_is_a_local_build_in_a_container(model, tmp_path) -> None:
-    request = buildmethods.BuildRequest(
+    request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
         image="registry.example.test/other/environment:test",
         ccache_dir=tmp_path / "ccache",
     )
-    target = buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request)
+    target = build.build_target_for(build.TARGET_LOCAL, request)
     assert target == buildtarget.LocalBuild(
         execution=buildtarget.ContainerExecution(
             image="registry.example.test/other/environment:test", ccache_dir=tmp_path / "ccache"
@@ -127,7 +127,7 @@ def test_the_local_target_is_a_local_build_in_a_container(model, tmp_path) -> No
 
 
 def test_the_remote_target_is_a_remote_build(model, tmp_path) -> None:
-    request = buildmethods.BuildRequest(
+    request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
         server="attic:8100",
@@ -135,7 +135,7 @@ def test_the_remote_target_is_a_remote_build(model, tmp_path) -> None:
         wait_for_turn=False,
         max_wait_seconds=90.0,
     )
-    target = buildmethods.build_target_for(buildmethods.TARGET_REMOTE, request)
+    target = build.build_target_for(build.TARGET_REMOTE, request)
     assert target == buildtarget.RemoteBuild(
         server="attic:8100", token="a-token", wait=False, max_wait_seconds=90.0
     )
@@ -144,15 +144,15 @@ def test_the_remote_target_is_a_remote_build(model, tmp_path) -> None:
 @pytest.mark.parametrize("nothing", [None, ""])
 def test_no_preference_is_the_container_target(model, tmp_path, nothing) -> None:
     """The default survives the translation: no name still means a container."""
-    request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    assert buildmethods.build_target_for(nothing, request) == buildtarget.LocalBuild()
+    request = build.BuildRequest(model=model, out_dir=tmp_path)
+    assert build.build_target_for(nothing, request) == buildtarget.LocalBuild()
 
 
 def test_an_unknown_target_refuses_at_the_translation(model, tmp_path) -> None:
     """The same refusal as before, one step earlier — not a ``KeyError``."""
-    request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    with pytest.raises(buildmethods.UnknownBuildTarget):
-        buildmethods.build_target_for("cloud", request)
+    request = build.BuildRequest(model=model, out_dir=tmp_path)
+    with pytest.raises(build.UnknownBuildTarget):
+        build.build_target_for("cloud", request)
 
 
 # --------------------------------------------------------------------------
@@ -170,8 +170,8 @@ def test_a_stated_target_beats_the_requests_target_fields(model, tmp_path, monke
     rather than a rewrite.
     """
     seen: dict[str, object] = {}
-    monkeypatch.setattr(buildmethods, "compose_local_build", _local_result(tmp_path, seen))
-    request = buildmethods.BuildRequest(
+    monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, seen))
+    request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
         image="registry.example.test/other/environment:from-the-request",
@@ -211,12 +211,12 @@ def test_a_remote_target_reaches_the_session_client(model, tmp_path, monkeypatch
 
     monkeypatch.setattr(sessionclient, "run_remote_build", fake)
     outcome = _build(
-        buildmethods.BuildRequest(model=model, out_dir=tmp_path, context_dir=context),
+        build.BuildRequest(model=model, out_dir=tmp_path, context_dir=context),
         buildtarget.RemoteBuild(
             server="build.example:8080", token="a-token", wait=False, max_wait_seconds=90.0
         ),
     )
-    assert outcome.target == buildmethods.TARGET_REMOTE
+    assert outcome.target == build.TARGET_REMOTE
     assert seen["url"] == "ws://build.example:8080/ws"
     assert seen["token"] == "a-token"
     assert seen["wait"] is False
@@ -230,7 +230,7 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
     callers migrate: whatever a target name meant, it still means, and it
     reaches the composition with the arguments it always did.
     """
-    request = buildmethods.BuildRequest(
+    request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
         image="registry.example.test/other/environment:test",
@@ -238,14 +238,12 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
     )
 
     by_name: dict[str, object] = {}
-    monkeypatch.setattr(buildmethods, "compose_local_build", _local_result(tmp_path, by_name))
-    assert asyncio.run(buildmethods.run_build(request, target=buildmethods.TARGET_LOCAL)).successful
+    monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, by_name))
+    assert asyncio.run(build.run_build(request, target=build.TARGET_LOCAL)).successful
 
     by_target: dict[str, object] = {}
-    monkeypatch.setattr(buildmethods, "compose_local_build", _local_result(tmp_path, by_target))
-    assert _build(
-        request, buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request)
-    ).successful
+    monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, by_target))
+    assert _build(request, build.build_target_for(build.TARGET_LOCAL, request)).successful
 
     assert by_name == by_target
 
@@ -261,7 +259,7 @@ def test_a_target_this_package_does_not_run_is_a_type_error(model, tmp_path) -> 
     So an unimplemented target is a programming mistake and says so,
     rather than borrowing the wording of a refusal a user could act on.
     """
-    request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
+    request = build.BuildRequest(model=model, out_dir=tmp_path)
     with pytest.raises(TypeError, match="BuildTarget"):
         _build(request, buildtarget.BuildTarget())
     with pytest.raises(TypeError, match="Execution"):
@@ -281,9 +279,9 @@ def test_the_seam_holds_the_build_directory(model, tmp_path, monkeypatch) -> Non
         seen["holder"] = holder_of(tmp_path)
         return inner(device_model, **kwargs)
 
-    monkeypatch.setattr(buildmethods, "compose_local_build", fake)
+    monkeypatch.setattr(build, "compose_local_build", fake)
     outcome = _build(
-        buildmethods.BuildRequest(model=model, out_dir=tmp_path),
+        build.BuildRequest(model=model, out_dir=tmp_path),
         buildtarget.LocalBuild(execution=buildtarget.ContainerExecution()),
     )
     assert outcome.successful

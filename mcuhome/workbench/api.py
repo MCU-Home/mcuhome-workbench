@@ -180,17 +180,7 @@ from mcuhome.model.model import MODEL_VERSION, DeviceModel
 from mcuhome.model.modelfile import read_model
 
 from mcuhome.workbench import __version__
-from mcuhome.workbench.buildenvsession import (
-    BuilderSession,
-    CacheTier,
-    EnvironmentUnavailable,
-    EnvironmentUnusable,
-    LocalOutcome,
-    Step,
-)
-from mcuhome.workbench.builders import Builder, SelectedBuilder
-from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
-from mcuhome.workbench.buildmethods import (
+from mcuhome.workbench.build import (
     BUILD_MODES,
     BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
@@ -214,6 +204,16 @@ from mcuhome.workbench.buildmethods import (
     resolve_build_target,
     run_build,
 )
+from mcuhome.workbench.buildenvsession import (
+    BuilderSession,
+    CacheTier,
+    EnvironmentUnavailable,
+    EnvironmentUnusable,
+    LocalOutcome,
+    Step,
+)
+from mcuhome.workbench.builders import Builder, SelectedBuilder
+from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildtarget import (
     BuildTarget,
     ContainerExecution,

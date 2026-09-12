@@ -1441,7 +1441,7 @@ def test_a_configured_local_mirror_reaches_the_composition(tmp_path: Path, keys)
     build would use came off the configured local mirror — offline, with
     an opener that fails the test if it is touched.
     """
-    from mcuhome.workbench import buildmethods
+    from mcuhome.workbench import build
 
     # Issued now rather than at the suite's fixed moment: this path goes
     # through the composition, which verifies against the real clock
@@ -1479,7 +1479,7 @@ def test_a_configured_local_mirror_reaches_the_composition(tmp_path: Path, keys)
     )
 
     lines: list[str] = []
-    promised = buildmethods._package_registry(  # noqa: SLF001 - the seam under test
+    promised = build._package_registry(  # noqa: SLF001 - the seam under test
         _model_with_default_sdk(),
         project_root=root,
         registries=settings,
@@ -1505,10 +1505,10 @@ def test_a_configured_local_mirror_reaches_the_composition(tmp_path: Path, keys)
 
 def test_a_build_without_a_project_has_no_registry(tmp_path: Path) -> None:
     """An embedder driving a bare model builds from its own directories."""
-    from mcuhome.workbench import buildmethods
+    from mcuhome.workbench import build
 
     assert (
-        buildmethods._package_registry(  # noqa: SLF001 - the seam under test
+        build._package_registry(  # noqa: SLF001 - the seam under test
             _model_with_default_sdk(),
             project_root=None,
             registries=(),

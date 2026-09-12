@@ -24,7 +24,7 @@ import pytest
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import configuration
-from mcuhome.workbench.buildmethods import build_options
+from mcuhome.workbench.build import build_options
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,

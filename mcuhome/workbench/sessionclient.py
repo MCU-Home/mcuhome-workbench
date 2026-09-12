@@ -115,7 +115,7 @@ from mcuhome.model.context import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
-from mcuhome.workbench.buildmethods import DEFAULT_MAX_WAIT_SECONDS
+from mcuhome.workbench.build import DEFAULT_MAX_WAIT_SECONDS
 from mcuhome.workbench.contextdir import read_context_request
 
 __all__ = [

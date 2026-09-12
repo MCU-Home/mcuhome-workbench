@@ -25,8 +25,8 @@ import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model.errors import ConfigError
 
-from mcuhome.workbench import buildenvsession, buildenvstore, buildmethods, subprocessbuild
-from mcuhome.workbench.buildmethods import BuildOptions, BuildRequest, build_options, options_for
+from mcuhome.workbench import build, buildenvsession, buildenvstore, subprocessbuild
+from mcuhome.workbench.build import BuildOptions, BuildRequest, build_options, options_for
 from mcuhome.workbench.configuration import resolve_settings
 from mcuhome.workbench.project import Project, init_project
 
@@ -53,7 +53,7 @@ def configured(project: Project, text: str) -> BuildOptions:
 
 def test_nothing_configured_is_the_machine_that_was_never_touched() -> None:
     options = BuildOptions()
-    assert options.mode == buildmethods.MODE_CONTAINER
+    assert options.mode == build.MODE_CONTAINER
     assert options.env_store is None
     assert options.python is None
     assert options.workspace_sources == ()
@@ -78,7 +78,7 @@ def test_every_key_reaches_its_field(project: Project) -> None:
         "  cache_session: /srv/cache/session\n"
         "  cache_project: /srv/cache/project\n",
     )
-    assert options.mode == buildmethods.MODE_SUBPROCESS
+    assert options.mode == build.MODE_SUBPROCESS
     assert options.mode_source == str(project.config_file)
     assert options.env_store == Path("/srv/store")
     assert options.dev_workspace == Path("/dev/workspace")
@@ -111,7 +111,7 @@ def test_a_bound_nobody_set_is_not_a_statement(project: Project) -> None:
 
 
 def test_a_request_that_states_options_is_answered_with_them(model, tmp_path) -> None:
-    stated = BuildOptions(mode=buildmethods.MODE_SUBPROCESS, python="python3.13")
+    stated = BuildOptions(mode=build.MODE_SUBPROCESS, python="python3.13")
     assert options_for(BuildRequest(model=model, out_dir=tmp_path, options=stated)) is stated
 
 
@@ -122,7 +122,7 @@ def test_a_request_without_options_reads_the_machines_configuration(
     options = options_for(
         BuildRequest(model=model, out_dir=tmp_path, project_root=project.root, env={})
     )
-    assert options.mode == buildmethods.MODE_SUBPROCESS
+    assert options.mode == build.MODE_SUBPROCESS
 
 
 def test_the_environment_reaches_a_request_without_a_project(model, tmp_path) -> None:
@@ -133,7 +133,7 @@ def test_the_environment_reaches_a_request_without_a_project(model, tmp_path) ->
             env={"MCUHOME_BUILD_MODE": "subprocess", "MCUHOME_BUILD_PYTHON": "python3.13"},
         )
     )
-    assert options.mode == buildmethods.MODE_SUBPROCESS
+    assert options.mode == build.MODE_SUBPROCESS
     assert options.python == "python3.13"
 
 
@@ -143,38 +143,38 @@ def test_the_environment_reaches_a_request_without_a_project(model, tmp_path) ->
 
 
 def test_the_configured_mode_selects_the_execution(model, tmp_path) -> None:
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
-            options=BuildOptions(mode=buildmethods.MODE_SUBPROCESS),
+            options=BuildOptions(mode=build.MODE_SUBPROCESS),
         ),
     )
-    assert isinstance(target.execution, buildmethods.SubprocessExecution)
+    assert isinstance(target.execution, build.SubprocessExecution)
 
 
 def test_a_stated_mode_beats_the_configuration(model, tmp_path) -> None:
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=buildmethods.MODE_CONTAINER,
-            options=BuildOptions(mode=buildmethods.MODE_SUBPROCESS),
+            build_mode=build.MODE_CONTAINER,
+            options=BuildOptions(mode=build.MODE_SUBPROCESS),
         ),
     )
-    assert isinstance(target.execution, buildmethods.ContainerExecution)
+    assert isinstance(target.execution, build.ContainerExecution)
 
 
 def test_the_configured_developer_trees_reach_the_execution(model, tmp_path) -> None:
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
             options=BuildOptions(
-                mode=buildmethods.MODE_SUBPROCESS,
+                mode=build.MODE_SUBPROCESS,
                 dev_workspace=tmp_path / "workspace",
             ),
         ),
@@ -183,14 +183,14 @@ def test_the_configured_developer_trees_reach_the_execution(model, tmp_path) -> 
 
 
 def test_a_stated_developer_tree_beats_the_configured_one(model, tmp_path) -> None:
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
         BuildRequest(
             model=model,
             out_dir=tmp_path,
             dev_workspace=tmp_path / "stated",
             options=BuildOptions(
-                mode=buildmethods.MODE_SUBPROCESS,
+                mode=build.MODE_SUBPROCESS,
                 dev_workspace=tmp_path / "configured",
             ),
         ),
@@ -206,13 +206,13 @@ def test_a_configured_development_workspace_needs_the_configured_mode(model, tmp
     came from, because that is the file they are not looking at.
     """
     with pytest.raises(ConfigError, match="development workspace") as refusal:
-        buildmethods.build_target_for(
-            buildmethods.TARGET_LOCAL,
+        build.build_target_for(
+            build.TARGET_LOCAL,
             BuildRequest(
                 model=model,
                 out_dir=tmp_path,
                 options=BuildOptions(
-                    mode=buildmethods.MODE_CONTAINER,
+                    mode=build.MODE_CONTAINER,
                     mode_source="the project's mcuhome.yaml",
                     dev_workspace=tmp_path / "workspace",
                 ),
@@ -239,27 +239,27 @@ def test_an_image_without_a_container_is_refused_naming_both_ways_out(
         image="ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1",
     )
     with pytest.raises(ConfigError) as refusal:
-        buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request)
+        build.build_target_for(build.TARGET_LOCAL, request)
     rendered = str(refusal.value)
     hint = refusal.value.hint or ""
     assert "ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1" in rendered
-    assert buildmethods.MODE_SUBPROCESS in hint
+    assert build.MODE_SUBPROCESS in hint
     # It says where the mode came from, because that is usually a file
     # the person running the build is not looking at.
     assert str(project.config_file) in hint
-    assert f"build.mode {buildmethods.MODE_CONTAINER}" in hint
+    assert f"build.mode {build.MODE_CONTAINER}" in hint
 
 
 def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> None:
     """The refusal names whoever chose the mode, and a mode stated for one
     build came from no file."""
     with pytest.raises(ConfigError) as refusal:
-        buildmethods.build_target_for(
-            buildmethods.TARGET_LOCAL,
+        build.build_target_for(
+            build.TARGET_LOCAL,
             BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                build_mode=buildmethods.MODE_SUBPROCESS,
+                build_mode=build.MODE_SUBPROCESS,
                 image="ghcr.io/mcu-home/x:1",
                 options=BuildOptions(mode_source="/etc/mcuhome/configuration.yaml"),
             ),
@@ -270,8 +270,8 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
 
 
 def test_an_image_with_a_container_is_the_ordinary_case(model, tmp_path) -> None:
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
         BuildRequest(model=model, out_dir=tmp_path, image="ghcr.io/mcu-home/x:1"),
     )
     assert target.execution.image == "ghcr.io/mcu-home/x:1"
@@ -300,17 +300,17 @@ def test_the_options_reach_the_provisioner_and_the_backend(model, tmp_path, monk
     monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run_locked_build)
     monkeypatch.setattr(subprocessbuild, "refuse_patched_context", lambda *a, **k: None)
     monkeypatch.setattr(subprocessbuild, "check_environment", lambda *a, **k: None)
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
     monkeypatch.setattr(
-        buildmethods,
+        build,
         "read_context_request",
         lambda path: type("Request", (), {"build_environment": "the pin"})(),
     )
-    monkeypatch.setattr(buildmethods, "format_generator_chain", lambda entries: "mcuhome 0.1")
-    monkeypatch.setattr(buildmethods, "read_generator_chain", lambda path: ())
+    monkeypatch.setattr(build, "format_generator_chain", lambda entries: "mcuhome 0.1")
+    monkeypatch.setattr(build, "read_generator_chain", lambda path: ())
 
     options = BuildOptions(
-        mode=buildmethods.MODE_SUBPROCESS,
+        mode=build.MODE_SUBPROCESS,
         env_store=tmp_path / "store",
         python="python3.13",
         workspace_sources=(tmp_path / "workspaces",),
@@ -324,7 +324,7 @@ def test_the_options_reach_the_provisioner_and_the_backend(model, tmp_path, monk
         cache_project=tmp_path / "cache-project",
     )
     (tmp_path / "cache-shared").mkdir()
-    result = buildmethods.compose_subprocess_build(
+    result = build.compose_subprocess_build(
         model,
         sdk_sources=(tmp_path / "sdk",),
         work_root=tmp_path / "work",
@@ -375,30 +375,28 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
     resolved: dict[str, object] = {}
 
     monkeypatch.setattr(
-        buildmethods,
+        build,
         "create_build_context",
         lambda device_model, **kwargs: created.update(kwargs),
     )
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
-    monkeypatch.setattr(buildmethods, "context_facts", lambda directory: {})
-    monkeypatch.setattr(buildmethods, "read_context_request", lambda path: _Pinned())
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
+    monkeypatch.setattr(build, "context_facts", lambda directory: {})
+    monkeypatch.setattr(build, "read_context_request", lambda path: _Pinned())
+    monkeypatch.setattr(build, "read_generator_chain", lambda path: ("mcuhome-workbench", "0.1.0"))
+    monkeypatch.setattr(build, "format_generator_chain", lambda chain: "mcuhome-workbench:0")
     monkeypatch.setattr(
-        buildmethods, "read_generator_chain", lambda path: ("mcuhome-workbench", "0.1.0")
-    )
-    monkeypatch.setattr(buildmethods, "format_generator_chain", lambda chain: "mcuhome-workbench:0")
-    monkeypatch.setattr(
-        buildmethods.containerbuild,
+        build.containerbuild,
         "prepare_environment",
         lambda pin, **kwargs: resolved.update(kwargs) or _Resolved(),
     )
-    monkeypatch.setattr(buildmethods.containerbuild, "check_image", lambda *a, **k: None)
+    monkeypatch.setattr(build.containerbuild, "check_image", lambda *a, **k: None)
     monkeypatch.setattr(
-        buildmethods.containerbuild,
+        build.containerbuild,
         "run_locked_build",
         lambda context_dir, **kwargs: driven.update(kwargs),
     )
 
-    buildmethods.compose_local_build(
+    build.compose_local_build(
         model,
         signing_pub="",
         sdk_sources=(tmp_path / "sdk",),
@@ -430,11 +428,11 @@ def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch
     """
     created: dict[str, object] = {}
     monkeypatch.setattr(
-        buildmethods,
+        build,
         "create_build_context",
         lambda device_model, **kwargs: created.update(kwargs),
     )
-    monkeypatch.setattr(buildmethods, "context_facts", lambda directory: {"build_environment": ""})
+    monkeypatch.setattr(build, "context_facts", lambda directory: {"build_environment": ""})
 
     request = BuildRequest(
         model=model,
@@ -446,7 +444,7 @@ def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch
             sdk_max_bytes=11,
         ),
     )
-    assert buildmethods._remote_context(request, tmp_path / "work") == tmp_path / "work" / "context"
+    assert build._remote_context(request, tmp_path / "work") == tmp_path / "work" / "context"
     assert created["sdk_sources"] == (tmp_path / "sdk",)
     assert created["workspace_sources"] == (tmp_path / "workspaces",)
     assert created["tools_sources"] == (tmp_path / "tools",)

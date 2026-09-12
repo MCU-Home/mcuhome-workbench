@@ -68,11 +68,11 @@ def test_the_build_targets_are_part_of_the_surface() -> None:
     """Driving a build is supported, not an implementation detail.
 
     Re-exported rather than reimplemented — the same objects
-    :mod:`mcuhome.workbench.buildmethods` defines, so a caller that
+    :mod:`mcuhome.workbench.build` defines, so a caller that
     monkeypatches or type-checks against either one is talking about the
     same thing.
     """
-    from mcuhome.workbench import buildmethods
+    from mcuhome.workbench import build
 
     exported = (
         "run_build",
@@ -88,7 +88,7 @@ def test_the_build_targets_are_part_of_the_surface() -> None:
     )
     for name in exported:
         assert name in api.__all__, name
-        assert getattr(api, name) is getattr(buildmethods, name), name
+        assert getattr(api, name) is getattr(build, name), name
 
 
 def test_creating_a_device_is_part_of_the_surface() -> None:

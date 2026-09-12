@@ -41,7 +41,7 @@ Nothing here reaches a filesystem, a socket or a container. These are the
 answers to "where" and "how", stated as data, so that the thing that
 answers "what" (the device model, and the build context created from it)
 and the thing that answers "where" can travel separately — which is the
-whole seam :func:`mcuhome.workbench.buildmethods.build_firmware` is built
+whole seam :func:`mcuhome.workbench.build.build_firmware` is built
 on.
 """
 

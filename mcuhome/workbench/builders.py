@@ -5,7 +5,7 @@
 A **builder** is configuration *about* a build target, never a third
 target: the target vocabulary underneath (``local``/``remote``), its
 validation and its typed refusals stay
-:mod:`mcuhome.workbench.buildmethods`'s. What this module adds is the
+:mod:`mcuhome.workbench.build`'s. What this module adds is the
 product shape on top — ``mcuhome device build`` should simply work, and
 *where* it built is something the user configured once:
 

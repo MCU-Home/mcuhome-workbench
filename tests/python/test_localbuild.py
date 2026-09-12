@@ -7,7 +7,7 @@ seam: a scripted stand-in dispatches on the argv
 :class:`~mcuhome.workbench.containerbuild.Runtime` composed and writes
 the result document a real container would (build-environment
 specification §6.2). What is asserted is the composition above the
-profile — :func:`mcuhome.workbench.buildmethods.compose_container_build`:
+profile — :func:`mcuhome.workbench.build.compose_container_build`:
 that a device model becomes a locked context and one ``build`` step, that
 the image is chosen by the packages that context pins and checked before
 anything is fetched, and that the **private** key never appears in any
@@ -43,7 +43,7 @@ from conftest import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
-from mcuhome.workbench import buildmethods, containerbuild
+from mcuhome.workbench import build, containerbuild
 from mcuhome.workbench.buildenvsession import RESULT_PREFIX, RESULT_SUFFIX, SPEC_GENERATION
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
@@ -282,14 +282,14 @@ def _build(tmp_path, model, public_pem, **overrides):
     """
     seam = overrides.pop("seam", None) or Seam()
     sdk_sources = overrides.pop("sdk_sources", (tmp_path / "src",))
-    options = overrides.pop("options", None) or buildmethods.BuildOptions()
+    options = overrides.pop("options", None) or build.BuildOptions()
     if not options.workspace_sources and not options.tools_sources:
         options = dataclasses.replace(
             options, workspace_sources=sdk_sources, tools_sources=sdk_sources
         )
     return (
         seam,
-        buildmethods.compose_container_build(
+        build.compose_container_build(
             model,
             signing_pub=public_pem,
             sdk_sources=sdk_sources,
@@ -497,7 +497,7 @@ def test_the_recommended_limits_are_the_ones_the_container_is_held_to(tmp_path, 
         tmp_path,
         model,
         public_pem,
-        options=buildmethods.BuildOptions(cpus=2, memory="4g"),
+        options=build.BuildOptions(cpus=2, memory="4g"),
     )
     assert result.outcome.successful
     assert seam.request["limits"] == {"cpus": 2.0, "memory_bytes": 4 * 1024**3}
@@ -768,7 +768,7 @@ def test_the_configured_cache_root_answers_when_the_request_states_none(tmp_path
         model,
         public_key_pem(generate_key_pem(TEST_SCALAR)),
         env={"HOME": str(tmp_path / "home")},
-        options=buildmethods.BuildOptions(cache_root=tmp_path / "operators-disk"),
+        options=build.BuildOptions(cache_root=tmp_path / "operators-disk"),
     )
     assert (
         f"{tmp_path / 'operators-disk' / 'cache-local'}:{containerbuild.CACHE_TARGET}/local"

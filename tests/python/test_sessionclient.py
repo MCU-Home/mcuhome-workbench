@@ -59,7 +59,7 @@ from mcuhome.model.errors import BuildError
 
 from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench import (
-    buildmethods,
+    build,
     containerbuild,
     imgtool,
     ociregistry,
@@ -2739,9 +2739,9 @@ def _remote_request(tmp_path: Path, sources: Path, harness: Harness, **overrides
     # did, the environment packages' now that a directory holding
     # everything is no longer read for them through sdk_sources alone.
     options = overrides.pop(
-        "options", buildmethods.BuildOptions(workspace_sources=(sources,), tools_sources=(sources,))
+        "options", build.BuildOptions(workspace_sources=(sources,), tools_sources=(sources,))
     )
-    return buildmethods.BuildRequest(
+    return build.BuildRequest(
         model=_model(),
         out_dir=tmp_path / "build",
         signing_pub=_public_pem(),
@@ -2775,15 +2775,15 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
     write_sdk_package(sources)
     lines: list[str] = []
 
-    async def scenario() -> buildmethods.BuildOutcome:
+    async def scenario() -> build.BuildOutcome:
         async with real_server(tmp_path) as harness:
-            return await buildmethods.run_build(
+            return await build.run_build(
                 _remote_request(tmp_path, sources, harness, on_line=lines.append),
-                target=buildmethods.TARGET_REMOTE,
+                target=build.TARGET_REMOTE,
             )
 
     outcome = run(scenario())
-    assert outcome.target == buildmethods.TARGET_REMOTE
+    assert outcome.target == build.TARGET_REMOTE
     assert outcome.successful is True and outcome.status == "success"
     assert outcome.context_id.startswith("sha256:")
     assert {entry.path for entry in outcome.artifacts} == {name for name, _ in ARTIFACTS}
@@ -2837,8 +2837,8 @@ def test_the_context_the_remote_target_creates_pins_what_the_resolver_answered(
 
     async def scenario() -> None:
         async with real_server(tmp_path) as harness:
-            await buildmethods.run_build(
-                _remote_request(tmp_path, sources, harness), target=buildmethods.TARGET_REMOTE
+            await build.run_build(
+                _remote_request(tmp_path, sources, harness), target=build.TARGET_REMOTE
             )
 
     run(scenario())
@@ -2884,7 +2884,7 @@ def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path)
     ``sdk.unavailable``, not retryable, naming the version and the pin.
 
     Driven with a hand-written context rather than through
-    :func:`~mcuhome.workbench.buildmethods.run_build`'s ``remote``
+    :func:`~mcuhome.workbench.build.run_build`'s ``remote``
     target: that target resolves and verifies every pin locally, SDK
     included, before a context is ever created (build-environment
     resolution reads the chain's first constraint out of the SDK's own,

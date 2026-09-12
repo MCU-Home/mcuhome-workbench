@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The build targets behind one interface (``buildmethods.py``).
+"""The build targets behind one interface (``build.py``).
 
 No container and no socket: each target is stubbed at its own backend
 seam — ``compose_local_build``, ``run_remote_build`` — and what is
@@ -51,7 +51,7 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import DeveloperEnvironment
 from mcuhome.model.errors import BuildError, ConfigError
 
-from mcuhome.workbench import buildmethods, containerbuild, sessionclient, subprocessbuild
+from mcuhome.workbench import build, containerbuild, sessionclient, subprocessbuild
 from mcuhome.workbench.buildenvsession import EnvironmentUnavailable, LocalOutcome
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.buildprocess import Completed
@@ -86,9 +86,9 @@ def _artifacts() -> tuple[Artifact, ...]:
     )
 
 
-def _run(request: buildmethods.BuildRequest, target: str) -> buildmethods.BuildOutcome:
+def _run(request: build.BuildRequest, target: str) -> build.BuildOutcome:
     """What a command line does at its entry point: one ``asyncio.run``."""
-    return asyncio.run(buildmethods.run_build(request, target=target))
+    return asyncio.run(build.run_build(request, target=target))
 
 
 def _served_by(directory: Path) -> tuple[RegistrySettings, ...]:
@@ -119,7 +119,7 @@ def _served_by(directory: Path) -> tuple[RegistrySettings, ...]:
 
 def _remote_context_of(
     monkeypatch: pytest.MonkeyPatch, **fields
-) -> tuple[buildmethods.BuildOutcome, object, list[str]]:
+) -> tuple[build.BuildOutcome, object, list[str]]:
     """Run a remote build to the socket and answer with the context it sent.
 
     The session client is stubbed where every other test in this file
@@ -148,13 +148,13 @@ def _remote_context_of(
     monkeypatch.setattr(sessionclient, "run_remote_build", fake)
     lines: list[str] = []
     outcome = _run(
-        buildmethods.BuildRequest(
+        build.BuildRequest(
             server="ws://build.example/session",
             signing_pub=_PUBLIC_PEM,
             on_line=lines.append,
             **fields,
         ),
-        buildmethods.TARGET_REMOTE,
+        build.TARGET_REMOTE,
     )
     return outcome, sent["request"], lines
 
@@ -164,16 +164,16 @@ def _remote_context_of(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", buildmethods.BUILD_TARGETS)
+@pytest.mark.parametrize("name", build.BUILD_TARGETS)
 def test_every_target_name_resolves_to_itself(name: str) -> None:
-    assert buildmethods.resolve_build_target(name) == name
+    assert build.resolve_build_target(name) == name
 
 
 @pytest.mark.parametrize("nothing", [None, ""])
 def test_no_preference_is_the_local_container(nothing) -> None:
     """The default is a build on this machine, in a container."""
-    assert buildmethods.resolve_build_target(nothing) == buildmethods.TARGET_LOCAL
-    assert buildmethods.DEFAULT_BUILD_TARGET == buildmethods.TARGET_LOCAL
+    assert build.resolve_build_target(nothing) == build.TARGET_LOCAL
+    assert build.DEFAULT_BUILD_TARGET == build.TARGET_LOCAL
 
 
 def test_a_caller_that_names_no_target_takes_the_configured_one(model, tmp_path) -> None:
@@ -183,32 +183,32 @@ def test_a_caller_that_names_no_target_takes_the_configured_one(model, tmp_path)
     where there is one; an embedder that passes nothing builds the way
     the machine is configured, exactly as it does for ``build.mode``.
     """
-    request = buildmethods.BuildRequest(
+    request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
         server="attic",
-        options=buildmethods.BuildOptions(target=buildmethods.TARGET_REMOTE),
+        options=build.BuildOptions(target=build.TARGET_REMOTE),
     )
-    assert isinstance(buildmethods.build_target_for(None, request), buildmethods.RemoteBuild)
+    assert isinstance(build.build_target_for(None, request), build.RemoteBuild)
     assert isinstance(
-        buildmethods.build_target_for(buildmethods.TARGET_LOCAL, request),
-        buildmethods.LocalBuild,
+        build.build_target_for(build.TARGET_LOCAL, request),
+        build.LocalBuild,
     )
 
 
 def test_an_unknown_target_is_a_refusal_that_lists_the_real_ones() -> None:
     """Typed, and it names them all — a user who guessed wrong needs them."""
-    with pytest.raises(buildmethods.UnknownBuildTarget) as refusal:
-        buildmethods.resolve_build_target("cloud")
+    with pytest.raises(build.UnknownBuildTarget) as refusal:
+        build.resolve_build_target("cloud")
     rendered = str(refusal.value)
     assert '"cloud"' in rendered
-    for name in buildmethods.BUILD_TARGETS:
+    for name in build.BUILD_TARGETS:
         assert name in rendered
 
 
 def test_run_build_refuses_an_unknown_target_before_it_runs_anything(model, tmp_path) -> None:
-    request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    with pytest.raises(buildmethods.UnknownBuildTarget):
+    request = build.BuildRequest(model=model, out_dir=tmp_path)
+    with pytest.raises(build.UnknownBuildTarget):
         _run(request, "cloud")
 
 
@@ -217,9 +217,9 @@ def test_run_build_refuses_an_unknown_target_before_it_runs_anything(model, tmp_
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", buildmethods.BUILD_MODES)
+@pytest.mark.parametrize("name", build.BUILD_MODES)
 def test_every_build_mode_resolves_to_itself(name: str) -> None:
-    assert buildmethods.resolve_build_mode(name) == name
+    assert build.resolve_build_mode(name) == name
 
 
 @pytest.mark.parametrize("nothing", [None, ""])
@@ -231,39 +231,39 @@ def test_no_preference_is_the_container(nothing) -> None:
     So the default is asserted where it is decided, on the target, and
     not on a field that now means "nobody said".
     """
-    assert buildmethods.resolve_build_mode(nothing) == buildmethods.MODE_CONTAINER
-    assert buildmethods.DEFAULT_BUILD_MODE == buildmethods.MODE_CONTAINER
-    assert buildmethods.BuildRequest(model=None, out_dir=Path()).build_mode is None
-    assert buildmethods.BuildOptions().mode == buildmethods.MODE_CONTAINER
+    assert build.resolve_build_mode(nothing) == build.MODE_CONTAINER
+    assert build.DEFAULT_BUILD_MODE == build.MODE_CONTAINER
+    assert build.BuildRequest(model=None, out_dir=Path()).build_mode is None
+    assert build.BuildOptions().mode == build.MODE_CONTAINER
 
 
 def test_an_unknown_build_mode_is_a_refusal_that_lists_the_real_ones() -> None:
-    with pytest.raises(buildmethods.UnknownBuildMode) as refusal:
-        buildmethods.resolve_build_mode("vm")
+    with pytest.raises(build.UnknownBuildMode) as refusal:
+        build.resolve_build_mode("vm")
     rendered = str(refusal.value)
     assert '"vm"' in rendered
-    for name in buildmethods.BUILD_MODES:
+    for name in build.BUILD_MODES:
         assert name in rendered
 
 
 def test_the_mode_selects_the_execution_the_local_target_runs(model, tmp_path) -> None:
     """One name, two decisions: the target states them apart."""
-    container = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL, buildmethods.BuildRequest(model=model, out_dir=tmp_path)
+    container = build.build_target_for(
+        build.TARGET_LOCAL, build.BuildRequest(model=model, out_dir=tmp_path)
     )
-    assert isinstance(container.execution, buildmethods.ContainerExecution)
+    assert isinstance(container.execution, build.ContainerExecution)
 
-    subprocess_target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
-        buildmethods.BuildRequest(
+    subprocess_target = build.build_target_for(
+        build.TARGET_LOCAL,
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=buildmethods.MODE_SUBPROCESS,
+            build_mode=build.MODE_SUBPROCESS,
             ccache_dir=tmp_path / "ccache",
         ),
     )
     execution = subprocess_target.execution
-    assert isinstance(execution, buildmethods.SubprocessExecution)
+    assert isinstance(execution, build.SubprocessExecution)
     assert execution.ccache_dir == tmp_path / "ccache"
 
 
@@ -289,17 +289,17 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
             environment=None,
         )
 
-    monkeypatch.setattr(buildmethods, "compose_subprocess_build", fake)
+    monkeypatch.setattr(build, "compose_subprocess_build", fake)
     outcome = _run(
-        buildmethods.BuildRequest(
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=buildmethods.MODE_SUBPROCESS,
+            build_mode=build.MODE_SUBPROCESS,
             ccache_dir=tmp_path / "ccache",
         ),
-        buildmethods.TARGET_LOCAL,
+        build.TARGET_LOCAL,
     )
-    assert outcome.target == buildmethods.TARGET_LOCAL
+    assert outcome.target == build.TARGET_LOCAL
     assert outcome.successful
     assert outcome.artifacts == _artifacts()
     assert outcome.report == BUILD_REPORT_FILE
@@ -324,14 +324,14 @@ def test_a_subprocess_build_resolves_its_pins_like_every_other_build(model, tmp_
     """
     with pytest.raises(BuildError) as refusal:
         asyncio.run(
-            buildmethods.build_firmware(
-                buildmethods.BuildRequest(
+            build.build_firmware(
+                build.BuildRequest(
                     model=model,
                     out_dir=tmp_path,
                     signing_pub=_PUBLIC_PEM,
-                    build_mode=buildmethods.MODE_SUBPROCESS,
+                    build_mode=build.MODE_SUBPROCESS,
                 ),
-                target=buildmethods.LocalBuild(execution=buildmethods.SubprocessExecution()),
+                target=build.LocalBuild(execution=build.SubprocessExecution()),
             )
         )
     assert "build.sdk_sources" in refusal.value.hint
@@ -364,7 +364,7 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         )
 
     monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
     checked: dict[str, object] = {}
     monkeypatch.setattr(
         subprocessbuild,
@@ -389,14 +389,14 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         signing_pub=_PUBLIC_PEM,
     )
     steps: list[tuple] = []
-    result = buildmethods.compose_subprocess_build(
+    result = build.compose_subprocess_build(
         model,
         sdk_sources=(tmp_path / "sdk",),
         work_root=tmp_path / "work",
         env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
         environment=FakeEnvironment(),
         context_dir=tmp_path / "context",
-        options=buildmethods.BuildOptions(cpus=5, memory="8g"),
+        options=build.BuildOptions(cpus=5, memory="8g"),
         on_step=lambda name, **facts: steps.append((name, facts)),
     )
     assert result.out_dir == tmp_path / "out"
@@ -434,7 +434,7 @@ def test_the_environment_is_checked_before_the_context_is_locked(
         "check_environment",
         lambda environment, **facts: order.append("check"),
     )
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: order.append("lock"))
+    monkeypatch.setattr(build, "lock_context", lambda directory: order.append("lock"))
     monkeypatch.setattr(
         subprocessbuild,
         "run_locked_build",
@@ -462,7 +462,7 @@ def test_the_environment_is_checked_before_the_context_is_locked(
         tools_sources=(tmp_path / "sdk",),
         signing_pub=_PUBLIC_PEM,
     )
-    buildmethods.compose_subprocess_build(
+    build.compose_subprocess_build(
         model,
         sdk_sources=(tmp_path / "sdk",),
         work_root=tmp_path / "work",
@@ -501,18 +501,18 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
             image="registry.example.test/other/environment:test",
         )
 
-    monkeypatch.setattr(buildmethods, "compose_local_build", fake)
+    monkeypatch.setattr(build, "compose_local_build", fake)
     outcome = _run(
-        buildmethods.BuildRequest(
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
             signing_pub="-----BEGIN PUBLIC KEY-----\n",
             sdk_sources=(tmp_path / "sdk",),
             image="registry.example.test/other/environment:test",
         ),
-        buildmethods.TARGET_LOCAL,
+        build.TARGET_LOCAL,
     )
-    assert outcome.target == buildmethods.TARGET_LOCAL
+    assert outcome.target == build.TARGET_LOCAL
     assert outcome.successful and outcome.status == "success"
     assert outcome.context_id == "sha256:" + "1" * 64
     assert outcome.artifacts == _artifacts()
@@ -558,14 +558,14 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
             image="registry.example.test/other/environment:test",
         )
 
-    monkeypatch.setattr(buildmethods, "compose_local_build", fake)
-    request = buildmethods.BuildRequest(model=model, out_dir=tmp_path)
-    assert _run(request, buildmethods.TARGET_LOCAL).successful
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    request = build.BuildRequest(model=model, out_dir=tmp_path)
+    assert _run(request, build.TARGET_LOCAL).successful
     holder = seen["holder"]
     assert holder["device"] == model.device.name  # type: ignore[index]
     assert holder["operation"] == "build"  # type: ignore[index]
     # And released again: the next build of that directory just runs.
-    assert _run(request, buildmethods.TARGET_LOCAL).successful
+    assert _run(request, build.TARGET_LOCAL).successful
 
 
 def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatch):
@@ -589,16 +589,16 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
 
     monkeypatch.setattr(sessionclient, "run_remote_build", fake)
     outcome = _run(
-        buildmethods.BuildRequest(
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
             server="ws://build.example:8080/session",
             token="a-token",
             context_dir=context,
         ),
-        buildmethods.TARGET_REMOTE,
+        build.TARGET_REMOTE,
     )
-    assert outcome.target == buildmethods.TARGET_REMOTE
+    assert outcome.target == build.TARGET_REMOTE
     assert outcome.successful and outcome.status == "success"
     assert outcome.context_id == "sha256:" + "2" * 64
     assert outcome.artifacts == _artifacts()
@@ -629,10 +629,10 @@ def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> N
     this is the text a user reads when nothing is configured, and a
     rung it does not mention is a rung nobody finds.
     """
-    with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
+    with pytest.raises(build.RemoteNotConfigured) as refusal:
         _run(
-            buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-            buildmethods.TARGET_REMOTE,
+            build.BuildRequest(model=model, out_dir=tmp_path),
+            build.TARGET_REMOTE,
         )
     rendered = str(refusal.value)
     assert "target: remote" in rendered
@@ -663,12 +663,10 @@ def test_remote_refuses_over_a_pin_only_when_nothing_can_resolve_one(model, tmp_
     """
     with pytest.raises(BuildError) as refusal:
         _run(
-            buildmethods.BuildRequest(
-                model=model, out_dir=tmp_path, server="ws://build.example/session"
-            ),
-            buildmethods.TARGET_REMOTE,
+            build.BuildRequest(model=model, out_dir=tmp_path, server="ws://build.example/session"),
+            build.TARGET_REMOTE,
         )
-    assert not isinstance(refusal.value, buildmethods.RemoteNotConfigured)
+    assert not isinstance(refusal.value, build.RemoteNotConfigured)
     rendered = str(refusal.value)
     assert "--sdk-sources" in rendered
     assert "build.sdk_sources" in rendered
@@ -746,7 +744,7 @@ def test_a_configured_source_still_beats_the_registry_for_a_remote_build(
         model=model,
         out_dir=tmp_path / "build",
         sdk_sources=(local,),
-        options=buildmethods.BuildOptions(workspace_sources=(local,), tools_sources=(local,)),
+        options=build.BuildOptions(workspace_sources=(local,), tools_sources=(local,)),
         project_root=project_root,
         registries=_served_by(served),
     )
@@ -777,13 +775,13 @@ def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path,
     monkeypatch.setattr(builtins, "__import__", without_aiohttp)
     with pytest.raises(sessionclient.RemoteDependencyMissing) as refusal:
         _run(
-            buildmethods.BuildRequest(
+            build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
                 server="ws://build.example/session",
                 context_dir=context,
             ),
-            buildmethods.TARGET_REMOTE,
+            build.TARGET_REMOTE,
         )
     assert "pip install 'mcuhome-workbench[remote]'" in str(refusal.value)
 
@@ -820,7 +818,7 @@ def test_the_container_target_no_longer_asks_for_the_compiler(model, tmp_path, m
     # point — what is asserted below is which refusal it is *not*.
     monkeypatch.setattr(containerbuild, "run_command", lambda argv, on_line=None: Completed(1, ""))
     with pytest.raises(BuildError) as refusal:
-        _run(buildmethods.BuildRequest(model=model, out_dir=tmp_path), buildmethods.TARGET_LOCAL)
+        _run(build.BuildRequest(model=model, out_dir=tmp_path), build.TARGET_LOCAL)
     assert "mcuhome-compiler" not in str(refusal.value)
 
 
@@ -844,7 +842,7 @@ def test_importing_the_dispatch_does_not_drag_in_the_compiler() -> None:
     from conftest import REPO_ROOT
 
     probe = (
-        "import sys; import mcuhome.workbench.buildmethods; "
+        "import sys; import mcuhome.workbench.build; "
         "print(any(name.startswith('mcuhome.compiler') for name in sys.modules))"
     )
     completed = subprocess.run(
@@ -895,14 +893,14 @@ def test_a_server_address_becomes_a_websocket_url(address, url) -> None:
     call, where ``attic:8137`` reads as a URL whose scheme is ``attic``
     and aiohttp raised — a traceback out of a documented input.
     """
-    assert buildmethods.websocket_url(address) == url
+    assert build.websocket_url(address) == url
 
 
 @pytest.mark.parametrize("address", ["", "   ", "://attic", "ftp://attic", "ssh://attic:22"])
 def test_an_address_that_is_not_one_is_refused_in_words(address) -> None:
     """A refusal naming what is wrong, never a traceback from the socket."""
-    with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
-        buildmethods.websocket_url(address)
+    with pytest.raises(build.RemoteNotConfigured) as refusal:
+        build.websocket_url(address)
     assert refusal.value.hint
     assert "<host" in refusal.value.hint
 
@@ -926,12 +924,12 @@ def west_workspace(root: Path) -> Path:
 def test_the_development_workspace_reaches_the_execution(model, tmp_path) -> None:
     """``build.dev_workspace`` is read where every other target-specific
     field is read, and lands on the target."""
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
-        buildmethods.BuildRequest(
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=buildmethods.MODE_SUBPROCESS,
+            build_mode=build.MODE_SUBPROCESS,
             dev_workspace=tmp_path / "west-workspace",
         ),
     )
@@ -948,12 +946,12 @@ def test_a_development_workspace_is_refused_for_a_container_build(model, tmp_pat
     to change.
     """
     with pytest.raises(ConfigError, match="development workspace") as refusal:
-        buildmethods.build_target_for(
-            buildmethods.TARGET_LOCAL,
-            buildmethods.BuildRequest(
+        build.build_target_for(
+            build.TARGET_LOCAL,
+            build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                build_mode=buildmethods.MODE_CONTAINER,
+                build_mode=build.MODE_CONTAINER,
                 dev_workspace=tmp_path / "west-workspace",
             ),
         )
@@ -971,9 +969,9 @@ def test_a_development_workspace_is_refused_for_a_remote_build(model, tmp_path) 
     person meant.
     """
     with pytest.raises(ConfigError, match="development workspace") as refusal:
-        buildmethods.build_target_for(
-            buildmethods.TARGET_REMOTE,
-            buildmethods.BuildRequest(
+        build.build_target_for(
+            build.TARGET_REMOTE,
+            build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
                 server="build.example.org",
@@ -1000,13 +998,11 @@ def test_a_development_workspace_reaches_the_composition(model, tmp_path, monkey
             environment=kwargs["environment"],
         )
 
-    monkeypatch.setattr(buildmethods, "compose_subprocess_build", fake)
+    monkeypatch.setattr(build, "compose_subprocess_build", fake)
     asyncio.run(
-        buildmethods.build_firmware(
-            buildmethods.BuildRequest(model=model, out_dir=tmp_path),
-            target=buildmethods.LocalBuild(
-                execution=buildmethods.SubprocessExecution(dev_workspace=workspace)
-            ),
+        build.build_firmware(
+            build.BuildRequest(model=model, out_dir=tmp_path),
+            target=build.LocalBuild(execution=build.SubprocessExecution(dev_workspace=workspace)),
         )
     )
     environment = seen["environment"]
@@ -1068,7 +1064,7 @@ def test_a_development_context_has_the_same_id_from_two_workspaces(
     identities = []
     for name in ("first", "second"):
         workspace = west_workspace(tmp_path / f"{name}-workspace")
-        buildmethods.compose_subprocess_build(
+        build.compose_subprocess_build(
             model,
             sdk_sources=(),
             work_root=tmp_path / name,
@@ -1106,7 +1102,7 @@ def test_a_pinned_context_is_not_built_against_a_workspace(model, tmp_path, monk
         lambda *a, **k: pytest.fail("the backend must not be reached"),
     )
     with pytest.raises(EnvironmentUnavailable, match="pinned to") as refused:
-        buildmethods.compose_subprocess_build(
+        build.compose_subprocess_build(
             model,
             sdk_sources=(tmp_path / "sdk",),
             work_root=tmp_path / "work",
@@ -1168,13 +1164,13 @@ def test_a_development_context_is_not_sent_to_a_build_server(model, tmp_path) ->
         signing_pub=_PUBLIC_PEM,
         developer=True,
     )
-    with pytest.raises(buildmethods.RemoteNotConfigured, match="development build") as refused:
+    with pytest.raises(build.RemoteNotConfigured, match="development build") as refused:
         asyncio.run(
-            buildmethods.build_firmware(
-                buildmethods.BuildRequest(
+            build.build_firmware(
+                build.BuildRequest(
                     model=model, out_dir=tmp_path, context_dir=context, server="build.example.org"
                 ),
-                target=buildmethods.RemoteBuild(server="build.example.org"),
+                target=build.RemoteBuild(server="build.example.org"),
             )
         )
     assert "mcuhome build" in refused.value.hint
@@ -1195,7 +1191,7 @@ def test_a_package_pinned_context_is_sent_as_before(model, tmp_path, monkeypatch
     )
     # Reached: the refusal is about the form of the context and about
     # nothing else, so a pinned one gets as far as the socket.
-    buildmethods._refuse_developer_context(context)
+    build._refuse_developer_context(context)
 
 
 def test_a_patched_context_is_refused_before_the_context_is_locked(
@@ -1214,7 +1210,7 @@ def test_a_patched_context_is_refused_before_the_context_is_locked(
     (context / "patches" / "zephyr" / "0001-fix.patch").write_text("--- a\n+++ b\n")
 
     locked: list[Path] = []
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: locked.append(directory))
+    monkeypatch.setattr(build, "lock_context", lambda directory: locked.append(directory))
     monkeypatch.setattr(
         subprocessbuild,
         "run_locked_build",
@@ -1223,10 +1219,10 @@ def test_a_patched_context_is_refused_before_the_context_is_locked(
 
     with pytest.raises(subprocessbuild.BuildEnvironmentError, match="cannot apply them"):
         asyncio.run(
-            buildmethods.build_firmware(
-                buildmethods.BuildRequest(model=model, out_dir=tmp_path, context_dir=context),
-                target=buildmethods.LocalBuild(
-                    execution=buildmethods.SubprocessExecution(dev_workspace=workspace)
+            build.build_firmware(
+                build.BuildRequest(model=model, out_dir=tmp_path, context_dir=context),
+                target=build.LocalBuild(
+                    execution=build.SubprocessExecution(dev_workspace=workspace)
                 ),
             )
         )
@@ -1263,14 +1259,14 @@ def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, mon
 
     monkeypatch.setattr(sessionclient, "run_remote_build", fake)
     outcome = _run(
-        buildmethods.BuildRequest(
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
             server="ws://build.example:8080/session",
             token="a-token",
             context_dir=context,
         ),
-        buildmethods.TARGET_REMOTE,
+        build.TARGET_REMOTE,
     )
     assert outcome.image == f"ghcr.io/mcu-home/build-environment@{digest}"
 
@@ -1303,7 +1299,7 @@ def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, mon
 
     monkeypatch.setattr(sessionclient, "run_remote_build", fake)
     _run(
-        buildmethods.BuildRequest(
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
             server="ws://build.example:8080/session",
@@ -1311,7 +1307,7 @@ def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, mon
             context_dir=context,
             image=":0.1.10.dev2-r1",
         ),
-        buildmethods.TARGET_REMOTE,
+        build.TARGET_REMOTE,
     )
     assert seen["image"] == ":0.1.10.dev2-r1"
 
@@ -1325,10 +1321,10 @@ def test_the_device_pin_answers_where_no_invocation_named_one(model) -> None:
     """Two statements can name an image, and the more specific one wins."""
     plain = replace(model, sources=replace(model.sources, container_image=None))
     pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
-    assert buildmethods.image_pin(plain, None) is None
-    assert buildmethods.image_pin(plain, "@sha256:" + "a" * 64) == "@sha256:" + "a" * 64
-    assert buildmethods.image_pin(pinned, None) == ":0.1.10.dev2-r1"
-    assert buildmethods.image_pin(pinned, "localhost/other:wip") == "localhost/other:wip"
+    assert build.image_pin(plain, None) is None
+    assert build.image_pin(plain, "@sha256:" + "a" * 64) == "@sha256:" + "a" * 64
+    assert build.image_pin(pinned, None) == ":0.1.10.dev2-r1"
+    assert build.image_pin(pinned, "localhost/other:wip") == "localhost/other:wip"
 
 
 def test_a_container_build_resolves_the_pin_the_device_carries(
@@ -1355,13 +1351,13 @@ def test_a_container_build_resolves_the_pin_the_device_carries(
     make_package_source(tmp_path / "sdk")
     for index, image in enumerate((None, ":wip")):
         with pytest.raises(BuildError, match="stopped after the pin was read"):
-            buildmethods.compose_container_build(
+            build.compose_container_build(
                 pinned,
                 sdk_sources=(tmp_path / "sdk",),
                 work_root=tmp_path / f"work-{index}",
                 env={},
                 signing_pub=_PUBLIC_PEM,
-                options=buildmethods.BuildOptions(
+                options=build.BuildOptions(
                     workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
                 ),
                 image=image,
@@ -1372,14 +1368,14 @@ def test_a_container_build_resolves_the_pin_the_device_carries(
 def test_a_remote_build_carries_the_device_pin_as_well(model, tmp_path) -> None:
     """The far side is told what the device pins, not only what a flag said."""
     pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_REMOTE,
-        buildmethods.BuildRequest(model=pinned, out_dir=tmp_path, server="attic"),
+    target = build.build_target_for(
+        build.TARGET_REMOTE,
+        build.BuildRequest(model=pinned, out_dir=tmp_path, server="attic"),
     )
     assert target.image == ":0.1.10.dev2-r1"
-    stated = buildmethods.build_target_for(
-        buildmethods.TARGET_REMOTE,
-        buildmethods.BuildRequest(
+    stated = build.build_target_for(
+        build.TARGET_REMOTE,
+        build.BuildRequest(
             model=pinned, out_dir=tmp_path, server="attic", image="@sha256:" + "b" * 64
         ),
     )
@@ -1405,13 +1401,13 @@ def test_a_subprocess_build_says_the_pin_has_no_effect_rather_than_refusing(
     make_package_source(tmp_path / "sdk")
     pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
     with pytest.raises(BuildError, match="stopped after the note"):
-        buildmethods.compose_subprocess_build(
+        build.compose_subprocess_build(
             pinned,
             sdk_sources=(tmp_path / "sdk",),
             work_root=tmp_path / "work",
             env={},
             signing_pub=_PUBLIC_PEM,
-            options=buildmethods.BuildOptions(
+            options=build.BuildOptions(
                 workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
             ),
             on_line=said.append,
@@ -1428,12 +1424,12 @@ def test_an_image_named_for_this_build_is_refused_without_a_container(model, tmp
     honoured halfway.
     """
     with pytest.raises(ConfigError) as refused:
-        buildmethods.build_target_for(
-            buildmethods.TARGET_LOCAL,
-            buildmethods.BuildRequest(
+        build.build_target_for(
+            build.TARGET_LOCAL,
+            build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                build_mode=buildmethods.MODE_SUBPROCESS,
+                build_mode=build.MODE_SUBPROCESS,
                 image=":0.1.10.dev2-r1",
             ),
         )
@@ -1452,16 +1448,16 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
     built, the image travels as something to say once, and the
     composition says it.
     """
-    target = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
-        buildmethods.BuildRequest(
+    target = build.build_target_for(
+        build.TARGET_LOCAL,
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=buildmethods.MODE_SUBPROCESS,
+            build_mode=build.MODE_SUBPROCESS,
             builder_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
         ),
     )
-    assert isinstance(target.execution, buildmethods.SubprocessExecution)
+    assert isinstance(target.execution, build.SubprocessExecution)
     assert target.execution.stated_image == "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1"
 
     said: list[str] = []
@@ -1472,13 +1468,13 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
     monkeypatch.setattr(subprocessbuild, "environment_from_pins", stop)
     make_package_source(tmp_path / "sdk")
     with pytest.raises(BuildError, match="stopped after the note"):
-        buildmethods.compose_subprocess_build(
+        build.compose_subprocess_build(
             replace(model, sources=replace(model.sources, container_image=None)),
             sdk_sources=(tmp_path / "sdk",),
             work_root=tmp_path / "work",
             env={},
             signing_pub=_PUBLIC_PEM,
-            options=buildmethods.BuildOptions(
+            options=build.BuildOptions(
                 workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
             ),
             on_line=said.append,
@@ -1505,13 +1501,13 @@ def test_the_note_names_the_more_specific_of_the_two_statements(
     make_package_source(tmp_path / "sdk")
     pinned = replace(model, sources=replace(model.sources, container_image=":device-pin"))
     with pytest.raises(BuildError, match="stopped after the note"):
-        buildmethods.compose_subprocess_build(
+        build.compose_subprocess_build(
             pinned,
             sdk_sources=(tmp_path / "sdk",),
             work_root=tmp_path / "work",
             env={},
             signing_pub=_PUBLIC_PEM,
-            options=buildmethods.BuildOptions(
+            options=build.BuildOptions(
                 workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
             ),
             on_line=said.append,
@@ -1524,14 +1520,14 @@ def test_the_note_names_the_more_specific_of_the_two_statements(
 
 def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model, tmp_path) -> None:
     """Where a container does run, both statements are pins and the flag wins."""
-    from_builder = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
-        buildmethods.BuildRequest(model=model, out_dir=tmp_path, builder_image=":from-the-builder"),
+    from_builder = build.build_target_for(
+        build.TARGET_LOCAL,
+        build.BuildRequest(model=model, out_dir=tmp_path, builder_image=":from-the-builder"),
     )
     assert from_builder.execution.image == ":from-the-builder"
-    from_flag = buildmethods.build_target_for(
-        buildmethods.TARGET_LOCAL,
-        buildmethods.BuildRequest(
+    from_flag = build.build_target_for(
+        build.TARGET_LOCAL,
+        build.BuildRequest(
             model=model,
             out_dir=tmp_path,
             builder_image=":from-the-builder",
@@ -1539,9 +1535,9 @@ def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model,
         ),
     )
     assert from_flag.execution.image == ":from-this-build"
-    remote = buildmethods.build_target_for(
-        buildmethods.TARGET_REMOTE,
-        buildmethods.BuildRequest(
+    remote = build.build_target_for(
+        build.TARGET_REMOTE,
+        build.BuildRequest(
             model=model, out_dir=tmp_path, server="attic", builder_image=":from-the-builder"
         ),
     )
@@ -1563,15 +1559,15 @@ def test_a_development_build_refuses_the_pin_and_notes_nothing(model, tmp_path) 
     said: list[str] = []
     with pytest.raises(BuildError, match="sources.container_image") as refused:
         asyncio.run(
-            buildmethods.build_firmware(
-                buildmethods.BuildRequest(
+            build.build_firmware(
+                build.BuildRequest(
                     model=pinned,
                     out_dir=tmp_path / "out",
                     signing_pub=_PUBLIC_PEM,
                     on_line=said.append,
                 ),
-                target=buildmethods.LocalBuild(
-                    execution=buildmethods.SubprocessExecution(dev_workspace=workspace)
+                target=build.LocalBuild(
+                    execution=build.SubprocessExecution(dev_workspace=workspace)
                 ),
             )
         )
@@ -1600,7 +1596,7 @@ def test_a_subprocess_build_prints_the_override_note_the_container_one_prints(
         )
 
     monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
     monkeypatch.setattr(subprocessbuild, "check_environment", lambda environment, **facts: None)
 
     class FakeEnvironment:
@@ -1619,13 +1615,13 @@ def test_a_subprocess_build_prints_the_override_note_the_container_one_prints(
         ),
     )
     lines: list[str] = []
-    buildmethods.compose_subprocess_build(
+    build.compose_subprocess_build(
         pinned,
         sdk_sources=(source,),
         work_root=tmp_path / "work",
         env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
         signing_pub=_PUBLIC_PEM,
-        options=buildmethods.BuildOptions(workspace_sources=(source,), tools_sources=(source,)),
+        options=build.BuildOptions(workspace_sources=(source,), tools_sources=(source,)),
         environment=FakeEnvironment(),
         on_line=lines.append,
     )
@@ -1688,7 +1684,7 @@ def test_the_configured_cache_root_reaches_the_subprocess_profile(
         )
 
     monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
-    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
     monkeypatch.setattr(subprocessbuild, "check_environment", lambda environment, **facts: None)
 
     class FakeEnvironment:
@@ -1699,13 +1695,13 @@ def test_the_configured_cache_root_reaches_the_subprocess_profile(
 
     source = tmp_path / "sdk"
     make_package_source(source)
-    buildmethods.compose_subprocess_build(
+    build.compose_subprocess_build(
         model,
         sdk_sources=(source,),
         work_root=tmp_path / "work",
         env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
         signing_pub=_PUBLIC_PEM,
-        options=buildmethods.BuildOptions(
+        options=build.BuildOptions(
             workspace_sources=(source,),
             tools_sources=(source,),
             cache_root=tmp_path / "operators-disk",

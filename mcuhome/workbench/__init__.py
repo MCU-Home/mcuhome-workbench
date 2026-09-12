@@ -26,7 +26,7 @@ already has them.
 :mod:`mcuhome.workbench.validate`      stage 2b: cross-refs, gates, conformance
 :mod:`mcuhome.workbench.resolve`       stage 3: defaults and completion
 :mod:`mcuhome.workbench.contextdir`    creating and verifying a context directory
-:mod:`mcuhome.workbench.buildmethods`  the two build targets, behind one call
+:mod:`mcuhome.workbench.build`         the two build targets, behind one call
 :mod:`mcuhome.workbench.sessionclient` the ``remote`` target's protocol client
 :mod:`mcuhome.workbench.signing`       the per-project firmware signing key
 :mod:`mcuhome.workbench.imgtool`       signing an image afterwards
