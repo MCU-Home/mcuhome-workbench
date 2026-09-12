@@ -13,7 +13,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcuhome-workbench"
 version = "0.1.0.dev0"
-description = "MCUHome's build workbench: configuration pipeline, build context, the three build methods, signing."
+description = "MCUHome's build workbench: configuration pipeline, build context, the two build targets, signing."
 readme = { text = """
 Everything between a YAML device configuration and something a compiler
 can be handed: parse, validate, resolve, create the build context, and

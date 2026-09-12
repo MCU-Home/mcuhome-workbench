@@ -50,8 +50,13 @@ pytest                           # the suite in ../tests/python/
 | `workbench/scaffold.py` | — | `mcuhome new`: a starter device configuration |
 | `workbench/provision.py` | — | `matter-pairing`: drawing a device's commissioning credentials |
 | `workbench/contextdir.py` | — | build-context creation and locking |
-| `workbench/resolve_pins.py` | — | SDK pin resolution against an index or directory |
+| `workbench/resolve_pins.py` | — | the pin chain — SDK, then the build workspace and build tools its meta files require — resolved against an index or a directory |
 | `workbench/buildmethods.py` | — | the two build targets behind `run_build` |
+| `workbench/containerbuild.py` | — | the `container` mode: one fresh container per step, in the image the context's packages select |
+| `workbench/resolve_image.py` | — | which container image delivers a package set: the repository list, the four pin forms, the label check |
+| `workbench/subprocessbuild.py` | — | the `subprocess` mode: the unpacked environment run as a child process |
+| `workbench/devworkspace.py` | — | `build.dev_workspace`: a west workspace of your own as the environment |
+| `workbench/buildenvstore.py` | — | the store the subprocess mode unpacks, finalizes and freezes environments in |
 | `workbench/sessionclient.py` | — | the ``remote`` target's session-protocol client |
 | `workbench/imgtool.py` | — | detached signing over the build report, whose shape the build actions document defines |
 | `workbench/signing.py` | — | the per-project signing key and its refusals |

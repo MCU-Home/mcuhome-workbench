@@ -205,7 +205,7 @@ device:
 
 sources:
   sdk: sdk/mcuhome-sdk:0.1.9
-  build_workspace: build-workspace/mcuhome-build-workspace:0.1.10.dev1
+  build_workspace: build-workspace/mcuhome-build-workspace:0.1.0
   build_tools: build-tools/mcuhome-build-tools
 ```
 
@@ -217,8 +217,9 @@ normal case — and the version is resolved at build time, as the next two
 sections describe.
 
 The form of a reference is
-`[registry/][source/]<package>[:<constraint>][@sha256:…]`, the spelling you
-already know from docker, with a **version constraint** where docker has a tag:
+`[<registry-host>/][<source>/]<package>[:<constraint>][@sha256:<hash>]`, the
+spelling you already know from docker, with a **version constraint** where
+docker has a tag:
 
 ```yaml
 sources:
@@ -227,6 +228,8 @@ sources:
   build_tools: "build-tools/mcuhome-build-tools:0.1.4"   # that version, exactly
 ```
 
+The registry host and the source shelf default to the ones the package is
+normally served from, so a plain package name is the usual spelling.
 Everything but the package name is optional, and so is the package name: a value
 that starts with the separator says the rest about the package the entry is
 already about — `":~=0.1.0"` narrows the range, `"@sha256:<hash>"` selects one
@@ -282,7 +285,7 @@ Each entry overrides its own package and nothing else:
 
 ```yaml
 sources:
-  build_tools: build-tools/mcuhome-build-tools:0.1.10.dev1
+  build_tools: build-tools/mcuhome-build-tools:0.1.0
 ```
 
 An override is never refused for being outside what the chain declares: a device
@@ -308,7 +311,7 @@ A reference may state a hash as well as a version:
 
 ```yaml
 sources:
-  build_workspace: build-workspace/mcuhome-build-workspace:0.1.10.dev1@sha256:7c31…
+  build_workspace: build-workspace/mcuhome-build-workspace:0.1.0@sha256:3e63…
 ```
 
 That decides the whole pin, and nothing is resolved for it — no chain, no index.
@@ -344,6 +347,14 @@ wins; unset, it is MCUHome's own repository. Where a repository holds several
 images for one package set, the highest assembly revision (`…-r2` over `…-r1`)
 is taken.
 
+MCUHome publishes exactly one such image,
+`ghcr.io/mcu-home/build-environment`, tagged
+`<build workspace package version>-r<n>` — the workspace package it delivers,
+plus a revision counter for a rebuild from the same packages. The tag is a
+location and never the identity: what makes an image usable for a build is the
+package set its labels declare, and two tags over one set are the same
+environment.
+
 A pin narrows the search for one build. It says *which* image to look at and
 never that it may be run without being what it claims — the labels are checked
 either way. Four forms, told apart by what the value starts with:
@@ -351,22 +362,36 @@ either way. Four forms, told apart by what the value starts with:
 | pin | means |
 |---|---|
 | `ghcr.io/mcu-home/build-environment` | that repository, in place of the list |
-| `:0.1.10.dev2-r1` | that tag, in the repositories of the list |
+| `:0.1.0-r2` | that tag, in the repositories of the list |
 | `@sha256:…` | those bytes, in the repositories of the list |
-| `ghcr.io/…/build-environment:0.1.10.dev2-r1` or `…@sha256:…` | exactly one image |
+| `ghcr.io/…/build-environment:0.1.0-r2` or `…@sha256:…` | exactly one image |
 
 The leading `:` and `@` are what make a bare name unambiguous: written plainly
 it is a repository.
 
-Two places state a pin, and the more specific of the two wins. A device carries
-one from build to build in `sources.container_image` — optional, written into a
-device only by whoever wants it there — and a single build overrides it (the
-command line's `--container-image`). Both mean the same thing at either target:
+Three places state a pin, and the more specific one wins. A device carries one
+from build to build in `sources.container_image` — optional, written into a
+device only by whoever wants it there; a configured builder carries one for the
+machine it describes (`image:`); and a single build overrides both (the command
+line's `--container-image`). All of them mean the same thing at either target:
 a local container build resolves the pin against the repository list above, and
 a remote build hands it to the server, which resolves it against what its
-operator allows. A build that starts no container has no image to pin: a
-development build is refused over it, and a `subprocess` build says in its log
-that the pin has no effect here rather than pretending otherwise.
+operator allows.
+
+A build that starts no container has no image for any of them to name, and the
+three are not answered alike, because they are not the same kind of statement:
+
+- `--container-image` on a build in `subprocess` mode is **refused**. It is a
+  statement about *this* build and cannot be quietly dropped; the refusal says
+  to drop the image or to set `build.mode` back to `container`.
+- a builder's `image:` and a device's `sources.container_image` are statements
+  about a machine and about a delivery, so they produce **one line in the build
+  log** — "the image has no effect here" — and the build carries on. Refusing
+  the first would refuse every build on that machine, and refusing the second
+  would refuse a device that builds correctly here and in a container elsewhere.
+- a development build against a west workspace of your own is refused over the
+  device's pin together with every other `sources.*` entry: that build fetches
+  no packages at all.
 
 The image runs with no network, as the calling user, and with exactly the tree
 the build-environment specification defines mounted into it: the build context
@@ -418,9 +443,12 @@ a build server does not.
 
 What it needs is a host that qualifies (below) and the environment's packages,
 which MCUHome fetches, verifies and unpacks itself the first time. After that a
-build needs no network at all. Naming a container image for a build that starts
-no container is refused rather than half-honoured: either drop the image, or set
-`build.mode` back to `container`.
+build needs no network at all. It runs the same packages a container build
+runs — the image is an assembly of exactly them — so the two ways compile one
+context against the same bytes. Pinning an image for *this* build
+(`--container-image`) is refused here rather than half-honoured; a pin that
+came with the device or with the machine's builder is noted in the log and
+changes nothing (above).
 
 The compiler cache follows the same layout a container build uses, so a machine
 that built both ways has one cache. Each tier can be moved on its own:
@@ -523,12 +551,13 @@ whose contents exceed it is refused and leaves nothing behind.
 
 If you are working on the SDK itself — or on the sources the build environment
 carries — point the build at your own west workspace instead of at a
-provisioned environment:
+provisioned environment. This is the supported way to build what you are
+editing; nothing else takes a working tree as its build environment.
 
 ```yaml
 build:
   mode: subprocess
-  dev_workspace: ~/work/mcuhome-west
+  dev_workspace: ~/work/mcuhome-workspace
 ```
 
 That one path names the **whole** environment. The workspace carries the
@@ -538,6 +567,25 @@ your Zephyr SDK, your `ccache` configuration. Nothing is fetched, nothing is
 unpacked, nothing is finalized, and nothing is verified: MCUHome checks that
 the directory is a west workspace with its manifest repository checked out, and
 nothing else. Those bytes are yours.
+
+**Which directory to name.** The workspace, not the SDK checkout — the
+directory `west init -l` anchored, holding `.west/`, `zephyr/`, `modules/`,
+`bootloader/` and the `mcuhome-sdk` checkout beside them:
+
+```
+mcuhome-workspace/          <- build.dev_workspace names this
+  .west/
+  mcuhome-sdk/              the manifest repository: the SDK this build compiles
+  zephyr/  modules/  bootloader/
+```
+
+The checkout has to lie **inside** the workspace. `west init -l` resolves a
+symlinked manifest repository and anchors the workspace at the checkout's
+physical parent, so a checkout somewhere else with a link into the workspace
+gives a workspace west does not recognise; the link goes the other way round —
+put it wherever you are used to reaching the repository at, and point
+`build.dev_workspace` at the real directory. The SDK repository's README has
+the recipe.
 
 The build runs the way every other build runs — the same per-step directories
 under the build directory, the same request document, the same view of the
