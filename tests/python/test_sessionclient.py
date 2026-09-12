@@ -109,6 +109,7 @@ zstandard = importlib.import_module("zstandard")
 bs_app = importlib.import_module("mcuhome.buildserver.app")
 bs_config = importlib.import_module("mcuhome.buildserver.config")
 bs_container = importlib.import_module("mcuhome.buildserver.container")
+bs_events = importlib.import_module("mcuhome.buildserver.events")
 bs_protocol = importlib.import_module("mcuhome.buildserver.protocol")
 bs_sessions = importlib.import_module("mcuhome.buildserver.sessions")
 
@@ -1834,6 +1835,25 @@ async def _await_file(path: Path, *, timeout: float = 30.0) -> None:
         await asyncio.sleep(0.01)
 
 
+async def _await_replayable(record: Any, *, seq: int, timeout: float = 30.0) -> None:
+    """Wait until the events file holds *seq*, i.e. until it is history.
+
+    A finished program is not a published event. The gate's receipt says
+    the result document is complete; the verdict reaches the replay
+    buffer only after the server has read that document, decided the
+    invocation and appended its event — three steps later, on a loaded
+    machine measurably later. A test that attaches on the receipt alone
+    races the append and gets the verdict *live* instead of replayed,
+    which is correct behaviour and not what such a test is asking about.
+    So the wait is on the buffer the verb reads, through the very
+    function it reads it with.
+    """
+    deadline = time.monotonic() + timeout
+    while not bs_events.replay(Path(record.events), from_seq=seq):
+        assert time.monotonic() < deadline, f"event {seq} never reached {record.events}"
+        await asyncio.sleep(0.005)
+
+
 def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
     """The events file is the replay buffer, and there is no other.
 
@@ -1881,9 +1901,14 @@ def test_a_reconnect_replays_every_event_exactly_once(tmp_path: Path) -> None:
             await client.close()
 
             # It finishes with nobody attached, so the verdict is history
-            # by the time the second connection asks.
+            # by the time the second connection asks — which is a claim
+            # about the server's events file and not about the program,
+            # so the wait is on the event and not on the program's
+            # receipt.
             gate.write_text("go", encoding="utf-8")
             await _await_file(gate.with_suffix(".done"))
+            record = harness.state.backend.record(session_id, invocation_id)
+            await _await_replayable(record, seq=2)
 
             resumed = client_for(
                 harness,
