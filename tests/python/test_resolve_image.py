@@ -95,10 +95,10 @@ def image_labels(
 class ScriptedImages:
     """A registry scripted per repository and tag, counting what it was asked.
 
-    Unlike :mod:`test_resolve_env`'s ``Fake`` — one repository, three fixed
-    labels — this resolver searches an *allowlist* of repositories and
-    matches on an open-ended ``packages.`` label set, so the stub needs a
-    tag map per repository and the option to make one of them unreachable.
+    A resolver that searches an *allowlist* of repositories and matches
+    on an open-ended ``packages.`` label set, rather than one repository
+    with a fixed label set, so the stub needs a tag map per repository and
+    the option to make one of them unreachable.
     """
 
     def __init__(

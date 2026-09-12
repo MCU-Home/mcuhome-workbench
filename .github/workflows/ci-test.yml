@@ -7,7 +7,7 @@
 #
 # test-pytest needs mcuhome-model and mcuhome-compiler, which are
 # published from mcu-home/mcuhome-sdk, a live mcuhome-buildserver peer
-# for the `remote` build method's own suite (test_sessionclient.py), and
+# for the `remote` build target's own suite (test_sessionclient.py), and
 # mcuhome-packagetool for the package registry's reference verifier —
 # four public siblings, plain checkouts, no deploy keys. Once the
 # packages are published this becomes a plain pip install.

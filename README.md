@@ -390,8 +390,8 @@ three are not answered alike, because they are not the same kind of statement:
   the first would refuse every build on that machine, and refusing the second
   would refuse a device that builds correctly here and in a container elsewhere.
 - a development build against a west workspace of your own is refused over the
-  device's pin together with every other `sources.*` entry: that build fetches
-  no packages at all.
+  device's pin together with every other `sources.*` entry that differs from
+  its default: that build fetches no packages at all.
 
 The image runs with no network, as the calling user, and with exactly the tree
 the build-environment specification defines mounted into it: the build context

@@ -424,9 +424,9 @@ def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch
     """The remote target writes its base context through the same writer,
     so the machine's package directories and bound reach it there too.
 
-    Remote builds are out of service until the build server runs
-    package-built environments, but this composition is live code: it is
-    what a client runs to pin a context before anything is sent.
+    A build server runs package-built environments, so the remote
+    target is a working one, and this composition is what a client runs
+    to pin a context before anything is sent.
     """
     created: dict[str, object] = {}
     monkeypatch.setattr(

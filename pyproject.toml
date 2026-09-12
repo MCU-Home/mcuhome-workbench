@@ -67,21 +67,21 @@ dependencies = [
   # Pinned to the release line of the MCUboot revision the SDK's west
   # manifest resolves to — bump the two as a pair, like CHIP and Zephyr.
   "imgtool~=2.4",
-  # The SDK package is a .tar.zst and the orchestrator unpacks it for
-  # every container build, so the codec is core rather than an extra.
-  # It was in `remote` alone while the orchestrator lived elsewhere.
+  # The SDK package is a .tar.zst and the workbench unpacks it for
+  # every build that resolves one, in either mode, so the codec is core
+  # rather than an extra.
   "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]
-# The `remote` build method and nothing else: the
+# The `remote` build target and nothing else: the
 # session client needs an async HTTP stack. The zstd codec it also needs
-# is a core dependency now — the orchestrator unpacks SDK packages with
-# it on every path. Bound matches the build server's for the same library.
+# is a core dependency now — SDK packages are unpacked on every path.
+# Bound matches the build server's for the same library.
 remote = ["aiohttp>=3.10,<4"]
 # `generate_tree` and nothing else: writing a device's Zephyr application
 # on this machine, for the caller who wants the tree for its own sake
-# (`mcuhome device build --generate-only`). No build method needs it — a
+# (`mcuhome device build --generate-only`). No build needs it — a
 # build environment generates from the model its context carries — so it
 # is an optional edge resolved at call time, and an
 # install that never generates locally carries no part of stage 4.
