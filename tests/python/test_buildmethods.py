@@ -384,6 +384,8 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         out_dir=tmp_path / "context",
         work_root=tmp_path / "made",
         sdk_sources=(tmp_path / "sdk",),
+        workspace_sources=(tmp_path / "sdk",),
+        tools_sources=(tmp_path / "sdk",),
         signing_pub=_PUBLIC_PEM,
     )
     steps: list[tuple] = []
@@ -456,6 +458,8 @@ def test_the_environment_is_checked_before_the_context_is_locked(
         out_dir=tmp_path / "context",
         work_root=tmp_path / "made",
         sdk_sources=(tmp_path / "sdk",),
+        workspace_sources=(tmp_path / "sdk",),
+        tools_sources=(tmp_path / "sdk",),
         signing_pub=_PUBLIC_PEM,
     )
     buildmethods.compose_subprocess_build(
@@ -631,10 +635,10 @@ def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> N
             buildmethods.TARGET_REMOTE,
         )
     rendered = str(refusal.value)
-    assert "type: remote" in rendered
+    assert "target: remote" in rendered
     assert "--builder attic" in rendered
-    assert "default_builder" in rendered
-    assert "secrets/build-server/attic.yaml" in rendered
+    assert "build.builder" in rendered
+    assert "secrets/builder/attic.yaml" in rendered
     assert "--build-target remote --build-server" in rendered
     assert "--build-token" in rendered
 
@@ -742,6 +746,7 @@ def test_a_configured_source_still_beats_the_registry_for_a_remote_build(
         model=model,
         out_dir=tmp_path / "build",
         sdk_sources=(local,),
+        options=buildmethods.BuildOptions(workspace_sources=(local,), tools_sources=(local,)),
         project_root=project_root,
         registries=_served_by(served),
     )
@@ -1090,6 +1095,8 @@ def test_a_pinned_context_is_not_built_against_a_workspace(model, tmp_path, monk
         out_dir=context,
         work_root=tmp_path / "made",
         sdk_sources=(tmp_path / "sdk",),
+        workspace_sources=(tmp_path / "sdk",),
+        tools_sources=(tmp_path / "sdk",),
         signing_pub=_PUBLIC_PEM,
     )
     workspace = west_workspace(tmp_path / "west-workspace")
@@ -1182,6 +1189,8 @@ def test_a_package_pinned_context_is_sent_as_before(model, tmp_path, monkeypatch
         out_dir=context,
         work_root=tmp_path / "made",
         sdk_sources=(tmp_path / "sdk",),
+        workspace_sources=(tmp_path / "sdk",),
+        tools_sources=(tmp_path / "sdk",),
         signing_pub=_PUBLIC_PEM,
     )
     # Reached: the refusal is about the form of the context and about
@@ -1352,6 +1361,9 @@ def test_a_container_build_resolves_the_pin_the_device_carries(
                 work_root=tmp_path / f"work-{index}",
                 env={},
                 signing_pub=_PUBLIC_PEM,
+                options=buildmethods.BuildOptions(
+                    workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
+                ),
                 image=image,
             )
     assert seen == ["ghcr.io/mcu-home/build-environment", ":wip"]
@@ -1399,6 +1411,9 @@ def test_a_subprocess_build_says_the_pin_has_no_effect_rather_than_refusing(
             work_root=tmp_path / "work",
             env={},
             signing_pub=_PUBLIC_PEM,
+            options=buildmethods.BuildOptions(
+                workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
+            ),
             on_line=said.append,
         )
     assert any(":0.1.10.dev2-r1" in line and "no effect" in line for line in said)
@@ -1463,6 +1478,9 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
             work_root=tmp_path / "work",
             env={},
             signing_pub=_PUBLIC_PEM,
+            options=buildmethods.BuildOptions(
+                workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
+            ),
             on_line=said.append,
             stated_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
         )
@@ -1493,6 +1511,9 @@ def test_the_note_names_the_more_specific_of_the_two_statements(
             work_root=tmp_path / "work",
             env={},
             signing_pub=_PUBLIC_PEM,
+            options=buildmethods.BuildOptions(
+                workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
+            ),
             on_line=said.append,
             stated_image=":builder-image",
         )
@@ -1604,6 +1625,7 @@ def test_a_subprocess_build_prints_the_override_note_the_container_one_prints(
         work_root=tmp_path / "work",
         env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
         signing_pub=_PUBLIC_PEM,
+        options=buildmethods.BuildOptions(workspace_sources=(source,), tools_sources=(source,)),
         environment=FakeEnvironment(),
         on_line=lines.append,
     )

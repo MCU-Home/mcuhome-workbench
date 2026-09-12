@@ -20,6 +20,7 @@ tests wrote would be the one thing capable of hiding a defect in it.
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import os
@@ -271,18 +272,32 @@ def _flatten(calls: list[list[str]]) -> str:
 
 
 def _build(tmp_path, model, public_pem, **overrides):
-    """One composed container build, with this suite's seams in place."""
+    """One composed container build, with this suite's seams in place.
+
+    ``make_sdk_source`` publishes all three package kinds into one
+    directory, so — unless a test states its own — the workspace and
+    tools packages are looked for there too, exactly as the SDK is: each
+    key states the same directory rather than one key doing it for all
+    three.
+    """
     seam = overrides.pop("seam", None) or Seam()
+    sdk_sources = overrides.pop("sdk_sources", (tmp_path / "src",))
+    options = overrides.pop("options", None) or buildmethods.BuildOptions()
+    if not options.workspace_sources and not options.tools_sources:
+        options = dataclasses.replace(
+            options, workspace_sources=sdk_sources, tools_sources=sdk_sources
+        )
     return (
         seam,
         buildmethods.compose_container_build(
             model,
             signing_pub=public_pem,
-            sdk_sources=overrides.pop("sdk_sources", (tmp_path / "src",)),
+            sdk_sources=sdk_sources,
             work_root=overrides.pop("work_root", tmp_path / "wr"),
             env=overrides.pop("env", {}),
             images=overrides.pop("images", None) or ScriptedRegistry(),
             runtime=_runtime(seam),
+            options=options,
             **overrides,
         ),
     )
@@ -630,6 +645,8 @@ def test_creating_a_context_twice_in_one_work_root_is_the_same_context(tmp_path,
             out_dir=tmp_path / "work" / "context",
             work_root=tmp_path / "work",
             sdk_sources=(tmp_path / "src",),
+            workspace_sources=(tmp_path / "src",),
+            tools_sources=(tmp_path / "src",),
             signing_pub=public_pem,
             created=created,
         )
@@ -655,6 +672,8 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
         out_dir=context,
         work_root=tmp_path / "held-wr",
         sdk_sources=(tmp_path / "src",),
+        workspace_sources=(tmp_path / "src",),
+        tools_sources=(tmp_path / "src",),
         signing_pub=public_pem,
     )
     before = sorted(path.name for path in context.iterdir())

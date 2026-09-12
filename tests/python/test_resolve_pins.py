@@ -426,7 +426,15 @@ def chained(tmp_path: Path, *, sdk_requires: str = "~=0.1.0", tools_requires: st
 
 
 def resolved(source: Source, tmp_path: Path, **kwargs):
-    """What a device with no ``sources:`` at all resolves to, through the chain."""
+    """What a device with no ``sources:`` at all resolves to, through the chain.
+
+    *source* is a single directory that, unless a test says otherwise,
+    publishes all three package kinds — so it is the default for
+    ``workspace_sources`` and ``tools_sources`` too, exactly as it is for
+    ``sources``. Each key is still its own key: a test that keeps its
+    packages apart passes its own directories and this default never
+    applies to them.
+    """
     found = resolve_sdk((source.path,), constraint="==0.1.0", prereleases=True)
     return resolve_environment(
         workspace=kwargs.pop("workspace", DEFAULT_BUILD_WORKSPACE),
@@ -434,6 +442,8 @@ def resolved(source: Source, tmp_path: Path, **kwargs):
         sdk_source=kwargs.pop("sdk_source", DEFAULT_SDK),
         sdk=found,
         sources=kwargs.pop("sources", (source.path,)),
+        workspace_sources=kwargs.pop("workspace_sources", (source.path,)),
+        tools_sources=kwargs.pop("tools_sources", (source.path,)),
         work_root=tmp_path / "work",
         **kwargs,
     )
@@ -1016,6 +1026,8 @@ def _pins_of(model, source: Source, work_root: Path):
         sdk_source=model.sources.sdk,
         sdk=found,
         sources=(source.path,),
+        workspace_sources=(source.path,),
+        tools_sources=(source.path,),
         work_root=work_root,
     )
 

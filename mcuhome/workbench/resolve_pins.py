@@ -1639,11 +1639,15 @@ def resolve_environment(
     entry records a meta file is a candidate, because a version that does
     not say what it requires cannot be resolved through.
 
-    *sources* are the operator directories, and *workspace_sources* /
-    *tools_sources* replace them for their own package when the
-    environment packages are kept somewhere else than the SDK — they are
-    two orders of magnitude larger, and a machine may well keep them on
-    another disk. Empty means "the same directories the SDK comes from".
+    **One kind, one set of directories.** *sources* holds the SDK's
+    (``build.sdk_sources``), *workspace_sources* the build workspace's
+    and *tools_sources* the build tools' — and no kind is ever looked for
+    under another kind's directories. A directory that holds the SDK
+    package is not thereby a claim about where build workspaces live,
+    and a machine that keeps all three in one place says so in all three
+    keys, which is the statement it is actually making. An empty set is
+    "no operator directory for this kind", and the package is then
+    resolved through the registry alone.
 
     *hosts* opens a registry for a base domain other than the SDK's;
     without it a foreign host is a refusal rather than a lookup on the
@@ -1678,7 +1682,7 @@ def resolve_environment(
     )
     workspace_found = _resolve_stage(
         workspace_demand,
-        sources=tuple(workspace_sources) or sources,
+        sources=tuple(workspace_sources),
         registry=_registry_for(
             workspace_demand,
             sdk=sdk_reference,
@@ -1702,7 +1706,7 @@ def resolve_environment(
     )
     tools_found = _resolve_stage(
         tools_demand,
-        sources=tuple(tools_sources) or sources,
+        sources=tuple(tools_sources),
         registry=_registry_for(
             tools_demand,
             sdk=sdk_reference,

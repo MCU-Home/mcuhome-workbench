@@ -2734,11 +2734,19 @@ def _public_pem() -> str:
 
 
 def _remote_request(tmp_path: Path, sources: Path, harness: Harness, **overrides: Any):
+    # write_sdk_package puts all three packages in one directory, so each
+    # kind states it under its own key — the SDK's the same way it always
+    # did, the environment packages' now that a directory holding
+    # everything is no longer read for them through sdk_sources alone.
+    options = overrides.pop(
+        "options", buildmethods.BuildOptions(workspace_sources=(sources,), tools_sources=(sources,))
+    )
     return buildmethods.BuildRequest(
         model=_model(),
         out_dir=tmp_path / "build",
         signing_pub=_public_pem(),
         sdk_sources=(sources,),
+        options=options,
         server=harness.url,
         token=TOKEN,
         **overrides,
