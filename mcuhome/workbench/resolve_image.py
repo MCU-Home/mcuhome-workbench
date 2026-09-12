@@ -152,10 +152,10 @@ def parse_image_pin(text: str | None) -> ImagePin:
     * empty — nothing pinned;
     * ``@sha256:…`` — a digest, looked for in whatever repositories are
       searched;
-    * ``:<tag>`` — a tag, in the same repositories (``:0.1.10.dev2-r1``);
+    * ``:<tag>`` — a tag, in the same repositories (``:0.1.0-r2``);
     * anything else — a repository, with the tag or digest it carries:
       ``ghcr.io/mcu-home/build-environment``,
-      ``…/build-environment:0.1.10.dev2-r1`` or ``…@sha256:…``.
+      ``…/build-environment:0.1.0-r2`` or ``…@sha256:…``.
 
     The leading marker is what makes a bare word unambiguous: written
     plainly it is a repository, and a tag or a digest of its own says so
