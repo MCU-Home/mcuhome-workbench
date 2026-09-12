@@ -16,13 +16,14 @@ The properties, in the order they matter:
   the one shared host-side signing step needs;
 * a target name nobody implements is a refusal that lists the ones that
   exist, rather than a ``KeyError`` or a silent default;
-* ``remote`` refuses in words for the two things it cannot invent — the
-  build server's address and the SDK source its context is pinned
-  from — and for the missing transport extra, before any of them
-  costs a connection.
+* ``remote`` refuses in words for the one thing it cannot invent — the
+  build server's address — and for the missing transport extra, before
+  either costs a connection, while the pins of the context it sends are
+  resolved the way every other target resolves them: the configured
+  source directories first, the registry second.
 
-What ``remote`` *does* once it has both — resolve the pin, write the base
-context, drive a real session — is asserted in ``test_sessionclient.py``,
+What ``remote`` *does* once it has the address — resolve the pins, write
+the base context, drive a real session — is asserted in ``test_sessionclient.py``,
 against the real build server. Here the composition is stubbed at
 ``run_remote_build`` and only the layer above it is the subject.
 """
@@ -31,12 +32,21 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES_DIR, make_package_source, resolve_file
+from conftest import (
+    ENVIRONMENT_VERSION,
+    EXAMPLES_DIR,
+    SDK_VERSION,
+    TOOLS_PACKAGE,
+    WORKSPACE_PACKAGE,
+    make_package_source,
+    resolve_file,
+)
 from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import DeveloperEnvironment
 from mcuhome.model.errors import BuildError, ConfigError
@@ -51,6 +61,12 @@ from mcuhome.workbench.contextdir import (
     read_context_request,
 )
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, RegistrySettings
+from mcuhome.workbench.resolve_pins import (
+    BUILD_TOOLS_SOURCE,
+    BUILD_WORKSPACE_SOURCE,
+    SDK_SOURCE,
+)
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
 #: A fixed public key, so nothing here draws one and every context this
@@ -73,6 +89,74 @@ def _artifacts() -> tuple[Artifact, ...]:
 def _run(request: buildmethods.BuildRequest, target: str) -> buildmethods.BuildOutcome:
     """What a command line does at its entry point: one ``asyncio.run``."""
     return asyncio.run(buildmethods.run_build(request, target=target))
+
+
+def _served_by(directory: Path) -> tuple[RegistrySettings, ...]:
+    """The official registry, served by *directory* and checked by nothing.
+
+    The three sources a chain is resolved from all point at the one
+    directory :func:`~conftest.make_package_source` writes, which holds
+    exactly what a registry serves for them: the packages, their
+    sidecars, and the index that lists both. Marked untrusted, so no
+    signatures and no trust anchor are needed for a fixture whose subject
+    is the *resolution* — what a registry's signatures are worth is
+    ``test_packageregistry.py``'s subject, and it uses real ones.
+
+    A local mirror is read off the filesystem, so nothing here can reach
+    a network even if it wanted to.
+    """
+    return (
+        RegistrySettings(
+            base_domain=OFFICIAL_BASE_DOMAIN,
+            untrusted=True,
+            mirrors={
+                source: (str(directory),)
+                for source in (SDK_SOURCE, BUILD_WORKSPACE_SOURCE, BUILD_TOOLS_SOURCE)
+            },
+        ),
+    )
+
+
+def _remote_context_of(
+    monkeypatch: pytest.MonkeyPatch, **fields
+) -> tuple[buildmethods.BuildOutcome, object, list[str]]:
+    """Run a remote build to the socket and answer with the context it sent.
+
+    The session client is stubbed where every other test in this file
+    stubs it, and what it would have uploaded is read back off disk —
+    which is the only place the pins a remote build resolved can be
+    observed. The build's own log comes back with it: an untrusted
+    registry says so at every read, which makes "the registry was asked
+    for this source" and "it was never asked at all" two things a test
+    can tell apart.
+    """
+    sent: dict[str, object] = {}
+
+    async def fake(context_dir, **kwargs):
+        del kwargs
+        sent["request"] = read_context_request(Path(context_dir) / "context.yaml")
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status="success",
+            successful=True,
+            artifacts=_artifacts(),
+            out=Path(fields["out_dir"]) / "out",
+            invocation_id="inv-1",
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake)
+    lines: list[str] = []
+    outcome = _run(
+        buildmethods.BuildRequest(
+            server="ws://build.example/session",
+            signing_pub=_PUBLIC_PEM,
+            on_line=lines.append,
+            **fields,
+        ),
+        buildmethods.TARGET_REMOTE,
+    )
+    return outcome, sent["request"], lines
 
 
 # --------------------------------------------------------------------------
@@ -555,28 +639,117 @@ def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> N
     assert "--build-token" in rendered
 
 
-def test_remote_without_an_sdk_source_names_the_two_knobs(model, tmp_path) -> None:
-    """The other half: the pin is the client's, so its source must be too.
+def test_remote_refuses_over_a_pin_only_when_nothing_can_resolve_one(model, tmp_path) -> None:
+    """The pin is the client's, and so is the refusal — from the resolution itself.
 
-    ``remote`` creates its own context now, and a context is
-    content-addressed over the SDK package's hash — so the one thing this
-    target still cannot invent is *which package*. The refusal names the
-    same two knobs the ``local`` target reads, because they are the same
-    two knobs: the pin is resolved here either way, and only who fetches
-    the bytes afterwards differs. It deliberately does not fall back to
-    "whatever the server has", which would be an identity describing a
-    build nobody asked for.
+    ``remote`` creates its own context, and a context is
+    content-addressed over the SDK package's hash, so the one thing it
+    cannot fall back on is "whatever the server has": that would be an
+    identity describing a build nobody asked for. Which package it is
+    resolves exactly as it does for every other target — the configured
+    directories first, the registry second — so the refusal belongs to
+    the pin resolution and names what would supply one. Here there is
+    neither a directory nor a project to read a registry out of, which is
+    the only case left in which a remote build cannot pin anything.
+
+    The refusal is therefore **not** a :class:`RemoteNotConfigured` any
+    more: nothing about this target is unconfigured, and a target-level
+    guard is exactly what used to refuse the registry-only build the two
+    tests below now make.
     """
-    with pytest.raises(buildmethods.RemoteNotConfigured) as refusal:
+    with pytest.raises(BuildError) as refusal:
         _run(
             buildmethods.BuildRequest(
                 model=model, out_dir=tmp_path, server="ws://build.example/session"
             ),
             buildmethods.TARGET_REMOTE,
         )
+    assert not isinstance(refusal.value, buildmethods.RemoteNotConfigured)
     rendered = str(refusal.value)
     assert "--sdk-sources" in rendered
     assert "build.sdk_sources" in rendered
+
+
+def test_a_remote_build_pins_the_chain_it_read_out_of_the_registry(
+    model, tmp_path, monkeypatch
+) -> None:
+    """No source directory anywhere, and the context still carries three pins.
+
+    This is what a user with nothing configured does: a project, a
+    device, and a build server. The chain is resolved from the served
+    index alone — the SDK, the build workspace its release requires, and
+    the build tools that workspace requires — and the context that goes
+    to the server pins all three by name, version and hash. Asserted
+    against the index the fixture serves rather than against literals, so
+    the test says "what the registry lists is what travelled" and not
+    "these hashes".
+    """
+    served = tmp_path / "served"
+    sdk_sha256 = make_package_source(served)
+    listed = json.loads((served / "index.json").read_text(encoding="utf-8"))["packages"]
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    outcome, request, log = _remote_context_of(
+        monkeypatch,
+        model=model,
+        out_dir=tmp_path / "build",
+        project_root=project_root,
+        registries=_served_by(served),
+    )
+
+    assert outcome.successful
+    assert (request.sdk.version, request.sdk.sha256) == (SDK_VERSION, sdk_sha256)
+    environment = request.build_environment
+    for pin, name in (
+        (environment.workspace, WORKSPACE_PACKAGE),
+        (environment.tools, TOOLS_PACKAGE),
+    ):
+        entry = listed[name][ENVIRONMENT_VERSION]
+        assert (pin.name, pin.version, pin.sha256) == (name, ENVIRONMENT_VERSION, entry["sha256"])
+    # And every one of the three came off the registry: each source it
+    # was read from is named in the build's own log, which is where this
+    # fixture's untrusted registry announces itself.
+    read = [
+        source
+        for source in (SDK_SOURCE, BUILD_WORKSPACE_SOURCE, BUILD_TOOLS_SOURCE)
+        if any(f"{source} is being read from {served}" in line for line in log)
+    ]
+    assert read == [SDK_SOURCE, BUILD_WORKSPACE_SOURCE, BUILD_TOOLS_SOURCE]
+
+
+def test_a_configured_source_still_beats_the_registry_for_a_remote_build(
+    model, tmp_path, monkeypatch
+) -> None:
+    """Two tiers, in their order — and the order is not "newest wins".
+
+    The registry serves a *newer* SDK than the directory does, so a build
+    that pinned the registry's would be indistinguishable from one that
+    simply took the highest version. The configured directory wins
+    anyway, which is what "local first" means: a machine that has the
+    package never opens a socket, and an operator's own copy is not
+    overtaken by a release appearing on a mirror.
+    """
+    served = tmp_path / "served"
+    make_package_source(served, version="0.1.1")
+    local = tmp_path / "local"
+    local_sha256 = make_package_source(local, version=SDK_VERSION)
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    _, request, log = _remote_context_of(
+        monkeypatch,
+        model=model,
+        out_dir=tmp_path / "build",
+        sdk_sources=(local,),
+        project_root=project_root,
+        registries=_served_by(served),
+    )
+
+    assert (request.sdk.version, request.sdk.sha256) == (SDK_VERSION, local_sha256)
+    # Not merely "the registry lost": it was never opened, for any of the
+    # three stages — an untrusted one would have said so in this log.
+    assert not [line for line in log if str(served) in line]
 
 
 def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path, monkeypatch):

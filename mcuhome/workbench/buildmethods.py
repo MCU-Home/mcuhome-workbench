@@ -1704,22 +1704,27 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
     ``remote`` extra: ``aiohttp`` and ``zstandard`` are refused in words
     the first time a frame would be sent, not at import.
 
-    Two things are refused before that, because neither can be invented.
-    **The server address** belongs to the caller — a build server has no
+    One thing is refused before that, because it cannot be invented:
+    **the server address** belongs to the caller — a build server has no
     default, and a wrong one is a build context sent to a stranger.
-    **An SDK source** is the second: the context this target creates
-    carries the SDK package's version *and* its
-    sha256, and both come from the client's own source directories
-    (later, from a registry index). The version is the key the server
-    resolves the package by; the hash is what it verifies the bytes it
-    found against, which is what makes "same version, other bytes" a
-    typed refusal there instead of a silent build against another SDK.
-    A client that states no source can resolve neither, and a context
-    pinned to whatever the server happened to have would be an identity
-    that describes nothing.
 
-    With both in hand this is a local build's own composition with a
-    socket in place of a container: resolve the pin, write the base
+    **The SDK pin is not refused here**, because it is not this target's
+    to invent either: it resolves exactly as a local build's does. The
+    context this target creates carries the SDK package's version *and*
+    its sha256 — the version is the key the server resolves the package
+    by, the hash is what it verifies the bytes it found against, which is
+    what makes "same version, other bytes" a typed refusal there instead
+    of a silent build against another SDK. Both come from the client's
+    own source directories where any are configured and from the
+    registry index otherwise, the same two tiers in the same order as
+    every other target, and only when neither can answer is there a
+    refusal — from the pin resolution itself, naming what would supply
+    one. What no remote build does is fall back to whatever the server
+    happened to have: a context pinned to that would be an identity that
+    describes nothing.
+
+    With the address in hand this is a local build's own composition with
+    a socket in place of a container: resolve the pin, write the base
     context through the seam both targets share
     (:func:`~mcuhome.workbench.contextdir.create_build_context`), and
     hand the directory to the session client. It is the **base** context
@@ -1754,16 +1759,6 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
     if context_dir is not None:
         _refuse_developer_context(context_dir)
     if context_dir is None:
-        if not request.sdk_sources:
-            raise RemoteNotConfigured(
-                "A remote build needs an SDK source to pin the build context "
-                "with, and none is configured.",
-                hint=(
-                    "point at a directory holding an MCUHome SDK package:\n"
-                    "    mcuhome config set build.sdk_sources <dir> --user\n"
-                    "or pass --sdk-sources <dir> for a single build."
-                ),
-            )
         if request.on_step is not None:
             request.on_step("context")
         # Off the event loop: this hashes nothing large, but it reads an
