@@ -378,9 +378,7 @@ def judge_step(
             context_id=context_id,
             exit_code=exit_code,
             status=STATUS_FAILURE,
-            problems=(
-                f"the build environment wrote no readable result document at {path.name}",
-            ),
+            problems=(f"the build environment wrote no readable result document at {path.name}",),
             # §6.3 from the other side: exiting zero is a claim that a
             # success document was written, and there is none.
             violation=(
