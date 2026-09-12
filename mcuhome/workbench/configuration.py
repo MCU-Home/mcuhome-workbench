@@ -265,14 +265,6 @@ class Option:
         return "--" + self.name.replace(".", "-").replace("_", "-")
 
 
-def option(name: str, registry: tuple[Option, ...] | None = None) -> Option:
-    """The declaration of *name*, or a ``ValueError`` for a name nobody declared."""
-    for declared in OPTIONS if registry is None else registry:
-        if declared.name == name:
-            return declared
-    raise ValueError(f"{name!r} is not a declared option")
-
-
 #: The platform's option registry. Tools may resolve additional
 #: registries of their own through the same machinery (the CLI's
 #: presentation options, say) — these are the options the *platform*
@@ -512,6 +504,20 @@ OPTIONS: tuple[Option, ...] = (
         help="package registries by domain: their mirrors, and whether they are trusted",
     ),
 )
+
+
+def option(name: str, declared_options: tuple[Option, ...] = OPTIONS) -> Option:
+    """The declaration of *name*, or a ``ValueError`` for a name nobody declared.
+
+    A programming error rather than a refusal in words: a tool asks for
+    an option it knows, and a name that reaches here without being one
+    came from code, not from a person. What a *person* mistyped is
+    refused where it was written — in a file, a variable or a flag.
+    """
+    for declared in declared_options:
+        if declared.name == name:
+            return declared
+    raise ValueError(f"{name!r} is not a declared option")
 
 
 @dataclass(frozen=True)
