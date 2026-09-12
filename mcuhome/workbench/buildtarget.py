@@ -154,7 +154,7 @@ class ContainerExecution(Execution):
     #: either. ``None`` — the ordinary case — searches the configured
     #: repositories for an image whose labels declare the package set the
     #: context pinned.
-    image: str | None = None
+    container_image: str | None = None
     #: Where the compiler cache lives on this machine — the root the
     #: tiers are laid out under. ``None`` takes ``build.cache_root``,
     #: and the user's cache directory where that is unset: one cache per
@@ -194,11 +194,12 @@ class SubprocessExecution(Execution):
     #: environment. A build context that carries patches is refused in
     #: this form rather than applied to a workspace somebody else owns.
     dev_workspace: Path | None = None
-    #: An image somebody stated for this build although it starts none —
-    #: a configured builder's ``image:``, which is a statement about the
-    #: machine rather than about this build. Carried so the build can say
-    #: once that it has no effect here; nothing reads it as a pin.
-    stated_image: str | None = None
+    #: A container image somebody stated for this build although it
+    #: starts none — a configured builder's ``container_image``, which is
+    #: a statement about the machine rather than about this build.
+    #: Carried so the build can say once that it has no effect here;
+    #: nothing reads it as a pin.
+    stated_container_image: str | None = None
 
 
 @dataclass(frozen=True)
@@ -246,4 +247,4 @@ class RemoteBuild(BuildTarget):
     #: narrows what the *server* looks at; which repositories may be used
     #: at all stays that server's operator's decision. Empty is the
     #: ordinary case: the server searches what it allows.
-    image: str | None = None
+    container_image: str | None = None

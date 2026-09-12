@@ -236,7 +236,7 @@ def test_an_image_without_a_container_is_refused_naming_both_ways_out(
         model=model,
         out_dir=tmp_path,
         project_root=project.root,
-        image="ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1",
+        container_image="ghcr.io/mcu-home/build-environment:0.1.10.dev1-r1",
     )
     with pytest.raises(ConfigError) as refusal:
         build.build_target_for(build.TARGET_LOCAL, request)
@@ -260,7 +260,7 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
                 model=model,
                 out_dir=tmp_path,
                 build_mode=build.MODE_SUBPROCESS,
-                image="ghcr.io/mcu-home/x:1",
+                container_image="ghcr.io/mcu-home/x:1",
                 options=BuildOptions(mode_source="/etc/mcuhome/configuration.yaml"),
             ),
         )
@@ -272,9 +272,9 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
 def test_an_image_with_a_container_is_the_ordinary_case(model, tmp_path) -> None:
     target = build.build_target_for(
         build.TARGET_LOCAL,
-        BuildRequest(model=model, out_dir=tmp_path, image="ghcr.io/mcu-home/x:1"),
+        BuildRequest(model=model, out_dir=tmp_path, container_image="ghcr.io/mcu-home/x:1"),
     )
-    assert target.execution.image == "ghcr.io/mcu-home/x:1"
+    assert target.execution.container_image == "ghcr.io/mcu-home/x:1"
 
 
 # --------------------------------------------------------------------------

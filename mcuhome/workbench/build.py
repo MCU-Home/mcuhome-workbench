@@ -600,13 +600,13 @@ class BuildRequest:
     #: one for a build that starts no container is refused rather than
     #: half-honoured — a statement about *this* build cannot be quietly
     #: dropped.
-    image: str | None = None
+    container_image: str | None = None
     #: The build environment a *configured builder* names, in the same
     #: four pin forms. It is a statement about the machine that builds,
     #: not about this build, so a build that starts no container does not
     #: refuse over it: the note says the pin has no effect here and the
-    #: build goes on. :attr:`image` beats it wherever a container does
-    #: run — the more explicit statement wins.
+    #: build goes on. :attr:`container_image` beats it wherever a
+    #: container does run — the more explicit statement wins.
     builder_image: str | None = None
 
     # -- local ---------------------------------------------------------
@@ -869,7 +869,7 @@ def _refuse_developer_remotely(workspace: Path) -> ConfigError:
 
 
 def _note_image_without_container(
-    model: DeviceModel | None, stated_image: str | None = None, *, on_line: Any = None
+    model: DeviceModel | None, stated_container_image: str | None = None, *, on_line: Any = None
 ) -> None:
     """Say once that an image named for this build does not apply to it.
 
@@ -891,7 +891,9 @@ def _note_image_without_container(
     next. A builder's image is still noted there, because nothing else
     ever mentions it.
     """
-    stated = stated_image or (model.sources.container_image if model is not None else None)
+    stated = stated_container_image or (
+        model.sources.container_image if model is not None else None
+    )
     if not stated or on_line is None:
         return
     on_line(
@@ -900,7 +902,7 @@ def _note_image_without_container(
     )
 
 
-def _stated_image(request: BuildRequest) -> str | None:
+def _stated_container_image(request: BuildRequest) -> str | None:
     """The image named for this build, the more specific statement first.
 
     ``--container-image`` is about this one invocation and a configured
@@ -909,7 +911,7 @@ def _stated_image(request: BuildRequest) -> str | None:
     own pin: that one is read where the device is
     (:func:`image_pin`), because it survives this invocation.
     """
-    return request.image if request.image is not None else request.builder_image
+    return request.container_image if request.container_image is not None else request.builder_image
 
 
 def image_pin(model: DeviceModel, override: str | None) -> str | None:
@@ -962,9 +964,9 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
     if chosen == TARGET_LOCAL:
         mode = resolve_build_mode(request.build_mode) if request.build_mode else options.mode
         if mode == MODE_SUBPROCESS:
-            if request.image is not None:
+            if request.container_image is not None:
                 raise _refuse_image_without_container(
-                    request.image,
+                    request.container_image,
                     # Whoever chose the mode is who has to be told, and a
                     # mode this request states itself did not come from
                     # any configuration file.
@@ -981,7 +983,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                     # machine delivers, and a machine configured to build
                     # without a container would otherwise refuse every
                     # build it ever runs. The composition notes it.
-                    stated_image=request.builder_image,
+                    stated_container_image=request.builder_image,
                 )
             )
         developing = (
@@ -992,7 +994,9 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                 developing,
                 source="this build" if request.build_mode else options.mode_source,
             )
-        return LocalBuild(execution=ContainerExecution(image=_stated_image(request)))
+        return LocalBuild(
+            execution=ContainerExecution(container_image=_stated_container_image(request))
+        )
     developing = (
         request.dev_workspace if request.dev_workspace is not None else options.dev_workspace
     )
@@ -1008,7 +1012,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
         # build in an environment other than the one it was told to,
         # which is the one thing an image pin exists to prevent. What is
         # allowed there stays the server operator's decision.
-        image=image_pin(request.model, _stated_image(request)),
+        container_image=image_pin(request.model, _stated_container_image(request)),
     )
 
 
@@ -1077,7 +1081,7 @@ def compose_local_build(
     env: dict[str, str],
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
-    image: str | None = None,
+    container_image: str | None = None,
     cache_root: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
@@ -1089,7 +1093,7 @@ def compose_local_build(
     build_mode: str = DEFAULT_BUILD_MODE,
     environment: Any = None,
     options: BuildOptions | None = None,
-    stated_image: str | None = None,
+    stated_container_image: str | None = None,
 ):
     """The local build, dispatched to the execution this machine uses.
 
@@ -1098,8 +1102,8 @@ def compose_local_build(
     caller learning both: ``container`` is
     :func:`compose_container_build` and ``subprocess` is
     :func:`compose_subprocess_build`. *environment* — the store entries a
-    build runs against — belongs to the second alone, and *image*,
-    *runtime* and *images* to the first.
+    build runs against — belongs to the second alone, and
+    *container_image*, *runtime* and *images* to the first.
 
     Synchronous, because both compositions are; ``build_firmware``
     offloads them.
@@ -1122,7 +1126,7 @@ def compose_local_build(
             on_step=on_step,
             registry=registry,
             options=options,
-            stated_image=stated_image,
+            stated_container_image=stated_container_image,
         )
     return compose_container_build(
         model,
@@ -1132,7 +1136,7 @@ def compose_local_build(
         env=env,
         project_root=project_root,
         registries=registries,
-        image=image,
+        container_image=container_image,
         cache_root=cache_root,
         created=created,
         context_dir=context_dir,
@@ -1154,7 +1158,7 @@ def compose_container_build(
     env: dict[str, str],
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
-    image: str | None = None,
+    container_image: str | None = None,
     cache_root: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
@@ -1182,9 +1186,9 @@ def compose_container_build(
     declare. A build environment is therefore never chosen from a
     device's wishes, only from what the resolved context pinned.
 
-    *image* is the one-invocation override, in any of the four pin
-    forms; without one the device's own ``sources.container_image`` is
-    the pin (:func:`image_pin`). Either narrows which images are looked
+    *container_image* is the one-invocation override, in any of the four
+    pin forms; without one the device's own ``sources.container_image``
+    is the pin (:func:`image_pin`). Either narrows which images are looked
     at and never what is accepted.
     *context_dir* is the caller that already holds a **base** context and
     wants this one built — an embedder that assembled one elsewhere, a
@@ -1199,7 +1203,7 @@ def compose_container_build(
     """
     options = options if options is not None else BuildOptions()
     limits = options.limits()
-    pin_wanted = image_pin(model, image)
+    pin_wanted = image_pin(model, container_image)
     sources = tuple(Path(source) for source in sdk_sources)
     work_root = Path(work_root)
     packages = (
@@ -1287,7 +1291,7 @@ def compose_container_build(
         )
     lock_context(context_dir)
     if on_step is not None:
-        on_step("compile", image=resolved.reference, **_reported(limits))
+        on_step("compile", container_image=resolved.reference, **_reported(limits))
     root = containerbuild.cache_root(env, cache_root or options.cache_root)
     return containerbuild.run_locked_build(
         context_dir,
@@ -1332,7 +1336,7 @@ def compose_subprocess_build(
     on_step: Any = None,
     registry: Any = None,
     options: BuildOptions | None = None,
-    stated_image: str | None = None,
+    stated_container_image: str | None = None,
 ) -> subprocessbuild.SubprocessBuildResult:
     """The subprocess execution's composition: environment, lock, drive.
 
@@ -1375,8 +1379,8 @@ def compose_subprocess_build(
     honoured either: this build starts no container, so there is no
     image for it to name. A device's ``sources.container_image`` is a
     statement about the delivery the device gets on a machine that does
-    start one, and *stated_image* — a configured builder's ``image:`` —
-    is a statement about that machine; the packages either would have
+    start one, and *stated_container_image* — a configured builder's
+    ``container_image`` — is a statement about that machine; the packages either would have
     delivered are what this build provisions itself. The log says so
     once rather than leaving the person to wonder
     (:func:`_note_image_without_container`). An image stated for *this
@@ -1405,7 +1409,9 @@ def compose_subprocess_build(
     # After the development question is settled, because the answer
     # decides whether the device's own pin may be spoken about at all: a
     # development build is refused over that pin a moment later.
-    _note_image_without_container(None if developing else model, stated_image, on_line=on_line)
+    _note_image_without_container(
+        None if developing else model, stated_container_image, on_line=on_line
+    )
     supplied = context_dir is not None
     context_dir = Path(context_dir) if supplied else work_root / "context"
     if not supplied:
@@ -1493,7 +1499,7 @@ def compose_subprocess_build(
         on_step("environment", build_environment=environment.described(), fetched=False)
     lock_context(context_dir)
     if on_step is not None:
-        on_step("compile", image="", **_reported(limits))
+        on_step("compile", container_image="", **_reported(limits))
     root = containerbuild.cache_root(dict(env), cache_root or options.cache_root)
     return subprocessbuild.run_locked_build(
         context_dir,
@@ -1562,7 +1568,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         build_mode=MODE_SUBPROCESS,
         environment=_developer_environment(execution),
         options=options_for(request),
-        stated_image=execution.stated_image,
+        stated_container_image=execution.stated_container_image,
     )
     outcome = result.outcome
     return BuildOutcome(
@@ -1598,7 +1604,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
-        image=execution.image,
+        container_image=execution.container_image,
         cache_root=execution.cache_root,
         context_dir=request.context_dir,
         on_line=request.on_line,
@@ -1787,7 +1793,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         url=url,
         token=target.token,
         work_root=work_root,
-        image=target.image,
+        image=target.container_image,
         mode=request.mode,
         on_line=request.on_line,
         on_wait=request.on_wait,

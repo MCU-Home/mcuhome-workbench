@@ -500,7 +500,7 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
             out_dir=tmp_path,
             signing_pub="-----BEGIN PUBLIC KEY-----\n",
             sdk_sources=(tmp_path / "sdk",),
-            image="registry.example.test/other/environment:test",
+            container_image="registry.example.test/other/environment:test",
         ),
         build.TARGET_LOCAL,
     )
@@ -1297,7 +1297,7 @@ def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, mon
             server="ws://build.example:8080/session",
             token="a-token",
             context_dir=context,
-            image=":0.1.10.dev2-r1",
+            container_image=":0.1.10.dev2-r1",
         ),
         build.TARGET_REMOTE,
     )
@@ -1352,7 +1352,7 @@ def test_a_container_build_resolves_the_pin_the_device_carries(
                 options=build.BuildOptions(
                     workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
                 ),
-                image=image,
+                container_image=image,
             )
     assert seen == ["ghcr.io/mcu-home/build-environment", ":wip"]
 
@@ -1364,14 +1364,17 @@ def test_a_remote_build_carries_the_device_pin_as_well(model, tmp_path) -> None:
         build.TARGET_REMOTE,
         build.BuildRequest(model=pinned, out_dir=tmp_path, server="attic"),
     )
-    assert target.image == ":0.1.10.dev2-r1"
+    assert target.container_image == ":0.1.10.dev2-r1"
     stated = build.build_target_for(
         build.TARGET_REMOTE,
         build.BuildRequest(
-            model=pinned, out_dir=tmp_path, server="attic", image="@sha256:" + "b" * 64
+            model=pinned,
+            out_dir=tmp_path,
+            server="attic",
+            container_image="@sha256:" + "b" * 64,
         ),
     )
-    assert stated.image == "@sha256:" + "b" * 64
+    assert stated.container_image == "@sha256:" + "b" * 64
 
 
 def test_a_subprocess_build_says_the_pin_has_no_effect_rather_than_refusing(
@@ -1422,7 +1425,7 @@ def test_an_image_named_for_this_build_is_refused_without_a_container(model, tmp
                 model=model,
                 out_dir=tmp_path,
                 build_mode=build.MODE_SUBPROCESS,
-                image=":0.1.10.dev2-r1",
+                container_image=":0.1.10.dev2-r1",
             ),
         )
     assert ":0.1.10.dev2-r1" in str(refused.value)
@@ -1450,7 +1453,10 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
         ),
     )
     assert isinstance(target.execution, build.SubprocessExecution)
-    assert target.execution.stated_image == "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1"
+    assert (
+        target.execution.stated_container_image
+        == "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1"
+    )
 
     said: list[str] = []
 
@@ -1470,7 +1476,7 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
                 workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
             ),
             on_line=said.append,
-            stated_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
+            stated_container_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
         )
     assert any("0.1.10.dev2-r1" in line and "no effect" in line for line in said)
 
@@ -1503,7 +1509,7 @@ def test_the_note_names_the_more_specific_of_the_two_statements(
                 workspace_sources=(tmp_path / "sdk",), tools_sources=(tmp_path / "sdk",)
             ),
             on_line=said.append,
-            stated_image=":builder-image",
+            stated_container_image=":builder-image",
         )
     notes = [line for line in said if "no effect" in line]
     assert notes and ":builder-image" in notes[0]
@@ -1516,24 +1522,24 @@ def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model,
         build.TARGET_LOCAL,
         build.BuildRequest(model=model, out_dir=tmp_path, builder_image=":from-the-builder"),
     )
-    assert from_builder.execution.image == ":from-the-builder"
+    assert from_builder.execution.container_image == ":from-the-builder"
     from_flag = build.build_target_for(
         build.TARGET_LOCAL,
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
             builder_image=":from-the-builder",
-            image=":from-this-build",
+            container_image=":from-this-build",
         ),
     )
-    assert from_flag.execution.image == ":from-this-build"
+    assert from_flag.execution.container_image == ":from-this-build"
     remote = build.build_target_for(
         build.TARGET_REMOTE,
         build.BuildRequest(
             model=model, out_dir=tmp_path, server="attic", builder_image=":from-the-builder"
         ),
     )
-    assert remote.image == ":from-the-builder"
+    assert remote.container_image == ":from-the-builder"
 
 
 def test_a_development_build_refuses_the_pin_and_notes_nothing(model, tmp_path) -> None:

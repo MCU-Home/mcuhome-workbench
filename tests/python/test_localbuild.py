@@ -372,7 +372,7 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
     assert chosen["build_environment"].endswith(f"@{DIGEST}")
     assert chosen["zephyr"] == "4.4.0"
     assert chosen["found_under"]
-    assert steps[4][1]["image"] == chosen["build_environment"]
+    assert steps[4][1]["container_image"] == chosen["build_environment"]
 
 
 # --------------------------------------------------------------------------

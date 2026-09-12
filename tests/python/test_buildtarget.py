@@ -103,7 +103,7 @@ def test_a_remote_build_carries_no_execution() -> None:
     """
     fields = {field.name for field in dataclasses.fields(buildtarget.RemoteBuild)}
     assert "execution" not in fields
-    assert fields == {"server", "token", "wait", "max_wait_seconds", "image"}
+    assert fields == {"server", "token", "wait", "max_wait_seconds", "container_image"}
 
 
 # --------------------------------------------------------------------------
@@ -115,12 +115,12 @@ def test_the_local_target_is_a_local_build_in_a_container(model, tmp_path) -> No
     request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
-        image="registry.example.test/other/environment:test",
+        container_image="registry.example.test/other/environment:test",
     )
     target = build.build_target_for(build.TARGET_LOCAL, request)
     assert target == buildtarget.LocalBuild(
         execution=buildtarget.ContainerExecution(
-            image="registry.example.test/other/environment:test"
+            container_image="registry.example.test/other/environment:test"
         )
     )
 
@@ -173,19 +173,19 @@ def test_a_stated_target_beats_the_requests_target_fields(model, tmp_path, monke
     request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
-        image="registry.example.test/other/environment:from-the-request",
+        container_image="registry.example.test/other/environment:from-the-request",
     )
     outcome = _build(
         request,
         buildtarget.LocalBuild(
             execution=buildtarget.ContainerExecution(
-                image="registry.example.test/other/environment:from-the-target",
+                container_image="registry.example.test/other/environment:from-the-target",
                 cache_root=tmp_path / "from-the-target",
             )
         ),
     )
     assert outcome.successful
-    assert seen["image"] == "registry.example.test/other/environment:from-the-target"
+    assert seen["container_image"] == "registry.example.test/other/environment:from-the-target"
     assert seen["cache_root"] == tmp_path / "from-the-target"
 
 
@@ -231,7 +231,7 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
     request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
-        image="registry.example.test/other/environment:test",
+        container_image="registry.example.test/other/environment:test",
     )
 
     by_name: dict[str, object] = {}
