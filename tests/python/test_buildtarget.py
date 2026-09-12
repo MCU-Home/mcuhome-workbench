@@ -44,7 +44,7 @@ def model():
     return resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
 
 
-def _build(request: build.BuildRequest, target) -> build.BuildOutcome:
+def _build(request: build.BuildRequest, target) -> build.BuildResult:
     """What a caller does at its entry point: one ``asyncio.run``."""
     return asyncio.run(build.build_firmware(request, target=target))
 
@@ -184,7 +184,7 @@ def test_a_stated_target_beats_the_requests_target_fields(model, tmp_path, monke
             )
         ),
     )
-    assert outcome.successful
+    assert outcome.ok
     assert seen["container_image"] == "registry.example.test/other/environment:from-the-target"
     assert seen["cache_root"] == tmp_path / "from-the-target"
 
@@ -237,11 +237,11 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
 
     by_name: dict[str, object] = {}
     monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, by_name))
-    assert asyncio.run(build.build_firmware(request, target=build.TARGET_LOCAL)).successful
+    assert asyncio.run(build.build_firmware(request, target=build.TARGET_LOCAL)).ok
 
     by_target: dict[str, object] = {}
     monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, by_target))
-    assert _build(request, build.build_target_for(build.TARGET_LOCAL, request)).successful
+    assert _build(request, build.build_target_for(build.TARGET_LOCAL, request)).ok
 
     assert by_name == by_target
 
@@ -282,7 +282,7 @@ def test_the_seam_holds_the_build_directory(model, tmp_path, monkeypatch) -> Non
         build.BuildRequest(model=model, out_dir=tmp_path),
         buildtarget.LocalBuild(execution=buildtarget.ContainerExecution()),
     )
-    assert outcome.successful
+    assert outcome.ok
     holder = seen["holder"]
     assert holder is not None
     assert holder["device"] == model.device.name

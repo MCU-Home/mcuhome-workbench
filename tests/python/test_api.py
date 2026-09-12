@@ -78,7 +78,7 @@ def test_the_build_targets_are_part_of_the_surface() -> None:
         "build_firmware",
         "resolve_build_target",
         "BuildRequest",
-        "BuildOutcome",
+        "BuildResult",
         "TARGET_LOCAL",
         "TARGET_REMOTE",
         "BUILD_TARGETS",

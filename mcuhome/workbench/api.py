@@ -86,7 +86,7 @@ What is here, in the order a caller needs it:
     path — a build environment generates from the model its context
     carries — so this is the caller who wants the tree for its own sake,
     and it refuses in words where ``mcuhome-compiler`` is not installed.
-``build_firmware`` / ``BuildRequest`` / ``BuildOutcome``
+``build_firmware`` / ``BuildRequest`` / ``BuildResult``
     Build a device behind one awaitable call, whichever target runs it:
     a target object, a target name, or nothing at all, which takes the
     request's builder and then ``build.target``. A build has two
@@ -187,8 +187,8 @@ from mcuhome.workbench.build import (
     TARGET_LOCAL,
     TARGET_REMOTE,
     BuildOptions,
-    BuildOutcome,
     BuildRequest,
+    BuildResult,
     RemoteNotConfigured,
     UnknownBuildMode,
     UnknownBuildTarget,
@@ -293,10 +293,10 @@ __all__ = [
     "BuildError",
     "BuilderSession",
     "BuildOptions",
-    "BuildOutcome",
     "BUILD_MODES",
     "BUILD_TARGETS",
     "BuildRequest",
+    "BuildResult",
     "BuildTarget",
     "Builder",
     "BusChoice",

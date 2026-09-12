@@ -52,7 +52,11 @@ from mcuhome.model.context import DeveloperEnvironment
 from mcuhome.model.errors import BuildError, ConfigError
 
 from mcuhome.workbench import build, containerbuild, sessionclient, subprocessbuild
-from mcuhome.workbench.buildenvsession import EnvironmentUnavailable, LocalOutcome
+from mcuhome.workbench.buildenvsession import (
+    EnvironmentUnavailable,
+    EnvironmentUnusable,
+    LocalOutcome,
+)
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.buildprocess import Completed
@@ -87,7 +91,7 @@ def _artifacts() -> tuple[Artifact, ...]:
     )
 
 
-def _run(request: build.BuildRequest, target: str) -> build.BuildOutcome:
+def _run(request: build.BuildRequest, target: str) -> build.BuildResult:
     """What a command line does at its entry point: one ``asyncio.run``."""
     return asyncio.run(build.build_firmware(request, target=target))
 
@@ -120,7 +124,7 @@ def _served_by(directory: Path) -> tuple[RegistrySettings, ...]:
 
 def _remote_context_of(
     monkeypatch: pytest.MonkeyPatch, **fields
-) -> tuple[build.BuildOutcome, object, list[str]]:
+) -> tuple[build.BuildResult, object, list[str]]:
     """Run a remote build to the socket and answer with the context it sent.
 
     The session client is stubbed where every other test in this file
@@ -313,11 +317,11 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
         build.TARGET_LOCAL,
     )
     assert outcome.target == build.TARGET_LOCAL
-    assert outcome.successful
+    assert outcome.ok
     assert outcome.artifacts == _artifacts()
     assert outcome.report == BUILD_REPORT_FILE
     # No image ran, and the outcome says so rather than naming one.
-    assert outcome.image == ""
+    assert outcome.container_image == ""
     # No job count travels: what a build may use of this machine is
     # `build.cpus`/`build.memory`, and the environment sizes itself from
     # the limits those become.
@@ -525,17 +529,129 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
         build.TARGET_LOCAL,
     )
     assert outcome.target == build.TARGET_LOCAL
-    assert outcome.successful and outcome.status == "success"
+    assert outcome.ok and not outcome.stopped
     assert outcome.context_id == "sha256:" + "1" * 64
     assert outcome.artifacts == _artifacts()
     assert outcome.out_dir == tmp_path / "delivery"
     assert outcome.report == BUILD_REPORT_FILE
-    assert outcome.image == "registry.example.test/other/environment:test"
+    assert outcome.container_image == "registry.example.test/other/environment:test"
     # The scratch area defaults under the build directory, and the public
     # key travelled — no private key is a field of the request at all.
     assert seen["work_root"] == tmp_path / ".mcuhome-local"
     assert "jobs" not in seen
     assert seen["signing_pub"] == "-----BEGIN PUBLIC KEY-----\n"
+
+
+def test_a_build_answers_one_document_whichever_target_ran(model, tmp_path, monkeypatch):
+    """The verdict is ``ok``, said once, and the document says everything.
+
+    A client renders a build out of this document and never assembles one
+    out of fields it read off the object: every key is present, the
+    values are JSON, and the composition's own object is not among them.
+    """
+
+    def fake(device_model, **kwargs):
+        del device_model, kwargs
+        return containerbuild.ContainerBuildResult(
+            outcome=LocalOutcome(
+                action="build",
+                context_id="sha256:" + "1" * 64,
+                exit_code=0,
+                status="success",
+                successful=True,
+                artifacts=_artifacts(),
+                out=tmp_path / "delivery",
+            ),
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            image="registry.example.test/other/environment:test",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    outcome = _run(build.BuildRequest(model=model, out_dir=tmp_path), build.TARGET_LOCAL)
+    document = outcome.to_dict()
+    assert list(document) == [
+        "ok",
+        "stopped",
+        "target",
+        "device",
+        "context_id",
+        "out_dir",
+        "report",
+        "container_image",
+        "artifacts",
+    ]
+    assert document["ok"] is True
+    assert document["stopped"] is False
+    assert document["device"] == model.device.name
+    assert document["out_dir"] == str(tmp_path / "delivery")
+    assert document["artifacts"] == [entry.to_dict() for entry in _artifacts()]
+    # A document, not an object graph: it survives json.dumps, and the
+    # composition's own result is deliberately not in it.
+    assert json.loads(json.dumps(document)) == document
+    assert "detail" not in document
+    assert outcome.detail is not None
+    # There is no third word for the verdict.
+    assert not hasattr(outcome, "status")
+    assert not hasattr(outcome, "successful")
+
+
+@pytest.mark.parametrize("target", [build.TARGET_LOCAL, build.TARGET_REMOTE])
+def test_an_environment_that_cannot_build_is_unusable_rather_than_failed(
+    model, tmp_path, monkeypatch, target
+) -> None:
+    """``unsupported`` says nothing about the firmware, so it is a refusal.
+
+    The specification's word means *no environment of my kind can do
+    this*. A caller told "the build failed" would look at its device; a
+    caller told the environment is unusable looks for another
+    environment, which is the only thing that helps.
+    """
+    context = tmp_path / "context"
+    context.mkdir()
+
+    def local(device_model, **kwargs):
+        del device_model, kwargs
+        return containerbuild.ContainerBuildResult(
+            outcome=LocalOutcome(
+                action="build",
+                context_id="sha256:" + "1" * 64,
+                exit_code=1,
+                status="unsupported",
+                successful=False,
+                out=tmp_path / "delivery",
+            ),
+            out_dir=tmp_path / "delivery",
+            context_dir=context,
+            image="registry.example.test/other/environment:test",
+        )
+
+    async def remote(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status="unsupported",
+            successful=False,
+            artifacts=(),
+            out=tmp_path / "out",
+            invocation_id="inv-1",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", local)
+    monkeypatch.setattr(sessionclient, "run_remote_build", remote)
+    with pytest.raises(EnvironmentUnusable) as refusal:
+        _run(
+            build.BuildRequest(
+                model=model,
+                out_dir=tmp_path,
+                context_dir=context,
+                builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
+            ),
+            target,
+        )
+    assert "build environment" in str(refusal.value)
+    assert refusal.value.hint
 
 
 def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkeypatch):
@@ -572,12 +688,12 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
 
     monkeypatch.setattr(build, "compose_local_build", fake)
     request = build.BuildRequest(model=model, out_dir=tmp_path)
-    assert _run(request, build.TARGET_LOCAL).successful
+    assert _run(request, build.TARGET_LOCAL).ok
     holder = seen["holder"]
     assert holder["device"] == model.device.name  # type: ignore[index]
     assert holder["operation"] == "build"  # type: ignore[index]
     # And released again: the next build of that directory just runs.
-    assert _run(request, build.TARGET_LOCAL).successful
+    assert _run(request, build.TARGET_LOCAL).ok
 
 
 def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatch):
@@ -614,7 +730,7 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
         build.TARGET_REMOTE,
     )
     assert outcome.target == build.TARGET_REMOTE
-    assert outcome.successful and outcome.status == "success"
+    assert outcome.ok and not outcome.stopped
     assert outcome.context_id == "sha256:" + "2" * 64
     assert outcome.artifacts == _artifacts()
     assert outcome.out_dir == tmp_path / "out"
@@ -721,7 +837,7 @@ def test_a_remote_build_pins_the_chain_it_read_out_of_the_registry(
         registries=_served_by(served),
     )
 
-    assert outcome.successful
+    assert outcome.ok
     assert (request.sdk.version, request.sdk.sha256) == (SDK_VERSION, sdk_sha256)
     environment = request.build_environment
     for pin, name in (
@@ -1298,7 +1414,7 @@ def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, mon
         ),
         build.TARGET_REMOTE,
     )
-    assert outcome.image == f"ghcr.io/mcu-home/build-environment@{digest}"
+    assert outcome.container_image == f"ghcr.io/mcu-home/build-environment@{digest}"
 
 
 def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, monkeypatch):

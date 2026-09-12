@@ -14,12 +14,12 @@ interface possible rather than merely tidy.
 
 So this module is small on purpose. :func:`build_firmware` takes a
 resolved device model plus the inputs a build needs, runs the one the
-target names, and answers with one :class:`BuildOutcome` whose meaning
+target names, and answers with one :class:`BuildResult` whose meaning
 does not depend on which ran: *did it succeed*, and *where are the
 unsigned artifacts and the report* — enough for the shared signing step,
 and enough for a caller that only wants to know whether to carry on. What
 is genuinely composition-specific — a container reference, an invocation
-id — travels in :attr:`BuildOutcome.detail`, typed as itself, so a
+id — travels in :attr:`BuildResult.detail`, typed as itself, so a
 renderer can reach it without every consumer having to.
 
 **Two axes, and each has its own word.** Where a build runs and how the
@@ -95,8 +95,10 @@ from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import buildenvstore, containerbuild, subprocessbuild
 from mcuhome.workbench.buildenvsession import (
+    STATUS_UNSUPPORTED,
     BuildLimits,
     EnvironmentUnavailable,
+    EnvironmentUnusable,
     cache_tiers,
     host_limits,
     memory_bytes,
@@ -156,7 +158,7 @@ __all__ = [
     "TARGET_LOCAL",
     "TARGET_REMOTE",
     "BuildOptions",
-    "BuildOutcome",
+    "BuildResult",
     "BuildRequest",
     "BuildTarget",
     "ContainerExecution",
@@ -664,25 +666,36 @@ class BuildRequest:
 
 
 @dataclass(frozen=True)
-class BuildOutcome:
+class BuildResult:
     """What a build produced, in the one shape every build answers.
 
-    :attr:`successful` is the only field a caller must consult before the
-    others mean anything. :attr:`out_dir` is where the **unsigned**
-    artifacts and the build report are, and :attr:`report` is that
-    report's file name — the two together are what the one shared signing
-    step needs, and they are the whole reason this class exists.
+    :attr:`ok` is the verdict and the only field a caller must consult
+    before the others mean anything; :attr:`stopped` says which kind of
+    "no" it was, a build that failed or one somebody stopped.
+    :attr:`out_dir` is where the **unsigned** artifacts and the build
+    report are, and :attr:`report` is that report's file name — the two
+    together are what the one shared signing step needs, and they are
+    the whole reason this class exists.
+
+    There is no status beside the verdict: a firmware build either
+    produced the artifacts or it did not. A build environment that
+    answers ``unsupported`` to the build action is an *unusable*
+    environment rather than a failed build, and the compositions raise
+    :class:`~mcuhome.workbench.buildenvsession.EnvironmentUnusable` for
+    it — a caller looking for another environment needs a refusal, not a
+    third word in a document.
 
     :attr:`artifacts` is the declared artifact set, in
     :class:`~mcuhome.model.artifacts.Artifact` — the same type whichever
     target produced it.
     """
 
+    #: Whether this build produced what it was asked for.
+    ok: bool
     #: Which of :data:`BUILD_TARGETS` ran.
     target: str
-    successful: bool
-    #: The build's own word for the result: ``success`` or ``failure``.
-    status: str
+    #: The device that was built, by its own name.
+    device: str
     #: The identity the work is attributed to: the build context's ID.
     context_id: str
     artifacts: tuple[Artifact, ...]
@@ -697,9 +710,60 @@ class BuildOutcome:
     #: started it or a build server did. Empty for a build that used no
     #: image at all — the subprocess profile — and for a server that
     #: named none.
-    image: str = ""
-    #: The composition's own result object, untouched.
+    container_image: str = ""
+    #: Whether this build was stopped rather than finished. A stopped
+    #: build is not a failed one, and a caller that renders the two the
+    #: same way tells a person their firmware is broken when they
+    #: pressed the stop button.
+    stopped: bool = False
+    #: The composition's own result object, untouched. Useful for
+    #: logging and never part of a document: what is in it depends on
+    #: which composition ran, which is the one thing this class exists to
+    #: hide.
     detail: Any = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """This build as a document, JSON-ready and complete.
+
+        Every key is always present: a client that renders a build
+        should not have to ask whether a missing key means "nothing" or
+        "this version did not know about it". :attr:`detail` is not in
+        here, because no two compositions would put the same thing in it.
+        """
+        return {
+            "ok": self.ok,
+            "stopped": self.stopped,
+            "target": self.target,
+            "device": self.device,
+            "context_id": self.context_id,
+            "out_dir": None if self.out_dir is None else str(self.out_dir),
+            "report": self.report,
+            "container_image": self.container_image,
+            "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+        }
+
+
+def _refuse_unsupported(status: str) -> None:
+    """A build environment that cannot do a build at all is unusable.
+
+    ``unsupported`` is the specification's word for *no environment of
+    my kind can do this*, and it says nothing about the firmware: the
+    environment does not implement the action, or not in the generation
+    it was asked in. Carrying that into the result as a third verdict
+    would tell a caller its build failed, when what it has to do is find
+    another environment.
+    """
+    if status != STATUS_UNSUPPORTED:
+        return
+    raise EnvironmentUnusable(
+        "This build environment cannot run a firmware build.",
+        hint=(
+            "it answered that the build action is not one it supports, which no "
+            "retry changes: provision the build environment this device's context "
+            "pins, or build in a container, where MCUHome delivers the environment "
+            "the context names"
+        ),
+    )
 
 
 def _reported(limits: BuildLimits) -> dict[str, Any]:
@@ -1006,7 +1070,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
 
 async def build_firmware(
     request: BuildRequest, *, target: BuildTarget | str | None = None
-) -> BuildOutcome:
+) -> BuildResult:
     """Build *request*, wherever *target* says, in the one outcome shape.
 
     One build, one entry point, whichever target runs it. Above it a
@@ -1029,10 +1093,12 @@ async def build_firmware(
     Raises whatever typed refusal the target's composition raises — a
     missing build container, a missing SDK package, a build server that
     said no. A build that ran and *failed* is not an exception: it comes
-    back with :attr:`BuildOutcome.successful` false and the composition's
-    own account in :attr:`BuildOutcome.detail`, because a failed compile
-    is an answer and a caller usually wants to render it rather than
-    catch it.
+    back with :attr:`BuildResult.ok` false and the composition's own
+    account in :attr:`BuildResult.detail`, because a failed compile is an
+    answer and a caller usually wants to render it rather than catch it.
+    A build environment that answers ``unsupported`` is the exception
+    and not an answer at all: it is
+    :class:`~mcuhome.workbench.buildenvsession.EnvironmentUnusable`.
 
     The build directory is held for the duration (:mod:`…buildlock`), so
     a second build of it refuses in words instead of deleting this one's
@@ -1531,7 +1597,7 @@ def _developer_environment(
     return subprocessbuild.environment_from_workspace(workspace)
 
 
-async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution) -> BuildOutcome:
+async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution) -> BuildResult:
     """Local, without a container: :func:`compose_local_build`, offloaded.
 
     The mirror of :func:`_run_local`, through the same module-global
@@ -1558,10 +1624,11 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         stated_container_image=execution.stated_container_image,
     )
     outcome = result.outcome
-    return BuildOutcome(
+    _refuse_unsupported(outcome.status)
+    return BuildResult(
+        ok=outcome.successful,
         target=TARGET_LOCAL,
-        successful=outcome.successful,
-        status=outcome.status,
+        device=request.model.device.name,
         context_id=outcome.context_id,
         artifacts=tuple(outcome.artifacts),
         out_dir=result.out_dir,
@@ -1569,12 +1636,12 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         # No image ran, and an empty reference is the honest answer: the
         # environment is named by its packages, which travel on the
         # composition's own result.
-        image="",
+        container_image="",
         detail=result,
     )
 
 
-async def _run_local(request: BuildRequest, execution: ContainerExecution) -> BuildOutcome:
+async def _run_local(request: BuildRequest, execution: ContainerExecution) -> BuildResult:
     """Local, in a container: :func:`compose_local_build`, offloaded.
 
     Synchronous underneath — it drives ``docker`` with a subprocess per
@@ -1600,15 +1667,16 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         options=options,
     )
     outcome = result.outcome
-    return BuildOutcome(
+    _refuse_unsupported(outcome.status)
+    return BuildResult(
+        ok=outcome.successful,
         target=TARGET_LOCAL,
-        successful=outcome.successful,
-        status=outcome.status,
+        device=request.model.device.name,
         context_id=outcome.context_id,
         artifacts=tuple(outcome.artifacts),
         out_dir=result.out_dir,
         report=BUILD_REPORT_FILE,
-        image=result.image,
+        container_image=result.image,
         detail=result,
     )
 
@@ -1697,7 +1765,7 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     return context_dir
 
 
-async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcome:
+async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult:
     """The ``remote`` target: :func:`…sessionclient.run_remote_build`.
 
     The session client is imported here rather than at module level so
@@ -1787,10 +1855,11 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         wait=target.wait,
         max_wait=target.max_wait_seconds,
     )
-    return BuildOutcome(
+    _refuse_unsupported(result.status)
+    return BuildResult(
+        ok=result.successful,
         target=TARGET_REMOTE,
-        successful=result.successful,
-        status=result.status,
+        device=request.model.device.name,
         context_id=result.context_id,
         artifacts=tuple(result.artifacts),
         out_dir=result.out,
@@ -1799,6 +1868,6 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         # build records: the server chose the delivery and is the only
         # side that can say which one, so a record without this would
         # name the packages and not the bytes.
-        image=result.image,
+        container_image=result.image,
         detail=result,
     )

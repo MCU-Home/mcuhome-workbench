@@ -2777,7 +2777,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
     write_sdk_package(sources)
     lines: list[str] = []
 
-    async def scenario() -> build.BuildOutcome:
+    async def scenario() -> build.BuildResult:
         async with real_server(tmp_path) as harness:
             return await build.build_firmware(
                 _remote_request(tmp_path, sources, harness, on_line=lines.append),
@@ -2786,7 +2786,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
 
     outcome = run(scenario())
     assert outcome.target == build.TARGET_REMOTE
-    assert outcome.successful is True and outcome.status == "success"
+    assert outcome.ok is True and outcome.stopped is False
     assert outcome.context_id.startswith("sha256:")
     assert {entry.path for entry in outcome.artifacts} == {name for name, _ in ARTIFACTS}
     assert lines and any("build finished" in line for line in lines)
