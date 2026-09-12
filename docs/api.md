@@ -438,6 +438,7 @@ def resolve_settings(
     project: Project | None,
     env: Mapping[str, str],
     args: Sequence[Argument] = (),
+    program: ProgramDefaults | None = None,
     declared_options: tuple[Option, ...] = OPTIONS,
 ) -> Settings
 ```
@@ -455,8 +456,19 @@ class Argument:
     name: str        # the option key
     value: Any       # what the tool parsed
     flag: str = ""   # the spelling the tool used; empty takes Option.flag
+
+@dataclass(frozen=True)
+class ProgramDefaults:
+    name: str                  # the program, as `config print` names it
+    values: Mapping[str, Any]  # its own defaults, by option key
 ```
 The spelling travels so a later refusal can name what the person typed.
+*program* is what an embedding program defaults shared keys to: it sits
+directly above the declared defaults and below every file, and the
+values it sets carry the origin `program` and the program's name as
+their source. Both raise `ValueError` for a key nobody declared, for the
+bootstrap option, and — for `args` — for an option the command line may
+not set.
 
 ```python
 def option(name: str, declared_options: tuple[Option, ...] = OPTIONS) -> Option
@@ -1476,7 +1488,8 @@ this package is public.
 
 **Configuration** — `resolve_settings`, `option`, `resolve_config_file`,
 `set_config_value`, `unset_config_value`, `resolve_build_options`,
-`Argument`, `Option`, `Setting`, `Settings`, `BuildOptions`.
+`Argument`, `ProgramDefaults`, `Option`, `Setting`, `Settings`,
+`BuildOptions`.
 
 **Builders** — `resolve_builder`, `Builder`, `SelectedBuilder`.
 

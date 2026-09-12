@@ -91,17 +91,20 @@ commits, licensing — are in the organization's
 
 ## Configuration
 
-Settings are declared once in the `OPTIONS` registry and merged over five layers
-by `mcuhome.workbench.api.resolve_settings`: system and user
-`configuration.yaml`, the project's `mcuhome.yaml`, `MCUHOME_*` variables, and
-the invocation's own arguments. The firmware signing key and a build server's
-token live under the project's `secrets/` directory and are referenced from
-configuration rather than inlined.
+Settings are declared once in the `OPTIONS` registry and merged over the layers
+by `mcuhome.workbench.api.resolve_settings`: a program's own defaults, system and
+user `configuration.yaml`, the project's `mcuhome.yaml`, `MCUHOME_*` variables,
+and the invocation's own arguments. The firmware signing key and a build
+server's token live under the project's `secrets/` directory and are referenced
+from configuration rather than inlined.
 
-An option may state the area it belongs to, and the dot in its name is a real
-level in every spelling of it: a section in a file, an underscore in the
-variable. Everything that describes **how this machine builds** lives under
-`build`:
+**Every option states the area it belongs to**, and the dot in its name is a
+real level in every spelling of it: a section in a file, an underscore in the
+variable, a dash in the flag. The areas are `project` (where the work lives),
+`signing` (the firmware key and the program that uses it), `build` (how this
+machine builds), `builder` (the named builders a build may run at), and
+`registry` (package registries). Everything that describes **how this machine
+builds** lives under `build`:
 
 ```yaml
 build:
@@ -116,13 +119,23 @@ build runs — on this machine or on a build server — and `build.mode` says ho
 server whether to start a container, so one word could never have answered
 both.
 
-No command-line flag is derived for the options of an area — no flag in MCUHome
-is written with a dot, and deriving one for every key would offer spellings no
-command line has. Set them in a file or in the environment; `mcuhome config
-print` shows every one of them with the layer it came from, and `mcuhome config
-set build.mode subprocess --user` writes the section for you. A tool may still
-map a flag of its own onto one: `mcuhome device build` does that for
-`--build-target`, `--build-mode` and `--sdk-sources`.
+One declaration produces every spelling: `build.mode` is `MCUHOME_BUILD_MODE`
+in the environment and `--build-mode` on a command line, and because an area is
+always one word the flag splits back into its key without a table. `mcuhome
+config print` shows every option with the layer it came from, and `mcuhome
+config set build.mode subprocess --user` writes the section for you.
+
+Named builders are a map under `builder`, keyed by the builder's name, and
+`build.builder` names the one a plain build uses:
+
+```yaml
+builder:
+  attic:
+    target: remote          # local | remote
+    server: 10.0.0.5:8291   # the token lives in secrets/builder/attic.yaml
+build:
+  builder: attic
+```
 
 ### Package registries
 
@@ -455,7 +468,8 @@ that built both ways has one cache. Each tier can be moved on its own:
 
 | key | what it is |
 |---|---|
-| `build.cache_local` | this machine's own cache; unset it lives under `ccache_dir` |
+| `build.cache_root` | where this machine keeps the cache; unset it is the user's cache directory |
+| `build.cache_local` | this machine's own cache; unset it lives under `build.cache_root` |
 | `build.cache_shared` | a cache shared with other machines, offered read-only; the directory has to exist |
 | `build.cache_session` | kept for one build session; unset there is no session tier |
 | `build.cache_project` | kept for one project; unset there is no project tier |
@@ -647,6 +661,9 @@ used for a signature. Report a vulnerability as described in the organization's
 
 ## Documentation
 
+- [`docs/api.md`](docs/api.md) — the reference of the programmatic surface:
+  every exported name, every option with its variable and flag, every file and
+  every document shape
 - [mcuhome-sdk specifications](https://github.com/mcu-home/mcuhome-sdk/tree/main/docs/spec)
   — build environment, context, actions
 - [MCUHome on GitHub](https://github.com/mcu-home) — every repository of the
