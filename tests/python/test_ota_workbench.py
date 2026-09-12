@@ -27,9 +27,13 @@ from mcuhome.workbench import otafile
 
 #: CHIP's own OTA image tool, when this checkout sits in a west workspace
 #: that has the Matter SDK. Absent on a machine that only installed the
-#: builder, which is the normal case for the interop test below.
+#: builder, which is the normal case for the interop test below. The west
+#: workspace lives in the dedicated ``workspace/`` folder next to the
+#: repository checkouts (not at the repository's own parent) since the
+#: development workspace moved out of the project root.
 CHIP_OTA_TOOL = (
     Path(__file__).resolve().parents[3]
+    / "workspace"
     / "modules"
     / "lib"
     / "connectedhomeip"
