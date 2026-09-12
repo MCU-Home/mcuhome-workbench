@@ -10,8 +10,8 @@ whole validation layer is built around pointing at the offending line
 ``!secret name`` reads ``name`` from the device's own
 ``secrets/devices/<name>.yaml`` first and the project-wide
 ``secrets/main.yaml`` second (yaml-schema.md §9, deliberately
-ESPHome-shaped UX; the ladder is the project layout's, PO 2026-08-15 —
-commissioning identity per device, shared values project-wide).
+ESPHome-shaped UX; the ladder is the project layout's — commissioning
+identity per device, shared values project-wide).
 Resolution happens here, before validation, so no later stage ever sees
 a secret reference — and an unknown secret is reported with the line of
 the ``!secret`` tag, not of the file it should have been in. Reading the
@@ -218,7 +218,7 @@ def load_yaml_file(path: Path) -> Any:
 def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
     """``secrets/devices/<name>.yaml``, next to the project's main secrets file.
 
-    The per-device secrets file of the project layout (PO 2026-08-15) —
+    The per-device secrets file of the project layout —
     where ``mcuhome device matter-pairing`` puts a device's commissioning
     values. For a device inside the project layout the name is the
     device *folder's*, never the configuration's own ``device.name``
@@ -267,7 +267,7 @@ def _load_secrets(
 ) -> dict[str, Any]:
     """Every secret this configuration may name, device values winning.
 
-    The ladder (PO 2026-08-15): the device's own
+    The ladder: the device's own
     ``secrets/devices/<name>.yaml`` answers first — its commissioning
     identity lives there — and the project-wide ``secrets/main.yaml``
     answers for everything shared between devices (a WiFi password).

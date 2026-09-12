@@ -482,10 +482,9 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
     """The project's key: ``mcuboot.pem``, referenced from ``mcuboot.yaml``.
 
     The YAML holds a ``!file`` reference and nothing key-shaped; the
-    material lives in its own file (PO 2026-08-14). Both
-    are under the key-material rule — insecure
-    permissions are a refusal, never a warning, checked before the
-    first byte is used. An inline PEM block is refused with the
+    material lives in its own file. Both are under the key-material
+    rule — insecure permissions are a refusal, never a warning, checked
+    before the first byte is used. An inline PEM block is refused with the
     migration in the hint: the two-file shape is the only one.
     """
     file = project.firmware_secrets_file

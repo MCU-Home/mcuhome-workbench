@@ -166,7 +166,7 @@ def test_editing_yaml_writes_the_reference_back_never_the_content(tmp_path: Path
 
 
 def test_the_device_secrets_file_answers_first(write_config) -> None:
-    """The ladder (PO 2026-08-15): device value beats main.yaml."""
+    """The ladder: device value beats main.yaml."""
     entry = write_config(CONFIG_WITH_SECRET, secrets="device_label: From Main\n")
     device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
     device_file.parent.mkdir(mode=0o700)
