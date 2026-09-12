@@ -85,8 +85,8 @@ from mcuhome.workbench.buildenvsession import (
     EnvironmentUnavailable,
     EnvironmentUnusable,
     Launcher,
-    LocalOutcome,
     Step,
+    StepResult,
     host_limits,
 )
 from mcuhome.workbench.buildprocess import (
@@ -485,7 +485,7 @@ def step_mounts(step: Step) -> list[Mount]:
         Mount(source=step.request, target=REQUEST_TARGET, read_only=True),
         Mount(source=session.sdk_tree, target=SDK_TARGET, read_only=True),
         Mount(source=session.context_dir, target=CONTEXT_TARGET, read_only=True),
-        Mount(source=step.out, target=OUT_TARGET),
+        Mount(source=step.out_dir, target=OUT_TARGET),
     ]
     for name in CACHE_TIERS:
         tier = step.cache.get(name)
@@ -906,7 +906,7 @@ class ContainerBuildResult:
     that delivered them.
     """
 
-    outcome: LocalOutcome
+    outcome: StepResult
     out_dir: Path
     context_dir: Path
     image: str
@@ -1031,7 +1031,7 @@ def run_locked_build(
                 seam.remove(name)
     return ContainerBuildResult(
         outcome=outcome,
-        out_dir=session.out,
+        out_dir=session.out_dir,
         context_dir=context_dir,
         image=recorded,
     )

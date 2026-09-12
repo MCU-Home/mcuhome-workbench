@@ -72,7 +72,7 @@ from mcuhome.workbench.buildenvsession import (
     RESULT_PREFIX,
     RESULT_SUFFIX,
     SPEC_GENERATION,
-    LocalOutcome,
+    StepResult,
 )
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
@@ -2602,7 +2602,7 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
     """Context in, unsigned artifacts out — the same answer shape as ``local``.
 
     "Same fields, same meanings" is a claim about
-    :class:`~mcuhome.workbench.buildenvsession.LocalOutcome`, so it is
+    :class:`~mcuhome.workbench.buildenvsession.StepResult`, so it is
     asserted *against* it rather than against this dataclass's own
     values: the shared fields are named, the two sets of fields that are
     deliberately not shared are named too — so a new divergence fails
@@ -2615,16 +2615,16 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
     """
     lines: list[str] = []
     result = _remote_build(tmp_path, on_line=lines.append)
-    assert result.successful is True
+    assert result.ok is True
     assert result.action == "build"
     assert result.context_id.startswith("sha256:")
-    assert result.out == tmp_path / "work" / "out"
-    assert (result.out / "build-report.json").is_file()
+    assert result.out_dir == tmp_path / "work" / "out"
+    assert (result.out_dir / "build-report.json").is_file()
     assert result.error is None
 
     remote_fields = {field.name for field in dataclasses.fields(sc.RemoteBuildResult)}
-    local_fields = {field.name for field in dataclasses.fields(LocalOutcome)}
-    assert {"action", "context_id", "status", "successful", "artifacts", "out"} <= (
+    local_fields = {field.name for field in dataclasses.fields(StepResult)}
+    assert {"action", "context_id", "status", "artifacts", "out_dir"} <= (
         remote_fields & local_fields
     )
     assert remote_fields - local_fields == {"error", "invocation_id", "image"}, (
@@ -2637,7 +2637,7 @@ def test_run_remote_build_mirrors_the_local_backend_shape(tmp_path: Path) -> Non
 
     # The same expression over both answers, which is the property the
     # docstring claims and a `dict` on one side would have broken.
-    local = LocalOutcome(
+    local = StepResult(
         action="build",
         context_id=result.context_id,
         exit_code=0,
@@ -2661,7 +2661,7 @@ def test_run_remote_build_can_verify_as_well_as_build(tmp_path: Path) -> None:
     """
     result = _remote_build(tmp_path, action="verify")
     assert result.action == "verify"
-    assert result.successful is True
+    assert result.ok is True
 
 
 def test_run_remote_build_refuses_an_action_no_server_performs(tmp_path: Path) -> None:
@@ -2686,7 +2686,7 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
     it, and states the hazard: "an old ``out/firmware.hex`` that still
     matched a re-declared hash would let a later non-conforming build
     slip through egress". Remotely the same directory is both the
-    delivery target and what :attr:`RemoteBuildResult.out` points a host
+    delivery target and what :attr:`RemoteBuildResult.out_dir` points a host
     signer at — and the signer resolves ``firmware.bin`` beside the build
     report by *scanning the directory*, not by consulting the declared
     list, so a leftover is what it signs.
@@ -2697,7 +2697,7 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
     (out / "stale-extra.bin").write_bytes(b"never declared by anybody")
 
     result = _remote_build(tmp_path)
-    assert result.successful is True
+    assert result.ok is True
     assert not (out / "stale-extra.bin").exists(), "a leftover survived into a new delivery"
     assert (out / "firmware.bin").read_bytes() == b"\x00\x01\x02\x03"
     assert sorted(path.name for path in out.iterdir()) == [

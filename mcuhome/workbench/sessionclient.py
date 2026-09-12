@@ -116,6 +116,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench.build import DEFAULT_MAX_WAIT_SECONDS
+from mcuhome.workbench.buildenvsession import STATUS_SUCCESS
 from mcuhome.workbench.contextdir import read_context_request
 
 __all__ = [
@@ -2217,7 +2218,7 @@ class ArtifactDelivery:
 
     :attr:`root` is where the files actually are, and every artifact's
     ``path`` is relative to it — the same relationship
-    :attr:`mcuhome.workbench.buildenvsession.LocalOutcome.out` has to its own
+    :attr:`mcuhome.workbench.buildenvsession.StepResult.out_dir` has to its own
     artifact list, so a caller that signs an image afterwards does not
     have to know which target produced it — including the *type* of
     that list, which is :class:`mcuhome.model.artifacts.Artifact` on both
@@ -2239,15 +2240,15 @@ class ArtifactDelivery:
 
 @dataclass(frozen=True)
 class RemoteBuildResult:
-    """What one remote invocation produced, in ``LocalOutcome``'s shape.
+    """What one remote invocation produced, in ``StepResult``'s shape.
 
     The fields a dispatcher over the two targets reads are the
     same fields with the same meanings and the same *types*:
-    :attr:`action`, :attr:`context_id`, :attr:`status`,
-    :attr:`successful`, :attr:`artifacts` — a tuple of
+    :attr:`action`, :attr:`context_id`, :attr:`status`, :attr:`ok`,
+    :attr:`artifacts` — a tuple of
     :class:`mcuhome.model.artifacts.Artifact`, the very class
-    :attr:`~mcuhome.workbench.buildenvsession.LocalOutcome.artifacts` carries
-    — and :attr:`out`, where those files are on this machine.
+    :attr:`~mcuhome.workbench.buildenvsession.StepResult.artifacts` carries
+    — and :attr:`out_dir`, where those files are on this machine.
     :attr:`context_id` is the identity the work is attributed to, the one
     the *server* computed and this client already compared against its
     own.
@@ -2258,7 +2259,7 @@ class RemoteBuildResult:
     local counterpart and could only come from the far side: which
     delivery of the pinned package set actually ran is the server's
     choice, and it answers it at ``send-context``. Four of
-    ``LocalOutcome``'s have no remote
+    ``StepResult``'s have no remote
     counterpart — ``exit_code``, ``result``, ``problems`` and
     ``violation`` are what a backend sees of a container it started
     itself, and a client that invented them from a verdict would be
@@ -2268,9 +2269,8 @@ class RemoteBuildResult:
     action: str
     context_id: str
     status: str
-    successful: bool
     artifacts: tuple[Artifact, ...]
-    out: Path | None
+    out_dir: Path | None
     error: dict[str, Any] | None = None
     invocation_id: str = ""
     #: The build environment that served this build, as the server named
@@ -2281,6 +2281,16 @@ class RemoteBuildResult:
     #: stays as documentation of where it was found. Empty when the
     #: server named none.
     image: str = ""
+
+    @property
+    def ok(self) -> bool:
+        """Whether the invocation did what it was asked.
+
+        Derived from :attr:`status`, the way the local side derives it:
+        a verdict stored beside the word it comes from is one fact in two
+        places, and the two can disagree.
+        """
+        return self.status == STATUS_SUCCESS
 
 
 def served_environment(accepted: Mapping[str, Any]) -> str:
@@ -2473,9 +2483,8 @@ async def run_remote_build(
                 action=action,
                 context_id=str(verdict.get("context") or identity),
                 status=status,
-                successful=status == "success",
                 artifacts=artifacts,
-                out=delivered,
+                out_dir=delivered,
                 error=verdict.get("error"),
                 invocation_id=invocation_id,
                 image=served,

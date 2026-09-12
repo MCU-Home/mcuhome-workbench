@@ -120,7 +120,7 @@ What is here, in the order a caller needs it:
     that never touches any of it builds the way the machine is
     configured, which is the point: the registry derives no command-line
     flag for these keys.
-``BuilderSession`` / ``LocalOutcome``
+``BuilderSession`` / ``StepResult``
     The **backend role**, for the caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a
     context somebody else created and locked, plus the environment that
@@ -202,8 +202,8 @@ from mcuhome.workbench.buildenvsession import (
     CacheTier,
     EnvironmentUnavailable,
     EnvironmentUnusable,
-    LocalOutcome,
     Step,
+    StepResult,
 )
 from mcuhome.workbench.builders import Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
@@ -323,7 +323,6 @@ __all__ = [
     "GenerationError",
     "InitResult",
     "LocalBuild",
-    "LocalOutcome",
     "Location",
     "MARKER_FILE",
     "MCUHomeError",
@@ -357,6 +356,7 @@ __all__ = [
     "Setting",
     "Settings",
     "Step",
+    "StepResult",
     "UPGRADE_FILE",
     "UnknownBuildMode",
     "UnknownBuildTarget",

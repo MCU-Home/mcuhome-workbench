@@ -518,7 +518,7 @@ def test_an_entry_point_that_cannot_be_executed_refuses_at_once(
 def test_a_step_runs_against_the_store_and_delivers(tmp_path, environment) -> None:
     result = run_one_step(tmp_path, environment)
 
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert result.outcome.status == "success"
     assert [artifact.path for artifact in result.outcome.artifacts] == ["firmware.bin"]
     assert (result.out_dir / "firmware.bin").read_text(encoding="utf-8") == "FIRMWARE"
@@ -602,7 +602,7 @@ def test_the_tiers_a_caller_states_are_the_ones_the_step_gets(tmp_path, environm
     values = child_environment(result)
     step = sorted((tmp_path / "work" / "session" / "steps").iterdir())[-1]
 
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert (step / "mcuhome" / "cache" / "project").resolve() == project.resolve()
     # `local` is the most local tier and is always writable, so it stays
     # the compiler cache even when a caller provided another one — which
@@ -621,7 +621,7 @@ def test_the_store_is_byte_identical_after_a_build(tmp_path, store, environment)
     result = run_one_step(tmp_path, environment)
     after = snapshot(store)
 
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert before == after
 
 
@@ -644,7 +644,7 @@ def test_the_frozen_store_denies_a_build_that_tries_to_write_into_it(
     before = snapshot(store)
     result = run_one_step(tmp_path, environment)
 
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert snapshot(store) == before
 
 
@@ -797,7 +797,7 @@ def test_a_developer_build_runs_the_builder_out_of_the_checkout(tmp_path, develo
     result = run_one_step(tmp_path, environment, env=env)
     values = child_environment(result)
 
-    assert result.outcome.successful
+    assert result.outcome.ok
     # `python3 -m mcuhome.compiler.abi`, with no arguments after it —
     # the specification's invocation, one process earlier than the entry
     # point would have made it.
@@ -991,7 +991,7 @@ def test_a_context_with_patches_builds_against_a_store(tmp_path, environment) ->
         work_root=tmp_path / "work",
         env=CALLER_ENV,
     )
-    assert result.outcome.successful
+    assert result.outcome.ok
 
 
 def test_an_empty_patch_directory_is_not_a_patched_context(tmp_path, developer) -> None:
@@ -1009,7 +1009,7 @@ def test_an_empty_patch_directory_is_not_a_patched_context(tmp_path, developer) 
         work_root=tmp_path / "work",
         env=developer_env(developer),
     )
-    assert result.outcome.successful
+    assert result.outcome.ok
 
 
 # --------------------------------------------------------------------------
@@ -1318,7 +1318,7 @@ def test_the_request_document_carries_the_limits_and_nothing_enforces_them(
         environment,
         limits=buildenvsession.BuildLimits(cpus=2, memory_bytes=4 * 1024**3),
     )
-    assert result.outcome.successful, result.outcome.problems
+    assert result.outcome.ok, result.outcome.problems
     documents = sorted((tmp_path / "work" / "session" / "steps").glob("*/mcuhome/*.json"))
     request = json.loads(documents[-1].read_text(encoding="utf-8"))
     assert request["limits"] == {"cpus": 2.0, "memory_bytes": 4 * 1024**3}

@@ -1626,7 +1626,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
     outcome = result.outcome
     _refuse_unsupported(outcome.status)
     return BuildResult(
-        ok=outcome.successful,
+        ok=outcome.ok,
         target=TARGET_LOCAL,
         device=request.model.device.name,
         context_id=outcome.context_id,
@@ -1669,7 +1669,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
     outcome = result.outcome
     _refuse_unsupported(outcome.status)
     return BuildResult(
-        ok=outcome.successful,
+        ok=outcome.ok,
         target=TARGET_LOCAL,
         device=request.model.device.name,
         context_id=outcome.context_id,
@@ -1857,12 +1857,12 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
     )
     _refuse_unsupported(result.status)
     return BuildResult(
-        ok=result.successful,
+        ok=result.ok,
         target=TARGET_REMOTE,
         device=request.model.device.name,
         context_id=result.context_id,
         artifacts=tuple(result.artifacts),
-        out_dir=result.out,
+        out_dir=result.out_dir,
         report=BUILD_REPORT_FILE,
         # What actually built it, in the same form a local container
         # build records: the server chose the delivery and is the only

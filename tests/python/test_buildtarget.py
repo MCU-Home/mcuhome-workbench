@@ -54,14 +54,13 @@ def _local_result(tmp_path, seen: dict):
 
     def fake(device_model, **kwargs):
         seen.update(kwargs)
-        outcome = lb.LocalOutcome(
+        outcome = lb.StepResult(
             action="build",
             context_id="sha256:" + "1" * 64,
             exit_code=0,
             status="success",
-            successful=True,
             artifacts=(),
-            out=tmp_path / "delivery",
+            out_dir=tmp_path / "delivery",
         )
         return containerbuild.ContainerBuildResult(
             outcome=outcome,
@@ -201,9 +200,8 @@ def test_a_remote_target_reaches_the_session_client(model, tmp_path, monkeypatch
             action="build",
             context_id="sha256:" + "2" * 64,
             status="success",
-            successful=True,
             artifacts=(),
-            out=tmp_path / "out",
+            out_dir=tmp_path / "out",
             invocation_id="inv-1",
         )
 

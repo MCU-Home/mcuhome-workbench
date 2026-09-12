@@ -33,7 +33,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -55,7 +55,7 @@ from mcuhome.workbench import build, containerbuild, sessionclient, subprocessbu
 from mcuhome.workbench.buildenvsession import (
     EnvironmentUnavailable,
     EnvironmentUnusable,
-    LocalOutcome,
+    StepResult,
 )
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
@@ -144,9 +144,8 @@ def _remote_context_of(
             action="build",
             context_id="sha256:" + "2" * 64,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=Path(fields["out_dir"]) / "out",
+            out_dir=Path(fields["out_dir"]) / "out",
             invocation_id="inv-1",
         )
 
@@ -164,6 +163,66 @@ def _remote_context_of(
         build.TARGET_REMOTE,
     )
     return outcome, sent["request"], lines
+
+
+# --------------------------------------------------------------------------
+# What a build may be given
+# --------------------------------------------------------------------------
+
+
+def test_the_request_carries_the_fields_the_reference_states(model, tmp_path) -> None:
+    """The request is one list of fields, and the reference is that list.
+
+    Every field is here in the order the API reference states, and
+    nothing else is: a caller reading the reference and a caller reading
+    the class have to arrive at the same object.
+    """
+    assert [entry.name for entry in fields(build.BuildRequest)] == [
+        "model",
+        "out_dir",
+        "env",
+        "options",
+        "builder",
+        "mode",
+        "container_image",
+        "project_root",
+        "registries",
+        "signing_pub",
+        "patches_dir",
+        "context_dir",
+        "work_root",
+        "wait_for_turn",
+        "max_wait_seconds",
+        "on_line",
+        "on_step",
+        "on_wait",
+    ]
+
+
+@pytest.mark.parametrize(
+    "retired",
+    [
+        "sdk_sources",
+        "server",
+        "token",
+        "builder_image",
+        "dev_workspace",
+        "ccache_dir",
+        "build_mode",
+    ],
+)
+def test_a_field_that_moved_is_refused_rather_than_ignored(model, tmp_path, retired) -> None:
+    """A keyword that was a field is a `TypeError`, not a silent no-op.
+
+    Every one of these moved somewhere a caller can still reach: the
+    three package source lists, the development workspace and the cache
+    root are `BuildOptions`, the build server and its token are the
+    selected builder, and the mode is spelled the way its configuration
+    key is. A request that still passed one of them would build with the
+    value dropped.
+    """
+    with pytest.raises(TypeError):
+        build.BuildRequest(model=model, out_dir=tmp_path, **{retired: None})
 
 
 # --------------------------------------------------------------------------
@@ -291,14 +350,13 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
 
     def fake(device_model, **kwargs):
         seen.update(kwargs)
-        outcome = LocalOutcome(
+        outcome = StepResult(
             action="build",
             context_id="sha256:" + "2" * 64,
             exit_code=0,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=tmp_path / "delivery",
+            out_dir=tmp_path / "delivery",
         )
         return subprocessbuild.SubprocessBuildResult(
             outcome=outcome,
@@ -373,7 +431,7 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
         driven["context_dir"] = context_dir
         driven.update(kwargs)
         return subprocessbuild.SubprocessBuildResult(
-            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=StepResult(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=kwargs["environment"],
@@ -455,7 +513,7 @@ def test_the_environment_is_checked_before_the_context_is_locked(
         subprocessbuild,
         "run_locked_build",
         lambda context_dir, **kwargs: subprocessbuild.SubprocessBuildResult(
-            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=StepResult(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=kwargs["environment"],
@@ -501,14 +559,13 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
 
     def fake(device_model, **kwargs):
         seen.update(kwargs)
-        outcome = LocalOutcome(
+        outcome = StepResult(
             action="build",
             context_id="sha256:" + "1" * 64,
             exit_code=0,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=tmp_path / "delivery",
+            out_dir=tmp_path / "delivery",
         )
         return containerbuild.ContainerBuildResult(
             outcome=outcome,
@@ -553,14 +610,13 @@ def test_a_build_answers_one_document_whichever_target_ran(model, tmp_path, monk
     def fake(device_model, **kwargs):
         del device_model, kwargs
         return containerbuild.ContainerBuildResult(
-            outcome=LocalOutcome(
+            outcome=StepResult(
                 action="build",
                 context_id="sha256:" + "1" * 64,
                 exit_code=0,
                 status="success",
-                successful=True,
                 artifacts=_artifacts(),
-                out=tmp_path / "delivery",
+                out_dir=tmp_path / "delivery",
             ),
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
@@ -613,13 +669,12 @@ def test_an_environment_that_cannot_build_is_unusable_rather_than_failed(
     def local(device_model, **kwargs):
         del device_model, kwargs
         return containerbuild.ContainerBuildResult(
-            outcome=LocalOutcome(
+            outcome=StepResult(
                 action="build",
                 context_id="sha256:" + "1" * 64,
                 exit_code=1,
                 status="unsupported",
-                successful=False,
-                out=tmp_path / "delivery",
+                out_dir=tmp_path / "delivery",
             ),
             out_dir=tmp_path / "delivery",
             context_dir=context,
@@ -632,9 +687,8 @@ def test_an_environment_that_cannot_build_is_unusable_rather_than_failed(
             action="build",
             context_id="sha256:" + "2" * 64,
             status="unsupported",
-            successful=False,
             artifacts=(),
-            out=tmp_path / "out",
+            out_dir=tmp_path / "out",
             invocation_id="inv-1",
         )
 
@@ -670,14 +724,13 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
 
     def fake(device_model, **kwargs):
         seen["holder"] = holder_of(tmp_path)
-        outcome = LocalOutcome(
+        outcome = StepResult(
             action="build",
             context_id="sha256:" + "1" * 64,
             exit_code=0,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=tmp_path / "delivery",
+            out_dir=tmp_path / "delivery",
         )
         return containerbuild.ContainerBuildResult(
             outcome=outcome,
@@ -709,9 +762,8 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
             action="build",
             context_id="sha256:" + "2" * 64,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=tmp_path / "out",
+            out_dir=tmp_path / "out",
             invocation_id="inv-1",
         )
 
@@ -1132,7 +1184,7 @@ def test_a_development_workspace_reaches_the_composition(model, tmp_path, monkey
     def fake(device_model, **kwargs):
         seen.update(kwargs)
         return subprocessbuild.SubprocessBuildResult(
-            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=StepResult(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=tmp_path / "context",
             environment=kwargs["environment"],
@@ -1194,7 +1246,7 @@ def test_a_development_context_has_the_same_id_from_two_workspaces(
 
     def fake(context_dir, *, environment, **kwargs):
         return subprocessbuild.SubprocessBuildResult(
-            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=StepResult(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=environment,
@@ -1393,9 +1445,8 @@ def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, mon
             action="build",
             context_id="sha256:" + "2" * 64,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=tmp_path / "out",
+            out_dir=tmp_path / "out",
             invocation_id="inv-1",
             image=f"ghcr.io/mcu-home/build-environment@{digest}",
         )
@@ -1437,9 +1488,8 @@ def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, mon
             action="build",
             context_id="sha256:" + "2" * 64,
             status="success",
-            successful=True,
             artifacts=_artifacts(),
-            out=tmp_path / "out",
+            out_dir=tmp_path / "out",
             invocation_id="inv-1",
         )
 
@@ -1759,7 +1809,7 @@ def test_a_subprocess_build_prints_the_override_note_the_container_one_prints(
 
     def fake_run(context_dir, **kwargs):
         return subprocessbuild.SubprocessBuildResult(
-            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=StepResult(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=kwargs["environment"],
@@ -1847,7 +1897,7 @@ def test_the_configured_cache_root_reaches_the_subprocess_profile(
     def fake_run(context_dir, **kwargs):
         seen.update(kwargs)
         return subprocessbuild.SubprocessBuildResult(
-            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            outcome=StepResult(action="build", context_id="", exit_code=0),
             out_dir=tmp_path / "out",
             context_dir=context_dir,
             environment=kwargs["environment"],

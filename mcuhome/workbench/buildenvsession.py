@@ -42,7 +42,7 @@ anything, or know what a build context is. It is handed a context
 directory, an SDK tree and an entry point, and it drives steps against
 them.
 
-The answer is :class:`LocalOutcome` — one type for both profiles, so
+The answer is :class:`StepResult` — one type for both profiles, so
 that a caller which only wants a firmware never has to ask which one
 ran.
 """
@@ -56,7 +56,7 @@ import shutil
 import stat
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +89,7 @@ __all__ = [
     "EnvironmentUnavailable",
     "EnvironmentUnusable",
     "Launcher",
-    "LocalOutcome",
+    "StepResult",
     "Step",
     "cache_tiers",
     "contained",
@@ -120,19 +120,24 @@ class EnvironmentUnusable(BuildError):
     """
 
 
-@dataclass
-class LocalOutcome:
+@dataclass(frozen=True)
+class StepResult:
     """What one step produced, from the orchestrator's side.
 
-    :attr:`successful` is the whole verdict a caller has to consult
-    before the other fields mean anything; :attr:`problems` is what it
-    renders when the verdict is no.
+    :attr:`ok` is the whole verdict a caller has to consult before the
+    other fields mean anything; :attr:`problems` is what it renders when
+    the verdict is no. :attr:`status` is beside it because a step has
+    three answers and not two — the third, ``unsupported``, says that no
+    environment of this kind can do the action at all.
 
     :attr:`violation` is §6.3's contradiction — a result document that
     says ``success`` after a non-zero exit, or a zero exit after
     anything else. It fails the step either way; carrying it separately
     is what lets a caller say that the *environment* misbehaved rather
     than the build.
+
+    Frozen: it is an answer about work that is over, and two callers
+    reading one step's result must see the same thing.
     """
 
     action: str
@@ -140,15 +145,25 @@ class LocalOutcome:
     exit_code: int | None
     result: dict[str, Any] | None = None
     status: str = "failure"
-    successful: bool = False
     problems: tuple[str, ...] = ()
     violation: str | None = None
     artifacts: tuple[Artifact, ...] = field(default_factory=tuple)
     #: The session's ``out`` directory on this machine — where every
     #: verified artifact in :attr:`artifacts` actually is (its ``path``
-    #: is relative to here). ``None`` on an outcome that never reached a
+    #: is relative to here). ``None`` on a result that never reached a
     #: step.
-    out: Path | None = None
+    out_dir: Path | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether this step did what it was asked, with nothing wrong.
+
+        Derived rather than stored, from the two facts that decide it:
+        the environment said ``success`` and the orchestrator found
+        nothing to hold against the step. A verdict a caller could set
+        beside those two would be a third fact that can contradict them.
+        """
+        return self.status == STATUS_SUCCESS and not self.problems
 
 
 # --------------------------------------------------------------------------
@@ -329,7 +344,7 @@ def judge_step(
     invocation_id: str,
     exit_code: int | None,
     context_id: str = "",
-) -> LocalOutcome:
+) -> StepResult:
     """Read the result document if it exists, and judge it (§6.2, §6.3).
 
     "The orchestrator reads the result document whenever it exists,
@@ -344,35 +359,39 @@ def judge_step(
     Everything else is a problem, and the problems are the message a
     caller renders.
 
-    :attr:`LocalOutcome.status` carries
+    :attr:`StepResult.status` carries
     the environment's own word, ``unsupported`` included: it means *no
     environment of my kind can do this* and tells the caller to look for
     a different environment rather than report a broken build, which is a
     decision this function must not make for it.
 
-    :attr:`LocalOutcome.violation` is
+    :attr:`StepResult.violation` is
     §6.3's contradiction — a document that says ``success`` after a
     non-zero exit, or a zero exit after anything else. It fails the step
     either way; carrying it separately is what lets a caller say that the
     *environment* misbehaved rather than the build.
     """
-    outcome = LocalOutcome(action=action, context_id=context_id, exit_code=exit_code, result=None)
     data = _load(path)
     if data is None:
-        outcome.problems = (
-            f"the build environment wrote no readable result document at {path.name}",
-        )
-        outcome.status = STATUS_FAILURE
-        if exit_code == 0:
+        return StepResult(
+            action=action,
+            context_id=context_id,
+            exit_code=exit_code,
+            status=STATUS_FAILURE,
+            problems=(
+                f"the build environment wrote no readable result document at {path.name}",
+            ),
             # §6.3 from the other side: exiting zero is a claim that a
             # success document was written, and there is none.
-            outcome.violation = "the build environment exited 0 and wrote no result document"
-        return outcome
+            violation=(
+                "the build environment exited 0 and wrote no result document"
+                if exit_code == 0
+                else None
+            ),
+        )
 
-    outcome.result = data
     problems: list[str] = []
     status = data.get("status")
-    outcome.status = status if status in _STATUSES else STATUS_FAILURE
 
     generation = data.get("spec_generation")
     if generation != SPEC_GENERATION:
@@ -394,10 +413,15 @@ def judge_step(
     if exit_code != 0:
         problems.append(f"the build environment exited {exit_code}")
 
-    outcome.violation = _violation(status, exit_code)
-    outcome.problems = tuple(problems)
-    outcome.successful = not problems
-    return outcome
+    return StepResult(
+        action=action,
+        context_id=context_id,
+        exit_code=exit_code,
+        result=data,
+        status=status if status in _STATUSES else STATUS_FAILURE,
+        problems=tuple(problems),
+        violation=_violation(status, exit_code),
+    )
 
 
 def _violation(status: object, exit_code: int | None) -> str | None:
@@ -739,7 +763,7 @@ class Step:
     #: §4's tree, resolved: the directories a launcher and a caller need.
     request: Path
     work: Path
-    out: Path
+    out_dir: Path
     entry_point: Path
     #: The stop sentinel. It is the *orchestrator's* file and is never
     #: named in the request document: generation 3 defines no cooperative
@@ -756,7 +780,7 @@ class Step:
     @property
     def result(self) -> Path:
         """Where this step's result document is (§6.2)."""
-        return self.out / f"{RESULT_PREFIX}{self.invocation_id}{RESULT_SUFFIX}"
+        return self.out_dir / f"{RESULT_PREFIX}{self.invocation_id}{RESULT_SUFFIX}"
 
     def stop(self) -> None:
         """Ask for this step to be stopped, and never raise for asking twice.
@@ -771,14 +795,14 @@ class Step:
         with contextlib.suppress(OSError):
             self.cancel.touch()
 
-    def run(self, *, on_line: LineSink | None = None) -> LocalOutcome:
+    def run(self, *, on_line: LineSink | None = None) -> StepResult:
         """Run the entry point, relay its log, and judge what came back."""
         session = self.session
         child = session.launcher(self, on_line)
         status = session.liveness(self).supervise(child)
         return self._collect(status)
 
-    def _collect(self, exit_code: int | None) -> LocalOutcome:
+    def _collect(self, exit_code: int | None) -> StepResult:
         """§6.2 and §6.3 for the document, §7 for the files it declares."""
         outcome = judge_step(
             self.result,
@@ -787,18 +811,18 @@ class Step:
             exit_code=exit_code,
             context_id=self.session.context_id,
         )
-        outcome.out = self.out
-        if outcome.result is not None:
-            declared = outcome.result.get("artifacts")
-            entries = declared if isinstance(declared, list) else []
-            verified, problems = verify_step_artifacts(self.out, entries)
-            outcome.artifacts = verified
-            if not isinstance(declared, list) and declared is not None:
-                problems = problems + ("the result document's artifacts are not a list",)
-            if problems:
-                outcome.problems = outcome.problems + problems
-                outcome.successful = False
-        return outcome
+        outcome = replace(outcome, out_dir=self.out_dir)
+        if outcome.result is None:
+            return outcome
+        declared = outcome.result.get("artifacts")
+        entries = declared if isinstance(declared, list) else []
+        verified, problems = verify_step_artifacts(self.out_dir, entries)
+        if not isinstance(declared, list) and declared is not None:
+            problems = problems + ("the result document's artifacts are not a list",)
+        # A problem found here fails the step the same way one found in
+        # the document does: `ok` is derived from the problems, so
+        # appending them is the whole of it.
+        return replace(outcome, artifacts=verified, problems=outcome.problems + problems)
 
 
 class BuilderSession:
@@ -809,7 +833,7 @@ class BuilderSession:
     that runs — and with the :data:`Launcher` that knows how to enter a
     step in the profile in use. :meth:`invoke` then runs one action to
     its end and answers the same
-    :class:`LocalOutcome` every other build path answers.
+    :class:`StepResult` every other build path answers.
 
     **The session owns ``out``** and nothing else that survives a step.
     It is created empty here and every step's ``mcuhome/out`` points at
@@ -877,7 +901,7 @@ class BuilderSession:
         # travel out of a build that never wrote one. `steps` is the same
         # question with disk attached: one build tree per build, kept
         # forever.
-        self.out = _fresh(self.root / "out")
+        self.out_dir = _fresh(self.root / "out")
         self._steps = _fresh(self.root / "steps")
         self._control = _fresh(self.root / "control")
         #: A home directory for a builder whose caller has none to state.
@@ -935,7 +959,7 @@ class BuilderSession:
         mcuhome = base / STEP_DIR
         work = mcuhome / STEP_WORK
         work.mkdir(mode=0o700, parents=True)
-        _link(mcuhome / STEP_OUT, self.out)
+        _link(mcuhome / STEP_OUT, self.out_dir)
         _link(mcuhome / STEP_SDK, self.sdk_tree)
         _link(mcuhome / STEP_CONTEXT, self.context_dir)
         cache, writable = self._lay_out_cache(mcuhome / STEP_CACHE)
@@ -951,7 +975,7 @@ class BuilderSession:
             base_dir=base,
             request=mcuhome / REQUEST_FILE,
             work=work,
-            out=self.out,
+            out_dir=self.out_dir,
             entry_point=entry_point,
             cache=cache,
             writable_cache=writable,
@@ -976,7 +1000,7 @@ class BuilderSession:
         *,
         parameters: Mapping[str, Any] | None = None,
         on_line: LineSink | None = None,
-    ) -> LocalOutcome:
+    ) -> StepResult:
         """Prepare one step, run it, and judge it."""
         step = self.prepare(action, parameters=parameters)
         self._running = True

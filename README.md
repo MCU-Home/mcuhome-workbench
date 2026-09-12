@@ -35,7 +35,7 @@ from mcuhome.workbench import api
 project, entry = api.find_device("kitchen", env=env, cwd=cwd)
 model = api.load_model(entry, project=project)
 request = api.BuildRequest(model=model, out_dir=out)
-outcome = await api.build_firmware(request, target="local")
+result = await api.build_firmware(request, target="local")
 ```
 
 Install the `remote` extra for the build-server client, or `generate` for writing

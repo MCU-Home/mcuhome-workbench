@@ -100,8 +100,8 @@ from mcuhome.workbench.buildenvsession import (
     BuildLimits,
     CacheTier,
     Launcher,
-    LocalOutcome,
     Step,
+    StepResult,
     cache_tiers,
     host_limits,
 )
@@ -1041,7 +1041,7 @@ class SubprocessBuildResult:
     there is none, and the environment is named by its packages instead.
     """
 
-    outcome: LocalOutcome
+    outcome: StepResult
     out_dir: Path
     context_dir: Path
     environment: Environment
@@ -1154,7 +1154,7 @@ def run_locked_build(
         outcome = session.invoke(ACTION_BUILD, on_line=on_line)
     return SubprocessBuildResult(
         outcome=outcome,
-        out_dir=session.out,
+        out_dir=session.out_dir,
         context_dir=context_dir,
         environment=environment,
     )

@@ -311,7 +311,7 @@ def _build(tmp_path, model, public_pem, **overrides):
 def test_a_container_build_composes_a_context_and_drives_one_step(tmp_path, model, public_pem):
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful, result.outcome.problems
+    assert result.outcome.ok, result.outcome.problems
     # What a build reports is the image it resolved to, tag and digest —
     # the tag is where it was found, the digest is what ran.
     assert result.image.startswith(f"{IMAGE}:")
@@ -347,7 +347,7 @@ def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):
         public_pem,
         on_step=lambda stage, **facts: steps.append((stage, facts)),
     )
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert [stage for stage, _facts in steps] == [
         "context",
         "context",
@@ -395,7 +395,7 @@ def test_the_private_key_never_appears_in_any_argv(tmp_path, model):
 
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_key_pem(private_pem))
-    assert result.outcome.successful
+    assert result.outcome.ok
 
     flat = _flatten(seam.calls)
     assert str(private_path) not in flat
@@ -431,7 +431,7 @@ def test_the_step_is_handed_the_specifications_tree_and_nothing_else(tmp_path, m
         public_pem,
         env={"HOME": str(tmp_path / "home"), "XDG_CACHE_HOME": str(tmp_path / "xdg")},
     )
-    assert result.outcome.successful, result.outcome.problems
+    assert result.outcome.ok, result.outcome.problems
     targets = {volume.removesuffix(":ro").rsplit(":", 1)[1] for volume in seam.volumes}
     assert targets == {
         containerbuild.REQUEST_TARGET,
@@ -459,7 +459,7 @@ def test_the_step_is_isolated_and_runs_as_the_calling_user(tmp_path, model, publ
     container is over when the step is."""
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful
+    assert result.outcome.ok
     argv = seam.step
     assert "--rm" in argv and "--init" in argv
     assert argv[argv.index("--network") + 1] == "none"
@@ -473,7 +473,7 @@ def test_the_request_document_is_the_fields_of_the_specification(tmp_path, model
     """§6.1's five mandatory fields, and the limits beside them."""
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert set(seam.request) == {
         "spec_generation",
         "session_id",
@@ -499,7 +499,7 @@ def test_the_recommended_limits_are_the_ones_the_container_is_held_to(tmp_path, 
         public_pem,
         options=build.BuildOptions(cpus=2, memory="4g"),
     )
-    assert result.outcome.successful
+    assert result.outcome.ok
     assert seam.request["limits"] == {"cpus": 2.0, "memory_bytes": 4 * 1024**3}
     argv = seam.step
     assert argv[argv.index("--cpus") + 1] == "2"
@@ -514,7 +514,7 @@ def test_a_build_nobody_bounded_is_given_this_machine(tmp_path, model, public_pe
     started the build."""
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful
+    assert result.outcome.ok
     argv = seam.step
     assert "--cpus" in argv and "--memory" in argv and "--pids-limit" in argv
     assert seam.request["limits"]["cpus"] == float(os.cpu_count() or 1)
@@ -617,7 +617,7 @@ def test_a_failed_step_comes_back_as_an_answer_and_not_as_an_exception(tmp_path,
 
     seam = Seam(build=failing, exit_status=1)
     _seam, result = _build(tmp_path, model, public_pem, seam=seam)
-    assert not result.outcome.successful
+    assert not result.outcome.ok
     assert result.outcome.status == "failure"
     assert any("the build failed" in problem for problem in result.outcome.problems)
 
@@ -685,7 +685,7 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
         context_dir=context,
         on_step=lambda stage, **facts: steps.append(stage),
     )
-    assert result.outcome.successful, result.outcome.problems
+    assert result.outcome.ok, result.outcome.problems
     assert result.context_dir == context
     # The directory it was given, locked in place — not a copy, and not a
     # second context somewhere under the work root.
@@ -842,7 +842,7 @@ def test_the_entry_point_is_named_by_its_path_and_not_left_to_the_image(
     """
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful
+    assert result.outcome.ok
     argv = seam.step
     assert argv[-1] == f"{containerbuild.BASE_DIR}mcuhome/bin/build-environment-entry"
     assert argv[-2].startswith(IMAGE), "the entry point is the command, the image is the image"
@@ -857,7 +857,7 @@ def test_a_stopped_step_has_its_container_removed_by_name(tmp_path, model, publi
     """
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful
+    assert result.outcome.ok
     name = seam.step[seam.step.index("--name") + 1]
     assert name.startswith("mcuhome-")
 
@@ -891,7 +891,7 @@ def test_a_machine_whose_memory_cannot_be_measured_states_no_memory_limit(
     monkeypatch.setattr(jobs, "_MEMINFO_PATH", tmp_path / "no-such-meminfo")
     make_sdk_source(tmp_path / "src")
     seam, result = _build(tmp_path, model, public_pem)
-    assert result.outcome.successful, result.outcome.problems
+    assert result.outcome.ok, result.outcome.problems
     argv = seam.step
     assert "--memory" not in argv
     assert "--cpus" in argv, "what the machine does know is still stated"
