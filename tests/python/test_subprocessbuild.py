@@ -553,7 +553,7 @@ def test_the_environment_the_child_is_given_is_composed_not_inherited(
 
 def test_the_compiler_cache_is_the_most_local_writable_tier(tmp_path, environment) -> None:
     cache = tmp_path / "ccache"
-    result = run_one_step(tmp_path, environment, ccache_dir=cache)
+    result = run_one_step(tmp_path, environment, cache_root=cache)
     values = child_environment(result)
 
     durable = cache / "cache-local" / "ccache"

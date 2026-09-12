@@ -255,16 +255,10 @@ def test_the_mode_selects_the_execution_the_local_target_runs(model, tmp_path) -
 
     subprocess_target = build.build_target_for(
         build.TARGET_LOCAL,
-        build.BuildRequest(
-            model=model,
-            out_dir=tmp_path,
-            build_mode=build.MODE_SUBPROCESS,
-            ccache_dir=tmp_path / "ccache",
-        ),
+        build.BuildRequest(model=model, out_dir=tmp_path, build_mode=build.MODE_SUBPROCESS),
     )
     execution = subprocess_target.execution
     assert isinstance(execution, build.SubprocessExecution)
-    assert execution.ccache_dir == tmp_path / "ccache"
 
 
 def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkeypatch):
@@ -295,7 +289,6 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
             model=model,
             out_dir=tmp_path,
             build_mode=build.MODE_SUBPROCESS,
-            ccache_dir=tmp_path / "ccache",
         ),
         build.TARGET_LOCAL,
     )
@@ -305,7 +298,6 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
     assert outcome.report == BUILD_REPORT_FILE
     # No image ran, and the outcome says so rather than naming one.
     assert outcome.image == ""
-    assert seen["ccache_dir"] == tmp_path / "ccache"
     # No job count travels: what a build may use of this machine is
     # `build.cpus`/`build.memory`, and the environment sizes itself from
     # the limits those become.
@@ -411,7 +403,7 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
     assert checked["generator"].startswith("mcuhome-workbench:")
     # Nobody configured a cache, so it is the user's cache directory —
     # the same answer a container build gets, from the same resolution.
-    assert driven["ccache_dir"] == tmp_path / "cache" / "mcuhome" / "ccache"
+    assert driven["cache_root"] == tmp_path / "cache" / "mcuhome" / "ccache"
     assert driven["context_dir"] == tmp_path / "context"
     assert [name for name, _ in steps] == ["environment", "environment", "compile"]
     assert steps[1][1]["build_environment"] == "mcuhome-build-workspace 0.1.0"
@@ -1668,7 +1660,7 @@ def test_the_configured_cache_root_reaches_the_subprocess_profile(
 
     The container profile reads it where it resolves the cache; this one
     resolves the cache the same way and must therefore read the same
-    key. It once read only the request field, so a machine that had
+    key. It once read a per-build override alone, so a machine that had
     moved its compiler cache kept it for container builds and silently
     lost it for `build.mode = subprocess`.
     """
@@ -1708,5 +1700,5 @@ def test_the_configured_cache_root_reaches_the_subprocess_profile(
         ),
         environment=FakeEnvironment(),
     )
-    assert seen["ccache_dir"] == tmp_path / "operators-disk"
+    assert seen["cache_root"] == tmp_path / "operators-disk"
     assert seen["tiers"]["local"].path == tmp_path / "operators-disk" / "cache-local"

@@ -737,15 +737,17 @@ def test_a_shared_cache_is_offered_read_only(tmp_path, model) -> None:
 
 
 def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> None:
-    """`ccache_dir` resolves through the configuration layers, so the
-    caller states it and this composition passes it on unchanged."""
+    """A cache root the caller states is passed on unchanged.
+
+    `build.cache_root` resolves through the configuration layers above
+    this composition, so what arrives here is already the answer."""
     make_sdk_source(tmp_path / "src")
     seam, _result = _build(
         tmp_path,
         model,
         public_key_pem(generate_key_pem(TEST_SCALAR)),
         env={"HOME": str(tmp_path / "home")},
-        ccache_dir=tmp_path / "fast-disk",
+        cache_root=tmp_path / "fast-disk",
     )
     assert (
         f"{tmp_path / 'fast-disk' / 'cache-local'}:{containerbuild.CACHE_TARGET}/local"
@@ -753,14 +755,12 @@ def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> No
     )
 
 
-def test_the_configured_cache_root_answers_when_the_request_states_none(tmp_path, model) -> None:
+def test_the_configured_cache_root_answers_when_nothing_else_does(tmp_path, model) -> None:
     """`build.cache_root` is where an operator moves the cache.
 
-    The request field is the per-build override; with none, the option
-    the configuration layers resolved is what this machine builds
-    against — and it is the only channel left, so a composition that
-    ignored it would send every build to the user's cache directory
-    whatever the machine was configured to do.
+    It is the only channel there is, so a composition that ignored it
+    would send every build to the user's cache directory whatever the
+    machine was configured to do.
     """
     make_sdk_source(tmp_path / "src")
     seam, _result = _build(

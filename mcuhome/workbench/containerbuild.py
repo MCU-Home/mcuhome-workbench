@@ -124,7 +124,7 @@ __all__ = [
     "Runtime",
     "cache_root",
     "check_image",
-    "ccache_directory",
+    "default_cache_root",
     "ensure_image",
     "image_for_context",
     "launcher",
@@ -403,7 +403,7 @@ def ensure_image(
 # --------------------------------------------------------------------------
 
 
-def ccache_directory(env: Mapping[str, str]) -> Path:
+def default_cache_root(env: Mapping[str, str]) -> Path:
     """Where the compiler cache lives on the host — the root of the tiers.
 
     A host directory rather than a named volume, for reasons that decide
@@ -452,7 +452,7 @@ def cache_root(env: Mapping[str, str], stated: Path | None) -> Path | None:
     if stated:
         return Path(stated)
     try:
-        return ccache_directory(env)
+        return default_cache_root(env)
     except ConfigError:
         return None
 

@@ -624,10 +624,6 @@ class BuildRequest:
     #: the execution instead, and one that states a mode here overrides
     #: the configuration for this build.
     build_mode: str | None = None
-    #: Where the compiler cache lives on this machine. ``None`` takes the
-    #: user's cache directory, which is what every build does unless
-    #: somebody moved it — one cache per user, shared by every project.
-    ccache_dir: Path | None = None
     #: A development build, for ``build.mode = subprocess`` only: a west
     #: workspace the developer maintains, built against instead of the
     #: environment MCUHome provisions into its store. ``None`` — the
@@ -976,7 +972,6 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                 )
             return LocalBuild(
                 execution=SubprocessExecution(
-                    ccache_dir=request.ccache_dir,
                     dev_workspace=(
                         request.dev_workspace
                         if request.dev_workspace is not None
@@ -997,11 +992,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                 developing,
                 source="this build" if request.build_mode else options.mode_source,
             )
-        return LocalBuild(
-            execution=ContainerExecution(
-                image=_stated_image(request), ccache_dir=request.ccache_dir
-            )
-        )
+        return LocalBuild(execution=ContainerExecution(image=_stated_image(request)))
     developing = (
         request.dev_workspace if request.dev_workspace is not None else options.dev_workspace
     )
@@ -1087,7 +1078,7 @@ def compose_local_build(
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
     image: str | None = None,
-    ccache_dir: Path | None = None,
+    cache_root: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
     on_line: Any = None,
@@ -1125,7 +1116,7 @@ def compose_local_build(
             registries=registries,
             environment=environment,
             created=created,
-            ccache_dir=ccache_dir,
+            cache_root=cache_root,
             context_dir=context_dir,
             on_line=on_line,
             on_step=on_step,
@@ -1142,7 +1133,7 @@ def compose_local_build(
         project_root=project_root,
         registries=registries,
         image=image,
-        ccache_dir=ccache_dir,
+        cache_root=cache_root,
         created=created,
         context_dir=context_dir,
         on_line=on_line,
@@ -1164,7 +1155,7 @@ def compose_container_build(
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
     image: str | None = None,
-    ccache_dir: Path | None = None,
+    cache_root: Path | None = None,
     created: datetime | None = None,
     context_dir: Path | None = None,
     on_line: Any = None,
@@ -1297,7 +1288,7 @@ def compose_container_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", image=resolved.reference, **_reported(limits))
-    root = containerbuild.cache_root(env, ccache_dir or options.cache_root)
+    root = containerbuild.cache_root(env, cache_root or options.cache_root)
     return containerbuild.run_locked_build(
         context_dir,
         image=resolved,
@@ -1335,7 +1326,7 @@ def compose_subprocess_build(
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
     created: datetime | None = None,
-    ccache_dir: Path | None = None,
+    cache_root: Path | None = None,
     context_dir: Path | None = None,
     on_line: Any = None,
     on_step: Any = None,
@@ -1503,7 +1494,7 @@ def compose_subprocess_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", image="", **_reported(limits))
-    cache_root = containerbuild.cache_root(dict(env), ccache_dir or options.cache_root)
+    root = containerbuild.cache_root(dict(env), cache_root or options.cache_root)
     return subprocessbuild.run_locked_build(
         context_dir,
         environment=environment,
@@ -1518,9 +1509,9 @@ def compose_subprocess_build(
         # and a caller without a home directory gets a slow build rather
         # than a refusal. The tiers on top of it are this profile's, and
         # each of them may be moved somewhere else outright.
-        ccache_dir=cache_root,
+        cache_root=root,
         tiers=cache_tiers(
-            ccache_dir=cache_root,
+            ccache_dir=root,
             local_dir=options.cache_local,
             shared_ccache_dir=options.cache_shared,
             session_dir=options.cache_session,
@@ -1564,7 +1555,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
-        ccache_dir=execution.ccache_dir,
+        cache_root=execution.cache_root,
         context_dir=request.context_dir,
         on_line=request.on_line,
         on_step=request.on_step,
@@ -1608,7 +1599,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         project_root=request.project_root,
         registries=request.registries,
         image=execution.image,
-        ccache_dir=execution.ccache_dir,
+        cache_root=execution.cache_root,
         context_dir=request.context_dir,
         on_line=request.on_line,
         on_step=request.on_step,

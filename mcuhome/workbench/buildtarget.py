@@ -155,10 +155,11 @@ class ContainerExecution(Execution):
     #: repositories for an image whose labels declare the package set the
     #: context pinned.
     image: str | None = None
-    #: Where the compiler cache lives on this machine. ``None`` takes the
-    #: user's cache directory, which is what every build does unless
-    #: somebody moved it — one cache per user, shared by every project.
-    ccache_dir: Path | None = None
+    #: Where the compiler cache lives on this machine — the root the
+    #: tiers are laid out under. ``None`` takes ``build.cache_root``,
+    #: and the user's cache directory where that is unset: one cache per
+    #: user, shared by every project.
+    cache_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -180,9 +181,10 @@ class SubprocessExecution(Execution):
     """
 
     #: Where the compiler cache lives on this machine, as for a container
-    #: build: the parent of the two role directories. ``None`` builds
-    #: without a durable cache, which is slow rather than wrong.
-    ccache_dir: Path | None = None
+    #: build: the parent of the two role directories. ``None`` takes
+    #: ``build.cache_root``, and builds without a durable cache where
+    #: neither that nor a cache home answers — slow rather than wrong.
+    cache_root: Path | None = None
     #: A development build: the west workspace to build against
     #: **instead of** the environment MCUHome would provision into its
     #: store — the developer's own, so that a change in it can be built

@@ -116,12 +116,11 @@ def test_the_local_target_is_a_local_build_in_a_container(model, tmp_path) -> No
         model=model,
         out_dir=tmp_path,
         image="registry.example.test/other/environment:test",
-        ccache_dir=tmp_path / "ccache",
     )
     target = build.build_target_for(build.TARGET_LOCAL, request)
     assert target == buildtarget.LocalBuild(
         execution=buildtarget.ContainerExecution(
-            image="registry.example.test/other/environment:test", ccache_dir=tmp_path / "ccache"
+            image="registry.example.test/other/environment:test"
         )
     )
 
@@ -175,20 +174,19 @@ def test_a_stated_target_beats_the_requests_target_fields(model, tmp_path, monke
         model=model,
         out_dir=tmp_path,
         image="registry.example.test/other/environment:from-the-request",
-        ccache_dir=tmp_path / "from-the-request",
     )
     outcome = _build(
         request,
         buildtarget.LocalBuild(
             execution=buildtarget.ContainerExecution(
                 image="registry.example.test/other/environment:from-the-target",
-                ccache_dir=tmp_path / "from-the-target",
+                cache_root=tmp_path / "from-the-target",
             )
         ),
     )
     assert outcome.successful
     assert seen["image"] == "registry.example.test/other/environment:from-the-target"
-    assert seen["ccache_dir"] == tmp_path / "from-the-target"
+    assert seen["cache_root"] == tmp_path / "from-the-target"
 
 
 def test_a_remote_target_reaches_the_session_client(model, tmp_path, monkeypatch) -> None:
@@ -234,7 +232,6 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
         model=model,
         out_dir=tmp_path,
         image="registry.example.test/other/environment:test",
-        ccache_dir=tmp_path / "ccache",
     )
 
     by_name: dict[str, object] = {}
