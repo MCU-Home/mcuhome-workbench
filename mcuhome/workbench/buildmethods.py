@@ -1500,7 +1500,7 @@ def compose_subprocess_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", image="", **_reported(limits))
-    cache_root = containerbuild.cache_root(dict(env), ccache_dir)
+    cache_root = containerbuild.cache_root(dict(env), ccache_dir or options.cache_root)
     return subprocessbuild.run_locked_build(
         context_dir,
         environment=environment,

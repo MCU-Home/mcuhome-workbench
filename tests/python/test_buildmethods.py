@@ -1663,3 +1663,54 @@ def _publish_workspace(directory: Path, version: str) -> None:
         },
     }
     (directory / "index.json").write_text(json.dumps(index), encoding="utf-8")
+
+
+def test_the_configured_cache_root_reaches_the_subprocess_profile(
+    model, tmp_path, monkeypatch
+) -> None:
+    """`build.cache_root` is the operator's key, and both profiles obey it.
+
+    The container profile reads it where it resolves the cache; this one
+    resolves the cache the same way and must therefore read the same
+    key. It once read only the request field, so a machine that had
+    moved its compiler cache kept it for container builds and silently
+    lost it for `build.mode = subprocess`.
+    """
+    seen: dict[str, object] = {}
+
+    def fake_run(context_dir, **kwargs):
+        seen.update(kwargs)
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=LocalOutcome(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=kwargs["environment"],
+        )
+
+    monkeypatch.setattr(subprocessbuild, "run_locked_build", fake_run)
+    monkeypatch.setattr(buildmethods, "lock_context", lambda directory: None)
+    monkeypatch.setattr(subprocessbuild, "check_environment", lambda environment, **facts: None)
+
+    class FakeEnvironment:
+        developer = False
+
+        def described(self) -> str:
+            return "mcuhome-build-workspace 0.9.0"
+
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    buildmethods.compose_subprocess_build(
+        model,
+        sdk_sources=(source,),
+        work_root=tmp_path / "work",
+        env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
+        signing_pub=_PUBLIC_PEM,
+        options=buildmethods.BuildOptions(
+            workspace_sources=(source,),
+            tools_sources=(source,),
+            cache_root=tmp_path / "operators-disk",
+        ),
+        environment=FakeEnvironment(),
+    )
+    assert seen["ccache_dir"] == tmp_path / "operators-disk"
+    assert seen["tiers"]["local"].path == tmp_path / "operators-disk" / "cache-local"

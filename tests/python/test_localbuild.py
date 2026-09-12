@@ -753,6 +753,29 @@ def test_a_stated_cache_directory_wins_over_the_users_own(tmp_path, model) -> No
     )
 
 
+def test_the_configured_cache_root_answers_when_the_request_states_none(tmp_path, model) -> None:
+    """`build.cache_root` is where an operator moves the cache.
+
+    The request field is the per-build override; with none, the option
+    the configuration layers resolved is what this machine builds
+    against — and it is the only channel left, so a composition that
+    ignored it would send every build to the user's cache directory
+    whatever the machine was configured to do.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam, _result = _build(
+        tmp_path,
+        model,
+        public_key_pem(generate_key_pem(TEST_SCALAR)),
+        env={"HOME": str(tmp_path / "home")},
+        options=buildmethods.BuildOptions(cache_root=tmp_path / "operators-disk"),
+    )
+    assert (
+        f"{tmp_path / 'operators-disk' / 'cache-local'}:{containerbuild.CACHE_TARGET}/local"
+        in seam.volumes
+    )
+
+
 # --------------------------------------------------------------------------
 # resolve_sdk_pin in isolation
 # --------------------------------------------------------------------------
