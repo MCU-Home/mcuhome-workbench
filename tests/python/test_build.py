@@ -233,7 +233,7 @@ def test_no_preference_is_the_container(nothing) -> None:
     """
     assert build.resolve_build_mode(nothing) == build.MODE_CONTAINER
     assert build.DEFAULT_BUILD_MODE == build.MODE_CONTAINER
-    assert build.BuildRequest(model=None, out_dir=Path()).build_mode is None
+    assert build.BuildRequest(model=None, out_dir=Path()).mode is None
     assert build.BuildOptions().mode == build.MODE_CONTAINER
 
 
@@ -255,7 +255,7 @@ def test_the_mode_selects_the_execution_the_local_target_runs(model, tmp_path) -
 
     subprocess_target = build.build_target_for(
         build.TARGET_LOCAL,
-        build.BuildRequest(model=model, out_dir=tmp_path, build_mode=build.MODE_SUBPROCESS),
+        build.BuildRequest(model=model, out_dir=tmp_path, mode=build.MODE_SUBPROCESS),
     )
     execution = subprocess_target.execution
     assert isinstance(execution, build.SubprocessExecution)
@@ -288,7 +288,7 @@ def test_the_subprocess_mode_reaches_its_own_composition(model, tmp_path, monkey
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=build.MODE_SUBPROCESS,
+            mode=build.MODE_SUBPROCESS,
         ),
         build.TARGET_LOCAL,
     )
@@ -321,7 +321,7 @@ def test_a_subprocess_build_resolves_its_pins_like_every_other_build(model, tmp_
                     model=model,
                     out_dir=tmp_path,
                     signing_pub=_PUBLIC_PEM,
-                    build_mode=build.MODE_SUBPROCESS,
+                    mode=build.MODE_SUBPROCESS,
                 ),
                 target=build.LocalBuild(execution=build.SubprocessExecution()),
             )
@@ -921,7 +921,7 @@ def test_the_development_workspace_reaches_the_execution(model, tmp_path) -> Non
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=build.MODE_SUBPROCESS,
+            mode=build.MODE_SUBPROCESS,
             dev_workspace=tmp_path / "west-workspace",
         ),
     )
@@ -943,7 +943,7 @@ def test_a_development_workspace_is_refused_for_a_container_build(model, tmp_pat
             build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                build_mode=build.MODE_CONTAINER,
+                mode=build.MODE_CONTAINER,
                 dev_workspace=tmp_path / "west-workspace",
             ),
         )
@@ -1424,7 +1424,7 @@ def test_an_image_named_for_this_build_is_refused_without_a_container(model, tmp
             build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                build_mode=build.MODE_SUBPROCESS,
+                mode=build.MODE_SUBPROCESS,
                 container_image=":0.1.10.dev2-r1",
             ),
         )
@@ -1448,7 +1448,7 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=build.MODE_SUBPROCESS,
+            mode=build.MODE_SUBPROCESS,
             builder_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
         ),
     )

@@ -106,7 +106,7 @@ What is here, in the order a caller needs it:
     the same for the
     other axis — ``MODE_CONTAINER``, ``MODE_SUBPROCESS``
     (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or ``UnknownBuildMode`` —
-    and ``BuildRequest.build_mode`` is where a caller states it.
+    and ``BuildRequest.mode`` is where a caller states it.
 ``BuildOptions`` / ``build_options`` / ``options_for``
     What the ``build`` section of the configuration says about *this
     machine*: the execution it uses, where it keeps unpacked build

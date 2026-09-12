@@ -535,11 +535,6 @@ class BuildRequest:
     #: The environment to resolve tools, images and caches from — stated,
     #: never read from the process (:mod:`mcuhome.model.userpaths`).
     env: Mapping[str, str] = field(default_factory=dict)
-    #: The pristine mode a remote build's session protocol still
-    #: carries. A local build ignores it: under build-environment
-    #: specification generation 3 every step starts pristine by
-    #: definition (§3), so there is nothing to ask for.
-    mode: str = "clean"
     #: Where the build log goes, line by line, while it happens.
     on_line: LineSink | None = None
     #: Called with a step key when the build enters a new step —
@@ -617,13 +612,13 @@ class BuildRequest:
     #: answered with exactly that.
     options: BuildOptions | None = None
     #: How this machine executes the build: ``container`` or
-    #: ``subprocess``. ``None`` takes the ``build.mode`` configuration
-    #: key, which is where the answer ordinarily comes from; a caller
-    #: that builds a
+    #: ``subprocess``, the two values of ``build.mode``. ``None`` takes
+    #: that configuration key, which is where the answer ordinarily
+    #: comes from; a caller that builds a
     #: :class:`~mcuhome.workbench.buildtarget.BuildTarget` itself states
     #: the execution instead, and one that states a mode here overrides
     #: the configuration for this build.
-    build_mode: str | None = None
+    mode: str | None = None
     #: A development build, for ``build.mode = subprocess`` only: a west
     #: workspace the developer maintains, built against instead of the
     #: environment MCUHome provisions into its store. ``None`` — the
@@ -962,7 +957,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
     options = options_for(request)
     chosen = resolve_build_target(name) if name else options.target
     if chosen == TARGET_LOCAL:
-        mode = resolve_build_mode(request.build_mode) if request.build_mode else options.mode
+        mode = resolve_build_mode(request.mode) if request.mode else options.mode
         if mode == MODE_SUBPROCESS:
             if request.container_image is not None:
                 raise _refuse_image_without_container(
@@ -970,7 +965,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                     # Whoever chose the mode is who has to be told, and a
                     # mode this request states itself did not come from
                     # any configuration file.
-                    source="this build" if request.build_mode else options.mode_source,
+                    source="this build" if request.mode else options.mode_source,
                 )
             return LocalBuild(
                 execution=SubprocessExecution(
@@ -992,7 +987,7 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
         if developing is not None:
             raise _refuse_developer_without_subprocess(
                 developing,
-                source="this build" if request.build_mode else options.mode_source,
+                source="this build" if request.mode else options.mode_source,
             )
         return LocalBuild(
             execution=ContainerExecution(container_image=_stated_container_image(request))
@@ -1090,7 +1085,7 @@ def compose_local_build(
     runtime: Any = None,
     registry: Any = None,
     images: Any = None,
-    build_mode: str = DEFAULT_BUILD_MODE,
+    mode: str = DEFAULT_BUILD_MODE,
     environment: Any = None,
     options: BuildOptions | None = None,
     stated_container_image: str | None = None,
@@ -1109,7 +1104,7 @@ def compose_local_build(
     offloads them.
     """
     options = options if options is not None else BuildOptions()
-    if resolve_build_mode(build_mode) == MODE_SUBPROCESS:
+    if resolve_build_mode(mode) == MODE_SUBPROCESS:
         return compose_subprocess_build(
             model,
             sdk_sources=sdk_sources,
@@ -1565,7 +1560,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         context_dir=request.context_dir,
         on_line=request.on_line,
         on_step=request.on_step,
-        build_mode=MODE_SUBPROCESS,
+        mode=MODE_SUBPROCESS,
         environment=_developer_environment(execution),
         options=options_for(request),
         stated_container_image=execution.stated_container_image,
@@ -1794,7 +1789,6 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
         token=target.token,
         work_root=work_root,
         image=target.container_image,
-        mode=request.mode,
         on_line=request.on_line,
         on_wait=request.on_wait,
         wait=target.wait,

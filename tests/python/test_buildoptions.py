@@ -160,7 +160,7 @@ def test_a_stated_mode_beats_the_configuration(model, tmp_path) -> None:
         BuildRequest(
             model=model,
             out_dir=tmp_path,
-            build_mode=build.MODE_CONTAINER,
+            mode=build.MODE_CONTAINER,
             options=BuildOptions(mode=build.MODE_SUBPROCESS),
         ),
     )
@@ -259,7 +259,7 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
             BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                build_mode=build.MODE_SUBPROCESS,
+                mode=build.MODE_SUBPROCESS,
                 container_image="ghcr.io/mcu-home/x:1",
                 options=BuildOptions(mode_source="/etc/mcuhome/configuration.yaml"),
             ),
