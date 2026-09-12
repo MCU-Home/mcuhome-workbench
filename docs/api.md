@@ -425,12 +425,16 @@ not make a configuration invalid). Methods `error_dicts()`,
 `to_dict()`.
 
 ## Configuration
-Five layers, ascending, over one declared option registry; each value
-carries the layer it came from:
+One declared option registry, and the layers over it. Ascending — later
+wins — and every value carries the one it came from:
 
 ```
-default → system file → user file → project file → environment → arguments
+default → program → system file → user file → project file → environment → arguments
 ```
+
+`default` is what the registry declares and `program` what an embedding
+program states for a shared key (see `ProgramDefaults` below); the two
+are the only origins no user wrote. The seven are `CONFIG_ORIGINS`.
 
 ```python
 def resolve_settings(
@@ -485,8 +489,11 @@ def unset_config_value(
 `project`) is edited in. `set_config_value` parses *text* through the
 option's declaration, writes it, and answers the parsed value;
 `unset_config_value` answers whether anything was removed. Both raise
-`ValueError` for a name nobody declared and `ConfigError` for a value the
-declaration rejects.
+`ConfigError` — for a name nobody declared, listing the ones a file may
+set, and for a value the declaration rejects: what they are given came
+from a person editing configuration, so it is refused in words rather
+than as a programming error. `option()` is the other way round and
+raises `ValueError`: a tool asks for an option it knows.
 
 ### Option
 Frozen dataclass — the single source of every spelling of one option.
