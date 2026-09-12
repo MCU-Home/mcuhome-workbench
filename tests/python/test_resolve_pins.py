@@ -1111,3 +1111,28 @@ def test_a_device_file_can_pin_one_environment_package(
     other = TOOLS if key == "build_workspace" else WORKSPACE
     assert stated.sha256 == digest
     assert derived.sha256 == source.hash_of(other, "0.1.0")
+
+
+def test_a_kind_is_not_looked_for_under_another_kinds_key(tmp_path) -> None:
+    """The directory that holds the SDK is no claim about the other two.
+
+    One key per package kind, and no fallback between them: a machine
+    that keeps everything in one directory names that directory in all
+    three keys, which is the statement it is actually making. Stating it
+    once used to answer for all three, and a build then resolved a
+    workspace out of a directory nobody had offered for one.
+    """
+    source = chained(tmp_path)
+    found = resolve_sdk((source.path,), constraint="==0.1.0", prereleases=True)
+    with pytest.raises(BuildError) as caught:
+        resolve_environment(
+            workspace=DEFAULT_BUILD_WORKSPACE,
+            tools=DEFAULT_BUILD_TOOLS,
+            sdk_source=DEFAULT_SDK,
+            sdk=found,
+            sources=(source.path,),  # the SDK's key alone
+            work_root=tmp_path / "work",
+        )
+    assert "build workspace package" in caught.value.message
+    # And with its own key it is found again, from the same directory.
+    assert resolved(source, tmp_path).workspace.version

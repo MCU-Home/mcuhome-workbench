@@ -391,10 +391,13 @@ def create_build_context(
     is the client for the SDK's own.
 
     *workspace_sources* and *tools_sources* are the operator directories
-    the two environment packages are looked up in. Empty means "wherever
-    the SDK comes from" (*sdk_sources*), which is what one directory
-    holding everything wants; a machine that keeps the gigabyte-sized
-    environment packages somewhere else names that place instead.
+    the two environment packages are looked up in, and *sdk_sources* the
+    SDK's. **One kind, one set of directories**: no kind is ever looked
+    for under another's, so empty means there is no operator directory
+    for that package and it is resolved through the registry. A machine
+    that keeps the gigabyte-sized environment packages somewhere else
+    names that place; one that keeps all three together names it three
+    times, which is the statement it is actually making.
 
     *out_dir* is **removed if it exists**, because :func:`create_context`
     requires an empty directory and a build's context directory is

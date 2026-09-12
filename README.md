@@ -269,8 +269,10 @@ So `sources.sdk: sdk/mcuhome-sdk:0.1.9` pins exactly `0.1.9` and will not quietl
 become `0.1.9.dev1`; write `:0.1.9.dev1` if that is what you want. Either way the
 minor bound holds — the default never crosses into 0.2.
 
-Packages are looked for in the operator's own directories first
-(`build.sdk_sources`) and only then on the registry, and their bytes are checked
+Packages are looked for in the operator's own directories first — one key per
+package kind (`build.sdk_sources`, `build.workspace_sources`,
+`build.tools_sources`), and no kind under another's — and only then on the
+registry, and their bytes are checked
 against the pinned hash on every path. A machine that already has the package
 never opens a socket. A package published per architecture is named once — the
 index says which concrete package that name stands for on this host, and the
@@ -553,7 +555,7 @@ MCUHome's own packages need:
 
 | key | default |
 |---|---|
-| `build.workspace_sources`, `build.tools_sources` | the `build.sdk_sources` directories |
+| `build.workspace_sources`, `build.tools_sources` | none — each kind is looked for under its own key, and the registry answers where no directory does |
 | `build.sdk_max_bytes` | 2 GiB |
 | `build.workspace_max_bytes` | 20 GiB |
 | `build.tools_max_bytes` | 10 GiB |

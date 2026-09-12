@@ -346,9 +346,12 @@ class BuildOptions:
 
     Unset values are ``None`` throughout and mean *the default of
     whatever consumes them*, never a value invented here: the store
-    resolves its own location from the user's cache home, the cache tiers
-    fall back to the cache root, and the sources fall back to
-    ``build.sdk_sources`` — so an option nobody set changes nothing.
+    resolves its own location from the user's cache home and the cache
+    tiers fall back to the cache root, so an option nobody set changes
+    nothing. A source list is the exception that proves it — unset means
+    *no* operator directory for that package kind, and the package is
+    then resolved through the registry rather than under another kind's
+    key.
     """
 
     #: ``build.target``: ``local`` or ``remote`` — where a build of this
