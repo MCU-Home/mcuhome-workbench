@@ -396,6 +396,20 @@ class RegistrySettings:
     #: ``None`` for the project's own ``secrets/trust-anchor/`` copy.
     anchor: Path | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready, every declared key present.
+
+        What ``mcuhome config print`` shows for a registry. The key is
+        ``base_domain`` — the same word the configuration key and this
+        class use — rather than a second name for it.
+        """
+        return {
+            "base_domain": self.base_domain,
+            "untrusted": self.untrusted,
+            "mirrors": {name: list(values) for name, values in self.mirrors.items()},
+            "anchor": None if self.anchor is None else str(self.anchor),
+        }
+
 
 def parse_registries(
     value: Any, *, file: Path, origin: str, env: Mapping[str, str] | None = None

@@ -46,8 +46,8 @@ What is here, in the order a caller needs it:
     registry (``OPTIONS``), each value with the layer it came from.
 ``resolve_builder``
     Which builder this invocation uses: an explicit name,
-    the configured ``default_builder``, or the built-in ``local``
-    fallback — credentials from ``secrets/build-server/<name>.yaml``
+    the configured ``build.builder``, or the built-in ``local``
+    fallback — credentials from ``secrets/builder/<name>.yaml``
     included.
 ``new_device`` / ``render_starter`` / ``DeviceOutline``
     A device's first ``main.yaml``. ``render_starter`` is pure — it
@@ -188,7 +188,7 @@ from mcuhome.workbench.buildenvsession import (
     LocalOutcome,
     Step,
 )
-from mcuhome.workbench.builders import BUILDER_TYPES, Builder, SelectedBuilder
+from mcuhome.workbench.builders import Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
 from mcuhome.workbench.buildmethods import (
     BUILD_MODES,
@@ -226,10 +226,14 @@ from mcuhome.workbench.configschema import config_json_schema
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
     CONFIG_SCOPES,
+    OPTION_KINDS,
     OPTIONS,
+    Argument,
     Option,
+    ProgramDefaults,
     Setting,
     Settings,
+    option,
     resolve_builder,
     resolve_settings,
     scope_config_file,
@@ -247,7 +251,6 @@ from mcuhome.workbench.project import (
     DEVICES_DIR,
     MARKER_FILE,
     PROJECT_CONFIG_FILE,
-    PROJECT_DIR_VAR,
     PROJECT_VERSION,
     InitResult,
     Project,
@@ -292,7 +295,6 @@ from mcuhome.workbench.schema import parse_config
 from mcuhome.workbench.validate import validate
 
 __all__ = [
-    "BUILDER_TYPES",
     "BUILD_DIR",
     "BuildDirectoryBusy",
     "BuildError",
@@ -305,6 +307,7 @@ __all__ = [
     "BuildTarget",
     "Builder",
     "BusChoice",
+    "Argument",
     "CONFIG_FILE",
     "CONFIG_SCOPES",
     "CacheTier",
@@ -340,9 +343,10 @@ __all__ = [
     "MigrationFailed",
     "NewDevice",
     "OPTIONS",
+    "OPTION_KINDS",
     "Option",
+    "ProgramDefaults",
     "PROJECT_CONFIG_FILE",
-    "PROJECT_DIR_VAR",
     "PROJECT_VERSION",
     "PairingResult",
     "PeripheralChoice",
@@ -384,6 +388,7 @@ __all__ = [
     "is_upgrading",
     "load_model",
     "new_device",
+    "option",
     "options_for",
     "project_at",
     "read_model",

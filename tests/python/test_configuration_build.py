@@ -37,6 +37,7 @@ from mcuhome.workbench.buildtarget import (
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
     OPTIONS,
+    Argument,
     option,
     resolve_settings,
     set_config_value,
@@ -51,6 +52,8 @@ from mcuhome.workbench.project import Project, init_project
 KEYS = {
     "build.target": "MCUHOME_BUILD_TARGET",
     "build.mode": "MCUHOME_BUILD_MODE",
+    "build.builder": "MCUHOME_BUILD_BUILDER",
+    "build.container_program": "MCUHOME_BUILD_CONTAINER_PROGRAM",
     "build.container_repositories": "MCUHOME_BUILD_CONTAINER_REPOSITORIES",
     "build.cpus": "MCUHOME_BUILD_CPUS",
     "build.memory": "MCUHOME_BUILD_MEMORY",
@@ -63,6 +66,7 @@ KEYS = {
     "build.sdk_max_bytes": "MCUHOME_BUILD_SDK_MAX_BYTES",
     "build.workspace_max_bytes": "MCUHOME_BUILD_WORKSPACE_MAX_BYTES",
     "build.tools_max_bytes": "MCUHOME_BUILD_TOOLS_MAX_BYTES",
+    "build.cache_root": "MCUHOME_BUILD_CACHE_ROOT",
     "build.cache_local": "MCUHOME_BUILD_CACHE_LOCAL",
     "build.cache_shared": "MCUHOME_BUILD_CACHE_SHARED",
     "build.cache_session": "MCUHOME_BUILD_CACHE_SESSION",
@@ -101,14 +105,17 @@ def test_every_build_key_is_declared_with_the_expected_variable() -> None:
         assert option(name).env_var == variable
 
 
-def test_an_option_in_an_area_has_no_flag() -> None:
-    """No flag is written with a dot; the command line maps its own onto some."""
-    assert option("build.mode").flag == ""
+def test_every_key_of_the_section_derives_its_flag() -> None:
+    """The key is the flag, with the separators the command line writes."""
+    assert option("build.mode").flag == "--build-mode"
     assert option("build.mode").area == "build"
     assert option("build.mode").leaf == "mode"
-    # The bare options keep theirs.
-    assert option("ccache_dir").flag == "--ccache-dir"
-    assert option("ccache_dir").area == ""
+    assert option("build.sdk_max_bytes").flag == "--build-sdk-max-bytes"
+    # Except where the command line is not a channel at all: selecting a
+    # builder per invocation is --builder, which carries a call's
+    # parameter rather than this key.
+    assert option("build.builder").flag == ""
+    assert not option("build.builder").arguments
 
 
 def test_the_pre_area_spelling_of_a_moved_key_is_not_an_option(project: Project) -> None:
@@ -164,11 +171,13 @@ def test_the_layers_beat_each_other_in_order(
     assert settings.value("build.python") == "environment"
     assert settings.setting("build.python").source == "MCUHOME_BUILD_PYTHON"
 
-    settings = resolve_settings(project=project, env=from_env, args={"build.python": "arguments"})
+    settings = resolve_settings(
+        project=project, env=from_env, args=[Argument("build.python", "arguments")]
+    )
     assert settings.value("build.python") == "arguments"
     assert settings.origin("build.python") == "arguments"
-    # No flag exists, so the source is the option's own name.
-    assert settings.setting("build.python").source == "build.python"
+    # The flag the registry derives, because this tool stated none.
+    assert settings.setting("build.python").source == "--build-python"
 
 
 def test_a_section_key_is_nearest_wins_like_every_other_scalar(
@@ -425,12 +434,12 @@ def test_a_key_of_another_area_is_still_an_unknown_option(project: Project) -> N
 def test_config_set_writes_the_section_and_keeps_the_rest(project: Project) -> None:
     """What is written reads back, and everything else in the file survives."""
     file = project.config_file
-    file.write_text("# a comment\ndefault_builder: attic\n", encoding="utf-8")
+    file.write_text("# a comment\nsigning:\n  imgtool: /opt/imgtool\n", encoding="utf-8")
     set_config_value(file, "build.mode", MODE_SUBPROCESS, env={})
     set_config_value(file, "build.env_store", "/srv/store", env={})
     text = file.read_text(encoding="utf-8")
     assert "# a comment" in text
-    assert "default_builder: attic" in text
+    assert "imgtool: /opt/imgtool" in text
     assert "build:\n  mode: subprocess\n  env_store: /srv/store\n" in text
     settings = resolve_settings(project=project, env={})
     assert settings.value("build.mode") == MODE_SUBPROCESS
@@ -471,7 +480,7 @@ def test_config_set_refuses_a_section_that_is_not_a_mapping(tmp_path: Path) -> N
 
 def test_every_build_key_is_printed_with_its_value_and_origin(project: Project) -> None:
     write_project(project, "build:\n  mode: subprocess\n")
-    data = resolve_settings(project=project, env={}).print_data()
+    data = resolve_settings(project=project, env={}).to_dict()
     for name in KEYS:
         assert name in data
     assert data["build.mode"] == {
@@ -490,11 +499,11 @@ def test_a_registrys_configured_anchor_is_printed_as_a_string(project: Project) 
         project,
         "registry:\n  packages.example.org:\n    anchor: anchors/private.json\n",
     )
-    data = resolve_settings(project=project, env={}).print_data()
+    data = resolve_settings(project=project, env={}).to_dict()
     printed = data["registry"]["value"]
     assert printed == [
         {
-            "domain": "packages.example.org",
+            "base_domain": "packages.example.org",
             "untrusted": False,
             "anchor": str((project.root / "anchors" / "private.json").resolve()),
             "mirrors": {},
@@ -502,7 +511,7 @@ def test_a_registrys_configured_anchor_is_printed_as_a_string(project: Project) 
     ]
     # A registry that names none says so rather than omitting the key.
     write_project(project, "registry:\n  packages.example.org: {}\n")
-    printed = resolve_settings(project=project, env={}).print_data()["registry"]["value"]
+    printed = resolve_settings(project=project, env={}).to_dict()["registry"]["value"]
     assert printed[0]["anchor"] is None
 
 
@@ -543,7 +552,9 @@ def test_the_target_is_a_key_of_the_section_like_the_mode(project: Project) -> N
     assert settings.value("build.target") == TARGET_LOCAL
     assert settings.setting("build.target").source == "MCUHOME_BUILD_TARGET"
 
-    settings = resolve_settings(project=project, env={}, args={"build.target": TARGET_LOCAL})
+    settings = resolve_settings(
+        project=project, env={}, args=[Argument("build.target", TARGET_LOCAL)]
+    )
     assert settings.value("build.target") == TARGET_LOCAL
     assert settings.origin("build.target") == "arguments"
 

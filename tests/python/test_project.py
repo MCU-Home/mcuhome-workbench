@@ -21,10 +21,10 @@ import pytest
 from conftest import FIXTURE_TREE
 from mcuhome.model.errors import ConfigError
 
+from mcuhome.workbench.configuration import option
 from mcuhome.workbench.project import (
     GITIGNORE_LINES,
     MARKER_FILE,
-    PROJECT_DIR_VAR,
     Project,
     check_secret_file,
     ensure_secrets_dir,
@@ -61,6 +61,11 @@ def mode_of(path: Path) -> int:
 
 
 # --- the marker -------------------------------------------------------
+
+
+#: The bootstrap's environment spelling, from the one declaration that
+#: owns it: the test states no literal the registry could disagree with.
+PROJECT_DIR_VAR = option("project.dir").env_var
 
 
 def test_the_marker_marks_a_project_root(tmp_path: Path) -> None:
@@ -174,8 +179,9 @@ def test_the_layout_hangs_off_the_root(tmp_path: Path) -> None:
     assert project.config_file == tmp_path / "mcuhome.yaml"
     assert project.secrets_file == tmp_path / "secrets" / "main.yaml"
     assert project.firmware_secrets_file == tmp_path / "secrets" / "firmware" / "mcuboot.yaml"
+    # One directory per kind of secret, named after the kind.
     assert project.builder_secrets_file("attic") == (
-        tmp_path / "secrets" / "build-server" / "attic.yaml"
+        tmp_path / "secrets" / "builder" / "attic.yaml"
     )
     assert project.device_secrets_file("porch") == tmp_path / "secrets" / "devices" / "porch.yaml"
     assert project.device_entry("porch") == tmp_path / "devices" / "porch" / "main.yaml"

@@ -22,6 +22,8 @@ from mcuhome.workbench import configuration
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
     OPTIONS,
+    Argument,
+    ProgramDefaults,
     Settings,
     option,
     resolve_settings,
@@ -57,13 +59,29 @@ def write_project(project: Project, text: str) -> Path:
 
 
 def test_the_spellings_derive_from_the_declaration() -> None:
-    declared = option("ccache_dir")
-    assert declared.env_var == "MCUHOME_CCACHE_DIR"
-    assert declared.flag == "--ccache-dir"
+    declared = option("build.cache_root")
+    assert declared.env_var == "MCUHOME_BUILD_CACHE_ROOT"
+    assert declared.flag == "--build-cache-root"
 
 
-def test_the_bootstrap_options_are_declared_but_stand_outside() -> None:
-    declared = option("project_dir")
+def test_a_derived_flag_splits_back_into_its_key() -> None:
+    """Reversible because an area is one word: the rule that makes it so."""
+    for declared in OPTIONS:
+        if not declared.flag:
+            continue
+        area, _, leaf = declared.flag[2:].partition("-")
+        assert declared.area == area
+        assert declared.leaf == leaf.replace("-", "_")
+
+
+def test_a_closed_channel_derives_no_spelling() -> None:
+    assert option("build.builder").flag == ""  # selection is --builder, not this key
+    assert option("builder").env_var == ""  # the map is files-only
+    assert option("registry").flag == ""
+
+
+def test_the_bootstrap_option_is_declared_but_stands_outside() -> None:
+    declared = option("project.dir")
     assert declared.bootstrap
     assert not declared.files
     assert declared.env_var == "MCUHOME_PROJECT_DIR"
@@ -82,7 +100,7 @@ def test_every_option_kind_is_one_the_parsers_know() -> None:
         "strings",
         "integer",
         "number",
-        "builders",
+        "builder",
         "registry",
     }
 
@@ -129,13 +147,39 @@ def test_the_command_line_beats_the_environment(project: Project) -> None:
     settings = resolve_settings(
         project=project,
         env={"MCUHOME_BUILD_SDK_MAX_BYTES": "7"},
-        args={"build.sdk_max_bytes": 2},
+        args=[Argument("build.sdk_max_bytes", 2)],
     )
     assert settings.value("build.sdk_max_bytes") == 2
     assert settings.origin("build.sdk_max_bytes") == "arguments"
-    # An option in an area has no derived flag, so the source is its own
-    # name — the same rule `_refuse_not_file_settable` documents.
-    assert settings.setting("build.sdk_max_bytes").source == "build.sdk_max_bytes"
+    # Every option settable from the command line derives a flag, so
+    # that is the source: the spelling a person could have typed.
+    assert settings.setting("build.sdk_max_bytes").source == "--build-sdk-max-bytes"
+
+
+def test_an_argument_carries_the_spelling_the_tool_used(project: Project) -> None:
+    """A tool with a flag of its own is quoted back in the user's words."""
+    settings = resolve_settings(
+        project=project,
+        env={},
+        args=[Argument("build.sdk_max_bytes", 2, flag="--limit")],
+    )
+    assert settings.setting("build.sdk_max_bytes").source == "--limit"
+
+
+def test_a_program_states_its_own_defaults_below_every_file(
+    tmp_path: Path, project: Project
+) -> None:
+    """A program's own default is visible, and an operator still wins."""
+    server = ProgramDefaults("mcuhome-buildserver", {"build.memory": "8g"})
+    settings = resolve_settings(project=project, env={}, program=server)
+    assert settings.value("build.memory") == "8g"
+    assert settings.origin("build.memory") == "program"
+    assert settings.setting("build.memory").source == "mcuhome-buildserver"
+
+    write_project(project, "build:\n  memory: 2g\n")
+    settings = resolve_settings(project=project, env={}, program=server)
+    assert settings.value("build.memory") == "2g"
+    assert settings.origin("build.memory") == "project"
 
 
 def test_the_system_layer_is_the_lowest_file(
@@ -237,15 +281,15 @@ def test_an_unknown_key_lists_what_a_file_may_set(project: Project) -> None:
     hint = caught.value.hint or ""
     assert "build.sdk_max_bytes" in hint
     assert "build.sdk_sources" in hint
-    assert "signing_key" not in hint  # not settable from files
-    assert "project_dir" not in hint  # bootstrap
+    assert "signing.key" not in hint  # not settable from files
+    assert "project.dir" not in hint  # bootstrap
 
 
 def test_a_file_cannot_set_a_bootstrap_option(project: Project) -> None:
-    write_project(project, "project_dir: /elsewhere\n")
+    write_project(project, "project:\n  dir: /elsewhere\n")
     with pytest.raises(ConfigError) as caught:
         resolve_settings(project=project, env={})
-    assert "'project_dir' cannot be set from a configuration file" in caught.value.message
+    assert "'project.dir' cannot be set from a configuration file" in caught.value.message
     hint = caught.value.hint or ""
     assert "before any configuration file is read" in hint
     assert "--project-dir" in hint
@@ -253,10 +297,10 @@ def test_a_file_cannot_set_a_bootstrap_option(project: Project) -> None:
 
 
 def test_a_file_cannot_set_a_per_invocation_option(project: Project) -> None:
-    write_project(project, "signing_key: /some/key\n")
+    write_project(project, "signing:\n  key: /some/key\n")
     with pytest.raises(ConfigError) as caught:
         resolve_settings(project=project, env={})
-    assert "'signing_key' cannot be set from a configuration file" in caught.value.message
+    assert "'signing.key' cannot be set from a configuration file" in caught.value.message
     hint = caught.value.hint or ""
     assert "--signing-key" in hint
     assert "MCUHOME_SIGNING_KEY" in hint
@@ -273,18 +317,18 @@ def test_arguments_for_undeclared_or_bootstrap_names_are_programming_errors(
     project: Project,
 ) -> None:
     with pytest.raises(ValueError):
-        resolve_settings(project=project, env={}, args={"no_such": 1})
+        resolve_settings(project=project, env={}, args=[Argument("no_such", 1)])
     with pytest.raises(ValueError):
-        resolve_settings(project=project, env={}, args={"project_dir": "x"})
+        resolve_settings(project=project, env={}, args=[Argument("project.dir", "x")])
 
 
 # --- config print -----------------------------------------------------
 
 
-def test_print_data_shows_every_value_with_its_origin(tmp_path: Path, project: Project) -> None:
+def test_the_document_shows_every_value_with_its_origin(tmp_path: Path, project: Project) -> None:
     env = user_env(tmp_path) | {"MCUHOME_BUILD_SDK_MAX_BYTES": "7"}
     write_user(tmp_path, "build:\n  sdk_sources:\n    - /pkgs\n")
-    data = resolve_settings(project=project, env=env).print_data()
+    data = resolve_settings(project=project, env=env).to_dict()
     assert data["build.sdk_max_bytes"] == {
         "value": 7,
         "origin": "environment",
@@ -292,7 +336,7 @@ def test_print_data_shows_every_value_with_its_origin(tmp_path: Path, project: P
     }
     assert data["build.sdk_sources"]["value"] == ["/pkgs"]  # JSON-ready, not Path
     assert data["build.sdk_sources"]["origin"] == "user"
-    assert "project_dir" not in data  # bootstrap options are not settings
+    assert "project.dir" not in data  # the bootstrap option is not a setting
 
 
 def test_settings_refuse_undeclared_names() -> None:
@@ -363,9 +407,9 @@ def test_set_preserves_comments_and_neighboring_keys(project: Project) -> None:
 def test_set_creates_the_file_and_its_directory(tmp_path: Path) -> None:
     env = {"XDG_CONFIG_HOME": str(tmp_path / "fresh-xdg")}
     file = configuration.scope_config_file("user", project=None, env=env)
-    configuration.set_config_value(file, "default_builder", "attic", env=env)
+    configuration.set_config_value(file, "build.builder", "attic", env=env)
     assert file.is_file()
-    assert "default_builder: attic" in file.read_text(encoding="utf-8")
+    assert "builder: attic" in file.read_text(encoding="utf-8")
 
 
 def test_set_splits_a_paths_value_like_the_environment_does(project: Project) -> None:
@@ -398,18 +442,18 @@ def test_set_refuses_an_undeclared_name_with_the_settable_list(project: Project)
 
 def test_set_refuses_the_channels_a_file_may_not_carry(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
-        configuration.set_config_value(project.config_file, "signing_key", "/k", env={})
-    assert "'signing_key' cannot be set from a configuration file" in caught.value.message
+        configuration.set_config_value(project.config_file, "signing.key", "/k", env={})
+    assert "'signing.key' cannot be set from a configuration file" in caught.value.message
     with pytest.raises(ConfigError) as caught:
-        configuration.set_config_value(project.config_file, "project_dir", "/p", env={})
-    assert "'project_dir' cannot be set from a configuration file" in caught.value.message
+        configuration.set_config_value(project.config_file, "project.dir", "/p", env={})
+    assert "'project.dir' cannot be set from a configuration file" in caught.value.message
 
 
-def test_set_refuses_builders_toward_the_file_itself(project: Project) -> None:
+def test_set_refuses_a_map_option_toward_the_file_itself(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
-        configuration.set_config_value(project.config_file, "builders", "attic", env={})
+        configuration.set_config_value(project.config_file, "builder", "attic", env={})
     assert "structured configuration" in caught.value.message
-    assert "builders:" in (caught.value.hint or "")
+    assert "builder:" in (caught.value.hint or "")
 
 
 def test_set_refuses_an_empty_value_toward_unset(project: Project) -> None:
@@ -426,12 +470,12 @@ def test_set_refuses_a_file_that_is_not_a_mapping(project: Project) -> None:
 
 
 def test_unset_removes_the_key_and_says_whether_it_did(project: Project) -> None:
-    write_project(project, "# keep me\nbuild:\n  sdk_max_bytes: 4\ndefault_builder: attic\n")
+    write_project(project, "# keep me\nbuild:\n  sdk_max_bytes: 4\n  builder: attic\n")
     assert configuration.unset_config_value(project.config_file, "build.sdk_max_bytes") is True
     text = project.config_file.read_text(encoding="utf-8")
     assert "sdk_max_bytes" not in text
     assert "# keep me" in text
-    assert "default_builder: attic" in text
+    assert "builder: attic" in text
     assert configuration.unset_config_value(project.config_file, "build.sdk_max_bytes") is False
     missing = project.root / "nowhere.yaml"
     assert configuration.unset_config_value(missing, "build.sdk_max_bytes") is False

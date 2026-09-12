@@ -57,6 +57,7 @@ __all__ = [
     "BUILD_TARGETS",
     "DEFAULT_BUILD_MODE",
     "DEFAULT_BUILD_TARGET",
+    "DEFAULT_CONTAINER_PROGRAM",
     "DEFAULT_CONTAINER_REPOSITORIES",
     "DEFAULT_MAX_WAIT_SECONDS",
     "MODE_CONTAINER",
@@ -77,6 +78,14 @@ __all__ = [
 #: option registry can declare it as the default of
 #: ``build.container_repositories`` without importing a build path.
 DEFAULT_CONTAINER_REPOSITORIES: tuple[str, ...] = (ENVIRONMENT_IMAGE_REPOSITORY,)
+
+#: The program that runs a build container. ``podman`` is command-line
+#: compatible for everything used here, which is the whole reason
+#: ``build.container_program`` exists — and the reason this default is
+#: stated beside the other build vocabulary rather than inside the
+#: profile that drives it: the option registry declares it without
+#: importing a build path.
+DEFAULT_CONTAINER_PROGRAM = "docker"
 
 
 #: The two targets, as the words a configuration writes them in: the

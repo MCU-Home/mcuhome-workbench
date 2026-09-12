@@ -28,7 +28,7 @@ The layout inside a project::
     secrets/                  # ALL secrets, no exceptions (mode 700)
       main.yaml               #   project-wide secrets (`!secret`)
       devices/<name>.yaml     #   per-device secrets (future)
-      build-server/<name>.yaml #  per-builder credentials
+      builder/<name>.yaml     #   per-builder credentials
       firmware/mcuboot.yaml   #   the MCUboot signing key
     build/                    # build output (disposable)
     .gitignore                # keeps secrets/ and build/ out of git
@@ -64,6 +64,7 @@ import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import expand
@@ -80,14 +81,17 @@ from mcuhome.workbench.projectfile import (
 )
 from mcuhome.workbench.projectupgrade import BUILD_DIR, in_flight_error
 
+if TYPE_CHECKING:  # pragma: no cover - import cycle, typing only
+    from mcuhome.workbench.configuration import Option
+
 __all__ = [
     "BUILD_DIR",
     "DEVICES_DIR",
     "DEVICE_ENTRY",
     "GITIGNORE_LINES",
+    "BUILDER_SECRETS_DIR",
     "MARKER_FILE",
     "PROJECT_CONFIG_FILE",
-    "PROJECT_DIR_VAR",
     "PROJECT_VERSION",
     "SECRETS_DIR",
     "InitResult",
@@ -105,11 +109,6 @@ __all__ = [
 #: project without one simply has an empty project layer.
 PROJECT_CONFIG_FILE = "mcuhome.yaml"
 
-#: The environment fallback of ``--project-dir``. A
-#: bootstrap exception: read before any configuration layer, never
-#: settable from one.
-PROJECT_DIR_VAR = "MCUHOME_PROJECT_DIR"
-
 #: The home of every device folder.
 DEVICES_DIR = "devices"
 #: Entry point inside a device folder.
@@ -118,6 +117,9 @@ DEVICE_ENTRY = "main.yaml"
 SECRETS_DIR = "secrets"
 #: Project-wide secrets inside ``secrets/`` — what ``!secret`` reads.
 MAIN_SECRETS_FILE = "main.yaml"
+#: One kind of secret per directory below ``secrets/``, named after the
+#: kind: a builder's credentials live here, under the builder's name.
+BUILDER_SECRETS_DIR = "builder"
 
 #: What ``mcuhome project init`` keeps out of git. ``secrets/`` is the point of
 #: the file; ``build/`` is disposable output that would
@@ -171,8 +173,8 @@ class Project:
         return self.secrets_dir / "firmware" / "mcuboot.yaml"
 
     def builder_secrets_file(self, name: str) -> Path:
-        """``secrets/build-server/<name>.yaml`` — one builder's credentials."""
-        return self.secrets_dir / "build-server" / f"{name}.yaml"
+        """``secrets/builder/<name>.yaml`` — one builder's credentials."""
+        return self.secrets_dir / BUILDER_SECRETS_DIR / f"{name}.yaml"
 
     def device_secrets_file(self, name: str) -> Path:
         """``secrets/devices/<name>.yaml`` — per-device secrets (reserved)."""
@@ -232,6 +234,20 @@ def project_at(root: Path, *, require_version: bool = True) -> Project:
     return Project(root=root, discovered=True, file=file)
 
 
+def _project_dir_option() -> Option:
+    """The declaration of ``project.dir``, for its two spellings.
+
+    Imported here rather than at module level: the configuration layer
+    reads this module, so the dependency only runs the other way once,
+    inside the bootstrap that needs the flag and the variable the
+    registry derives. Nothing else in this module knows either spelling
+    — the declaration is the single source of both.
+    """
+    from mcuhome.workbench.configuration import option
+
+    return option("project.dir")
+
+
 def _refuse_no_marker(directory: Path, *, named_by: str) -> ConfigError:
     return ConfigError(
         f'"{directory}" is not an MCUHome project directory: it has no {MARKER_FILE}.',
@@ -265,9 +281,10 @@ def resolve_project(
     Both *env* and *cwd* are stated, never read from the process — the
     module docstring says why.
     """
+    declared = _project_dir_option()
     for value, named_by in (
-        (explicit, "--project-dir"),
-        (env.get(PROJECT_DIR_VAR), PROJECT_DIR_VAR),
+        (explicit, declared.flag),
+        (env.get(declared.env_var), declared.env_var),
     ):
         if not value:
             continue

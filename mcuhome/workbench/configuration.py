@@ -1,28 +1,39 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The configuration model: five layers, one option registry.
+"""The configuration model: one option registry, and the layers over it.
 
 Every option is declared exactly once, in :data:`OPTIONS` — name, type,
 default, and **which channels may set it** — and the ``MCUHOME_*``
-variable, the command-line flag spelling and the configuration key all
-derive from that declaration. Not every option belongs in every
-channel: a per-invocation value is argument+environment only and never
-lives in a static file, and the two bootstrap options stand outside the
-merge entirely (:mod:`mcuhome.workbench.project` resolves them first,
-because they decide where the project layer even is).
+variable, the command-line flag and the configuration key all derive
+from that declaration. Nothing in this package reads a variable the
+registry did not declare: an ad-hoc one is a spelling nobody can find
+and a value ``mcuhome config print`` cannot show. Not every option
+belongs in every channel: a per-invocation value is
+argument+environment only and never lives in a static file, and the one
+bootstrap option stands outside the merge entirely
+(:mod:`mcuhome.workbench.project` resolves it first, because it decides
+where the project layer even is).
 
-The five layers, ascending — later wins::
+The layers, ascending — later wins::
 
+    program      what an embedding program defaults shared keys to
     system       /etc/mcuhome/configuration.yaml (or XDG_CONFIG_DIRS')
     user         $XDG_CONFIG_HOME/mcuhome/configuration.yaml
     project      mcuhome.yaml in the project directory
     environment  MCUHOME_* variables
     command      the invocation's arguments
 
-The system/user files are deliberately **not** named ``mcuhome.yaml``:
-only a project directory may look like a project directory, and a
-config directory must never be mistaken for one — by the upward search
-or by a user working inside it. The directories follow
+The **program** layer sits directly above the declared defaults and
+below every file: a build server wants ``build.memory`` bounded where a
+workstation does not, and a default nobody can see is a value nobody can
+account for — so it is a layer with an origin and a source like every
+other, and an operator's file still wins.
+
+The system/user files are deliberately **not** named ``mcuhome.yaml``: a
+configuration directory is already named ``mcuhome/``, so a file of that
+name in it would say nothing, while in a user's own repository — full of
+files belonging to other tools — the product name is exactly what the
+file has to carry. The directories follow
 the platformdirs conventions, computed here from the
 *stated* environment rather than through the platformdirs library,
 because that library answers out of the process environment and this
@@ -35,35 +46,40 @@ simply does not exist for that resolution.
 Merge semantics: scalars are nearest-wins, whole value per layer.
 Structured values define their own rule where they are introduced, and
 both of the ones that exist merge by the name their entries are keyed on
-rather than replacing each other wholesale: builder lists by builder
-name, package registries by base domain. ``mcuhome config print`` falls
-out of the same registry: :meth:`Settings.print_data` answers with every
-effective value and the layer it came from.
+rather than replacing each other wholesale: builders by builder name,
+package registries by base domain. ``mcuhome config print`` falls out of
+the same registry: :meth:`Settings.to_dict` answers with every effective
+value, the layer it came from and the file, variable or flag inside it.
 
-**Areas.** An option's name may state the area it belongs to, separated
-by a dot: ``build.mode``, ``build.env_store``. The dot is a real level
+**Areas.** Every option's name states the area it belongs to, separated
+by a dot: ``build.mode``, ``signing.key``. The dot is a real level
 everywhere the option is written down — the file nests them under the
 area, the environment variable joins them with an underscore
-(``MCUHOME_BUILD_MODE``) — so one option name still produces every
-spelling::
+(``MCUHOME_BUILD_MODE``), the flag with a dash (``--build-mode``) — so
+one option name produces every spelling::
 
     build:
       mode: subprocess
       env_store: /var/cache/mcuhome/build-environments
 
-No command-line flag is derived for an option in an area: no flag in
-MCUHome is written with a dot, and deriving one from the name would
-advertise a spelling that either does not exist or, worse, already means
-something else. Those options are set from a file or from the
-environment — or by a tool that maps a flag of its own onto one, which is
-what the command line's ``--sdk-sources`` does with
-``build.sdk_sources``.
+An area may hold a **map** instead of leaves, keyed by a name the user
+chooses: ``builder`` by builder name, ``registry`` by base domain. Such
+an option is declared under the area name alone, and what follows the
+area is data rather than further levels of this scheme — which is also
+why the two live in files only.
+
+A derived flag splits back into its key without a table, because an area
+name is always one word: ``--build-sdk-sources`` is ``build`` and
+``sdk_sources``, and a message may therefore offer either spelling of a
+value. A flag exists exactly where the command line is a channel at all:
+selecting a builder for one invocation is ``--builder``, which carries a
+call's parameter rather than ``build.builder``.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -79,20 +95,24 @@ from mcuhome.workbench.buildenvstore import (
     TOOLS_KIND,
     WORKSPACE_KIND,
 )
-from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, Builder, SelectedBuilder
+from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, SelectedBuilder
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
     DEFAULT_BUILD_TARGET,
+    DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
 )
 from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
-from mcuhome.workbench.project import Project, check_secret_file
+from mcuhome.workbench.project import BUILDER_SECRETS_DIR, Project, check_secret_file
 
 __all__ = [
     "CONFIG_FILE",
     "CONFIG_SCOPES",
+    "OPTION_KINDS",
+    "Argument",
+    "ProgramDefaults",
     "OPTIONS",
     "Option",
     "Setting",
@@ -123,28 +143,51 @@ CONFIG_SCOPES = ("system", "user", "project")
 _LIST_SEPARATOR = ","
 
 #: Origin labels, in ascending precedence. ``default`` is what a value
-#: has when no layer set it.
-_ORIGINS = ("default", "system", "user", "project", "environment", "arguments")
+#: has when no layer set it, and ``program`` what an embedding program
+#: states for a shared key before any file is read.
+_ORIGINS = (
+    "default",
+    "program",
+    "system",
+    "user",
+    "project",
+    "environment",
+    "arguments",
+)
+
+#: Every kind an option may declare. The two map kinds parse and merge
+#: themselves and are named after the area they hold.
+OPTION_KINDS = (
+    "string",
+    "path",
+    "paths",
+    "strings",
+    "integer",
+    "number",
+    "builder",
+    "registry",
+)
 
 
 @dataclass(frozen=True)
 class Option:
     """One declared option — the single source of every spelling.
 
-    *kind* is one of ``string``, ``path``, ``paths`` (an ordered list,
-    ``os.pathsep``-separated in the environment), ``strings`` (an ordered
-    list of plain names, comma-separated in the environment because the
-    names may contain a colon), ``integer``, and the two structured kinds
-    ``builders`` and ``registry``, which parse and merge themselves and
-    live in files only.
+    *kind* is one of :data:`OPTION_KINDS`: ``string``, ``path``,
+    ``paths`` (an ordered list, ``os.pathsep``-separated in the
+    environment), ``strings`` (an ordered list of plain names,
+    comma-separated in the environment because the names may contain a
+    colon), ``integer``, ``number``, and the two map kinds ``builder``
+    and ``registry``, which parse and merge themselves and live in files
+    only.
     The three channel switches say where the option may be set:
     *files* covers all three file layers at once — there is no option
     that a user file may set and a system file may not. *bootstrap*
-    marks the two options that run before the merge; they are declared
-    here so their spellings derive like everyone else's, but
-    :func:`resolve_settings` refuses them from files and skips them in
-    the merge (:func:`mcuhome.workbench.project.resolve_project` is
-    their resolver).
+    marks the option that runs before the merge; it is declared here so
+    its spellings derive like everyone else's, but
+    :func:`resolve_settings` refuses it from files and skips it in the
+    merge (:func:`mcuhome.workbench.project.resolve_project` is its
+    resolver).
 
     *choices* and *minimum* are the declaration's own validation, and
     they are here rather than in each reader for the reason the rest of
@@ -171,39 +214,55 @@ class Option:
 
     @property
     def area(self) -> str:
-        """The area the name states, or the empty string for a bare name."""
-        return self.name.partition(".")[0] if "." in self.name else ""
+        """The area this option belongs to — the part before the dot.
+
+        Every option has one. A map option *is* its area (``builder``,
+        ``registry``): it is declared once, under the area name alone,
+        and what a user writes below it are names of their own choosing
+        rather than further levels of this scheme.
+        """
+        return self.name.partition(".")[0]
 
     @property
     def leaf(self) -> str:
-        """The name inside the area — the key a configuration file writes."""
-        return self.name.partition(".")[2] or self.name
+        """The name inside the area, or empty for an option that is its area.
+
+        The key a configuration file writes below the area's section —
+        so a map option has none: the whole section is its value.
+        """
+        return self.name.partition(".")[2]
 
     @property
     def env_var(self) -> str:
+        """``MCUHOME_<AREA>_<NAME>``, or empty where the channel is closed.
+
+        Derived from the key and nothing else, so one declaration
+        produces every spelling. Empty exactly when the environment
+        cannot set this option, which is what a message checks before
+        offering the variable.
+        """
+        if not self.environment:
+            return ""
         return "MCUHOME_" + self.name.upper().replace(".", "_")
 
     @property
     def flag(self) -> str:
-        """The flag this registry derives, or empty for an option in an area.
+        """``--<key with dots and underscores as dashes>``, or empty.
 
-        No flag in MCUHome is written with a dot, and the obvious
-        substitution would derive a spelling for every key in an area —
-        including the many nobody sets per invocation, and including
-        ``build.sdk_sources``, whose flag is ``--sdk-sources`` and older
-        than the areas are. A derived flag would then be offered in
-        messages for options no command line has. So nothing is derived
-        for an option that names its area, and a message that offers a
-        flag checks this first: such an option is set in a file or in the
-        environment.
+        Total and reversible: an area name is one word, so
+        ``--build-sdk-sources`` splits back into ``build`` and
+        ``sdk_sources`` without a table. A message may therefore offer
+        either spelling of a value, and a value that arrived through the
+        arguments channel can name the flag it came from.
 
-        A tool may still put a flag of its **own** on one, because the
-        arguments channel takes the option's name rather than a
-        spelling: ``mcuhome device build`` does that for
-        ``build.target``, ``build.mode`` and ``build.sdk_sources``. What
-        this registry will not do is invent the spelling.
+        Empty exactly when the command line cannot set this option —
+        selecting a builder for one invocation is ``--builder``, which
+        carries a call's parameter rather than this key, and a map
+        option is written in a file or not at all.
         """
-        return "" if self.area else "--" + self.name.replace("_", "-")
+        if not self.arguments:
+            return ""
+        return "--" + self.name.replace(".", "-").replace("_", "-")
 
 
 def option(name: str, registry: tuple[Option, ...] | None = None) -> Option:
@@ -218,61 +277,35 @@ def option(name: str, registry: tuple[Option, ...] | None = None) -> Option:
 #: registries of their own through the same machinery (the CLI's
 #: presentation options, say) — these are the options the *platform*
 #: owns, shared by every tool.
+#:
+#: **Declared default against derived fallback.** What stands in
+#: ``default`` here is what ``mcuhome config print`` shows with the
+#: origin ``default``. What a consumer does with a value nobody set —
+#: the user's cache directory, the interpreter this process runs on, the
+#: machine's own cores — is *not* written here: a key carrying its
+#: consumer's fallback would look configured when it is not, and the
+#: fallback would then be in two places at once.
 OPTIONS: tuple[Option, ...] = (
     Option(
-        "project_dir",
+        "project.dir",
         kind="path",
         files=False,
         bootstrap=True,
         help="the project directory; disables the upward marker search",
     ),
     Option(
-        "signing_key",
+        "signing.key",
         kind="path",
         files=False,
         help="a firmware signing key file to use instead of the project's",
     ),
-    # One cache for everything this user builds — its entries are content
-    # addresses, so two projects share one exactly when the compilation
-    # is the same compilation. Left unset it lands under the user's cache
-    # directory; setting it moves the cache to a faster disk, or off a
-    # network home directory.
+    # A name or a path, and looked up like any other program when it is
+    # a name. The escape hatch for a machine where the installed package
+    # is not the right imgtool.
     Option(
-        "ccache_dir",
-        kind="path",
-        help="where the compiler cache lives; unset means the user cache directory",
-    ),
-    # Builders are deployment configuration and live in files
-    # only — the fully manual rung (--build-mode plus its flags) is the
-    # per-invocation channel and bypasses the list entirely.
-    Option(
-        "builders",
-        kind="builders",
-        default=(),
-        environment=False,
-        arguments=False,
-        help="named builders: where a build may run",
-    ),
-    # Package registries, by base domain. A nested map, so it is a file
-    # option like `builders`: an environment variable spelling of
-    # `registry.<domain>.mirrors.<source>` would be a second grammar to
-    # specify and parse for a value nobody sets per invocation.
-    Option(
-        "registry",
-        kind="registry",
-        default=(),
-        environment=False,
-        arguments=False,
-        help="package registries by domain: their mirrors, and whether they are trusted",
-    ),
-    # Settable up to the environment; the *invocation* selects with
-    # --builder, which is selection rather than configuration — so the
-    # arguments channel is deliberately off here.
-    Option(
-        "default_builder",
+        "signing.imgtool",
         kind="string",
-        arguments=False,
-        help="the builder a plain `mcuhome device build` uses",
+        help="the imgtool that signs firmware; unset uses the installed one",
     ),
     # -- build.* : how this machine builds -----------------------------
     # Everything below describes the machine a build runs on, not the
@@ -299,6 +332,24 @@ OPTIONS: tuple[Option, ...] = (
         default=DEFAULT_BUILD_MODE,
         choices=BUILD_MODES,
         help="how a local build is executed: in a build container, or as a child process",
+    ),
+    # Settable up to the environment; the *invocation* selects with
+    # --builder, which is selection rather than configuration — so the
+    # arguments channel is deliberately off here and this key derives no
+    # flag.
+    Option(
+        "build.builder",
+        kind="string",
+        arguments=False,
+        help="the builder a plain `mcuhome device build` uses",
+    ),
+    # `podman` is command-line compatible for everything used here,
+    # which is the whole reason this key exists.
+    Option(
+        "build.container_program",
+        kind="string",
+        default=DEFAULT_CONTAINER_PROGRAM,
+        help="the program that runs build containers",
     ),
     # Where a container build may take its environment from, in search
     # order. An image is chosen by the packages its labels declare, never
@@ -351,6 +402,11 @@ OPTIONS: tuple[Option, ...] = (
         kind="string",
         help="the Python that creates a build environment's virtual environment",
     ),
+    # One key per package kind, and a kind is never looked for under
+    # another kind's key: a directory that holds the SDK package is not
+    # thereby a claim about where build workspaces live, and a machine
+    # that keeps everything in one place says so three times — which is
+    # the statement it is actually making.
     Option(
         "build.sdk_sources",
         kind="paths",
@@ -361,13 +417,13 @@ OPTIONS: tuple[Option, ...] = (
         "build.workspace_sources",
         kind="paths",
         default=(),
-        help="directories holding build workspace packages; unset uses build.sdk_sources",
+        help="directories holding build workspace packages",
     ),
     Option(
         "build.tools_sources",
         kind="paths",
         default=(),
-        help="directories holding build tools packages; unset uses build.sdk_sources",
+        help="directories holding build tools packages",
     ),
     # The unpacking bounds. Not a tuning knob for speed: a package is
     # trusted by its pinned hash before a byte of it is unpacked, and the
@@ -396,15 +452,23 @@ OPTIONS: tuple[Option, ...] = (
         minimum=1,
         help="how much the build tools package may unpack to, in bytes",
     ),
-    # The compiler cache, by tier. `ccache_dir` above names the root the
-    # local and shared tiers are laid out under, which is what a machine
-    # nobody configured further uses; these name a tier's directory
-    # outright, for the machine that keeps one somewhere else — a shared
-    # cache on a read-only mount, a project-wide cache on a fast disk.
+    # One cache for everything this user builds — its entries are content
+    # addresses, so two projects share one exactly when the compilation
+    # is the same compilation. Left unset it lands under the user's cache
+    # directory; setting it moves the cache to a faster disk, or off a
+    # network home directory. The four tiers below name a tier's
+    # directory outright, for a machine that keeps one somewhere else —
+    # a shared cache on a read-only mount, a project-wide cache on a
+    # fast disk.
+    Option(
+        "build.cache_root",
+        kind="path",
+        help="where the compiler cache lives; unset means the user cache directory",
+    ),
     Option(
         "build.cache_local",
         kind="path",
-        help="this machine's own compiler cache; unset uses the cache directory",
+        help="this machine's own compiler cache; unset uses the cache root",
     ),
     Option(
         "build.cache_shared",
@@ -421,7 +485,73 @@ OPTIONS: tuple[Option, ...] = (
         kind="path",
         help="a compiler cache kept for one project; unset means no project tier",
     ),
+    # Builders are deployment configuration and live in files only — the
+    # fully manual rung (--build-mode plus its flags) is the
+    # per-invocation channel and bypasses the map entirely. `builder` is
+    # also a reserved area: no option in it ever reads the environment,
+    # because MCUHOME_BUILDER_* is what MCUHome sets *for* a build
+    # environment it starts.
+    Option(
+        "builder",
+        kind="builder",
+        default=(),
+        environment=False,
+        arguments=False,
+        help="named builders, by name: where a build may run",
+    ),
+    # Package registries, by base domain. A nested map, so it is a file
+    # option like `builder`: an environment variable spelling of
+    # `registry.<domain>.mirrors.<source>` would be a second grammar to
+    # specify and parse for a value nobody sets per invocation.
+    Option(
+        "registry",
+        kind="registry",
+        default=(),
+        environment=False,
+        arguments=False,
+        help="package registries by domain: their mirrors, and whether they are trusted",
+    ),
 )
+
+
+@dataclass(frozen=True)
+class Argument:
+    """One value an invocation carried, in the spelling it arrived in.
+
+    *flag* is what the person actually typed. A tool that offers the
+    derived spelling may leave it empty and the declaration answers
+    instead; a tool with a flag of its own states it, and a later refusal
+    can then quote the words the person used rather than a key they
+    never wrote.
+    """
+
+    #: The option this sets, by its declared key.
+    name: str
+    #: The parsed value, in the option's own type — the caller parsed it,
+    #: because only the caller knows whether the flag was used at all.
+    value: Any
+    #: The spelling used, ``--build-mode`` style. Empty takes
+    #: :attr:`Option.flag`.
+    flag: str = ""
+
+
+@dataclass(frozen=True)
+class ProgramDefaults:
+    """What an embedding program defaults shared keys to.
+
+    A build server wants ``build.memory`` bounded where a workstation
+    does not, and a default nobody can see is a value nobody can
+    account for. So a program states its own values in a layer of its
+    own — directly above the registry's defaults and below every file,
+    because an operator's file must still win — and every value it sets
+    carries the origin ``program`` and this program's *name* as its
+    source.
+    """
+
+    #: The program, as ``mcuhome config print`` should name it.
+    name: str
+    #: Its values, keyed by option name and already in the option's type.
+    values: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -430,12 +560,21 @@ class Setting:
 
     option: Option
     value: Any
-    #: One of ``default``, ``system``, ``user``, ``project``,
-    #: ``environment``, ``arguments``.
+    #: One of :data:`_ORIGINS`: ``default``, ``program``, ``system``,
+    #: ``user``, ``project``, ``environment``, ``arguments``.
     origin: str
     #: Where exactly: the file for a file layer, the variable name for
-    #: the environment, the flag for an argument, ``None`` for a default.
+    #: the environment, the flag for an argument, the program's name for
+    #: its own defaults, ``None`` for a declared default.
     source: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """This value as a document: what it is, and where it came from."""
+        return {
+            "value": _jsonable(self.value),
+            "origin": self.origin,
+            "source": self.source,
+        }
 
 
 class Settings:
@@ -458,38 +597,31 @@ class Settings:
     def origin(self, name: str) -> str:
         return self.setting(name).origin
 
-    def print_data(self) -> dict[str, dict[str, Any]]:
-        """What ``mcuhome config print`` renders: value and origin per option.
+    def to_dict(self) -> dict[str, dict[str, Any]]:
+        """Every effective value as one document, in declaration order.
 
-        JSON-ready — paths become strings — and in declaration order,
-        which groups related options the way the registry does rather
-        than alphabetically tearing them apart.
+        Declaration order rather than alphabetical, because it groups
+        related options the way the registry does. Every value goes
+        through its own ``to_dict`` on the way out, so no client ever
+        meets a Python object where it asked for data.
         """
+        return {name: setting.to_dict() for name, setting in self._settings.items()}
 
-        def jsonable(value: Any) -> Any:
-            if isinstance(value, Path):
-                return str(value)
-            if isinstance(value, Builder):
-                return value.to_dict()
-            if isinstance(value, packageregistry.RegistrySettings):
-                return {
-                    "domain": value.base_domain,
-                    "untrusted": value.untrusted,
-                    "anchor": None if value.anchor is None else str(value.anchor),
-                    "mirrors": {name: list(value.mirrors[name]) for name in value.mirrors},
-                }
-            if isinstance(value, tuple):
-                return [jsonable(item) for item in value]
-            return value
 
-        return {
-            name: {
-                "value": jsonable(setting.value),
-                "origin": setting.origin,
-                "source": setting.source,
-            }
-            for name, setting in self._settings.items()
-        }
+def _jsonable(value: Any) -> Any:
+    """One resolved value as JSON-ready data.
+
+    Paths become strings, tuples become lists, and anything that knows
+    its own document shape is asked for it — a client that prints
+    configuration should never have to recognize a workbench class.
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 def system_config_dir(env: Mapping[str, str]) -> Path | None:
@@ -597,7 +729,7 @@ def _parse_file_value(
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise refuse("a list of paths")
         return tuple(_resolve_path(item, env=env, base=file.parent) for item in value)
-    if opt.kind == "builders":
+    if opt.kind == "builder":
         return builders_module.parse_builders(value, file=file, origin=origin)
     if opt.kind == "registry":
         return packageregistry.parse_registries(value, file=file, origin=origin, env=env)
@@ -668,7 +800,7 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
 #: How a structured option's value from a higher layer combines with the
 #: one below it. A kind that is absent here is nearest-wins, whole value.
 _MERGERS: dict[str, Callable[[Any, Any], Any]] = {
-    "builders": builders_module.merge_builders,
+    "builder": builders_module.merge_builders,
     "registry": packageregistry.merge_registries,
 }
 
@@ -719,15 +851,18 @@ def _read_layer(
         raise ConfigError(
             f"{file.name} must be a mapping of `option: value` pairs.",
             location=Location(file=file, line=1, column=1),
-            hint="one option per line, for example:\n    default_builder: attic",
+            hint="one area per section, for example:\n    build:\n      builder: attic",
         )
     by_name = {opt.name: opt for opt in registry}
     settable = sorted(name for name, opt in by_name.items() if opt.files and not opt.bootstrap)
-    areas = {opt.area for opt in registry if opt.area}
+    # An area that holds leaves is a section; an area that *is* an option
+    # (the map kinds) is read as that option, whole.
+    areas = {opt.area for opt in registry if opt.leaf}
     settings: dict[str, Setting] = {}
 
     def in_area(area: str) -> str:
-        return ", ".join(sorted(opt.leaf for opt in registry if opt.area == area and opt.files))
+        inside = sorted(opt.leaf for opt in registry if opt.area == area and opt.files and opt.leaf)
+        return ", ".join(inside) if inside else "none — they are set per invocation"
 
     def read(opt: Option, raw: Any, location: Location) -> None:
         if opt.bootstrap or not opt.files:
@@ -738,7 +873,9 @@ def _read_layer(
     for key, raw in data.items():
         location = _key_location(data, str(key), file)
         declared = by_name.get(key)
-        if declared is not None and not declared.area:
+        if declared is not None and not declared.leaf:
+            # A map option: the section under this key is its value, and
+            # the names inside it are the user's own.
             read(declared, raw, location)
             continue
         if key in areas:
@@ -784,30 +921,40 @@ def resolve_settings(
     *,
     project: Project | None,
     env: Mapping[str, str],
-    args: Mapping[str, Any] | None = None,
-    registry: tuple[Option, ...] = OPTIONS,
+    args: Sequence[Argument] = (),
+    program: ProgramDefaults | None = None,
+    declared_options: tuple[Option, ...] = OPTIONS,
 ) -> Settings:
-    """Resolve *registry* through the five layers.
+    """Resolve *declared_options* through the layers.
 
     *project* is the already-resolved project directory (or ``None``
     outside any project — the project layer is then simply absent), and
     *env* the stated environment both the ``MCUHOME_*`` layer and the
-    file locations are read from. *args* carries the invocation's
-    values, keyed by option name and holding **only what the caller was
-    actually given** — an unset flag must be absent here, not ``None``,
-    because "the flag was not used" and "the flag was used to clear the
-    option" are different statements and only the caller can tell them
-    apart.
+    file locations are read from. *args* carries the invocation's values
+    and **only what the caller was actually given** — an unused flag is
+    absent here, not ``None``, because "the flag was not used" and "the
+    flag was used to clear the option" are different statements and only
+    the caller can tell them apart. Each one names the spelling it
+    arrived in, so a later refusal can quote it.
 
-    The bootstrap options are skipped: they were consumed before this
-    ran (:func:`mcuhome.workbench.project.resolve_project`), and a file
-    that tries to set one is refused with the reason.
+    *program* is what an embedding program defaults shared keys to; it
+    sits directly above the declared defaults and below every file, so
+    an operator's configuration still wins.
+
+    The bootstrap option is skipped: it was consumed before this ran
+    (:func:`mcuhome.workbench.project.resolve_project`), and a file that
+    tries to set it is refused with the reason.
     """
     resolved: dict[str, Setting] = {
         opt.name: Setting(option=opt, value=opt.default, origin="default")
-        for opt in registry
+        for opt in declared_options
         if not opt.bootstrap
     }
+    for name, value in (program.values if program is not None else {}).items():
+        opt = _settable(name, declared_options, channel="a program's own defaults")
+        resolved[opt.name] = Setting(
+            option=opt, value=value, origin="program", source=program.name if program else None
+        )
 
     def apply(layer_settings: dict[str, Setting]) -> None:
         # Scalars are whole-value nearest-wins; the structured kinds
@@ -834,11 +981,15 @@ def resolve_settings(
     for origin, directory in layers:
         if directory is None:
             continue
-        apply(_read_layer(directory / CONFIG_FILE, origin=origin, registry=registry, env=env))
+        apply(
+            _read_layer(directory / CONFIG_FILE, origin=origin, registry=declared_options, env=env)
+        )
     if project is not None:
-        apply(_read_layer(project.config_file, origin="project", registry=registry, env=env))
+        apply(
+            _read_layer(project.config_file, origin="project", registry=declared_options, env=env)
+        )
 
-    for opt in registry:
+    for opt in declared_options:
         if opt.bootstrap or not opt.environment:
             continue
         raw = env.get(opt.env_var)
@@ -851,20 +1002,28 @@ def resolve_settings(
             source=opt.env_var,
         )
 
-    for name, value in (args or {}).items():
-        opt = option(name, registry)
-        if opt.bootstrap:
-            raise ValueError(f"{name!r} is a bootstrap option; resolve_project consumed it already")
-        if not opt.arguments:
-            raise ValueError(f"{name!r} is not settable from the command line")
-        # An option in an area has no derived flag, so the source is its
-        # own name: a caller may have mapped a flag of its own onto it,
-        # and this registry cannot name a spelling it never wrote.
-        resolved[name] = Setting(
-            option=opt, value=value, origin="arguments", source=opt.flag or opt.name
+    for argument in args:
+        opt = _settable(argument.name, declared_options, channel="the command line")
+        # The spelling the tool used, or the one this registry derives:
+        # either way a refusal can name what the person typed.
+        resolved[opt.name] = Setting(
+            option=opt,
+            value=argument.value,
+            origin="arguments",
+            source=argument.flag or opt.flag,
         )
 
     return Settings(resolved)
+
+
+def _settable(name: str, registry: tuple[Option, ...], *, channel: str) -> Option:
+    """The declaration of *name*, or a programming error naming the channel."""
+    opt = option(name, registry)
+    if opt.bootstrap:
+        raise ValueError(f"{name!r} is a bootstrap option; resolve_project consumed it already")
+    if channel == "the command line" and not opt.arguments:
+        raise ValueError(f"{name!r} is not settable from the command line")
+    return opt
 
 
 # --------------------------------------------------------------------------
@@ -883,11 +1042,11 @@ def resolve_builder(
     """Which builder this invocation uses, credentials included.
 
     The two configured rungs — an explicit ``--builder`` *name*, then
-    the configured ``default_builder`` — over the resolved ``builders``
-    list, falling back to ``build.target`` when neither is set (and that
+    the configured ``build.builder`` — over the resolved ``builder`` map,
+    falling back to ``build.target`` when neither is set (and that
     key's own default is a build on this machine). A caller that names a
     target outright never calls this. A remote
-    builder's token comes from ``secrets/build-server/<name>.yaml``,
+    builder's token comes from ``secrets/builder/<name>.yaml``,
     looked up nearest-first: the project, then the user configuration
     directory, then the system one — the same ladder its definition
     merged through, and the **nearest existing file answers whole**
@@ -897,9 +1056,9 @@ def resolve_builder(
     want no Authorization at all.
     """
     return builders_module.select_builder(
-        settings.value("builders"),
+        settings.value("builder"),
         name=name,
-        default=settings.value("default_builder"),
+        default=settings.value("build.builder"),
         fallback=settings.value("build.target"),
         token_of=lambda builder: _builder_token(
             builder.name, project=project, env=env, on_warning=on_warning
@@ -914,7 +1073,7 @@ def _builder_token(
     env: Mapping[str, str],
     on_warning: Callable[[str], None] | None,
 ) -> str | None:
-    relative = Path("build-server") / f"{name}.yaml"
+    relative = Path(BUILDER_SECRETS_DIR) / f"{name}.yaml"
     candidates: list[Path] = []
     if project is not None:
         candidates.append(project.secrets_dir / relative)
@@ -1040,13 +1199,13 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
             location=location,
             hint=f"to remove the option from the file: mcuhome config unset {opt.name}",
         )
-    if opt.kind == "builders":
+    if opt.kind == "builder":
         raise ConfigError(
-            "'builders' is structured configuration and not settable as one value.",
+            "'builder' is structured configuration and not settable as one value.",
             location=location,
             hint=(
-                "edit the `builders:` list in the file directly — one entry per "
-                "builder with name:, type: and the type's options"
+                "edit the `builder:` map in the file directly — one section per "
+                "builder, keyed by its name, with target: and what that target needs"
             ),
         )
     if opt.kind == "registry":
@@ -1095,7 +1254,7 @@ def _load_for_editing(file: Path, yaml: Any) -> Any:
         raise ConfigError(
             f"{file.name} must be a mapping of `option: value` pairs.",
             location=Location(file=file, line=1, column=1),
-            hint="one option per line, for example:\n    default_builder: attic",
+            hint="one area per section, for example:\n    build:\n      builder: attic",
         )
     return data
 
@@ -1122,7 +1281,7 @@ def set_config_value(
     text: str,
     *,
     env: Mapping[str, str],
-    registry: tuple[Option, ...] = OPTIONS,
+    declared_options: tuple[Option, ...] = OPTIONS,
 ) -> Any:
     """Set *name* to *text* in *file*, and answer with the written value.
 
@@ -1131,7 +1290,7 @@ def set_config_value(
     and goes through the round-trip editor, so comments and ``!file``
     references elsewhere in the file survive the edit byte for byte.
     """
-    opt = _declared_or_refuse(name, registry)
+    opt = _declared_or_refuse(name, declared_options)
     location = Location(file=file, key=name)
     if opt.bootstrap or not opt.files:
         raise _refuse_not_file_settable(opt, location)
@@ -1144,7 +1303,7 @@ def set_config_value(
     data = _load_for_editing(file, yaml)
     if data is None:
         data = {}
-    if opt.area:
+    if opt.leaf:
         # The area is a section in the file, and an existing one is
         # written into rather than replaced: the section may hold other
         # options, and their comments and `!file` references are as much
@@ -1172,19 +1331,19 @@ def unset_config_value(
     file: Path,
     name: str,
     *,
-    registry: tuple[Option, ...] = OPTIONS,
+    declared_options: tuple[Option, ...] = OPTIONS,
 ) -> bool:
     """Remove *name* from *file*; False when there was nothing to remove.
 
     The name must be a declared option — ``unset`` with a typo saying
     "nothing to remove" would confirm a removal that never happened.
     """
-    opt = _declared_or_refuse(name, registry)
+    opt = _declared_or_refuse(name, declared_options)
     yaml = editing_yaml()
     data = _load_for_editing(file, yaml)
     if data is None:
         return False
-    if opt.area:
+    if opt.leaf:
         section = data.get(opt.area)
         if not isinstance(section, dict) or opt.leaf not in section:
             return False
