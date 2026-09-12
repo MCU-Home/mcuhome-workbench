@@ -402,6 +402,99 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
     assert driven["sdk_max_bytes"] == 11
 
 
+def test_the_configured_container_program_reaches_both_container_calls(
+    model, tmp_path, monkeypatch
+) -> None:
+    """`build.container_program` is what a container build drives.
+
+    Both calls into the profile take it — the one that resolves the
+    image and may fetch it, and the one that runs the step — because the
+    two start their own container runtime. A machine that set `podman`
+    and had one of the two fall back to `docker` would learn it from
+    whichever half failed.
+    """
+    resolved: dict[str, object] = {}
+    driven: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        build,
+        "create_build_context",
+        lambda device_model, **kwargs: None,
+    )
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
+    monkeypatch.setattr(build, "context_facts", lambda directory: {})
+    monkeypatch.setattr(build, "read_context_request", lambda path: _Pinned())
+    monkeypatch.setattr(build, "read_generator_chain", lambda path: ("mcuhome-workbench", "0.1.0"))
+    monkeypatch.setattr(build, "format_generator_chain", lambda chain: "mcuhome-workbench:0")
+    monkeypatch.setattr(
+        build.containerbuild,
+        "prepare_environment",
+        lambda pin, **kwargs: resolved.update(kwargs) or _Resolved(),
+    )
+    monkeypatch.setattr(build.containerbuild, "check_image", lambda *a, **k: None)
+    monkeypatch.setattr(
+        build.containerbuild,
+        "run_locked_build",
+        lambda context_dir, **kwargs: driven.update(kwargs),
+    )
+
+    build.compose_local_build(
+        model,
+        signing_pub="",
+        sdk_sources=(tmp_path / "sdk",),
+        work_root=tmp_path / "work",
+        env={},
+        options=BuildOptions(container_program="podman"),
+    )
+    assert resolved["container_program"] == "podman"
+    assert driven["container_program"] == "podman"
+
+
+def test_the_container_profile_starts_the_program_it_was_given(tmp_path, monkeypatch) -> None:
+    """And the profile builds its runtime out of that name.
+
+    The other half of the same key: what the composition hands over has
+    to be what the container commands are actually spelled with, or the
+    value would travel the whole way and change nothing.
+    """
+    from mcuhome.workbench import containerbuild
+
+    started: list[str] = []
+
+    class _Recorder:
+        def __init__(self, program=containerbuild.DEFAULT_CONTAINER_PROGRAM, **kwargs):
+            started.append(program)
+            raise _Stop
+
+    monkeypatch.setattr(containerbuild, "Runtime", _Recorder)
+    monkeypatch.setattr(
+        containerbuild,
+        "read_context_manifest",
+        lambda path: type(
+            "Manifest",
+            (),
+            {
+                "sdk": type("Sdk", (), {"version": "0.1.0", "sha256": "a" * 64})(),
+                "compute_id": lambda self: "sha256:" + "0" * 64,
+            },
+        )(),
+    )
+    with pytest.raises(_Stop):
+        containerbuild.prepare_environment(
+            _Pinned().build_environment, env={}, container_program="podman"
+        )
+    with pytest.raises(_Stop):
+        containerbuild.run_locked_build(
+            tmp_path / "context",
+            image="ghcr.io/mcu-home/x@sha256:" + "1" * 64,
+            sdk_sources=(),
+            work_root=tmp_path / "work",
+            env={},
+            container_program="podman",
+        )
+    assert started == ["podman", "podman"]
+
+
 def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch) -> None:
     """The remote target writes its base context through the same writer,
     so the machine's package directories and bound reach it there too.
