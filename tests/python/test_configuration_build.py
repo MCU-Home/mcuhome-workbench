@@ -562,13 +562,17 @@ def test_the_target_is_a_key_of_the_section_like_the_mode(project: Project) -> N
 def test_the_build_options_carry_the_target_and_where_it_came_from(project: Project) -> None:
     """What a build reads is the resolved object, source included.
 
-    The source is carried for the same reason the mode's is: a refusal
-    that a target caused has to be able to say who chose it, and it
-    usually came out of a file the person is not looking at.
+    Every key carries where its value came from, for the reason the
+    target and the mode need it most: a refusal one of them caused has to
+    be able to say who chose it, and it usually came out of a file the
+    person is not looking at.
     """
     write_project(project, "build:\n  target: remote\n")
     options = build_options(resolve_settings(project=project, env={}))
     assert options.target == TARGET_REMOTE
-    assert options.target_source == str(project.root / "mcuhome.yaml")
-    assert build_options(resolve_settings(project=None, env={})).target == TARGET_LOCAL
-    assert build_options(resolve_settings(project=None, env={})).target_source == "default"
+    assert options.source("target") == str(project.root / "mcuhome.yaml")
+    unset = build_options(resolve_settings(project=None, env={}))
+    assert unset.target == TARGET_LOCAL
+    assert unset.source("target") == "default"
+    # Not only the two the object used to carry a field for.
+    assert unset.source("cache_root") == "default"

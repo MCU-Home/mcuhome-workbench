@@ -87,43 +87,39 @@ What is here, in the order a caller needs it:
     carries — so this is the caller who wants the tree for its own sake,
     and it refuses in words where ``mcuhome-compiler`` is not installed.
 ``build_firmware`` / ``BuildRequest`` / ``BuildOutcome``
-    Build a device, at a stated target, behind one awaitable call. A
-    build has two placement questions in it and only the first belongs
-    to a caller: **where** it runs (``LocalBuild``, ``RemoteBuild``) and
-    **how** the machine that runs it executes the work
-    (``ContainerExecution`` in a build container, ``SubprocessExecution``
-    against a build environment unpacked on the host) — which is why
-    ``LocalBuild`` carries an ``Execution`` and ``RemoteBuild`` does not.
-    ``RemoteNotConfigured`` is the typed refusal a caller renders.
-``run_build`` / ``resolve_build_target`` / ``build_target_for``
-    The same build, selected by target name — for a caller whose choice
-    arrived as a command-line flag or a configuration value.
-    ``resolve_build_target`` turns a name into one of ``TARGET_LOCAL``,
+    Build a device behind one awaitable call, whichever target runs it:
+    a target object, a target name, or nothing at all, which takes the
+    request's builder and then ``build.target``. A build has two
+    placement questions in it and only the first belongs to a caller:
+    **where** it runs (``LocalBuild``, ``RemoteBuild``) and **how** the
+    machine that runs it executes the work (``ContainerExecution`` in a
+    build container, ``SubprocessExecution`` against a build environment
+    unpacked on the host) — which is why ``LocalBuild`` carries an
+    ``Execution`` and ``RemoteBuild`` does not. ``RemoteNotConfigured``
+    is the typed refusal a caller renders.
+``resolve_build_target`` / ``resolve_build_mode``
+    A name into a value, for a caller whose choice arrived as a
+    command-line flag or a configuration value:
+    ``resolve_build_target`` answers one of ``TARGET_LOCAL``,
     ``TARGET_REMOTE`` (``BUILD_TARGETS``, ``DEFAULT_BUILD_TARGET``) or
-    raises ``UnknownBuildTarget``; ``build_target_for`` is the name and
-    the request read together as the target they describe, and a name of
-    ``None`` there takes ``build.target``. ``resolve_build_mode`` does
-    the same for the
-    other axis — ``MODE_CONTAINER``, ``MODE_SUBPROCESS``
-    (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or ``UnknownBuildMode`` —
-    and ``BuildRequest.mode`` is where a caller states it.
-``BuildOptions`` / ``build_options`` / ``options_for``
+    raises ``UnknownBuildTarget``, and ``resolve_build_mode`` does the
+    same for the other axis — ``MODE_CONTAINER``, ``MODE_SUBPROCESS``
+    (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or ``UnknownBuildMode``.
+    ``BuildRequest.mode`` is where a caller states the mode.
+``BuildOptions`` / ``build_options``
     What the ``build`` section of the configuration says about *this
     machine*: the execution it uses, where it keeps unpacked build
     environments and which interpreter finalizes them, how much a package
     may unpack to, which directories each package is looked for in, and
     where the compiler cache tiers are. ``build_options`` turns resolved
-    ``Settings`` into that object; ``options_for`` answers for a request —
-    the options it states, or the machine's own, resolved from the
-    environment and the project the request names. ``build.target`` is
-    in there too: where a build of this machine runs when nothing more
-    explicit said otherwise. A caller that never
-    touches any of it builds the way the machine is configured, which is
-    the point: the registry derives no command-line flag for these keys.
-    The section's ``build.sdk_sources`` is the one key that travels on
-    the request instead (``BuildRequest.sdk_sources``), because a remote
-    build resolves its pins from it too — both targets look there first
-    and at the registry second.
+    ``Settings`` into that object; a request that states none has them
+    resolved from the environment and the project it names.
+    ``build.target`` is in there too: where a build of this machine runs
+    when nothing more explicit said otherwise, and so are the three
+    package source lists both targets resolve their pins from. A caller
+    that never touches any of it builds the way the machine is
+    configured, which is the point: the registry derives no command-line
+    flag for these keys.
 ``BuilderSession`` / ``LocalOutcome``
     The **backend role**, for the caller that owns its own sessions
     rather than asking for a firmware: a build server. It is handed a
@@ -137,11 +133,11 @@ What is here, in the order a caller needs it:
     what a local build does and what a build server does differ in who
     owns the session, not in what a build is.
 ``build_lock`` / ``BuildDirectoryBusy``
-    One build directory, one operation at a time. ``run_build`` takes
-    the lock itself, so an embedder gets the guard for free; a caller
-    that does more to the same directory — signing after the build,
-    flashing what it produced, deleting it — holds it around the whole
-    sequence instead, and the nested acquisition inside ``run_build``
+    One build directory, one operation at a time. ``build_firmware``
+    takes the lock itself, so an embedder gets the guard for free; a
+    caller that does more to the same directory — signing after the
+    build, flashing what it produced, deleting it — holds it around the
+    whole sequence instead, and the nested acquisition inside the build
     then costs nothing. What it keeps out is a *second process* working
     in that directory, which is how a build ends up overwriting the
     image another run is signing or flashing.
@@ -153,7 +149,7 @@ making 40 ms of pure computation awaitable buys nothing against a build
 that blocks for minutes, and a synchronous core is what keeps synchronous
 embedding possible at all (an ``asyncio.run`` facade over an async core
 raises inside a caller that already has a loop). What is made
-awaitable is the *waiting* — :func:`run_build`, which drives a
+awaitable is the *waiting* — :func:`build_firmware`, which drives a
 subprocess, a container or a socket. So a caller with an event loop
 awaits the build directly and offloads one of the synchronous operations
 with ``asyncio.to_thread`` when it must.
@@ -198,11 +194,8 @@ from mcuhome.workbench.build import (
     UnknownBuildTarget,
     build_firmware,
     build_options,
-    build_target_for,
-    options_for,
     resolve_build_mode,
     resolve_build_target,
-    run_build,
 )
 from mcuhome.workbench.buildenvsession import (
     BuilderSession,
@@ -374,7 +367,6 @@ __all__ = [
     "VERSION",
     "ValidationResult",
     "build_firmware",
-    "build_target_for",
     "build_options",
     "build_lock",
     "config_json_schema",
@@ -389,7 +381,6 @@ __all__ = [
     "load_model",
     "new_device",
     "option",
-    "options_for",
     "project_at",
     "read_model",
     "registry_data",
@@ -399,7 +390,6 @@ __all__ = [
     "resolve_build_target",
     "resolve_project",
     "resolve_settings",
-    "run_build",
     "running_builds",
     "scope_config_file",
     "set_config_value",

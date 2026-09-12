@@ -75,7 +75,7 @@ def test_the_build_targets_are_part_of_the_surface() -> None:
     from mcuhome.workbench import build
 
     exported = (
-        "run_build",
+        "build_firmware",
         "resolve_build_target",
         "BuildRequest",
         "BuildOutcome",

@@ -51,7 +51,7 @@ pytest                           # the suite in ../tests/python/
 | `workbench/provision.py` | — | `matter-pairing`: drawing a device's commissioning credentials |
 | `workbench/contextdir.py` | — | build-context creation and locking |
 | `workbench/resolve_pins.py` | — | the pin chain — SDK, then the build workspace and build tools its meta files require — resolved against an index or a directory |
-| `workbench/build.py` | — | the two build targets behind `run_build` |
+| `workbench/build.py` | — | the two build targets behind `build_firmware` |
 | `workbench/containerbuild.py` | — | the `container` mode: one fresh container per step, in the image the context's packages select |
 | `workbench/resolve_image.py` | — | which container image delivers a package set: the repository list, the four pin forms, the label check |
 | `workbench/subprocessbuild.py` | — | the `subprocess` mode: the unpacked environment run as a child process |

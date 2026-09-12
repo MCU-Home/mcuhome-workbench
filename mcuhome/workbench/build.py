@@ -28,12 +28,11 @@ first belongs to a caller, which is what :mod:`…buildtarget` states:
 :class:`~mcuhome.workbench.buildtarget.LocalBuild` carries an
 :class:`~mcuhome.workbench.buildtarget.Execution`,
 :class:`~mcuhome.workbench.buildtarget.RemoteBuild` deliberately carries
-none. :func:`build_firmware` is the seam that takes one of those, and
-:func:`run_build` is the name-shaped entry point over it for a caller
-whose target arrived as a flag or a configuration value —
-:func:`build_target_for` is the whole of the translation, in one place,
-so that the target-specific fields of :class:`BuildRequest` have exactly
-one reader.
+none. :func:`build_firmware` takes one of those, or the name a flag or a
+configuration value carried, or nothing at all — and the translation
+from a name and a request into a target object happens in one place
+(:func:`build_target_for`), so that the fields a target reads have
+exactly one reader.
 
 **No key of any kind can be private here.** The one field that carries
 key material is :attr:`BuildRequest.signing_pub`, the PEM that becomes
@@ -79,7 +78,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -102,6 +101,7 @@ from mcuhome.workbench.buildenvsession import (
     host_limits,
     memory_bytes,
 )
+from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import build_lock
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
@@ -122,7 +122,7 @@ from mcuhome.workbench.buildtarget import (
     RemoteBuild,
     SubprocessExecution,
 )
-from mcuhome.workbench.configuration import Settings, resolve_settings
+from mcuhome.workbench.configuration import Setting, Settings, resolve_settings
 from mcuhome.workbench.contextdir import (
     context_facts,
     create_build_context,
@@ -169,15 +169,12 @@ __all__ = [
     "UnknownBuildTarget",
     "build_firmware",
     "build_options",
-    "build_target_for",
     "compose_container_build",
     "compose_subprocess_build",
     "image_pin",
-    "options_for",
     "websocket_url",
     "resolve_build_mode",
     "resolve_build_target",
-    "run_build",
 ]
 
 # The two vocabularies above are re-exported, not defined here. They
@@ -359,15 +356,12 @@ class BuildOptions:
     #: that selects a target per build (a command line's flag, a
     #: configured builder) states it and never reads this.
     target: str = DEFAULT_BUILD_TARGET
-    #: Where ``target`` came from, in the words :class:`…configuration.Setting`
-    #: uses — the file, the variable, or ``default``.
-    target_source: str = "default"
     #: ``build.mode``: ``container`` or ``subprocess``.
     mode: str = DEFAULT_BUILD_MODE
-    #: Where ``mode`` came from, in the words :class:`…configuration.Setting`
-    #: uses — the file, the variable, or ``default``. Carried so that a
-    #: refusal caused by the mode can say who chose it.
-    mode_source: str = "default"
+    #: ``build.builder``: the named builder a plain build runs at when
+    #: nothing was selected per build. Empty is the fallback — no
+    #: builder, the target ``build.target`` names.
+    builder: str = ""
     #: ``build.container_repositories``: where a container build may take
     #: its environment from, in search order. The image is chosen by the
     #: package set its labels declare, so this list says whose images may
@@ -392,12 +386,13 @@ class BuildOptions:
     #: itself runs on, which is right whenever the host's Python is the
     #: one the tools package was built for.
     python: str | None = None
-    #: ``build.workspace_sources`` / ``build.tools_sources``: the
-    #: operator directories of those two package kinds, and of no other.
-    #: A kind is never looked for under another kind's key, so empty
-    #: means "no operator directory for this one" and the package is
-    #: resolved through the registry; a machine that keeps all three in
-    #: one place names it in all three keys.
+    #: ``build.sdk_sources`` / ``build.workspace_sources`` /
+    #: ``build.tools_sources``: the operator directories of one package
+    #: kind each, and of no other. A kind is never looked for under
+    #: another kind's key, so empty means "no operator directory for this
+    #: one" and the package is resolved through the registry; a machine
+    #: that keeps all three in one place names it in all three keys.
+    sdk_sources: tuple[Path, ...] = ()
     workspace_sources: tuple[Path, ...] = ()
     tools_sources: tuple[Path, ...] = ()
     #: ``build.<kind>_max_bytes``: how much each package may unpack to.
@@ -415,6 +410,21 @@ class BuildOptions:
     cache_shared: Path | None = None
     cache_session: Path | None = None
     cache_project: Path | None = None
+    #: Where each of the values above came from, by the key's leaf name
+    #: and in the words :class:`…configuration.Setting` uses: the file,
+    #: the variable, the flag, the program, or ``default``. Every key can
+    #: say it, so a refusal caused by a configured value can name who
+    #: chose it whichever value that was.
+    sources: Mapping[str, str] = field(default_factory=dict)
+
+    def source(self, leaf: str) -> str:
+        """Where the value of ``build.<leaf>`` came from.
+
+        ``default`` for a key nobody set and for an object nobody
+        resolved through the configuration — a caller that built these
+        options itself states values and no origins.
+        """
+        return self.sources.get(leaf, "default")
 
     def limits(self) -> BuildLimits:
         """What a build of this machine is given, as the two documents
@@ -438,14 +448,10 @@ def build_options(settings: Settings) -> BuildOptions:
     validation and the five layers it merged through are stated in
     exactly one place (:data:`mcuhome.workbench.configuration.OPTIONS`).
 
-    One key of the section is deliberately not here:
-    ``build.sdk_sources`` is a field of the request itself
-    (:attr:`BuildRequest.sdk_sources`), because a remote build needs it
-    too and never reads these options at all. A caller that resolves
-    the configuration states both.
+    Every key of the section is here, including the three package source
+    lists: both targets read them, because a remote build resolves its
+    pins on this machine before it sends anything.
     """
-    setting = settings.setting("build.mode")
-    target = settings.setting("build.target")
 
     def path(name: str) -> Path | None:
         value = settings.value(name)
@@ -458,10 +464,9 @@ def build_options(settings: Settings) -> BuildOptions:
         return int(settings.value(name)) if settings.origin(name) != "default" else None
 
     return BuildOptions(
-        target=resolve_build_target(target.value),
-        target_source=target.source or target.origin,
-        mode=resolve_build_mode(setting.value),
-        mode_source=setting.source or setting.origin,
+        target=resolve_build_target(settings.value("build.target")),
+        mode=resolve_build_mode(settings.value("build.mode")),
+        builder=settings.value("build.builder") or "",
         container_repositories=tuple(settings.value("build.container_repositories")),
         cpus=settings.value("build.cpus"),
         memory=settings.value("build.memory") or None,
@@ -469,6 +474,7 @@ def build_options(settings: Settings) -> BuildOptions:
         dev_workspace=path("build.dev_workspace"),
         container_program=settings.value("build.container_program"),
         python=settings.value("build.python") or None,
+        sdk_sources=tuple(settings.value("build.sdk_sources")),
         workspace_sources=tuple(settings.value("build.workspace_sources")),
         tools_sources=tuple(settings.value("build.tools_sources")),
         sdk_max_bytes=number("build.sdk_max_bytes"),
@@ -479,7 +485,22 @@ def build_options(settings: Settings) -> BuildOptions:
         cache_shared=path("build.cache_shared"),
         cache_session=path("build.cache_session"),
         cache_project=path("build.cache_project"),
+        sources={
+            entry.name: _stated(settings.setting(f"build.{entry.name}"))
+            for entry in fields(BuildOptions)
+            if entry.name != "sources" and f"build.{entry.name}" in settings
+        },
     )
+
+
+def _stated(setting: Setting) -> str:
+    """Where one resolved value came from, in one word or one path.
+
+    The file, the variable or the flag where there is one, and the layer
+    itself where there is not — which is what ``default`` and the
+    program layer look like.
+    """
+    return setting.source or setting.origin
 
 
 def options_for(request: BuildRequest) -> BuildOptions:
@@ -519,12 +540,13 @@ class BuildRequest:
     ignored rather than refused, because a caller assembling one request
     for a target chosen at run time should not have to assemble two.
 
-    The fields marked for one target are the ones a build target object
-    states instead (:mod:`mcuhome.workbench.buildtarget`), and while both
-    exist they are read in exactly one place — :func:`build_target_for`,
-    which is what :func:`run_build` turns a target name into. A caller
-    that builds a target itself and calls :func:`build_firmware` puts
-    those values on the target, and what it leaves here is ignored.
+    Where a build runs is one field: :attr:`builder` is the destination
+    that was selected — the target, the build server behind it, its
+    token, the image it delivers — and it is what
+    :func:`mcuhome.workbench.configuration.resolve_builder` answers. A
+    caller that builds a target object itself
+    (:mod:`mcuhome.workbench.buildtarget`) states those values there and
+    what it leaves here is ignored.
     """
 
     #: The canonical device model, stages 1-3 already run.
@@ -535,6 +557,87 @@ class BuildRequest:
     #: The environment to resolve tools, images and caches from — stated,
     #: never read from the process (:mod:`mcuhome.model.userpaths`).
     env: Mapping[str, str] = field(default_factory=dict)
+    #: What the ``build`` section of this machine's configuration says
+    #: (:class:`BuildOptions`). ``None`` — the ordinary case — resolves
+    #: it here, from :attr:`env` and :attr:`project_root`; a caller that
+    #: has already resolved the configuration states the result and is
+    #: answered with exactly that.
+    options: BuildOptions | None = None
+    #: Where this build is to run: the selected build destination, with
+    #: its target, its build server and token, and the container image
+    #: that machine delivers. ``None`` is the plain build — the target
+    #: ``build.target`` names, with every default.
+    #:
+    #: A builder's ``container_image`` is a statement about the machine
+    #: that builds rather than about this build, so a build that starts
+    #: no container does not refuse over it: the log says the pin has no
+    #: effect here and the build goes on. :attr:`container_image` beats
+    #: it wherever a container does run — the more explicit statement
+    #: wins.
+    builder: SelectedBuilder | None = None
+    #: How this machine executes the build: ``container`` or
+    #: ``subprocess``, the two values of ``build.mode``. ``None`` takes
+    #: that configuration key, which is where the answer ordinarily
+    #: comes from; a caller that builds a
+    #: :class:`~mcuhome.workbench.buildtarget.BuildTarget` itself states
+    #: the execution instead, and one that states a mode here overrides
+    #: the configuration for this build.
+    mode: str | None = None
+    #: The build environment this one build asks for, in the four pin
+    #: forms: a repository, ``:tag``, ``@sha256:…``, or a repository with
+    #: either. The one-invocation override of the device's own
+    #: ``sources.container_image``, and it means the same thing at both
+    #: targets — pin this one instead: a local container build resolves
+    #: it against the configured repositories, and a remote build sends
+    #: it to the server, which resolves it against what it allows.
+    #: ``None`` — the ordinary case — leaves the choice to the search,
+    #: which accepts an image by the packages its labels declare. Naming
+    #: one for a build that starts no container is refused rather than
+    #: half-honoured — a statement about *this* build cannot be quietly
+    #: dropped.
+    container_image: str | None = None
+    #: The project directory, which is where the trust anchors are:
+    #: ``secrets/trust-anchor/<base-domain>.json``, written when the
+    #: project was created. Left ``None`` the build has no project to
+    #: read them from and therefore no registry — it then builds from the
+    #: configured package directories alone, which is exactly what an
+    #: embedder driving a bare model wants.
+    project_root: Path | None = None
+    #: What the project says about package registries, resolved from
+    #: configuration (the ``registry`` option): mirror overrides per
+    #: source, and which registries are marked untrusted. Empty means the
+    #: defaults — the official registry, its own mirror list, verified.
+    registries: Sequence[RegistrySettings] = ()
+    #: PEM of the user's MCUboot **public** key. Becomes
+    #: ``keys/signing.pub`` in the build context, which is all of the key
+    #: pair a build ever sees.
+    signing_pub: str = ""
+    #: Patches to carry into the build context, laid out as
+    #: ``<layer>/NNNN-name.patch``. They are part of what the context is
+    #: attributed to: two builds of one device differ in their context
+    #: identity exactly when their patch sets differ.
+    patches_dir: Path | None = None
+    #: A build context directory to build instead of creating one. For a
+    #: caller that already holds one — an embedder that assembled a
+    #: context elsewhere, a build server that received one over a socket,
+    #: a test driving a hand-written one. Left ``None``, which is the
+    #: ordinary case, the build creates its own from :attr:`model` and
+    #: the configured package directories. Either way it is a *base*
+    #: context: locking it is the act of whoever builds it, and a client
+    #: that sent one checks the identity the server answers with.
+    context_dir: Path | None = None
+    #: Scratch area a build may own. Defaults to a hidden directory
+    #: under :attr:`out_dir`, which is what a command line wants: rebuilt
+    #: every run, thrown away with the build directory.
+    work_root: Path | None = None
+    #: Wait when the build server has no room. A busy server hands out a
+    #: turn instead of a session, and waiting for it is what a person
+    #: starting a build almost always wants; ``False`` is the caller that
+    #: would rather be told now.
+    wait_for_turn: bool = True
+    #: How long that wait may last in total, in seconds. ``0`` removes
+    #: the bound.
+    max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
     #: Where the build log goes, line by line, while it happens.
     on_line: LineSink | None = None
     #: Called with a step key when the build enters a new step —
@@ -551,114 +654,6 @@ class BuildRequest:
     #: it recognizes and ignores the rest, and a composition that has
     #: nothing to say states nothing rather than inventing it.
     on_step: Callable[..., None] | None = None
-    #: Scratch area a build may own. Defaults to a hidden directory
-    #: under :attr:`out_dir`, which is what a command line wants: rebuilt
-    #: every run, thrown away with the build directory.
-    work_root: Path | None = None
-
-    # -- local / remote -----------------------------------------------
-    #: PEM of the user's MCUboot **public** key. Becomes
-    #: ``keys/signing.pub`` in the build context, which is all of the key
-    #: pair a build ever sees.
-    signing_pub: str = ""
-
-    # -- local / remote ------------------------------------------------
-    #: Directories holding the hash-pinned MCUHome SDK package. Read at
-    #: **both** targets, for the same reason and at the same moment: the
-    #: resolved package hash is an input of the context ID, so the pin
-    #: has to exist before a context does. What differs afterwards is who
-    #: fetches the bytes — this machine for ``local``, the build server
-    #: out of its operator's own sources for ``remote``, which then
-    #: verifies them against this pin.
-    sdk_sources: Sequence[Path] = ()
-    #: The project directory, which is where the trust anchors are:
-    #: ``secrets/trust-anchor/<base-domain>.json``, written when the
-    #: project was created. Left ``None`` the build has no project to
-    #: read them from and therefore no registry — it then builds from
-    #: :attr:`sdk_sources` alone, which is exactly what an embedder
-    #: driving a bare model wants.
-    project_root: Path | None = None
-    #: What the project says about package registries, resolved from
-    #: configuration (the ``registry`` option): mirror overrides per
-    #: source, and which registries are marked untrusted. Empty means the
-    #: defaults — the official registry, its own mirror list, verified.
-    registries: Sequence[RegistrySettings] = ()
-    #: The build environment this one build asks for, in the four pin
-    #: forms: a repository, ``:tag``, ``@sha256:…``, or a repository with
-    #: either. The one-invocation override of the device's own
-    #: ``sources.container_image``, and it means the same thing at both
-    #: targets — pin this one instead: a local container build resolves
-    #: it against the configured repositories, and a remote build sends
-    #: it to the server, which resolves it against what it allows.
-    #: ``None`` — the ordinary case — leaves the choice to the search,
-    #: which accepts an image by the packages its labels declare. Naming
-    #: one for a build that starts no container is refused rather than
-    #: half-honoured — a statement about *this* build cannot be quietly
-    #: dropped.
-    container_image: str | None = None
-    #: The build environment a *configured builder* names, in the same
-    #: four pin forms. It is a statement about the machine that builds,
-    #: not about this build, so a build that starts no container does not
-    #: refuse over it: the note says the pin has no effect here and the
-    #: build goes on. :attr:`container_image` beats it wherever a
-    #: container does run — the more explicit statement wins.
-    builder_image: str | None = None
-
-    # -- local ---------------------------------------------------------
-    #: What the ``build`` section of this machine's configuration says
-    #: (:class:`BuildOptions`). ``None`` — the ordinary case — resolves
-    #: it here, from :attr:`env` and :attr:`project_root`; a caller that
-    #: has already resolved the configuration states the result and is
-    #: answered with exactly that.
-    options: BuildOptions | None = None
-    #: How this machine executes the build: ``container`` or
-    #: ``subprocess``, the two values of ``build.mode``. ``None`` takes
-    #: that configuration key, which is where the answer ordinarily
-    #: comes from; a caller that builds a
-    #: :class:`~mcuhome.workbench.buildtarget.BuildTarget` itself states
-    #: the execution instead, and one that states a mode here overrides
-    #: the configuration for this build.
-    mode: str | None = None
-    #: A development build, for ``build.mode = subprocess`` only: a west
-    #: workspace the developer maintains, built against instead of the
-    #: environment MCUHome provisions into its store. ``None`` — the
-    #: ordinary case — takes the ``build.dev_workspace`` configuration
-    #: key, which is unset on a machine that is not developing the SDK
-    #: itself.
-    dev_workspace: Path | None = None
-
-    # -- remote --------------------------------------------------------
-    #: The build server's address, as a person writes it: a host, a
-    #: ``host:port``, or either with a scheme. :func:`websocket_url` turns
-    #: it into the URL the socket needs. *Selecting* a server belongs to
-    #: the caller — a configured builder, or a command line naming the
-    #: target and the server outright;
-    #: :func:`mcuhome.workbench.configuration.resolve_builder` is the
-    #: configured path — and an address is what arrives here.
-    server: str | None = None
-    #: The bearer token for it, from the builder's
-    #: ``secrets/builder/<name>.yaml`` (or the manual rung's
-    #: ``--build-token``). ``None`` sends no ``Authorization`` header at
-    #: all, which this package permits because a third-party server may
-    #: want none.
-    token: str | None = None
-    #: A build context directory to build instead of creating one. For a
-    #: caller that already holds one — an embedder that assembled a
-    #: context elsewhere, a build server that received one over a socket,
-    #: a test driving a hand-written one. Left ``None``, which is the
-    #: ordinary case, the build creates its own from :attr:`model` and
-    #: :attr:`sdk_sources`. Either way it is a *base* context: locking it
-    #: is the act of whoever builds it, and a client that sent one checks
-    #: the identity the server answers with.
-    context_dir: Path | None = None
-    #: Wait when the build server has no room. A busy server hands out a
-    #: turn instead of a session, and waiting for it is what a person
-    #: starting a build almost always wants; ``False`` is the caller that
-    #: would rather be told now.
-    wait_for_turn: bool = True
-    #: How long that wait may last in total, in seconds. ``0`` removes
-    #: the bound.
-    max_wait_seconds: float = DEFAULT_MAX_WAIT_SECONDS
     #: Called with a
     #: :class:`~mcuhome.workbench.sessionclient.SeatWait` each time a
     #: turn is refused, so a caller can say something true while nothing
@@ -900,13 +895,15 @@ def _note_image_without_container(
 def _stated_container_image(request: BuildRequest) -> str | None:
     """The image named for this build, the more specific statement first.
 
-    ``--container-image`` is about this one invocation and a configured
-    builder's ``image:`` is about the machine, so the first beats the
-    second wherever a container actually runs. Neither is the device's
-    own pin: that one is read where the device is
+    :attr:`BuildRequest.container_image` is about this one invocation and
+    a builder's own ``container_image`` is about the machine it builds
+    at, so the first beats the second wherever a container actually runs.
+    Neither is the device's own pin: that one is read where the device is
     (:func:`image_pin`), because it survives this invocation.
     """
-    return request.container_image if request.container_image is not None else request.builder_image
+    if request.container_image is not None:
+        return request.container_image
+    return None if request.builder is None else request.builder.container_image
 
 
 def image_pin(model: DeviceModel, override: str | None) -> str | None:
@@ -941,21 +938,23 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
     compositions.
 
     *name* goes through :func:`resolve_build_target` first, so an unknown
-    one is the same refusal a caller would have got from
-    :func:`run_build`. ``None`` and the empty string mean "no
-    preference" and take ``build.target`` (:func:`options_for`) — a
-    caller that selects per build states the name and never reaches
-    that.
+    one is refused by name. ``None`` and the empty string mean "no
+    preference": the selected builder answers where it has one, and
+    ``build.target`` answers otherwise.
 
     **This is also where the configuration is consulted** for the values
-    a request may leave open — the target, the mode and the development
-    workspace — because they answer the same question the
-    target-specific fields answer and must be read in one place with
-    them. What the request states wins over what the machine is
-    configured to do: a caller that named a value meant it.
+    a request leaves open — the target, the mode and the development
+    workspace. What the request states wins over what the machine is
+    configured to do: a caller that named a value meant it, and a
+    selected builder is such a statement.
     """
     options = options_for(request)
-    chosen = resolve_build_target(name) if name else options.target
+    if name:
+        chosen = resolve_build_target(name)
+    elif request.builder is not None:
+        chosen = resolve_build_target(request.builder.target)
+    else:
+        chosen = options.target
     if chosen == TARGET_LOCAL:
         mode = resolve_build_mode(request.mode) if request.mode else options.mode
         if mode == MODE_SUBPROCESS:
@@ -965,41 +964,35 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
                     # Whoever chose the mode is who has to be told, and a
                     # mode this request states itself did not come from
                     # any configuration file.
-                    source="this build" if request.mode else options.mode_source,
+                    source="this build" if request.mode else options.source("mode"),
                 )
             return LocalBuild(
                 execution=SubprocessExecution(
-                    dev_workspace=(
-                        request.dev_workspace
-                        if request.dev_workspace is not None
-                        else options.dev_workspace
-                    ),
-                    # Not a refusal: a builder's image says what this
+                    dev_workspace=options.dev_workspace,
+                    # Not a refusal: a builder's image says what the
                     # machine delivers, and a machine configured to build
                     # without a container would otherwise refuse every
                     # build it ever runs. The composition notes it.
-                    stated_container_image=request.builder_image,
+                    stated_container_image=(
+                        None if request.builder is None else request.builder.container_image
+                    ),
                 )
             )
-        developing = (
-            request.dev_workspace if request.dev_workspace is not None else options.dev_workspace
-        )
+        developing = options.dev_workspace
         if developing is not None:
             raise _refuse_developer_without_subprocess(
                 developing,
-                source="this build" if request.mode else options.mode_source,
+                source="this build" if request.mode else options.source("mode"),
             )
         return LocalBuild(
             execution=ContainerExecution(container_image=_stated_container_image(request))
         )
-    developing = (
-        request.dev_workspace if request.dev_workspace is not None else options.dev_workspace
-    )
+    developing = options.dev_workspace
     if developing is not None:
         raise _refuse_developer_remotely(developing)
     return RemoteBuild(
-        server=request.server,
-        token=request.token,
+        server=None if request.builder is None else request.builder.server,
+        token=None if request.builder is None else request.builder.token,
         wait=request.wait_for_turn,
         max_wait_seconds=request.max_wait_seconds,
         # The pin reaches the far side as well — this invocation's, or
@@ -1011,15 +1004,27 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
     )
 
 
-async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> BuildOutcome:
-    """Build *request* at *target*, and answer in the one outcome shape.
+async def build_firmware(
+    request: BuildRequest, *, target: BuildTarget | str | None = None
+) -> BuildOutcome:
+    """Build *request*, wherever *target* says, in the one outcome shape.
 
-    The seam. Above it a caller decides *what* to build (a device model,
-    or a build context already created from one) and *where*; below it
-    the three compositions differ in everything and agree on the answer.
-    It is also where a build server enters: what reaches it over a socket
-    is a context and a target of its own making, and from that point on
-    the work is the same work a local build does.
+    One build, one entry point, whichever target runs it. Above it a
+    caller decides *what* to build (a device model, or a build context
+    already created from one) and *where*; below it the three
+    compositions differ in everything and agree on the answer. It is also
+    where a build server enters: what reaches it over a socket is a
+    context and a target of its own making, and from that point on the
+    work is the same work a local build does.
+
+    *target* is what a caller has: a **target object** for the caller
+    that assembled one itself, a **name** — ``local`` or ``remote`` —
+    for the caller whose choice arrived as a flag or a configuration
+    value, and ``None`` for no preference, which takes the request's
+    selected builder and then ``build.target``. A name that is not one
+    of :data:`BUILD_TARGETS` is :class:`UnknownBuildTarget`; a target
+    object this package does not implement is a :class:`TypeError`,
+    because a name can be mistyped and an object cannot.
 
     Raises whatever typed refusal the target's composition raises — a
     missing build container, a missing SDK package, a build server that
@@ -1027,9 +1032,7 @@ async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> Build
     back with :attr:`BuildOutcome.successful` false and the composition's
     own account in :attr:`BuildOutcome.detail`, because a failed compile
     is an answer and a caller usually wants to render it rather than
-    catch it. A target this package does not implement is a
-    :class:`TypeError` rather than a refusal: a name can be mistyped, an
-    object cannot.
+    catch it.
 
     The build directory is held for the duration (:mod:`…buildlock`), so
     a second build of it refuses in words instead of deleting this one's
@@ -1038,6 +1041,8 @@ async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> Build
     care which two were running — nor whether the other one is a command
     line or a dashboard.
     """
+    if not isinstance(target, BuildTarget):
+        target = build_target_for(target, request)
     with build_lock(request.out_dir, device=request.model.device.name):
         if isinstance(target, LocalBuild):
             execution = target.execution
@@ -1051,20 +1056,6 @@ async def build_firmware(request: BuildRequest, *, target: BuildTarget) -> Build
         if isinstance(target, RemoteBuild):
             return await _run_remote(request, target)
         raise TypeError(f"{type(target).__name__} is not a build target this package runs")
-
-
-async def run_build(request: BuildRequest, *, target: str | None = None) -> BuildOutcome:
-    """Run *request* at the target named *target*: :func:`build_firmware` by name.
-
-    The name-shaped entry point, for callers that select a build target
-    from a command-line flag or a configuration value and have nothing to
-    say about the two axes apart. It resolves the name to a target object
-    (:func:`build_target_for`) and hands over; everything the seam
-    documents holds here unchanged, including :class:`UnknownBuildTarget`
-    for a name that is not one of :data:`BUILD_TARGETS`. ``None`` is "no
-    preference" and takes ``build.target``.
-    """
-    return await build_firmware(request, target=build_target_for(target, request))
 
 
 def compose_local_build(
@@ -1547,11 +1538,12 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
     seam and with the same reason for being offloaded: underneath it
     drives a child process and blocks until it ends.
     """
+    options = options_for(request)
     result = await asyncio.to_thread(
         compose_local_build,
         request.model,
         signing_pub=request.signing_pub,
-        sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        sdk_sources=options.sdk_sources,
         work_root=_work_root(request, ".mcuhome-local"),
         env=dict(request.env),
         project_root=request.project_root,
@@ -1562,7 +1554,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         on_step=request.on_step,
         mode=MODE_SUBPROCESS,
         environment=_developer_environment(execution),
-        options=options_for(request),
+        options=options,
         stated_container_image=execution.stated_container_image,
     )
     outcome = result.outcome
@@ -1590,11 +1582,12 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
     is looked up as a module global so that a caller (or a test) that
     replaced ``compose_local_build`` is the one that runs.
     """
+    options = options_for(request)
     result = await asyncio.to_thread(
         compose_local_build,
         request.model,
         signing_pub=request.signing_pub,
-        sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        sdk_sources=options.sdk_sources,
         work_root=_work_root(request, ".mcuhome-local"),
         env=dict(request.env),
         project_root=request.project_root,
@@ -1604,7 +1597,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         context_dir=request.context_dir,
         on_line=request.on_line,
         on_step=request.on_step,
-        options=options_for(request),
+        options=options,
     )
     outcome = result.outcome
     return BuildOutcome(
@@ -1673,7 +1666,7 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
         request.model,
         out_dir=context_dir,
         work_root=Path(work_root),
-        sdk_sources=tuple(Path(source) for source in request.sdk_sources),
+        sdk_sources=options.sdk_sources,
         workspace_sources=options.workspace_sources,
         tools_sources=options.tools_sources,
         sdk_max_bytes=options.sdk_max_bytes,
@@ -1755,7 +1748,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildOutcom
                 "    --builder attic or once via build.builder;\n"
                 "or fully manually:\n"
                 "    --build-target remote --build-server <host[:port]> "
-                "[--build-token <token>]\n"
+                "[--build-server-token <token>]\n"
                 "A build server is not discovered and has no default: the build "
                 "context carries the device model, so the address is a decision "
                 "rather than a lookup."

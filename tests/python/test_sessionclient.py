@@ -74,6 +74,7 @@ from mcuhome.workbench.buildenvsession import (
     SPEC_GENERATION,
     LocalOutcome,
 )
+from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 
@@ -2739,16 +2740,17 @@ def _remote_request(tmp_path: Path, sources: Path, harness: Harness, **overrides
     # did, the environment packages' now that a directory holding
     # everything is no longer read for them through sdk_sources alone.
     options = overrides.pop(
-        "options", build.BuildOptions(workspace_sources=(sources,), tools_sources=(sources,))
+        "options",
+        build.BuildOptions(
+            sdk_sources=(sources,), workspace_sources=(sources,), tools_sources=(sources,)
+        ),
     )
     return build.BuildRequest(
         model=_model(),
         out_dir=tmp_path / "build",
         signing_pub=_public_pem(),
-        sdk_sources=(sources,),
         options=options,
-        server=harness.url,
-        token=TOKEN,
+        builder=SelectedBuilder(target=build.TARGET_REMOTE, server=harness.url, token=TOKEN),
         **overrides,
     )
 
@@ -2777,7 +2779,7 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
 
     async def scenario() -> build.BuildOutcome:
         async with real_server(tmp_path) as harness:
-            return await build.run_build(
+            return await build.build_firmware(
                 _remote_request(tmp_path, sources, harness, on_line=lines.append),
                 target=build.TARGET_REMOTE,
             )
@@ -2837,7 +2839,7 @@ def test_the_context_the_remote_target_creates_pins_what_the_resolver_answered(
 
     async def scenario() -> None:
         async with real_server(tmp_path) as harness:
-            await build.run_build(
+            await build.build_firmware(
                 _remote_request(tmp_path, sources, harness), target=build.TARGET_REMOTE
             )
 

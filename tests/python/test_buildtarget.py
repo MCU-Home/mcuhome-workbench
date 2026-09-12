@@ -35,6 +35,7 @@ from conftest import EXAMPLES_DIR, resolve_file
 
 from mcuhome.workbench import build, buildtarget, containerbuild, sessionclient
 from mcuhome.workbench import buildenvsession as lb
+from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
 
 
@@ -129,8 +130,7 @@ def test_the_remote_target_is_a_remote_build(model, tmp_path) -> None:
     request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
-        server="attic:8100",
-        token="a-token",
+        builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic:8100", token="a-token"),
         wait_for_turn=False,
         max_wait_seconds=90.0,
     )
@@ -222,11 +222,12 @@ def test_a_remote_target_reaches_the_session_client(model, tmp_path, monkeypatch
 
 
 def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, monkeypatch) -> None:
-    """``run_build`` is the translation and nothing else.
+    """A target name and a target object reach the same build.
 
-    The one property that makes the older entry point safe to keep while
-    callers migrate: whatever a target name meant, it still means, and it
-    reaches the composition with the arguments it always did.
+    ``build_firmware`` takes either, and the translation is the whole of
+    the difference: whatever a target name means, it reaches the
+    composition with the arguments a caller that built the object itself
+    would have passed.
     """
     request = build.BuildRequest(
         model=model,
@@ -236,7 +237,7 @@ def test_the_name_entry_point_and_the_seam_run_the_same_build(model, tmp_path, m
 
     by_name: dict[str, object] = {}
     monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, by_name))
-    assert asyncio.run(build.run_build(request, target=build.TARGET_LOCAL)).successful
+    assert asyncio.run(build.build_firmware(request, target=build.TARGET_LOCAL)).successful
 
     by_target: dict[str, object] = {}
     monkeypatch.setattr(build, "compose_local_build", _local_result(tmp_path, by_target))

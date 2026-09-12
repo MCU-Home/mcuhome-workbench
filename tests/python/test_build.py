@@ -53,6 +53,7 @@ from mcuhome.model.errors import BuildError, ConfigError
 
 from mcuhome.workbench import build, containerbuild, sessionclient, subprocessbuild
 from mcuhome.workbench.buildenvsession import EnvironmentUnavailable, LocalOutcome
+from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import (
@@ -88,7 +89,7 @@ def _artifacts() -> tuple[Artifact, ...]:
 
 def _run(request: build.BuildRequest, target: str) -> build.BuildOutcome:
     """What a command line does at its entry point: one ``asyncio.run``."""
-    return asyncio.run(build.run_build(request, target=target))
+    return asyncio.run(build.build_firmware(request, target=target))
 
 
 def _served_by(directory: Path) -> tuple[RegistrySettings, ...]:
@@ -149,7 +150,9 @@ def _remote_context_of(
     lines: list[str] = []
     outcome = _run(
         build.BuildRequest(
-            server="ws://build.example/session",
+            builder=SelectedBuilder(
+                target=build.TARGET_REMOTE, server="ws://build.example/session"
+            ),
             signing_pub=_PUBLIC_PEM,
             on_line=lines.append,
             **fields,
@@ -186,7 +189,6 @@ def test_a_caller_that_names_no_target_takes_the_configured_one(model, tmp_path)
     request = build.BuildRequest(
         model=model,
         out_dir=tmp_path,
-        server="attic",
         options=build.BuildOptions(target=build.TARGET_REMOTE),
     )
     assert isinstance(build.build_target_for(None, request), build.RemoteBuild)
@@ -194,6 +196,24 @@ def test_a_caller_that_names_no_target_takes_the_configured_one(model, tmp_path)
         build.build_target_for(build.TARGET_LOCAL, request),
         build.LocalBuild,
     )
+
+
+def test_the_selected_builder_answers_before_the_configured_target(model, tmp_path) -> None:
+    """A builder is a selection, and a selection beats a configured default.
+
+    The ladder with no target name: the builder this build was selected
+    for, then ``build.target``. A name states more than either and still
+    wins over both.
+    """
+    request = build.BuildRequest(
+        model=model,
+        out_dir=tmp_path,
+        builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic", token="a-token"),
+        options=build.BuildOptions(target=build.TARGET_LOCAL),
+    )
+    target = build.build_target_for(None, request)
+    assert target == build.RemoteBuild(server="attic", token="a-token")
+    assert isinstance(build.build_target_for(build.TARGET_LOCAL, request), build.LocalBuild)
 
 
 def test_an_unknown_target_is_a_refusal_that_lists_the_real_ones() -> None:
@@ -206,7 +226,7 @@ def test_an_unknown_target_is_a_refusal_that_lists_the_real_ones() -> None:
         assert name in rendered
 
 
-def test_run_build_refuses_an_unknown_target_before_it_runs_anything(model, tmp_path) -> None:
+def test_build_firmware_refuses_an_unknown_target_before_it_runs_anything(model, tmp_path) -> None:
     request = build.BuildRequest(model=model, out_dir=tmp_path)
     with pytest.raises(build.UnknownBuildTarget):
         _run(request, "cloud")
@@ -499,7 +519,7 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
             model=model,
             out_dir=tmp_path,
             signing_pub="-----BEGIN PUBLIC KEY-----\n",
-            sdk_sources=(tmp_path / "sdk",),
+            options=build.BuildOptions(sdk_sources=(tmp_path / "sdk",)),
             container_image="registry.example.test/other/environment:test",
         ),
         build.TARGET_LOCAL,
@@ -584,8 +604,11 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            server="ws://build.example:8080/session",
-            token="a-token",
+            builder=SelectedBuilder(
+                target=build.TARGET_REMOTE,
+                server="ws://build.example:8080/session",
+                token="a-token",
+            ),
             context_dir=context,
         ),
         build.TARGET_REMOTE,
@@ -632,7 +655,7 @@ def test_remote_without_a_server_refuses_naming_both_rungs(model, tmp_path) -> N
     assert "build.builder" in rendered
     assert "secrets/builder/attic.yaml" in rendered
     assert "--build-target remote --build-server" in rendered
-    assert "--build-token" in rendered
+    assert "--build-server-token" in rendered
 
 
 def test_remote_refuses_over_a_pin_only_when_nothing_can_resolve_one(model, tmp_path) -> None:
@@ -655,7 +678,13 @@ def test_remote_refuses_over_a_pin_only_when_nothing_can_resolve_one(model, tmp_
     """
     with pytest.raises(BuildError) as refusal:
         _run(
-            build.BuildRequest(model=model, out_dir=tmp_path, server="ws://build.example/session"),
+            build.BuildRequest(
+                model=model,
+                out_dir=tmp_path,
+                builder=SelectedBuilder(
+                    target=build.TARGET_REMOTE, server="ws://build.example/session"
+                ),
+            ),
             build.TARGET_REMOTE,
         )
     assert not isinstance(refusal.value, build.RemoteNotConfigured)
@@ -735,8 +764,9 @@ def test_a_configured_source_still_beats_the_registry_for_a_remote_build(
         monkeypatch,
         model=model,
         out_dir=tmp_path / "build",
-        sdk_sources=(local,),
-        options=build.BuildOptions(workspace_sources=(local,), tools_sources=(local,)),
+        options=build.BuildOptions(
+            sdk_sources=(local,), workspace_sources=(local,), tools_sources=(local,)
+        ),
         project_root=project_root,
         registries=_served_by(served),
     )
@@ -770,7 +800,9 @@ def test_remote_without_the_extra_refuses_with_the_install_line(model, tmp_path,
             build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                server="ws://build.example/session",
+                builder=SelectedBuilder(
+                    target=build.TARGET_REMOTE, server="ws://build.example/session"
+                ),
                 context_dir=context,
             ),
             build.TARGET_REMOTE,
@@ -922,7 +954,7 @@ def test_the_development_workspace_reaches_the_execution(model, tmp_path) -> Non
             model=model,
             out_dir=tmp_path,
             mode=build.MODE_SUBPROCESS,
-            dev_workspace=tmp_path / "west-workspace",
+            options=build.BuildOptions(dev_workspace=tmp_path / "west-workspace"),
         ),
     )
     assert target.execution.dev_workspace == tmp_path / "west-workspace"
@@ -944,7 +976,7 @@ def test_a_development_workspace_is_refused_for_a_container_build(model, tmp_pat
                 model=model,
                 out_dir=tmp_path,
                 mode=build.MODE_CONTAINER,
-                dev_workspace=tmp_path / "west-workspace",
+                options=build.BuildOptions(dev_workspace=tmp_path / "west-workspace"),
             ),
         )
     assert "build.mode subprocess" in refusal.value.hint
@@ -966,8 +998,8 @@ def test_a_development_workspace_is_refused_for_a_remote_build(model, tmp_path) 
             build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
-                server="build.example.org",
-                dev_workspace=tmp_path / "west-workspace",
+                builder=SelectedBuilder(target=build.TARGET_REMOTE, server="build.example.org"),
+                options=build.BuildOptions(dev_workspace=tmp_path / "west-workspace"),
             ),
         )
     assert "build.dev_workspace" in refusal.value.hint
@@ -1160,7 +1192,10 @@ def test_a_development_context_is_not_sent_to_a_build_server(model, tmp_path) ->
         asyncio.run(
             build.build_firmware(
                 build.BuildRequest(
-                    model=model, out_dir=tmp_path, context_dir=context, server="build.example.org"
+                    model=model,
+                    out_dir=tmp_path,
+                    context_dir=context,
+                    builder=SelectedBuilder(target=build.TARGET_REMOTE, server="build.example.org"),
                 ),
                 target=build.RemoteBuild(server="build.example.org"),
             )
@@ -1254,8 +1289,11 @@ def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, mon
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            server="ws://build.example:8080/session",
-            token="a-token",
+            builder=SelectedBuilder(
+                target=build.TARGET_REMOTE,
+                server="ws://build.example:8080/session",
+                token="a-token",
+            ),
             context_dir=context,
         ),
         build.TARGET_REMOTE,
@@ -1294,8 +1332,11 @@ def test_a_remote_build_carries_the_image_pin_to_the_server(model, tmp_path, mon
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            server="ws://build.example:8080/session",
-            token="a-token",
+            builder=SelectedBuilder(
+                target=build.TARGET_REMOTE,
+                server="ws://build.example:8080/session",
+                token="a-token",
+            ),
             context_dir=context,
             container_image=":0.1.10.dev2-r1",
         ),
@@ -1362,7 +1403,11 @@ def test_a_remote_build_carries_the_device_pin_as_well(model, tmp_path) -> None:
     pinned = replace(model, sources=replace(model.sources, container_image=":0.1.10.dev2-r1"))
     target = build.build_target_for(
         build.TARGET_REMOTE,
-        build.BuildRequest(model=pinned, out_dir=tmp_path, server="attic"),
+        build.BuildRequest(
+            model=pinned,
+            out_dir=tmp_path,
+            builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
+        ),
     )
     assert target.container_image == ":0.1.10.dev2-r1"
     stated = build.build_target_for(
@@ -1370,7 +1415,7 @@ def test_a_remote_build_carries_the_device_pin_as_well(model, tmp_path) -> None:
         build.BuildRequest(
             model=pinned,
             out_dir=tmp_path,
-            server="attic",
+            builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
             container_image="@sha256:" + "b" * 64,
         ),
     )
@@ -1449,7 +1494,10 @@ def test_a_configured_builders_image_is_a_note_and_not_a_refusal(
             model=model,
             out_dir=tmp_path,
             mode=build.MODE_SUBPROCESS,
-            builder_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
+            builder=SelectedBuilder(
+                target=build.TARGET_LOCAL,
+                container_image="ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1",
+            ),
         ),
     )
     assert isinstance(target.execution, build.SubprocessExecution)
@@ -1520,7 +1568,11 @@ def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model,
     """Where a container does run, both statements are pins and the flag wins."""
     from_builder = build.build_target_for(
         build.TARGET_LOCAL,
-        build.BuildRequest(model=model, out_dir=tmp_path, builder_image=":from-the-builder"),
+        build.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            builder=SelectedBuilder(target=build.TARGET_LOCAL, container_image=":from-the-builder"),
+        ),
     )
     assert from_builder.execution.container_image == ":from-the-builder"
     from_flag = build.build_target_for(
@@ -1528,7 +1580,7 @@ def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model,
         build.BuildRequest(
             model=model,
             out_dir=tmp_path,
-            builder_image=":from-the-builder",
+            builder=SelectedBuilder(target=build.TARGET_LOCAL, container_image=":from-the-builder"),
             container_image=":from-this-build",
         ),
     )
@@ -1536,7 +1588,11 @@ def test_a_container_build_takes_the_builders_image_and_the_flag_beats_it(model,
     remote = build.build_target_for(
         build.TARGET_REMOTE,
         build.BuildRequest(
-            model=model, out_dir=tmp_path, server="attic", builder_image=":from-the-builder"
+            model=model,
+            out_dir=tmp_path,
+            builder=SelectedBuilder(
+                target=build.TARGET_REMOTE, server="attic", container_image=":from-the-builder"
+            ),
         ),
     )
     assert remote.container_image == ":from-the-builder"

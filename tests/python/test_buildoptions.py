@@ -79,7 +79,7 @@ def test_every_key_reaches_its_field(project: Project) -> None:
         "  cache_project: /srv/cache/project\n",
     )
     assert options.mode == build.MODE_SUBPROCESS
-    assert options.mode_source == str(project.config_file)
+    assert options.source("mode") == str(project.config_file)
     assert options.env_store == Path("/srv/store")
     assert options.dev_workspace == Path("/dev/workspace")
     assert options.python == "python3.13"
@@ -182,22 +182,6 @@ def test_the_configured_developer_trees_reach_the_execution(model, tmp_path) -> 
     assert target.execution.dev_workspace == tmp_path / "workspace"
 
 
-def test_a_stated_developer_tree_beats_the_configured_one(model, tmp_path) -> None:
-    target = build.build_target_for(
-        build.TARGET_LOCAL,
-        BuildRequest(
-            model=model,
-            out_dir=tmp_path,
-            dev_workspace=tmp_path / "stated",
-            options=BuildOptions(
-                mode=build.MODE_SUBPROCESS,
-                dev_workspace=tmp_path / "configured",
-            ),
-        ),
-    )
-    assert target.execution.dev_workspace == tmp_path / "stated"
-
-
 def test_a_configured_development_workspace_needs_the_configured_mode(model, tmp_path) -> None:
     """The realistic shape of that mistake: both values in a file.
 
@@ -213,7 +197,7 @@ def test_a_configured_development_workspace_needs_the_configured_mode(model, tmp
                 out_dir=tmp_path,
                 options=BuildOptions(
                     mode=build.MODE_CONTAINER,
-                    mode_source="the project's mcuhome.yaml",
+                    sources={"mode": "the project's mcuhome.yaml"},
                     dev_workspace=tmp_path / "workspace",
                 ),
             ),
@@ -261,7 +245,7 @@ def test_a_mode_this_build_stated_is_not_blamed_on_a_file(model, tmp_path) -> No
                 out_dir=tmp_path,
                 mode=build.MODE_SUBPROCESS,
                 container_image="ghcr.io/mcu-home/x:1",
-                options=BuildOptions(mode_source="/etc/mcuhome/configuration.yaml"),
+                options=BuildOptions(sources={"mode": "/etc/mcuhome/configuration.yaml"}),
             ),
         )
     hint = refusal.value.hint or ""
@@ -437,8 +421,8 @@ def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch
     request = BuildRequest(
         model=model,
         out_dir=tmp_path,
-        sdk_sources=(tmp_path / "sdk",),
         options=BuildOptions(
+            sdk_sources=(tmp_path / "sdk",),
             workspace_sources=(tmp_path / "workspaces",),
             tools_sources=(tmp_path / "tools",),
             sdk_max_bytes=11,
