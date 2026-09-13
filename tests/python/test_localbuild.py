@@ -393,6 +393,30 @@ def test_a_launcher_without_a_callback_still_starts_its_step(tmp_path, model):
     assert launcher(_a_step(tmp_path), None) is not None
 
 
+def test_a_callback_that_raises_ends_the_step_before_a_container_exists(tmp_path) -> None:
+    """The order the name is reported in, as a property.
+
+    Told *before* the start, so a caller that throws in its own callback
+    throws before there is anything running — the exception is its own
+    and the runtime was never asked to start a container.
+    """
+    seam = Seam()
+    launcher = containerbuild.create_launcher(
+        container_image=f"{IMAGE}@{DIGEST}",
+        runtime=_runtime(seam),
+        on_container=_raises,
+    )
+
+    with pytest.raises(RuntimeError, match="the caller's own bug"):
+        launcher(_a_step(tmp_path), None)
+
+    assert [argv for argv in seam.calls if argv[1] == "run"] == []
+
+
+def _raises(name: str) -> None:
+    raise RuntimeError(f"the caller's own bug about {name}")
+
+
 def test_the_launcher_takes_nothing_a_caller_has_to_hand_it_to_be_filled() -> None:
     """No mutable argument on the surface: a callee that fills a caller's
     list makes the caller's object part of the contract, and two callers

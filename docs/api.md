@@ -1005,7 +1005,12 @@ rather than a registry client, so it raises no `ImageRegistryError`.
 step with and raises nothing; *on_container* is told the name of every
 container it starts, before it starts it, so a caller can reap the one
 that did not end on its own — a container started by a process that then
-died is still a name its caller was given.
+died is still a name its caller was given. It is told first for that
+reason, and the order has one consequence worth stating: a callback that
+raises takes the step down with it before the container exists, so the
+exception is the caller's own and nothing is left running. Every other
+callback on this surface ignores what it answers; none of them is a
+place to fail on purpose.
 
 `ContainerRuntime(program=DEFAULT_CONTAINER_PROGRAM, *, runner=None,
 spawner=None)` — the seam over the container command line; methods `run`,
