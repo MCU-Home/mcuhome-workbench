@@ -557,8 +557,9 @@ for the environment, the flag for an argument, `None` for a default), and
 `to_dict()`.
 `Settings` is the whole resolution: `setting(name)`, `value(name)`,
 `origin(name)`, `__contains__`, and `to_dict()` answering `{<key>:
-{value, origin, source}}` for every declared option, in declaration
-order.
+{value, origin, source}}` for every declared option **except the
+bootstrap one**, in declaration order — `project.dir` is resolved before
+the merge and is in no resolution (see [Options](#options)).
 
 ## Builders
 A builder is a named place a build may run at, configured under the
@@ -1504,9 +1505,10 @@ and the warnings, each with its severity, so a client renders one list:
 }
 ```
 
-`Settings.to_dict()` answers one entry per declared option, in
-declaration order — the key is the option's name, the value the setting
-document below:
+`Settings.to_dict()` answers one entry per declared option except the
+bootstrap one, in declaration order — the key is the option's name, the
+value the setting document below. `project.dir` is absent because it is
+resolved before the merge and has no layer to report:
 ```json
 {"build.mode": {"value": "subprocess", "origin": "project",
                 "source": "/…/mcuhome.yaml"}}

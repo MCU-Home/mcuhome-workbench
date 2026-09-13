@@ -372,9 +372,21 @@ def test_the_pairing_sub_document_carries_what_the_reference_declares() -> None:
 
 
 def test_the_settings_document_has_one_entry_per_declared_option() -> None:
-    """The one document whose keys are data: the option registry itself."""
+    """The one document whose keys are data: the option registry itself.
+
+    The rule is the reference's own sentence — "one entry per declared
+    option except the bootstrap one, in declaration order" — so the
+    sentence is read out of the document and the registry is held
+    against it. The bootstrap option is resolved before the merge and
+    has no layer to report, which is why it is in no resolution.
+    """
+    rule = _documents_section(REFERENCE.read_text("utf-8")).split("`Settings.to_dict()`", 1)[1]
+    assert "except the\nbootstrap one" in rule
+    assert "in declaration order" in rule
+
     document = SETTINGS.to_dict()
     declared = [option.name for option in api.OPTIONS if not option.bootstrap]
+    assert [option.name for option in api.OPTIONS if option.bootstrap] == ["project.dir"]
     assert list(document) == declared, "one entry per declared option, in declaration order"
     for entry in document.values():
         assert sorted(entry) == sorted(DOCUMENTS["Setting"])
