@@ -35,7 +35,7 @@ from types import ModuleType
 from mcuhome.workbench.migrations import v1_project_identity
 from mcuhome.workbench.projectfile import ProjectFile
 
-__all__ = ["MIGRATIONS", "Migration", "plan_for"]
+__all__ = ["MIGRATIONS", "Migration", "plan_upgrade"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,6 @@ class Migration:
 MIGRATIONS: tuple[Migration, ...] = (Migration.of(v1_project_identity),)
 
 
-def plan_for(version: int) -> tuple[Migration, ...]:
-    """The migrations that take a project from *version* to the current one."""
-    return tuple(migration for migration in MIGRATIONS if migration.from_version >= version)
+def plan_upgrade(from_version: int) -> tuple[Migration, ...]:
+    """The migrations that take a project from *from_version* to the current one."""
+    return tuple(migration for migration in MIGRATIONS if migration.from_version >= from_version)

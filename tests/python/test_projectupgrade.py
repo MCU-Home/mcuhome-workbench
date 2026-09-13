@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from mcuhome.model.errors import ConfigError, MCUHomeError
 
-from mcuhome.workbench.migrations import MIGRATIONS, Migration, plan_for
+from mcuhome.workbench.migrations import MIGRATIONS, Migration, plan_upgrade
 from mcuhome.workbench.project import create_project, resolve_project
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
@@ -33,9 +33,9 @@ from mcuhome.workbench.projectupgrade import (
     MigrationFailed,
     UpgradeInProgress,
     UpgradeInterrupted,
+    find_running_builds,
     is_upgrading,
-    running_builds,
-    upgrade_session,
+    open_upgrade_session,
 )
 
 
@@ -53,8 +53,8 @@ def hold_upgrade(root: Path, seconds: float = 5) -> subprocess.Popen:
     """Another process, holding *root* in an upgrade until it is killed."""
     code = (
         "import sys, time\n"
-        "from mcuhome.workbench.projectupgrade import upgrade_session\n"
-        f"with upgrade_session({str(root)!r}):\n"
+        "from mcuhome.workbench.projectupgrade import open_upgrade_session\n"
+        f"with open_upgrade_session({str(root)!r}):\n"
         "    print('held', flush=True)\n"
         f"    time.sleep({seconds})\n"
     )
@@ -86,8 +86,8 @@ def test_every_migration_explains_itself_twice() -> None:
 
 
 def test_the_plan_is_what_is_still_missing() -> None:
-    assert plan_for(0) == MIGRATIONS
-    assert plan_for(PROJECT_VERSION) == ()
+    assert plan_upgrade(0) == MIGRATIONS
+    assert plan_upgrade(PROJECT_VERSION) == ()
 
 
 # --- the upgrade itself -----------------------------------------------
@@ -98,7 +98,7 @@ def test_an_upgrade_makes_an_old_project_current(tmp_path: Path) -> None:
     with pytest.raises(ProjectUpgradeRequired):
         resolve_project(root, env={}, cwd=tmp_path)
 
-    with upgrade_session(root) as session:
+    with open_upgrade_session(root) as session:
         result = session.apply()
 
     assert result.from_version == 0
@@ -113,7 +113,7 @@ def test_the_project_file_is_renamed_for_the_whole_run(tmp_path: Path) -> None:
     """The rename is the guard: while it holds, the project is not findable."""
     root = legacy_project(tmp_path / "old")
     seen = []
-    with upgrade_session(root) as session:
+    with open_upgrade_session(root) as session:
         assert not (root / PROJECT_MARKER_FILE).exists()
         assert (root / UPGRADE_MARKER_FILE).is_file()
         session.apply(
@@ -126,7 +126,7 @@ def test_the_project_file_is_renamed_for_the_whole_run(tmp_path: Path) -> None:
 
 def test_the_renamed_file_names_the_process_doing_it(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
-    with upgrade_session(root):
+    with open_upgrade_session(root):
         record = read_project_file(root / UPGRADE_MARKER_FILE).upgrade
         assert record is not None
         assert record.process > 0
@@ -137,7 +137,7 @@ def test_the_renamed_file_names_the_process_doing_it(tmp_path: Path) -> None:
 def test_a_declined_upgrade_puts_the_project_back(tmp_path: Path) -> None:
     """Nothing applied, and the project usable again — the "no" case."""
     root = legacy_project(tmp_path / "old")
-    with upgrade_session(root) as session:
+    with open_upgrade_session(root) as session:
         assert session.plan
     assert (root / PROJECT_MARKER_FILE).is_file()
     assert read_project_file(root / PROJECT_MARKER_FILE).version == 0
@@ -145,7 +145,7 @@ def test_a_declined_upgrade_puts_the_project_back(tmp_path: Path) -> None:
 
 def test_an_abort_before_the_migrations_puts_the_project_back(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
-    with pytest.raises(KeyboardInterrupt), upgrade_session(root):
+    with pytest.raises(KeyboardInterrupt), open_upgrade_session(root):
         raise KeyboardInterrupt
     assert (root / PROJECT_MARKER_FILE).is_file()
     assert read_project_file(root / PROJECT_MARKER_FILE).version == 0
@@ -154,13 +154,13 @@ def test_an_abort_before_the_migrations_puts_the_project_back(tmp_path: Path) ->
 def test_a_stop_between_migrations_ends_cleanly_at_the_version_reached(tmp_path: Path) -> None:
     """A clean stop is not a resumption: it leaves a whole, older project."""
     root = legacy_project(tmp_path / "old")
-    with upgrade_session(root) as session:
+    with open_upgrade_session(root) as session:
         result = session.apply(should_stop=lambda: True)
     assert result.stopped
     assert result.applied == ()
     assert result.to_version == 0
     assert (root / PROJECT_MARKER_FILE).is_file()
-    assert plan_for(result.to_version) == MIGRATIONS
+    assert plan_upgrade(result.to_version) == MIGRATIONS
 
 
 def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Path) -> None:
@@ -178,7 +178,7 @@ def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Pat
         details="x\ny",
         run=explode,
     )
-    with pytest.raises(MigrationFailed) as caught, upgrade_session(root) as session:
+    with pytest.raises(MigrationFailed) as caught, open_upgrade_session(root) as session:
         session.plan = (broken,)
         session.apply()
     assert "disk is on fire" in caught.value.message
@@ -195,7 +195,7 @@ def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Pat
 
 def test_an_upgrade_of_a_current_project_has_nothing_to_do(tmp_path: Path) -> None:
     root = create_project(tmp_path / "fresh").project.root
-    with upgrade_session(root) as session:
+    with open_upgrade_session(root) as session:
         assert session.plan == ()
         result = session.apply()
     assert result.applied == ()
@@ -205,7 +205,7 @@ def test_an_upgrade_of_a_current_project_has_nothing_to_do(tmp_path: Path) -> No
 def test_upgrading_something_that_is_not_a_project_refuses(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
-    with pytest.raises(ConfigError) as caught, upgrade_session(plain):
+    with pytest.raises(ConfigError) as caught, open_upgrade_session(plain):
         pass
     assert PROJECT_MARKER_FILE in caught.value.message
     assert "mcuhome project init" in (caught.value.hint or "")
@@ -233,7 +233,7 @@ def test_a_second_upgrade_is_refused_not_run(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
     peer = hold_upgrade(root)
     try:
-        with pytest.raises(UpgradeInProgress), upgrade_session(root):
+        with pytest.raises(UpgradeInProgress), open_upgrade_session(root):
             pytest.fail("two upgrades entered the same project")
     finally:
         peer.kill()
@@ -279,7 +279,7 @@ def test_a_running_build_is_reported_so_the_caller_can_wait(tmp_path: Path) -> N
     root = create_project(tmp_path / "fresh").project.root
     build_dir = root / "build" / "bench-node"
     build_dir.mkdir(parents=True)
-    assert running_builds(root) == ()
+    assert find_running_builds(root) == ()
 
     code = (
         "import time\n"
@@ -292,15 +292,15 @@ def test_a_running_build_is_reported_so_the_caller_can_wait(tmp_path: Path) -> N
     assert peer.stdout is not None
     peer.stdout.readline()
     try:
-        busy = running_builds(root)
+        busy = find_running_builds(root)
         assert [entry.name for entry in busy] == ["bench-node"]
         assert busy[0].operation == "build"
         assert busy[0].process == str(peer.pid)
         # And the session answers the same question, for the caller's wait.
-        with upgrade_session(root) as session:
+        with open_upgrade_session(root) as session:
             assert [entry.name for entry in session.running_builds()] == ["bench-node"]
     finally:
         peer.kill()
         peer.wait()
 
-    assert running_builds(root) == (), "the kernel releases the lock with the process"
+    assert find_running_builds(root) == (), "the kernel releases the lock with the process"

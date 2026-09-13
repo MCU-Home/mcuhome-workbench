@@ -33,11 +33,11 @@ What is here, in the order a caller needs it:
     ``UpgradeInterrupted`` — the four states a caller renders
     differently. ``resolve_project(..., require_version=False)`` is for
     the one caller that exists to fix the first of them.
-``upgrade_session`` / ``UpgradeResult`` / ``Migration``
+``open_upgrade_session`` / ``UpgradeResult`` / ``Migration``
     Upgrading a project to the current layout. The session renames the
     project file for the whole run — so nothing else can start work on a
     project being rewritten — answers which build directories are still
-    busy (``running_builds``), and applies the migrations of
+    busy (``find_running_builds``), and applies the migrations of
     ``mcuhome.workbench.migrations`` in order. A caller drives the three
     apart on purpose: take the project, wait for what is still running,
     *then* ask the user, then apply.
@@ -241,8 +241,7 @@ from mcuhome.workbench.configuration import (
 )
 from mcuhome.workbench.generate import CompilerUnavailable, generate_tree
 from mcuhome.workbench.loader import load_config
-from mcuhome.workbench.migrations import Migration
-from mcuhome.workbench.migrations import plan_for as upgrade_plan
+from mcuhome.workbench.migrations import Migration, plan_upgrade
 from mcuhome.workbench.packagefetch import SdkUnavailable
 from mcuhome.workbench.project import (
     BUILD_DIR,
@@ -275,8 +274,8 @@ from mcuhome.workbench.projectupgrade import (
     UpgradeInterrupted,
     UpgradeResult,
     UpgradeSession,
-    running_builds,
-    upgrade_session,
+    find_running_builds,
+    open_upgrade_session,
 )
 from mcuhome.workbench.provision import PairingResult, init_pairing
 from mcuhome.workbench.resolve import resolve
@@ -397,12 +396,12 @@ __all__ = [
     "resolve_project",
     "resolve_settings",
     "resolve_shutdown_seconds",
-    "running_builds",
+    "find_running_builds",
     "scope_config_file",
     "set_config_value",
     "unset_config_value",
-    "upgrade_plan",
-    "upgrade_session",
+    "plan_upgrade",
+    "open_upgrade_session",
     "validate_device",
 ]
 

@@ -45,7 +45,7 @@ version, and the next upgrade starts there like any other.
 
 **Waiting, not locking, for builds.** Once the marker is gone no build
 can start, so the upgrade takes no build-directory lock; it only asks
-which build directories are still busy (:func:`running_builds`) so the
+which build directories are still busy (:func:`find_running_builds`) so the
 caller can wait for a run that started earlier. The caller's own
 confirmation belongs *after* that wait — a person who says "yes" must
 see the upgrade begin, not a wait they might interrupt at the exact
@@ -65,7 +65,7 @@ from pathlib import Path
 from mcuhome.model.errors import ConfigError, MCUHomeError
 
 from mcuhome.workbench.buildlock import holder_of, is_busy
-from mcuhome.workbench.migrations import Migration, plan_for
+from mcuhome.workbench.migrations import Migration, plan_upgrade
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
@@ -89,8 +89,8 @@ __all__ = [
     "UpgradeResult",
     "UpgradeSession",
     "is_upgrading",
-    "running_builds",
-    "upgrade_session",
+    "find_running_builds",
+    "open_upgrade_session",
 ]
 
 #: Where builds put their directories, one per device.
@@ -136,7 +136,7 @@ class UpgradeResult:
 
     @property
     def remaining(self) -> tuple[Migration, ...]:
-        return plan_for(self.to_version)
+        return plan_upgrade(self.to_version)
 
 
 def is_upgrading(root: Path) -> bool:
@@ -191,7 +191,7 @@ def in_flight_error(root: Path) -> ConfigError:
     )
 
 
-def running_builds(root: Path) -> tuple[RunningBuild, ...]:
+def find_running_builds(root: Path) -> tuple[RunningBuild, ...]:
     """Which of this project's build directories are busy right now.
 
     Asked, not held — see the module docstring. Only the project's own
@@ -221,7 +221,7 @@ def running_builds(root: Path) -> tuple[RunningBuild, ...]:
 class UpgradeSession:
     """One upgrade, from the moment the project file is renamed.
 
-    Created by :func:`upgrade_session`, which owns the rename and the
+    Created by :func:`open_upgrade_session`, which owns the rename and the
     lock. The session itself is what a caller drives: it knows the plan,
     answers which builds are still running, and applies the migrations
     when the caller says so.
@@ -233,7 +233,7 @@ class UpgradeSession:
         #: migrations are applied.
         self.file = file
         self.path = path
-        self.plan = plan_for(file.version)
+        self.plan = plan_upgrade(file.version)
         self.from_version = file.version
         #: Set when a migration failed: the file then stays renamed.
         self.failed: Migration | None = None
@@ -243,7 +243,7 @@ class UpgradeSession:
 
     def running_builds(self) -> tuple[RunningBuild, ...]:
         """Which build directories are still busy — for the caller's wait."""
-        return running_builds(self.root)
+        return find_running_builds(self.root)
 
     def apply(
         self,
@@ -311,7 +311,7 @@ class UpgradeSession:
 
 
 @contextmanager
-def upgrade_session(root: Path) -> Iterator[UpgradeSession]:
+def open_upgrade_session(root: Path) -> Iterator[UpgradeSession]:
     """Take the project in *root* for an upgrade: rename it, lock it, yield.
 
     On the way in the project file is locked and renamed to
