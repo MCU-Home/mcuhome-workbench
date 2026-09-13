@@ -841,8 +841,13 @@ def provision_environment(
 Acquires the package (operator directories first, the registry second,
 the hash checked on every path), unpacks it under the bound for its kind,
 finalizes and freezes it, and writes the marker last. A package that is
-already in the store is answered without touching the network, the disk
-or the lock. *package* is a package file — identified by the hash
+already in the store is answered rather than unpacked a second time —
+but identifying it costs what it costs: the file is hashed, or the name
+is resolved against an index, on every call. What an existing entry saves
+is the unpacking, not the question; the file's hash is never skipped for
+it, because that hash is what makes a package rebuilt under a version it
+already had a refusal instead of a stale answer.
+*package* is a package file — identified by the hash
 computed from it, because there is no pin to check it against — or a
 package name resolved against *sources* and the registry. Raises
 `BuildEnvironmentError`, `SdkUnavailable`, `PackageRegistryError`.

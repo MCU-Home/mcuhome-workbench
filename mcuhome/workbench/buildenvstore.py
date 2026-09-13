@@ -552,8 +552,17 @@ def provision_environment(
     produced a package and wants the real unpacking rather than a
     three-line copy of its rule. What it does is what a build does —
     acquire, unpack under the bound for the kind, finalize, freeze, write
-    the marker last — and a package that is already there is answered
-    without touching the network, the disk or the lock.
+    the marker last — and a package that is already in the store is
+    answered rather than unpacked a second time.
+
+    **Identifying the package costs what it costs, every time.** A build
+    arrives with a pin; a caller here arrives with a file or a name, and
+    turning either into a pin is work: the file is hashed and the name is
+    resolved against an index on every call. What is saved by an entry
+    that is already there is the unpacking, not the question. The file's
+    hash is in particular never skipped for it — it is what makes a
+    package rebuilt under a version it already had a refusal instead of a
+    stale answer.
 
     **A package named as a file is identified by the hash computed from
     it.** There is no pin to check it against: the caller pointed at
