@@ -62,8 +62,14 @@ from mcuhome.model.buildenvironment import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 
+from mcuhome.workbench.buildenvsession import EnvironmentUnavailable
 from mcuhome.workbench.buildtarget import DEFAULT_CONTAINER_REPOSITORIES
-from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistry, ImageRegistryError
+from mcuhome.workbench.ociregistry import (
+    ImageFacts,
+    ImageRegistry,
+    ImageRegistryError,
+    ImageRegistryUnreachable,
+)
 
 __all__ = [
     "ContainerImageMatch",
@@ -299,14 +305,23 @@ def resolve_container_image(
         )
     client = registry if registry is not None else ImageRegistry()
     rejected: list[str] = []
+    # Whether any registry answered this search at all. One repository
+    # that cannot be asked is a candidate fewer; *none* of them being
+    # askable is a different question with a different answer, and the
+    # two are told apart here rather than by the person reading a list of
+    # timeouts.
+    answered = False
     for repository in searched:
         reference = parse_reference(
             repository, default_registry=DOCKER_HUB, what="build environment"
         )
-        for candidate in _candidates(client, reference, pin, rejected):
+        candidates, listed = _candidates(client, reference, pin, rejected)
+        answered = answered or listed
+        for candidate in candidates:
             facts = _facts_of(client, candidate, platform, rejected)
             if facts is None:
                 continue
+            answered = True
             if not declares_exactly(facts.labels, packages):
                 rejected.append(f"{candidate} declares {_described(facts.labels)}")
                 continue
@@ -318,36 +333,43 @@ def resolve_container_image(
                 declaration=declaration_from_labels(facts.labels),
                 found_under=candidate.tag or "",
             )
+    if not answered:
+        raise _no_registry_answered(searched, rejected)
     raise _no_image_declares(packages, pin, searched, rejected)
 
 
 def _candidates(
     client: ImageRegistry, reference: Reference, pin: ContainerImagePin, rejected: list[str]
-) -> list[Reference]:
+) -> tuple[list[Reference], bool]:
     """Which images of *reference*'s repository are worth a label read.
 
     A pinned digest or tag is one candidate and costs no listing. Without
     one, the repository's tags are listed and ordered newest first — the
     highest ``-r<n>``, then the tag itself, so that the order is a fact
     rather than the registry's mood.
+
+    The second answer is whether the registry *answered* about this
+    repository: a listing that succeeded, empty or not, is an answer. A
+    pin costs no listing, so it answers nothing here and the label read
+    settles it instead.
     """
     if pin.digest:
-        return [replace(reference, tag=None, digest=pin.digest)]
+        return [replace(reference, tag=None, digest=pin.digest)], False
     if pin.tag:
-        return [replace(reference, tag=pin.tag, digest=None)]
+        return [replace(reference, tag=pin.tag, digest=None)], False
     try:
         tags = client.tags(reference)
     except ImageRegistryError as unreachable:
         # One unreachable repository is not the end of the search: a
         # search list exists to have alternatives in it.
         rejected.append(f"{reference.repository} could not be asked ({unreachable})")
-        return []
+        return [], False
     if not tags:
         rejected.append(f"{reference.repository} publishes no image")
     return [
         replace(reference, tag=tag, digest=None)
         for tag in sorted(tags, key=lambda tag: (-revision_of(tag), tag))
-    ]
+    ], True
 
 
 def _facts_of(
@@ -374,12 +396,36 @@ def _described(labels: Mapping[str, str]) -> str:
     return ", ".join(f"{name} {value}" for name, value in sorted(stated.items()))
 
 
+def _no_registry_answered(
+    searched: Sequence[str], rejected: Sequence[str]
+) -> ImageRegistryUnreachable:
+    """No repository could be asked at all — which is about this machine.
+
+    The opposite answer to the one below, and the reason the two are
+    separate: "publish an image for this package set" and "your machine
+    cannot reach a registry right now" are different days' work. A
+    *partial* outage never comes here, because a search list exists to
+    have alternatives in it and one silent mirror must not fail a build
+    the next repository can serve.
+    """
+    tried = "\n".join(f"    {reason}" for reason in rejected) or "    nothing answered"
+    return ImageRegistryUnreachable(
+        "MCUHome could not reach any registry to find this build environment.",
+        hint=(
+            f"the build environment is fetched from {', '.join(searched)}, and none of "
+            f"them answered:\n{tried}\n"
+            "check this machine's network access and its proxy settings, log in where "
+            "a repository is private, or build without a container."
+        ),
+    )
+
+
 def _no_image_declares(
     packages: Mapping[str, PackageMember],
     pin: ContainerImagePin,
     searched: Sequence[str],
     rejected: Sequence[str],
-) -> BuildError:
+) -> EnvironmentUnavailable:
     """The typed refusal, after every candidate was tried.
 
     It lists what was wanted, what was looked at and why each candidate
@@ -405,7 +451,7 @@ def _no_image_declares(
             "point build.container_repositories at the repository that has one, or "
             "build without a container."
         )
-    return BuildError(
+    return EnvironmentUnavailable(
         "No container image declares the build environment this build needs.",
         hint=(
             f"the build needs an image assembled from exactly {wanted}, and {where}. "

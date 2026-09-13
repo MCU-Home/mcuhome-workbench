@@ -27,7 +27,12 @@ from mcuhome.model.buildenvironment import (
 )
 from mcuhome.model.errors import BuildError
 
-from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistryError
+from mcuhome.workbench.buildenvsession import EnvironmentUnavailable
+from mcuhome.workbench.ociregistry import (
+    ImageFacts,
+    ImageRegistryError,
+    ImageRegistryUnreachable,
+)
 from mcuhome.workbench.resolve_image import (
     parse_container_image,
     resolve_container_image,
@@ -323,6 +328,78 @@ def test_a_repository_that_raises_registryerror_is_skipped_not_fatal() -> None:
     assert registry.tag_listings == [OTHER_REPO]
 
 
+def test_a_partial_outage_is_a_miss_the_refusal_names(monkeypatch) -> None:
+    """One repository silent, one answering nothing: still a missing image.
+
+    The refusal a person can act on says which repository was asked and
+    what came back — so the one that could not be asked is named in it
+    rather than deciding it.
+    """
+    registry = ScriptedImages({OTHER_REPO: {}}, unreachable=frozenset({REPO}))
+
+    with pytest.raises(EnvironmentUnavailable) as refusal:
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+
+    hint = refusal.value.hint or ""
+    assert f"{REPO} could not be asked" in hint
+    assert f"{OTHER_REPO} publishes no image" in hint
+
+
+def test_no_registry_answering_at_all_is_about_this_machine() -> None:
+    """The total outage, which needs the opposite answer from the person.
+
+    "Publish an image for this package set" and "this machine cannot
+    reach a registry" are different days' work, so they are different
+    refusals: every repository unreachable and none rejected for what it
+    declares is the second one.
+    """
+    registry = ScriptedImages(unreachable=frozenset({REPO, OTHER_REPO}))
+
+    with pytest.raises(ImageRegistryUnreachable) as refusal:
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+
+    assert "could not reach any registry" in str(refusal.value)
+    hint = refusal.value.hint or ""
+    assert REPO in hint and OTHER_REPO in hint
+    assert "network" in hint
+
+
+def test_a_repository_that_answers_with_nothing_has_been_asked() -> None:
+    """An empty repository is an answer, and answers the first question.
+
+    A registry that says "I publish nothing here" has been reached, so
+    what is missing is the image and not the network — the refusal that
+    tells somebody to publish one.
+    """
+    registry = ScriptedImages({REPO: {}})
+
+    with pytest.raises(EnvironmentUnavailable):
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
+
+
+def test_a_pinned_image_nobody_could_read_is_the_unreachable_refusal() -> None:
+    """A pin costs no tag listing, so the label read is what answers.
+
+    Nothing was listed and nothing was read: the search learned nothing
+    about the pinned image at all, which is the machine's problem and not
+    the image's.
+    """
+    registry = ScriptedImages(unreachable=frozenset({REPO}))
+
+    def unreadable(reference, *, platform=None):
+        raise ImageRegistryError(f"{reference.repository} did not answer.")
+
+    registry.facts = unreadable  # type: ignore[method-assign]
+
+    with pytest.raises(ImageRegistryUnreachable):
+        resolve_container_image(
+            WANTED,
+            registry=registry,
+            repositories=(REPO,),
+            pin=parse_container_image(":v1"),
+        )
+
+
 # --------------------------------------------------------------------------
 # the allowlist itself
 # --------------------------------------------------------------------------
@@ -340,10 +417,15 @@ def test_an_empty_allowlist_is_a_typed_refusal_that_never_touches_a_registry() -
 
 
 def test_the_refusal_names_the_wanted_package_set_when_nothing_matches() -> None:
-    """The hint says what was needed, because that is the only thing left to try."""
+    """The hint says what was needed, because that is the only thing left to try.
+
+    And it is the typed refusal the reference states: a client switches
+    on the error document's kind, and "no build environment delivers the
+    package set this context pinned" is a condition of its own.
+    """
     registry = ScriptedImages({REPO: {}})
 
-    with pytest.raises(BuildError) as refusal:
+    with pytest.raises(EnvironmentUnavailable) as refusal:
         resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
     message = str(refusal.value)

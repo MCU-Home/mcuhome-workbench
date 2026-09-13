@@ -970,10 +970,17 @@ def create_launcher(
 ```
 An image is chosen by the package set its labels declare, never by its
 name: `resolve_container_image` answers a `ContainerImageMatch(reference,
-declaration, found_under)` or raises `EnvironmentUnavailable`. A
-repository that could not be asked is one candidate fewer and not a
-failure of the search — the refusal lists it among the ones it tried,
-with the reason.
+declaration, found_under)` or raises `EnvironmentUnavailable` — no
+image delivers this package set. A repository that could not be asked is
+one candidate fewer and not a failure of the search: the refusal lists it
+among the ones it tried, with the reason, because a search list exists to
+have alternatives in it. Where **no** repository could be asked at all it
+raises `ImageRegistryUnreachable` instead, since "publish an image for
+this package set" and "this machine cannot reach a registry" are
+different answers to the person reading them. A search list configured
+empty is refused before any registry is asked (`BuildError`): which
+repositories a build may take an environment from is a decision about
+trust, not a default.
 `require_container_image` refuses an image whose declaration does not
 match this generation, generator constraint or Zephyr release
 (`EnvironmentUnusable`). `require_container_runtime` refuses with the one
