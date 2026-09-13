@@ -2417,12 +2417,57 @@ async def _sleep_or_stop(seconds: float, should_stop: Callable[[], bool]) -> Non
         raise _Stopped
 
 
+class _StopClock:
+    """When a remote build was stopped, and how much of its bound is left.
+
+    **One clock for the whole tail**, because a caller waiting for a
+    stopped build waits for all of it: the acknowledgement of the stop,
+    the verdict that may never come, and the closing of the session
+    afterwards. Every one of those is a command frame that waits
+    :data:`DEFAULT_CALL_TIMEOUT` for an answer, so a bound that covered
+    only one of them would be a bound on paper — a server that is
+    connected and silent would still hold this side for minutes, and a
+    local build would hold the build directory for all of them.
+
+    Unstarted it is not a clock at all: a build nobody stopped waits as
+    long as its caller asked it to.
+    """
+
+    def __init__(self) -> None:
+        self.deadline: float | None = None
+
+    @property
+    def started(self) -> bool:
+        return self.deadline is not None
+
+    def start(self) -> None:
+        """Begin the bound, at the decision and not at somebody's answer."""
+        if self.deadline is None:
+            self.deadline = time.monotonic() + resolve_shutdown_seconds(cancel_grace_seconds=0)
+
+    def remaining(self, *, reserved: float = 0.0) -> float:
+        """Seconds left of the bound; ``0`` once it has run out.
+
+        *reserved* keeps the last of it back for whatever comes after the
+        caller in question — the wait for the verdict leaves a tick to
+        the session close, so that a stopped build still *tells* the
+        server it is going even when the server answered nothing.
+        """
+        if self.deadline is None:
+            return 0.0
+        return max(0.0, self.deadline - time.monotonic() - reserved)
+
+    def spent(self, *, reserved: float = 0.0) -> bool:
+        return self.started and self.remaining(reserved=reserved) <= 0
+
+
 async def _follow_invocation(
     client: SessionClient,
     invocation_id: str,
     *,
     should_stop: Callable[[], bool],
     timeout: float | None,
+    clock: _StopClock,
 ) -> dict[str, Any] | None:
     """Wait for the verdict, and cancel the invocation if the caller stops.
 
@@ -2444,23 +2489,38 @@ async def _follow_invocation(
     for is the ladder it knows and never a figure it made up. After it,
     the build counts as stopped: the person who pressed stop gets an
     answer, and what the server does with the container it started is the
-    server's own business.
+    server's own business. The same *clock* bounds what
+    :func:`run_remote_build` does afterwards, so the bound is the whole
+    tail and not this function's share of it — and the last tick of it is
+    left to the session close, so that a build this side gave up on still
+    tells the server it is going.
+
+    **A socket that dies while stopping is a stopped build**, not a
+    transport failure: the caller asked for the build to end, the build
+    has ended as far as this side can observe, and answering
+    ``RemoteTransportError`` would replace that answer with one about the
+    connection. Off the stop path the refusal stands, because there a
+    lost socket is the only news there is.
+
+    Asked on the event-loop thread: this is where the predicate is
+    polled for a remote build, unlike the local executions, where the
+    supervisor polls it from the worker thread the build runs in.
     """
     waiter = asyncio.ensure_future(client.wait_finished(invocation_id, timeout=timeout))
-    give_up_at: float | None = None
     try:
         while True:
             try:
                 return await asyncio.wait_for(asyncio.shield(waiter), _STOP_POLL_SECONDS)
             except TimeoutError:
                 pass
-            if give_up_at is None and should_stop():
+            except RemoteTransportError:
+                if not clock.started:
+                    raise
+                return None
+            if not clock.started and should_stop():
                 # The clock starts with the decision, not with the
-                # server's answer to it: a command frame waits up to
-                # `DEFAULT_CALL_TIMEOUT` for a reply, so a server that is
-                # connected and silent would otherwise hold this side for
-                # five minutes against a bound of forty-four seconds.
-                give_up_at = time.monotonic() + resolve_shutdown_seconds(cancel_grace_seconds=0)
+                # server's answer to it.
+                clock.start()
                 # Best effort, and bounded by that same clock: a cancel
                 # that is refused — a session the server already took
                 # away, an invocation it no longer knows — changes
@@ -2470,9 +2530,9 @@ async def _follow_invocation(
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(
                         client.cancel(invocation_id),
-                        max(0.0, give_up_at - time.monotonic()),
+                        clock.remaining(reserved=_STOP_POLL_SECONDS),
                     )
-            if give_up_at is not None and time.monotonic() >= give_up_at:
+            if clock.spent(reserved=_STOP_POLL_SECONDS):
                 return None
     finally:
         if not waiter.done():
@@ -2598,15 +2658,26 @@ async def run_remote_build(
     told about each wait, so a caller can say something true while
     nothing is happening.
 
-    *should_stop* ends the build wherever it currently is. While it is
-    waiting for a turn, that costs nothing: no session was opened and the
-    server takes the turn back. Once an invocation is running, stopping
-    means telling the server — the protocol's ``cancel`` — and waiting
-    for the verdict it answers with; a server that says nothing within
-    the liveness ladder's bound is taken as stopped anyway. Either way
-    the answer carries :data:`STATUS_CANCELLED` and therefore no
-    artifacts: what a stopped build produced is on the machine that ran
-    it and is not fetched.
+    *should_stop* ends the build wherever it currently is, and is asked
+    on the event-loop thread — this function's own, not a worker's.
+    While the build is waiting for a turn, stopping costs nothing: no
+    session was opened and the server takes the turn back. Once an
+    invocation is running, stopping means telling the server — the
+    protocol's ``cancel`` — and waiting for the verdict it answers with;
+    a server that says nothing is taken as stopped anyway.
+
+    **One bound covers the whole tail** of a stopped build
+    (:class:`_StopClock`): the acknowledgement, the verdict, and closing
+    the session. It is
+    :func:`~mcuhome.workbench.buildprocess.resolve_shutdown_seconds`
+    measured from the decision, because each of those is a frame that
+    would otherwise wait :data:`DEFAULT_CALL_TIMEOUT` on a peer that has
+    stopped answering — and a local caller holds its build directory for
+    every second of it.
+
+    A stopped build answers :data:`STATUS_CANCELLED`, no artifacts and no
+    ``out_dir``: what it produced is on the machine that ran it and is
+    not fetched, whether this side stopped it or the server did.
     """
     if action not in ("build", "verify"):
         raise RemoteError(
@@ -2621,6 +2692,7 @@ async def run_remote_build(
     out = Path(work_root) / "out"
     await asyncio.to_thread(shutil.rmtree, out, ignore_errors=True)
     stopping = _StopPoll(should_stop)
+    clock = _StopClock()
     try:
         client = await _wait_for_admission(
             lambda: SessionClient(
@@ -2654,7 +2726,7 @@ async def run_remote_build(
             else:
                 invocation_id = await client.build(mode=mode)
             verdict = await _follow_invocation(
-                client, invocation_id, should_stop=stopping, timeout=timeout
+                client, invocation_id, should_stop=stopping, timeout=timeout, clock=clock
             )
             if verdict is None:
                 # Stopped, and the server never said so. The invocation
@@ -2670,6 +2742,24 @@ async def run_remote_build(
                     container_image=served,
                 )
             status = str(verdict.get("status") or "failure")
+            if status == STATUS_CANCELLED:
+                # Nothing is fetched for an invocation that was stopped,
+                # whichever side stopped it, and whatever it declared:
+                # those files are a half-built firmware on the machine
+                # that ran it, a download this side is waiting on inside
+                # a bound, and — on the one path that could still deliver
+                # them — files whose absence the caller would have to
+                # tell from a build that produced none.
+                return RemoteBuildResult(
+                    action=action,
+                    context_id=str(verdict.get("context") or identity),
+                    status=status,
+                    artifacts=(),
+                    out_dir=None,
+                    error=verdict.get("error"),
+                    invocation_id=invocation_id,
+                    container_image=served,
+                )
             artifacts = artifacts_from_wire(verdict.get("artifacts") or ())
             delivered: Path | None = None
             if artifacts:
@@ -2687,7 +2777,17 @@ async def run_remote_build(
                 container_image=served,
             )
         finally:
+            # Inside the stop's own bound where there is one: closing the
+            # session is a command frame like any other, and a server
+            # that stopped answering must not add its call timeout to a
+            # build somebody stopped — the build directory of a local
+            # build is held for every second of it. A close that does not
+            # answer in time is abandoned, and the transport dropped
+            # below is what actually ends the conversation.
             with contextlib.suppress(Exception):
-                await client.close_session()
+                if clock.started:
+                    await asyncio.wait_for(client.close_session(), clock.remaining())
+                else:
+                    await client.close_session()
     finally:
         await client.close()
