@@ -17,7 +17,9 @@ product owner actually asked for.
 That same sentence is why this module sits beside signing rather than
 inside the compiler package: the machine that wraps an image
 is the machine that signed it, and it has no toolchain. What it needs
-from the build is the device's OTA identity, nothing more.
+from the build is the device's OTA identity, nothing more — and it takes
+that from the device model itself, so no caller has to know which vendor
+and product a device reports, or how its file is named.
 
 The format is small enough that this costs eighty lines: a 16-byte fixed
 header and a Matter-TLV structure of six fields. ``tests/python/test_ota.py``

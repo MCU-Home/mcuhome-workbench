@@ -1126,9 +1126,15 @@ def ota_file_name(device: str, version: str) -> str
 def ota_parameters(model: DeviceModel) -> OtaIdentity | None
 ```
 `write_ota_image` wraps a **signed** payload in the Matter OTA header and
-answers `None` for a device that has no OTA identity. It raises
-`BuildError` when the payload is missing or unreadable and `ConfigError`
-when the device's stated version is not one the header can carry.
+answers `None` for a device that has no OTA identity — a board whose
+update scheme has nowhere to stage an image, or a device without a
+Matter stack. It derives the identity, the version and the file name
+from *model*, so a client states the device and never the header's
+fields. It raises `BuildError` when the payload is missing, unreadable or
+empty, and `ota_file_name` is there for a client that shows the name
+before the file exists. A device version the header cannot carry is
+refused earlier, by `validate_device`, as a `ConfigError` at the line
+that states it.
 
 ## Checking a build host
 ```python
