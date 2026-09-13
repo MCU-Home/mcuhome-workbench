@@ -942,19 +942,22 @@ def _into_the_log(on_line: LineSink | None) -> Callable[[Diagnostic], None] | No
 
     A build has no second stream for findings: what it learns while it
     runs belongs where the person watching it is looking. The message
-    goes in and the fix hint with it, line by line — a warning that says
-    what is wrong and not what to do about it costs the reader the one
-    thing the finding carried for them. The rest of the document (the
-    location, the kind) is for a client that renders documents; a log is
-    text.
+    goes in and the fix hint with it — a warning that says what is wrong
+    and not what to do about it costs the reader the one thing the
+    finding carried for them. The rest of the document (the location,
+    the kind) is for a client that renders documents; a log is text.
+
+    Both are split into lines, because that is what a line sink is: a
+    consumer that prefixes, timestamps or forwards one line at a time
+    would make a single blob of a multi-line hint.
     """
     if on_line is None:
         return None
 
     def report(finding: Diagnostic) -> None:
-        on_line(finding.message)
-        for line in (finding.hint or "").splitlines():
-            on_line(line)
+        for text in (finding.message, finding.hint or ""):
+            for line in text.splitlines():
+                on_line(line)
 
     return report
 

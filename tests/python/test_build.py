@@ -65,6 +65,7 @@ from mcuhome.workbench.contextdir import (
     read_context_manifest,
     read_context_request,
 )
+from mcuhome.workbench.diagnostics import WARNING_KINDS, Diagnostic
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, RegistrySettings
 from mcuhome.workbench.resolve_pins import (
@@ -162,6 +163,53 @@ def _remote_context_of(
         build.TARGET_REMOTE,
     )
     return outcome, sent["request"], lines
+
+
+# --------------------------------------------------------------------------
+# Findings, on the one channel a build has
+# --------------------------------------------------------------------------
+
+
+def test_a_finding_reaches_the_build_log_as_lines() -> None:
+    """A line sink is given lines — both halves of the finding, split.
+
+    A build reports what it finds through its log, and a consumer of
+    that log prefixes, timestamps or forwards one line at a time. A
+    multi-line message or hint handed over whole would arrive as one
+    blob with newlines in it, which is a different thing from what every
+    other line on that channel is.
+    """
+    lines: list[str] = []
+    report = build._into_the_log(lines.append)  # noqa: SLF001 - the seam under test
+    assert report is not None
+    report(
+        Diagnostic.warning(
+            "two things are wrong:\nthis one and that one",
+            kind=WARNING_KINDS[0],
+            hint="fix it like so:\n    chmod 600 somewhere",
+        )
+    )
+
+    assert lines == [
+        "two things are wrong:",
+        "this one and that one",
+        "fix it like so:",
+        "    chmod 600 somewhere",
+    ]
+
+
+def test_a_finding_without_a_hint_says_only_what_it_knows() -> None:
+    """An empty hint adds no empty line to the log."""
+    lines: list[str] = []
+    build._into_the_log(lines.append)(  # noqa: SLF001 - the seam under test
+        Diagnostic.warning("one thing", kind=WARNING_KINDS[0])
+    )
+    assert lines == ["one thing"]
+
+
+def test_a_build_without_a_log_has_no_warning_channel() -> None:
+    """No sink, nothing to wrap — the callee is told there is no channel."""
+    assert build._into_the_log(None) is None  # noqa: SLF001 - the seam under test
 
 
 # --------------------------------------------------------------------------
