@@ -568,7 +568,7 @@ def resolve_builder(
     name: str | None = None,
     project: Project | None,
     env: Mapping[str, str],
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> SelectedBuilder
 ```
 Which builder this invocation uses: an explicit *name*, the configured
@@ -1007,7 +1007,7 @@ def open_package_registry(
     settings: Sequence[RegistrySettings] = (),
     into: Path,
     opener: Callable[[str, float], IO[bytes]] | None = None,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
     now: datetime | None = None,
 ) -> RegistrySource
 def fetch_sdk_package(
