@@ -11,26 +11,33 @@ signing with it verifies against a key the whole world holds. That is
 theatre, and shipping it would be worse than shipping nothing, because it
 looks like a signature.
 
-**Where the key lives.** In the project (PO 2026-08-14; originally per
-user under ``$XDG_CONFIG_HOME``): the key material is its own file,
-``secrets/firmware/mcuboot.pem`` (:data:`PRIVATE_KEY_FILE`), and
-``secrets/firmware/mcuboot.yaml`` references it under
-``firmware_signing_key`` with the loader's ``!file`` tag — never as an
-inline PEM block (PO 2026-08-14; the inline form is refused with the
-migration in the hint). The secrets-hygiene rules apply to **both** files:
-directories 700, files 600, and key material other users can read is
-refused, not warned about. All devices of a project share the key; a
-user who wants one vendor key across projects copies the pair.
-``--signing-key`` and the option ``signing.key`` it carries point
-somewhere else, at a plain PEM file — that is the dashboard's path, which keeps the key in its own
+**Where the key lives.** In the project, rather than per user under
+``$XDG_CONFIG_HOME``: the key material is its own file,
+:data:`SIGNING_KEY_FILE`, and the secrets YAML beside it references that
+file under ``firmware_signing_key`` with the loader's ``!file`` tag —
+never as an inline PEM block, which is refused with the migration in the
+hint. The secrets-hygiene rules apply to **both** files: directories 700,
+files 600, and key material other users can read is refused, not warned
+about. All devices of a project share the key; a user who wants one
+vendor key across projects copies the pair. ``--signing-key`` and the
+option ``signing.key`` it carries point somewhere else, at a plain PEM
+file — that is the dashboard's path, which keeps the key in its own
 state directory (in a Home Assistant add-on,
 ``/config/mcuhome/signing.key``). The rule that fixes is *where the
 user's controlling instance runs, never on a build server*.
 
-Either way the resolved key **is a file** (:attr:`SigningKey.path` —
-the referenced ``mcuboot.pem``, or the override's PEM), so ``imgtool``'s
+Either way the resolved key **is a file** (:attr:`SigningKey.path` — the
+referenced key file, or the override's PEM), so ``imgtool``'s
 ``--key <file>`` gets that path directly: nothing is ever materialized,
 copied, or written into a build directory to sign with.
+
+**Reading a key never makes one.** :func:`resolve_signing_key` answers
+the key that is there and refuses in words when there is none;
+:func:`create_signing_key` is the call that draws one. The split is the
+whole point: a client that only shows the public key would otherwise
+create a private key by opening a project, and a second key is not a
+harmless thing to create — a device only accepts images signed with the
+key its bootloader carries.
 
 **Why signing is a separate concern from building.** MCUboot signing is a
 detached post-build step: ``imgtool`` runs over the finished binary, so a
@@ -63,6 +70,7 @@ import binascii
 import os
 import secrets
 import stat
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -76,30 +84,33 @@ from mcuhome.workbench.project import Project, ensure_secrets_dir, require_secre
 
 __all__ = [
     "FIRMWARE_KEY",
-    "PRIVATE_KEY_FILE",
     "PUBLIC_KEY_FILE",
+    "SIGNING_KEY_FILE",
     "SigningKey",
+    "create_signing_key",
     "generate_key_pem",
     "is_p256_private_key",
     "is_p256_public_key",
     "public_key_pem",
-    "signing_key",
+    "resolve_signing_key",
 ]
 
-#: The YAML key in the project's ``secrets/firmware/mcuboot.yaml`` that
-#: references the private key file.
+#: The YAML key in the project's signing secrets file that references
+#: the private key file.
 FIRMWARE_KEY = "firmware_signing_key"
 
-#: File name of the project's private key, next to the YAML that
-#: references it: ``secrets/firmware/mcuboot.pem``.
-PRIVATE_KEY_FILE = "mcuboot.pem"
+#: File name of the private key, next to the YAML that references it.
+#: Named after what it holds rather than after the bootloader that
+#: verifies against it: one project has one signing key, whatever signs
+#: with it.
+SIGNING_KEY_FILE = "key.pem"
 
 #: Conventional file name of the *public* half — the only part of the key
 #: pair that ever leaves the machine it was generated on. A build server
 #: needs it (MCUboot verifies against a public key compiled into the
-#: bootloader) and must never see the other half,
-#: which is what ``mcuhome device build --no-sign --public-key`` is for.
-PUBLIC_KEY_FILE = "signing.pub"
+#: bootloader) and must never see the other half. Nothing here writes it;
+#: it is the name a client gives the file when it exports the public key.
+PUBLIC_KEY_FILE = "key.pub"
 
 #: PEM label of a PKCS#8 private key, and of the older SEC1 spelling that
 #: OpenSSL writes with ``-----BEGIN EC PRIVATE KEY-----``. Both are
@@ -120,12 +131,12 @@ _EC_PUBLIC_KEY_OID_DER = bytes.fromhex("06072a8648ce3d0201")
 # --------------------------------------------------------------------------
 
 
-def _override_path(override: Path | str | None, env: dict[str, str]) -> Path | None:
-    """The plain key *file* an override names: flag first, then variable.
+def _override_path(override: Path | str | None, env: Mapping[str, str]) -> Path | None:
+    """The plain key *file* a caller names outright.
 
-    ``None`` when neither is set — the key then lives in the project's
-    ``secrets/firmware/mcuboot.yaml``, which is not a path but a
-    (file, YAML key) pair and is resolved by :func:`signing_key` itself.
+    ``None`` when nothing is named — the key then lives in the project's
+    secrets YAML, which is not a path but a (file, YAML key) pair and is
+    resolved by the two entry points below themselves.
     *env* is stated, never read from the process: this resolves the
     location of a private key, and a server process must resolve it from
     what it was given rather than from the environment it happens to run
@@ -326,16 +337,16 @@ def is_p256_private_key(text: str) -> bool:
 class SigningKey:
     """The key this build signs with, and whether it had to be made."""
 
-    #: The key **file**: the project's ``secrets/firmware/mcuboot.pem``
-    #: when :attr:`in_secrets` is true (the file ``mcuboot.yaml``
-    #: references with ``!file``), the override's plain PEM file
-    #: otherwise. Always a real absolute path, ready for an external
-    #: tool's ``--key <file>`` — nothing is ever materialized to sign.
+    #: The key **file**: the one the project's secrets YAML references
+    #: with ``!file`` when :attr:`in_secrets` is true, the plain PEM file
+    #: a caller named otherwise. Always a real absolute path, ready for
+    #: an external tool's ``--key <file>`` — nothing is ever materialized
+    #: to sign.
     path: Path
     #: The private key itself, PKCS#8 PEM — the content of :attr:`path`.
     pem: str
-    #: True when the key was resolved through the project's
-    #: ``mcuboot.yaml`` reference rather than a plain-file override.
+    #: True when the key was resolved through the project's secrets
+    #: YAML rather than from a plain file a caller named.
     in_secrets: bool
     #: True when this call created it. The caller says so out loud:
     #: firmware signed with a new key is not accepted by a device that
@@ -388,10 +399,23 @@ def _refuse_no_project() -> BuildError:
         "MCUHome has no firmware signing key to use: this command does not run "
         "inside a project, and no key file is named.",
         hint=(
-            "the project's key lives in secrets/firmware/mcuboot.yaml under "
-            f"{FIRMWARE_KEY} and is generated on first need. "
+            "the project's key lives in its secrets directory under "
+            f"{FIRMWARE_KEY} and is drawn when MCUHome first needs one. "
             "Run inside a project (or create one with `mcuhome project init`), point "
             "--signing-key at a PEM key file, or set the option signing.key."
+        ),
+    )
+
+
+def _refuse_no_project_key(reason: str) -> BuildError:
+    """This project has no key yet — and reading one never makes one."""
+    return BuildError(
+        f"This project has no firmware signing key yet: {reason}.",
+        hint=(
+            "MCUHome draws one the first time it signs an image for this project, "
+            "and every device of the project is then signed with it.\n"
+            "To sign with a key you already have instead, point --signing-key at its "
+            "PEM file or set the option signing.key."
         ),
     )
 
@@ -402,52 +426,80 @@ def _refuse_inline_key(file: Path) -> BuildError:
         hint=(
             "the key material lives in its own file next to this one, and the "
             "YAML only points at it:\n"
-            f"    {FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}\n"
+            f"    {FIRMWARE_KEY}: !file {SIGNING_KEY_FILE}\n"
             "If the entry currently holds the PEM itself, move that block into "
-            f"{PRIVATE_KEY_FILE} (same directory, chmod 600) and replace it with "
+            f"{SIGNING_KEY_FILE} (same directory, chmod 600) and replace it with "
             "the reference above."
         ),
     )
 
 
-def signing_key(
+def resolve_signing_key(
     override: Path | str | None = None,
     *,
-    env: dict[str, str],
+    env: Mapping[str, str],
     project: Project | None = None,
-    create: bool = True,
 ) -> SigningKey:
-    """The key to sign with, generating one on first need.
+    """The key to sign with, and never one this call brought into existence.
 
-    Resolution order: *override* — the resolved ``signing.key``, which
-    a caller states however its user set it (the flag, the variable, a
-    configuration file) — then the *project*'s
-    ``secrets/firmware/mcuboot.yaml`` under :data:`FIRMWARE_KEY`. This
-    module reads no environment variable of its own: the configuration
-    layer reads ``signing.key`` once, and what arrives here is its
-    value.
-    With no override and no project there is
+    Resolution order: *override* — the resolved ``signing.key``, which a
+    caller states however its user set it (the flag, the variable, a
+    configuration file) — then the *project*'s secrets YAML under
+    :data:`FIRMWARE_KEY`. This module reads no environment variable of
+    its own: the configuration layer reads ``signing.key`` once, and what
+    arrives here is its value. With no override and no project there is
     nothing to resolve against, and that is a refusal in words rather
     than a guess at a directory.
 
-    Generating rather than refusing is deliberate: a user who has never
-    signed anything should get a working, private, per-project key by
-    running ``mcuhome device build``, not a lecture about key
-    management. What is *not* deliberate is generating a second one by
-    accident, so every caller is expected to say when this created a
-    key — a device only accepts images signed with the key its
-    bootloader carries.
+    A project that has no key yet is a refusal too. Reading is not the
+    moment to draw one: a client that shows the public key would
+    otherwise create a private key by opening a project, and the caller
+    that wants one says so through :func:`create_signing_key`.
     """
     path = _override_path(override, env)
     if path is not None:
-        return _plain_file_key(path, create=create)
+        return _read_plain_key(path)
     if project is None:
         raise _refuse_no_project()
-    return _project_key(project, create=create)
+    return _read_project_key(project)
 
 
-def _plain_file_key(path: Path, *, create: bool) -> SigningKey:
-    """An override key file: read it, or create it right there."""
+def create_signing_key(
+    *,
+    env: Mapping[str, str],
+    project: Project | None = None,
+    path: Path | None = None,
+) -> SigningKey:
+    """Draw the signing key, or answer the one that is already there.
+
+    *path* names a plain PEM file — the resolved ``signing.key`` — and
+    without it the key is the *project*'s: :data:`SIGNING_KEY_FILE` in
+    its secrets directory, with the YAML beside it referencing the file.
+    Either way the answer says in :attr:`SigningKey.created` whether this
+    call drew it, which is worth passing on to the user: a device only
+    accepts images signed with the key its bootloader carries, so a key
+    that came into existence just now is news.
+
+    Calling this twice does not produce two keys. Generating over
+    existing key material is the one thing creation must never do, so a
+    key that is already there is answered as it stands, with *created*
+    false.
+    """
+    target = _override_path(path, env)
+    if target is not None:
+        return _create_plain_key(target)
+    if project is None:
+        raise _refuse_no_project()
+    return _create_project_key(project)
+
+
+# --------------------------------------------------------------------------
+# A key file named outright
+# --------------------------------------------------------------------------
+
+
+def _read_plain_key(path: Path) -> SigningKey:
+    """The key in *path*, or a refusal that says what is wrong with it."""
     if path.exists():
         if path.is_dir():
             raise _refuse_unreadable(path, "it is a directory")
@@ -461,10 +513,13 @@ def _plain_file_key(path: Path, *, create: bool) -> SigningKey:
         if not is_p256_private_key(text):
             raise _refuse_not_a_key(path)
         return SigningKey(path=path, pem=text, in_secrets=False, created=False)
+    raise _refuse_unreadable(path, "no such file")
 
-    if not create:
-        raise _refuse_unreadable(path, "no such file")
 
+def _create_plain_key(path: Path) -> SigningKey:
+    """The same file, drawn where there is none — never over one there is."""
+    if path.exists():
+        return _read_plain_key(path)
     pem = generate_key_pem()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -474,47 +529,78 @@ def _plain_file_key(path: Path, *, create: bool) -> SigningKey:
     return SigningKey(path=path, pem=pem, in_secrets=False, created=True)
 
 
-def _project_key(project: Project, *, create: bool) -> SigningKey:
-    """The project's key: ``mcuboot.pem``, referenced from ``mcuboot.yaml``.
+# --------------------------------------------------------------------------
+# The project's own key
+# --------------------------------------------------------------------------
 
-    The YAML holds a ``!file`` reference and nothing key-shaped; the
-    material lives in its own file. Both are under the key-material
-    rule — insecure permissions are a refusal, never a warning, checked
-    before the first byte is used. An inline PEM block is refused with the
-    migration in the hint: the two-file shape is the only one.
+
+def _read_project_key(project: Project) -> SigningKey:
+    """The key the project's secrets YAML references, or a refusal.
+
+    Reads two files and writes neither: the YAML, and the key it points
+    at. Both are under the key-material rule — insecure permissions are a
+    refusal, never a warning, checked before the first byte is used.
     """
     file = project.firmware_secrets_file
-    data: dict | None = None
-    if file.exists():
-        if file.is_dir():
-            raise _refuse_unreadable(file, "it is a directory")
-        require_secret_file(file, key_material=True)
-        data = read_yaml_file(file)
-        if data is None:
-            data = {}
-        if not isinstance(data, dict):
-            raise _refuse_unreadable(file, "it is not a mapping of `name: value` pairs")
-        value = data.get(FIRMWARE_KEY)
-        if value is not None:
-            if not isinstance(value, FileRef):
-                raise _refuse_inline_key(file)
-            require_secret_file(value.path, key_material=True)
-            if not is_p256_private_key(str(value)):
-                raise _refuse_not_a_key(value.path)
-            return SigningKey(path=value.path, pem=str(value), in_secrets=True, created=False)
-        if not create:
-            raise _refuse_unreadable(file, f"it has no {FIRMWARE_KEY} entry")
-    elif not create:
-        raise _refuse_unreadable(file, "no such file")
+    data = _read_project_secrets(file)
+    if data is None:
+        raise _refuse_no_project_key(f"{file} does not exist")
+    key = _referenced_key(file, data)
+    if key is None:
+        raise _refuse_no_project_key(f"{file} names no {FIRMWARE_KEY}")
+    return key
 
-    # Create: the key file first, then the reference — a crash between
-    # the two leaves a valid pem that the next run adopts, never a
-    # dangling reference.
+
+def _read_project_secrets(file: Path) -> dict | None:
+    """The secrets YAML as a mapping, or ``None`` when there is no file."""
+    if not file.exists():
+        return None
+    if file.is_dir():
+        raise _refuse_unreadable(file, "it is a directory")
+    require_secret_file(file, key_material=True)
+    data = read_yaml_file(file)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise _refuse_unreadable(file, "it is not a mapping of `name: value` pairs")
+    return data
+
+
+def _referenced_key(file: Path, data: dict) -> SigningKey | None:
+    """The key *data* references, or ``None`` when it references none.
+
+    The YAML holds a ``!file`` reference and nothing key-shaped; the
+    material lives in its own file. An inline PEM block is refused with
+    the migration in the hint: the two-file shape is the only one.
+    """
+    value = data.get(FIRMWARE_KEY)
+    if value is None:
+        return None
+    if not isinstance(value, FileRef):
+        raise _refuse_inline_key(file)
+    require_secret_file(value.path, key_material=True)
+    if not is_p256_private_key(str(value)):
+        raise _refuse_not_a_key(value.path)
+    return SigningKey(path=value.path, pem=str(value), in_secrets=True, created=False)
+
+
+def _create_project_key(project: Project) -> SigningKey:
+    """The project's key, drawn and referenced — or the one already there."""
+    file = project.firmware_secrets_file
+    data = _read_project_secrets(file)
+    if data is not None:
+        existing = _referenced_key(file, data)
+        if existing is not None:
+            return existing
+
+    # The key file first, then the reference — a crash between the two
+    # leaves a valid pem that the next run adopts, never a dangling
+    # reference.
     try:
         directory = ensure_secrets_dir(project.root, "firmware")
     except OSError as error:
         raise _refuse_unwritable(file, error.strerror or "cannot write") from error
-    pem_path = directory / PRIVATE_KEY_FILE
+    pem_path = directory / SIGNING_KEY_FILE
     created = False
     if pem_path.exists():
         # An unreferenced key at the canonical spot — a user's import, or
@@ -537,14 +623,14 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
             raise _refuse_unwritable(pem_path, error.strerror or "cannot write") from error
         created = True
 
-    reference = f"{FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}\n"
+    reference = f"{FIRMWARE_KEY}: !file {SIGNING_KEY_FILE}\n"
     try:
         if data is not None:
             # The file exists with other content: add the reference,
             # round-trip, so nothing the user put there is disturbed —
             # including other !file references, which editing_yaml
             # writes back as the references they are.
-            data[FIRMWARE_KEY] = TaggedScalar(value=PRIVATE_KEY_FILE, tag="!file")
+            data[FIRMWARE_KEY] = TaggedScalar(value=SIGNING_KEY_FILE, tag="!file")
             with file.open("w", encoding="utf-8") as handle:
                 editing_yaml().dump(data, handle)
         else:
@@ -552,7 +638,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
                 file,
                 "# MCUHome firmware signing key.\n"
                 f"# The private half of the project's MCUboot key pair lives next to\n"
-                f"# this file as {PRIVATE_KEY_FILE} and is referenced below. It never\n"
+                f"# this file as {SIGNING_KEY_FILE} and is referenced below. It never\n"
                 "# leaves this machine: never commit it, never copy it into a build\n"
                 "# directory, never hand it to a build server.\n" + reference,
             )

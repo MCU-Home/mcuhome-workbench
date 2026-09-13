@@ -1069,15 +1069,18 @@ def public_key_pem(private_pem: str) -> str
 def is_p256_private_key(text: str) -> bool
 def is_p256_public_key(text: str) -> bool
 ```
-Resolution order: *override*, then `signing.key`, then the project's
-`secrets/signing/key.yaml` reference. `resolve_signing_key` **never
-writes**: it raises `BuildError` when there is no key, when the file
-cannot be read, when it is not a P-256 key, and `ConfigError` when the
-file is exposed to other users. A caller that wants one generated says so
-— `create_signing_key` writes the pair (mode 0600) and answers it with
-`created` true, which is worth saying out loud: a device only accepts
-images signed with the key its bootloader carries. `SigningKey` (frozen):
-`path`, `pem`, `in_secrets`, `created`.
+Resolution order: the *override* — which is the resolved `signing.key`,
+however its user stated it; nothing here reads a configuration channel of
+its own — then the project's `secrets/signing/key.yaml` reference.
+`resolve_signing_key` **never writes**: it raises `BuildError` when there
+is no key, when the file cannot be read, when it is not a P-256 key, and
+`ConfigError` when the file is exposed to other users. A caller that
+wants one generated says so — `create_signing_key` writes the pair
+(mode 0600) and answers it with `created` true, which is worth saying out
+loud: a device only accepts images signed with the key its bootloader
+carries. Asked again it answers the key that is there, with `created`
+false: generating over existing key material is the one thing it never
+does. `SigningKey` (frozen): `path`, `pem`, `in_secrets`, `created`.
 
 *scalar* is `generate_key_pem`'s injection seam and exists for MCUHome's
 own tests, which need one known key to compare bytes against. Left out —

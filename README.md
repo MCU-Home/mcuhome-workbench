@@ -664,7 +664,9 @@ Firmware is signed on the machine the user controls, never on a build server:
 what travels to a builder is the build context and the public half of the key.
 The key is drawn per project and kept in the project's `secrets/` directory, or
 at a path an embedding application states; MCUboot's published demo key is never
-used for a signature. Report a vulnerability as described in the organization's
+used for a signature. Drawing one is its own call: reading a project's key never
+creates one, so a client that only shows the public key cannot make a project a
+second vendor by looking at it. Report a vulnerability as described in the organization's
 [security policy](https://github.com/mcu-home/.github/blob/main/SECURITY.md).
 
 ## Documentation

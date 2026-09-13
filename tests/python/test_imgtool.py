@@ -425,7 +425,7 @@ def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
 
     out = _report_dir(tmp_path)
     project = create_project(tmp_path / "project").project
-    generated = signing.signing_key(env={}, project=project)
+    generated = signing.create_signing_key(env={}, project=project)
     used_keys: list[Path] = []
 
     def runner(command: list[str]) -> tuple[int, str]:
@@ -439,7 +439,7 @@ def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
     assert used_keys and all(path == generated.path for path in used_keys)
     assert generated.path.is_file()  # the durable home, untouched
     assert plan.key == generated.path
-    assert plan.key.name == signing.PRIVATE_KEY_FILE
+    assert plan.key.name == signing.SIGNING_KEY_FILE
     assert plan.key != project.firmware_secrets_file  # the YAML is never a --key
 
 

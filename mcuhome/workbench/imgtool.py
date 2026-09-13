@@ -376,7 +376,7 @@ def sign_report(
     its device's bootloader already carries. The resolved key is a file
     either way, and imgtool gets exactly that file.
     """
-    resolved = signing.signing_key(key, env=env, project=project, create=False)
+    resolved = signing.resolve_signing_key(key, env=env, project=project)
     plan = plan_report_signing(target, key=resolved.path, env=env, imgtool=imgtool)
     run_signing(plan, runner=runner)
     return plan

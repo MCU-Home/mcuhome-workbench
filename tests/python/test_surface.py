@@ -58,16 +58,10 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 PENDING: dict[str, str] = {
     # Signing, the build report and OTA: a read that no longer writes a
     # key, signing that answers a result, the project's key file names.
-    "PUBLIC_KEY_FILE": "signing",
     "SIGNED_FIRMWARE_NAMES": "signing",
-    "SIGNING_KEY_FILE": "signing",
     "SignedArtifact": "signing",
     "SigningResult": "signing",
-    "create_signing_key": "signing",
-    "is_p256_private_key": "signing",
-    "is_p256_public_key": "signing",
     "plan_signing": "signing",
-    "resolve_signing_key": "signing",
     "sign_firmware": "signing",
     "write_ota_image": "signing",
     # The host check and the container-profile seams as a designed set.
