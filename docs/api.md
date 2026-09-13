@@ -1551,13 +1551,21 @@ package, and a model release outside it is not covered by this document.
 `MODEL_PACKAGE_VERSION` answers which one is installed, `MODEL_VERSION`
 the model format it writes.
 
-MCUHome's own test suites are the one place that reaches past this
-surface on purpose, and only where no exported name can express the
-test: the container layout constants of one execution profile
-(`ENTRY_POINT_PATH`, `REQUEST_TARGET`, `OUT_TARGET`), the runtime and
-registry objects a test replaces wholesale, and the private helpers a
-test monkeypatches. Any seam that has an exported equivalent is used
-through the exported one.
+### The seams MCUHome's own tests use
+The `mcuhome` command line and the build server import from `api` and
+from nothing else. MCUHome's own test suites are the one place that
+reaches past this surface on purpose, and only for the reasons below.
+Any seam that has an exported equivalent is used through the exported
+one — a test that could call `api` and reaches into a module instead is
+a defect in the test, not a seam.
+
+| What a test reaches for | Why |
+|---|---|
+| the modules behind the surface, each with its own test file — `build`, `buildenvsession`, `buildenvstore`, `builders`, `buildlock`, `buildprocess`, `buildtarget`, `configschema`, `configuration`, `containerbuild`, `contextdir`, `devworkspace`, `generate`, `generatorconstraint`, `imgtool`, `loader`, `migrations`, `ociregistry`, `otafile`, `packagefetch`, `packageregistry`, `project`, `projectfile`, `projectupgrade`, `provision`, `resolve_image`, `resolve_pins`, `scaffold`, `schema`, `sessionclient`, `signing`, `subprocessbuild` | the workbench's own unit tests are tests *of* those modules. A unit test that may only enter through `api` is an integration test, and the behaviour it pins would be asserted three layers away from where it lives |
+| `containerbuild.ENTRY_POINT_PATH`, `REQUEST_TARGET`, `OUT_TARGET` | the container layout of one execution profile. A double standing in for a build environment has to read the request document at the path the real profile mounts it at, and that path is not something the surface answers |
+| the composition functions the build targets are made of (`build.compose_local_build`, `build.compose_subprocess_build`, `subprocessbuild.run_locked_build`, `sessionclient.run_remote_build` and their neighbours) | replaced wholesale so that one build path can be driven without a container, a registry or a socket. The surface deliberately has no seam between `build_firmware` and the composition it picks |
+| `open_package_registry(opener=, now=)`, `generate_key_pem(scalar=)` | injection parameters on exported functions: an HTTP opener, a clock, and one known private key to compare bytes against. They are stated in the signatures above and are not part of the supported call |
+| private helpers a test monkeypatches (`subprocessbuild._require_entry_point`, `sessionclient._STOP_POLL_SECONDS`, and the like) | a leading underscore says the name is nobody's to use outside this package; a test that patches one is inside it |
 
 Two consequences worth stating:
 - There is no supported way to reach the private half of a signing key
