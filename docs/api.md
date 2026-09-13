@@ -782,13 +782,18 @@ def create_context(
     on_line: Callable[[str], None] | None = None,
 ) -> ContextRequest
 ```
-Resolves every pin and writes a fresh base context at *out_dir*, which is
-removed if it exists. The SDK constraint resolves to one release, that
-release states the build workspace range it belongs with, and that
-workspace states the tools range. A device that pins either overrides
-that package alone, with a note on *on_line* rather than a refusal.
-*options* says which package directories the pins resolve against,
-*project_root* whether there is a registry to fall through to at all.
+Resolves every pin and writes a fresh base context at *out_dir*, which
+has to be new or empty: a directory that already holds files is refused
+(`BuildError`, naming it) rather than emptied, and a refusal leaves
+nothing behind — the context is assembled beside *out_dir* and moved into
+place only once it is complete.
+
+The SDK constraint resolves to one release, that release states the build
+workspace range it belongs with, and that workspace states the tools
+range. A device that pins either overrides that package alone, with a
+note on *on_line* rather than a refusal. *options* says which package
+directories the pins resolve against, *project_root* whether there is a
+registry to fall through to at all.
 
 The patches a context carries are the device's own unless stated: without
 a *patches_dir*, `<project>/devices/<name>/patches/` is picked up when it

@@ -2166,6 +2166,45 @@ def test_a_patch_outside_a_layer_folder_is_refused(model, tmp_path) -> None:
     assert "patches/<layer>/NNNN-name.patch" in refused.value.hint
 
 
+def test_a_directory_that_already_holds_something_is_refused(model, tmp_path) -> None:
+    """`create_context` creates; it does not empty a directory somebody named.
+
+    A context is written from scratch because its integrity list and its
+    ID cover everything in the directory — so the target has to be new or
+    empty. Emptying it instead would delete what the caller put there to
+    build a context that claims to cover it.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "notes.txt").write_text("mine\n", encoding="utf-8")
+
+    with pytest.raises(BuildError, match="already contains files") as refused:
+        _context_of(model, tmp_path, out="occupied", source=source)
+
+    assert str(occupied) in refused.value.message
+    assert (occupied / "notes.txt").is_file()
+
+
+def test_a_refused_context_leaves_nothing_behind(model, tmp_path) -> None:
+    """Halfway through is the case that matters: the refusal comes after
+    the model and the key are written, and the caller must still find
+    nothing where the context would have gone — no half context in the
+    place it named, and no leftover beside it either.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+    _write_patch(_device_patches(project, model.device.name), "0001-fix-uart.patch", "uart.c")
+
+    with pytest.raises(BuildError, match="is not a patch layer"):
+        _context_of(model, tmp_path, out="context", source=source, project_root=project)
+
+    assert not (tmp_path / "context").exists()
+    assert [path.name for path in tmp_path.iterdir() if path.name.startswith(".mcuhome-")] == []
+
+
 def test_a_stated_patches_directory_replaces_the_devices_own(model, tmp_path) -> None:
     """Two statements, and the explicit one wins — it does not add to the other.
 

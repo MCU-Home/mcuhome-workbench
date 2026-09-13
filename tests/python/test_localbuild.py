@@ -748,6 +748,12 @@ def test_creating_a_context_twice_in_one_work_root_is_the_same_context(tmp_path,
     (`<build dir>/.mcuhome-local`). A second creation therefore lands on
     the first one's unpacked tree, and it has to answer with the same
     context rather than with a refusal or with something else.
+
+    Through the internal seam the three compositions use, because this is
+    their property and not the public call's: `<work root>/context` is a
+    build's own scratch and is rebuilt every run, while the exported
+    `create_context` refuses a directory that already holds a context
+    rather than replacing what somebody else put there.
     """
     make_sdk_source(tmp_path / "src")
     requests = [
@@ -755,15 +761,13 @@ def test_creating_a_context_twice_in_one_work_root_is_the_same_context(tmp_path,
         # differ in — it is the wall clock, and it is outside the context
         # identity — so the comparison drops it rather than freezing it.
         dataclasses.replace(
-            build.create_context(
+            build._create_context(
                 model,
                 out_dir=tmp_path / "work" / "context",
                 work_root=tmp_path / "work",
-                options=build.BuildOptions(
-                    sdk_sources=(tmp_path / "src",),
-                    workspace_sources=(tmp_path / "src",),
-                    tools_sources=(tmp_path / "src",),
-                ),
+                sdk_sources=(tmp_path / "src",),
+                workspace_sources=(tmp_path / "src",),
+                tools_sources=(tmp_path / "src",),
                 signing_pub=public_pem,
             ),
             created="",

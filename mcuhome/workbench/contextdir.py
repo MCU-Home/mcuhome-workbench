@@ -80,6 +80,7 @@ __all__ = [
     "read_context_manifest",
     "read_context_request",
     "read_generator_chain",
+    "require_empty_context_dir",
     "verify_context",
     "write_build_context",
     "write_context",
@@ -247,6 +248,32 @@ def _format_created(created: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def require_empty_context_dir(out_dir: Path) -> None:
+    """Refuse *out_dir* unless a context can be created in it.
+
+    A context is written from scratch, because its integrity list and its
+    ID cover everything in the directory — including files this package
+    did not put there. So the target has to be new or empty, and a
+    directory that already holds something is refused rather than
+    emptied: what is in it belongs to whoever put it there.
+    """
+    if not out_dir.exists():
+        return
+    if not out_dir.is_dir():
+        raise BuildError(
+            f"The context target {out_dir} is not a directory.",
+            hint="point at a new or empty directory the context can be created in",
+        )
+    if any(out_dir.iterdir()):
+        raise BuildError(
+            f"The context directory {out_dir} already contains files.",
+            hint=(
+                "a context is created from scratch so its integrity list covers "
+                "everything in it — point at a new or empty directory"
+            ),
+        )
+
+
 def write_context(
     model: DeviceModel,
     *,
@@ -291,20 +318,7 @@ def write_context(
     differ in — nothing here reads a clock, so identical inputs yield
     byte-identical files.
     """
-    if out_dir.exists():
-        if not out_dir.is_dir():
-            raise BuildError(
-                f"The context target {out_dir} is not a directory.",
-                hint="point at a new or empty directory the context can be created in",
-            )
-        if any(out_dir.iterdir()):
-            raise BuildError(
-                f"The context directory {out_dir} already contains files.",
-                hint=(
-                    "a context is created from scratch so its integrity list covers "
-                    "everything in it — point at a new or empty directory"
-                ),
-            )
+    require_empty_context_dir(out_dir)
     if not is_p256_public_key(signing_pub):
         raise BuildError(
             "The key given for the context is not an ECDSA P-256 public key in PEM form.",

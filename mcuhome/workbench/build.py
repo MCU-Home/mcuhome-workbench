@@ -135,6 +135,7 @@ from mcuhome.workbench.contextdir import (
     read_context_facts,
     read_context_request,
     read_generator_chain,
+    require_empty_context_dir,
     write_context,
 )
 from mcuhome.workbench.diagnostics import Diagnostic
@@ -1139,10 +1140,17 @@ def create_context(
 
     *work_root* is a directory this function may use as scratch — the SDK
     package is unpacked there to read its meta file out of bytes verified
-    against the pin. *out_dir* is **removed if it exists**, because a
-    context is written from scratch so that its later integrity list
-    covers everything in it; callers pass a path they own, never a
-    directory a user named.
+    against the pin.
+
+    *out_dir* has to be **new or empty**, and a directory that already
+    holds files is refused rather than emptied: a context is written from
+    scratch because its integrity list and its ID cover everything in the
+    directory, and what is already in one belongs to whoever put it
+    there. **A refusal leaves nothing behind**, whether it comes before
+    anything was written or halfway through: the context is assembled in
+    a hidden directory beside *out_dir* and moved into place only once it
+    is complete, so a patch layout this format cannot express costs a
+    message and no files.
 
     Answers the :class:`~mcuhome.model.context.ContextRequest` that was
     written. The context is a **base** context: locking it — computing
@@ -1154,34 +1162,54 @@ def create_context(
     patch layout this format cannot express or a *signing_pub* that is
     not a P-256 public key.
     """
+    out_dir = Path(out_dir)
     work_root = Path(work_root)
-    return _create_context(
-        model,
-        out_dir=out_dir,
-        work_root=work_root,
-        sdk_sources=tuple(Path(source) for source in options.sdk_sources),
-        signing_pub=signing_pub,
-        workspace_sources=tuple(Path(source) for source in options.workspace_sources),
-        tools_sources=tuple(Path(source) for source in options.tools_sources),
-        sdk_max_bytes=options.sdk_max_bytes,
-        patches_dir=patches_dir,
-        project_root=project_root,
-        registry=_package_registry(
+    require_empty_context_dir(out_dir)
+    # Assembled beside the target and moved in at the end. The rename is
+    # within one directory, so it is cheap and cannot half-happen, and
+    # the name carries the target's, so two contexts created in one
+    # directory cannot land in each other's scratch.
+    staging = out_dir.parent / f".mcuhome-{out_dir.name}-partial"
+    try:
+        request = _create_context(
             model,
-            project_root=project_root,
-            registries=registries,
+            out_dir=staging,
             work_root=work_root,
-            on_line=on_line,
-        ),
-        hosts=_package_hosts(
+            sdk_sources=tuple(Path(source) for source in options.sdk_sources),
+            signing_pub=signing_pub,
+            workspace_sources=tuple(Path(source) for source in options.workspace_sources),
+            tools_sources=tuple(Path(source) for source in options.tools_sources),
+            sdk_max_bytes=options.sdk_max_bytes,
+            patches_dir=patches_dir,
             project_root=project_root,
-            registries=registries,
-            work_root=work_root,
+            registry=_package_registry(
+                model,
+                project_root=project_root,
+                registries=registries,
+                work_root=work_root,
+                on_line=on_line,
+            ),
+            hosts=_package_hosts(
+                project_root=project_root,
+                registries=registries,
+                work_root=work_root,
+                on_line=on_line,
+            ),
+            developer=options.dev_workspace is not None,
             on_line=on_line,
-        ),
-        developer=options.dev_workspace is not None,
-        on_line=on_line,
-    )
+        )
+    except BaseException:
+        # Including a stop and a keyboard interrupt: what lies in the
+        # staging directory at that moment is half a context, and half a
+        # context is worth nothing to anybody.
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if out_dir.exists():
+        # Empty — `require_empty_context_dir` said so — and in the way of
+        # a rename that must not land inside it.
+        out_dir.rmdir()
+    staging.rename(out_dir)
+    return request
 
 
 def _create_context(
