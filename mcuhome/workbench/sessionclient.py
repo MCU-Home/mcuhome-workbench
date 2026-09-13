@@ -2280,7 +2280,7 @@ class RemoteBuildResult:
     #: the digest that decides what ran; the tag, where there is one,
     #: stays as documentation of where it was found. Empty when the
     #: server named none.
-    image: str = ""
+    container_image: str = ""
 
     @property
     def ok(self) -> bool:
@@ -2487,7 +2487,7 @@ async def run_remote_build(
                 out_dir=delivered,
                 error=verdict.get("error"),
                 invocation_id=invocation_id,
-                image=served,
+                container_image=served,
             )
         finally:
             with contextlib.suppress(Exception):

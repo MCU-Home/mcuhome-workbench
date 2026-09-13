@@ -3,10 +3,10 @@
 """Where a build runs and how it is executed (``buildtarget.py``).
 
 Two axes rather than one name, and this file is about the seam that
-carries them: :func:`~mcuhome.workbench.build.build_firmware`
-takes a target, :func:`~mcuhome.workbench.build.run_build` takes a
-target name and translates it, and both reach the same composition with
-the same arguments.
+carries them: :func:`~mcuhome.workbench.build.build_firmware` takes a
+target object, a target name, or nothing at all, and whichever of the
+three it was given reaches the same composition with the same
+arguments.
 
 Nothing here builds anything. Every composition is stubbed at its own
 backend seam, exactly as in ``test_build.py`` — what those
@@ -21,8 +21,8 @@ properties asserted here are the ones the two-axis vocabulary is *for*:
 * a target is **authoritative**: what a caller states on it is what runs,
   whatever the request's target-shaped fields happen to say;
 * every target name resolves to the target that describes it, so a
-  caller that migrates from the one entry point to the other keeps the
-  build it had.
+  caller that states a name and a caller that builds the object get the
+  same build.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _local_result(tmp_path, seen: dict):
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="registry.example.test/other/environment:test",
+            container_image="registry.example.test/other/environment:test",
         )
 
     return fake
@@ -263,10 +263,12 @@ def test_a_target_this_package_does_not_run_is_a_type_error(model, tmp_path) -> 
 
 
 def test_the_seam_holds_the_build_directory(model, tmp_path, monkeypatch) -> None:
-    """The guard is at the seam, so both entry points inherit it.
+    """The guard is at the seam, so every way in inherits it.
 
-    ``run_build`` used to take the lock itself; a caller that reaches the
-    seam directly — a build server, an embedder — would have had none.
+    A caller that hands over a target object — a build server, an
+    embedder — takes the same lock as one that names a target, because
+    the guard sits where the build is dispatched rather than in whatever
+    resolved the name.
     """
     seen: dict[str, object] = {}
     inner = _local_result(tmp_path, seen)

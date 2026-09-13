@@ -901,15 +901,15 @@ def prepare_environment(
 class ContainerBuildResult:
     """What one :func:`run_locked_build` produced, from the caller's side.
 
-    The same shape the subprocess profile's result has, plus the image:
-    there the environment is named by its packages, here by the bytes
-    that delivered them.
+    The same shape the subprocess profile's result has, plus the
+    container image: there the environment is named by its packages,
+    here by the bytes that delivered them.
     """
 
     outcome: StepResult
     out_dir: Path
     context_dir: Path
-    image: str
+    container_image: str
 
 
 def run_locked_build(
@@ -1033,5 +1033,5 @@ def run_locked_build(
         outcome=outcome,
         out_dir=session.out_dir,
         context_dir=context_dir,
-        image=recorded,
+        container_image=recorded,
     )

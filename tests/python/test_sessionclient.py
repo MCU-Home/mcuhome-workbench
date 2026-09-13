@@ -2,14 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """The ``remote`` build target, driven against the real build server.
 
-**The peer here is the real thing wherever it can be.** ``mcuhome-buildserver``
-is importable in this development environment, so most of these tests run
-:mod:`mcuhome.workbench.sessionclient` against
-:func:`mcuhome.buildserver.app.create_app` over a real socket: one client
-and one server, tested against each other rather than each against a
-mock of the other. Only docker is stubbed at the same seam the build
-server's own suite stubs it at, because a build server is an orchestrator
-and there is no build to stand in for.
+**The peer here is the real thing wherever it can be.** Where
+``mcuhome-buildserver`` is installed *and* imports against this
+workbench, these tests run :mod:`mcuhome.workbench.sessionclient`
+against :func:`mcuhome.buildserver.app.create_app` over a real socket:
+one client and one server, tested against each other rather than each
+against a mock of the other. Only docker is stubbed at the same seam the
+build server's own suite stubs it at, because a build server is an
+orchestrator and there is no build to stand in for.
+
+**And where it is not, this whole file skips.** The two gates below say
+which of the two it was, in the summary rather than in silence. That is
+the state while this package's surface is being unified and the server
+has not followed yet: every test here is skipped until it does, and the
+reason names the import that failed.
 
 **There is no hand-rolled server left.** One existed for a single shape
 the real one could not be bent into — a ``capabilities`` payload that
@@ -2729,8 +2735,9 @@ def test_run_remote_build_empties_the_delivery_directory_first(tmp_path: Path) -
 # --------------------------------------------------------------------------
 #
 # Everything above drives the session client directly, from a context
-# somebody already wrote. These drive `run_build(target="remote")` — the
-# supported entry point — from a resolved device model and nothing else:
+# somebody already wrote. These drive `build_firmware(target="remote")` —
+# the supported entry point — from a resolved device model and nothing
+# else:
 # the SDK pin is resolved on this side, from
 # this side's source directories, and the context is created here.
 #
@@ -2903,7 +2910,7 @@ def test_a_pin_the_servers_source_does_not_hold_is_refused_typed(tmp_path: Path)
     ``sdk.unavailable``, not retryable, naming the version and the pin.
 
     Driven with a hand-written context rather than through
-    :func:`~mcuhome.workbench.build.run_build`'s ``remote``
+    :func:`~mcuhome.workbench.build.build_firmware`'s ``remote``
     target: that target resolves and verifies every pin locally, SDK
     included, before a context is ever created (build-environment
     resolution reads the chain's first constraint out of the SDK's own,
@@ -3130,7 +3137,7 @@ def test_a_remote_build_answers_which_environment_served_it(tmp_path: Path) -> N
     what decides.
     """
     result = _remote_build(tmp_path)
-    assert result.image == IMAGE_REFERENCE
+    assert result.container_image == IMAGE_REFERENCE
 
 
 def test_the_environment_answer_is_read_defensively() -> None:

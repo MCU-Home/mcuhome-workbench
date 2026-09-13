@@ -615,9 +615,14 @@ class BuildRequest:
     #: pair a build ever sees.
     signing_pub: str = ""
     #: Patches to carry into the build context, laid out as
-    #: ``<layer>/NNNN-name.patch``. They are part of what the context is
-    #: attributed to: two builds of one device differ in their context
-    #: identity exactly when their patch sets differ.
+    #: ``<layer>/NNNN-name.patch``.
+    #:
+    #: Carried and **not yet read**: the context writer does not take
+    #: them yet, so a request that states this field builds exactly the
+    #: context it would have built without it. It is stated here because
+    #: it is a field of the request in the surface this package is being
+    #: brought to, and a field that appeared later would be a second
+    #: shape of the same request.
     patches_dir: Path | None = None
     #: A build context directory to build instead of creating one. For a
     #: caller that already holds one — an embedder that assembled a
@@ -743,7 +748,36 @@ class BuildResult:
         }
 
 
-def _refuse_unsupported(status: str) -> None:
+#: What to do about an environment that does not implement a build, per
+#: the thing that ran it — because who can replace that environment
+#: differs: a container build picks its image, a subprocess build runs
+#: what is unpacked in the store, and a remote build runs what somebody
+#: else's operator provisioned.
+_UNSUPPORTED_HINTS = {
+    MODE_CONTAINER: (
+        "the image that delivered it does not implement this build, and no retry "
+        "changes that. Build without naming an image, so MCUHome searches the "
+        "configured repositories for one that does:\n"
+        "    mcuhome device build <device>\n"
+        "(drop --container-image, and `sources.container_image` in the device file "
+        "if it names one)"
+    ),
+    MODE_SUBPROCESS: (
+        "the build environment unpacked on this machine does not implement this "
+        "build, and no retry changes that. Build in a container, where MCUHome "
+        "delivers the environment this device's context names:\n"
+        "    mcuhome config set build.mode container"
+    ),
+    TARGET_REMOTE: (
+        "the build server chose that environment out of what its operator "
+        "provisioned, so this side cannot replace it. Ask the operator for an "
+        "environment that implements this build, or build on this machine:\n"
+        "    mcuhome device build <device> --build-target local"
+    ),
+}
+
+
+def _refuse_unsupported(status: str, *, ran: str) -> None:
     """A build environment that cannot do a build at all is unusable.
 
     ``unsupported`` is the specification's word for *no environment of
@@ -752,17 +786,16 @@ def _refuse_unsupported(status: str) -> None:
     it was asked in. Carrying that into the result as a third verdict
     would tell a caller its build failed, when what it has to do is find
     another environment.
+
+    *ran* is what ran it — a build mode, or ``remote`` — because that is
+    what decides whose environment it was and therefore what the person
+    reading the refusal can actually do about it.
     """
     if status != STATUS_UNSUPPORTED:
         return
     raise EnvironmentUnusable(
         "This build environment cannot run a firmware build.",
-        hint=(
-            "it answered that the build action is not one it supports, which no "
-            "retry changes: provision the build environment this device's context "
-            "pins, or build in a container, where MCUHome delivers the environment "
-            "the context names"
-        ),
+        hint=_UNSUPPORTED_HINTS[ran],
     )
 
 
@@ -1624,7 +1657,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         stated_container_image=execution.stated_container_image,
     )
     outcome = result.outcome
-    _refuse_unsupported(outcome.status)
+    _refuse_unsupported(outcome.status, ran=MODE_SUBPROCESS)
     return BuildResult(
         ok=outcome.ok,
         target=TARGET_LOCAL,
@@ -1667,7 +1700,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         options=options,
     )
     outcome = result.outcome
-    _refuse_unsupported(outcome.status)
+    _refuse_unsupported(outcome.status, ran=MODE_CONTAINER)
     return BuildResult(
         ok=outcome.ok,
         target=TARGET_LOCAL,
@@ -1676,7 +1709,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         artifacts=tuple(outcome.artifacts),
         out_dir=result.out_dir,
         report=BUILD_REPORT_FILE,
-        container_image=result.image,
+        container_image=result.container_image,
         detail=result,
     )
 
@@ -1855,7 +1888,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         wait=target.wait,
         max_wait=target.max_wait_seconds,
     )
-    _refuse_unsupported(result.status)
+    _refuse_unsupported(result.status, ran=TARGET_REMOTE)
     return BuildResult(
         ok=result.ok,
         target=TARGET_REMOTE,
@@ -1868,6 +1901,6 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         # build records: the server chose the delivery and is the only
         # side that can say which one, so a record without this would
         # name the packages and not the bytes.
-        container_image=result.image,
+        container_image=result.container_image,
         detail=result,
     )

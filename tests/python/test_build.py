@@ -205,6 +205,7 @@ def test_the_request_carries_the_fields_the_reference_states(model, tmp_path) ->
         "sdk_sources",
         "server",
         "token",
+        "image",
         "builder_image",
         "dev_workspace",
         "ccache_dir",
@@ -217,12 +218,29 @@ def test_a_field_that_moved_is_refused_rather_than_ignored(model, tmp_path, reti
     Every one of these moved somewhere a caller can still reach: the
     three package source lists, the development workspace and the cache
     root are `BuildOptions`, the build server and its token are the
-    selected builder, and the mode is spelled the way its configuration
-    key is. A request that still passed one of them would build with the
-    value dropped.
+    selected builder, and the image and the mode are spelled the way
+    their configuration keys are. A request that still passed one of them
+    would build with the value dropped.
     """
     with pytest.raises(TypeError):
         build.BuildRequest(model=model, out_dir=tmp_path, **{retired: None})
+
+
+def test_the_pristine_mode_is_not_a_build_mode(model, tmp_path) -> None:
+    """`mode` kept its spelling and lost its other meaning.
+
+    It used to carry the session protocol's ``clean`` as well, which is
+    the one retirement a `TypeError` cannot state: the field is still
+    there, so the old *value* has to be refused instead — and it is, by
+    the same refusal any other non-mode gets.
+    """
+    with pytest.raises(build.UnknownBuildMode) as refusal:
+        build.build_target_for(
+            build.TARGET_LOCAL, build.BuildRequest(model=model, out_dir=tmp_path, mode="clean")
+        )
+    assert '"clean"' in str(refusal.value)
+    for name in build.BUILD_MODES:
+        assert name in (refusal.value.hint or "")
 
 
 # --------------------------------------------------------------------------
@@ -571,7 +589,7 @@ def test_the_local_target_answers_with_the_backends_own_verdict(model, tmp_path,
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="registry.example.test/other/environment:test",
+            container_image="registry.example.test/other/environment:test",
         )
 
     monkeypatch.setattr(build, "compose_local_build", fake)
@@ -620,7 +638,7 @@ def test_a_build_answers_one_document_whichever_target_ran(model, tmp_path, monk
             ),
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="registry.example.test/other/environment:test",
+            container_image="registry.example.test/other/environment:test",
         )
 
     monkeypatch.setattr(build, "compose_local_build", fake)
@@ -652,9 +670,16 @@ def test_a_build_answers_one_document_whichever_target_ran(model, tmp_path, monk
     assert not hasattr(outcome, "successful")
 
 
-@pytest.mark.parametrize("target", [build.TARGET_LOCAL, build.TARGET_REMOTE])
+@pytest.mark.parametrize(
+    ("target", "mode", "says"),
+    [
+        (build.TARGET_LOCAL, build.MODE_CONTAINER, "--container-image"),
+        (build.TARGET_LOCAL, build.MODE_SUBPROCESS, "build.mode container"),
+        (build.TARGET_REMOTE, None, "--build-target local"),
+    ],
+)
 def test_an_environment_that_cannot_build_is_unusable_rather_than_failed(
-    model, tmp_path, monkeypatch, target
+    model, tmp_path, monkeypatch, target, mode, says
 ) -> None:
     """``unsupported`` says nothing about the firmware, so it is a refusal.
 
@@ -662,23 +687,31 @@ def test_an_environment_that_cannot_build_is_unusable_rather_than_failed(
     this*. A caller told "the build failed" would look at its device; a
     caller told the environment is unusable looks for another
     environment, which is the only thing that helps.
+
+    All three ways of running a build answer it — the two local
+    executions and the remote target — and each says what the person in
+    front of *that* one can do about it: whose environment it was decides
+    who can replace it.
     """
     context = tmp_path / "context"
     context.mkdir()
 
-    def local(device_model, **kwargs):
+    def container(device_model, **kwargs):
         del device_model, kwargs
         return containerbuild.ContainerBuildResult(
-            outcome=StepResult(
-                action="build",
-                context_id="sha256:" + "1" * 64,
-                exit_code=1,
-                status="unsupported",
-                out_dir=tmp_path / "delivery",
-            ),
+            outcome=_unsupported_step(tmp_path),
             out_dir=tmp_path / "delivery",
             context_dir=context,
-            image="registry.example.test/other/environment:test",
+            container_image="registry.example.test/other/environment:test",
+        )
+
+    def subprocess_build(device_model, **kwargs):
+        del device_model, kwargs
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=_unsupported_step(tmp_path),
+            out_dir=tmp_path / "delivery",
+            context_dir=context,
+            environment=None,
         )
 
     async def remote(context_dir, **kwargs):
@@ -692,20 +725,40 @@ def test_an_environment_that_cannot_build_is_unusable_rather_than_failed(
             invocation_id="inv-1",
         )
 
-    monkeypatch.setattr(build, "compose_local_build", local)
+    monkeypatch.setattr(
+        build,
+        "compose_local_build",
+        container if mode != build.MODE_SUBPROCESS else subprocess_build,
+    )
     monkeypatch.setattr(sessionclient, "run_remote_build", remote)
     with pytest.raises(EnvironmentUnusable) as refusal:
         _run(
             build.BuildRequest(
                 model=model,
                 out_dir=tmp_path,
+                mode=mode,
                 context_dir=context,
                 builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
             ),
             target,
         )
     assert "build environment" in str(refusal.value)
-    assert refusal.value.hint
+    # The way out is the one that exists for whoever ran it: a container
+    # build picks its image, a subprocess build can move into a
+    # container, and a remote build can only come home — the server's
+    # environments are its operator's.
+    assert says in (refusal.value.hint or "")
+
+
+def _unsupported_step(tmp_path) -> StepResult:
+    """A step that answered ``unsupported``: the environment, not the build."""
+    return StepResult(
+        action="build",
+        context_id="sha256:" + "1" * 64,
+        exit_code=1,
+        status="unsupported",
+        out_dir=tmp_path / "delivery",
+    )
 
 
 def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkeypatch):
@@ -736,7 +789,7 @@ def test_a_build_holds_its_build_directory_while_it_runs(model, tmp_path, monkey
             outcome=outcome,
             out_dir=tmp_path / "delivery",
             context_dir=tmp_path / "context",
-            image="registry.example.test/other/environment:test",
+            container_image="registry.example.test/other/environment:test",
         )
 
     monkeypatch.setattr(build, "compose_local_build", fake)
@@ -1448,7 +1501,7 @@ def test_a_remote_build_records_the_environment_that_ran_it(model, tmp_path, mon
             artifacts=_artifacts(),
             out_dir=tmp_path / "out",
             invocation_id="inv-1",
-            image=f"ghcr.io/mcu-home/build-environment@{digest}",
+            container_image=f"ghcr.io/mcu-home/build-environment@{digest}",
         )
 
     monkeypatch.setattr(sessionclient, "run_remote_build", fake)

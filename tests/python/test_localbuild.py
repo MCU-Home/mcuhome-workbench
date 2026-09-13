@@ -314,8 +314,8 @@ def test_a_container_build_composes_a_context_and_drives_one_step(tmp_path, mode
     assert result.outcome.ok, result.outcome.problems
     # What a build reports is the image it resolved to, tag and digest —
     # the tag is where it was found, the digest is what ran.
-    assert result.image.startswith(f"{IMAGE}:")
-    assert result.image.endswith(f"@{DIGEST}")
+    assert result.container_image.startswith(f"{IMAGE}:")
+    assert result.container_image.endswith(f"@{DIGEST}")
     # A locked context was created from the model, with the pins the pin
     # resolution produced.
     manifest = read_context_manifest(result.context_dir / "manifest.yaml")
