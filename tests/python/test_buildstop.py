@@ -555,6 +555,12 @@ class FakeServer:
         #: frame is normally answered at once; a server that is connected
         #: and silent is the case this exists for.
         self.cancel_takes: float = 0.0
+        #: The same for ``close-session``, which is the last frame a
+        #: stopped build sends and the one that used to wait out the
+        #: whole call timeout on a peer that had stopped answering.
+        self.close_takes: float = 0.0
+        #: When set, the socket dies instead of answering the verdict.
+        self.drops_the_connection = False
         self._finished: asyncio.Future | None = None
 
     def finished(self) -> asyncio.Future:
@@ -574,6 +580,9 @@ class FakeClient:
         self.server = server
         self.closed = False
         self.session_closed = False
+        #: Every artifact download this client was asked for — empty is
+        #: what a stopped build has to leave behind.
+        self.fetched: list[str] = []
         server.clients.append(self)
 
     async def connect(self) -> None:
@@ -612,6 +621,12 @@ class FakeClient:
         return INVOCATION
 
     async def wait_finished(self, invocation_id: str, *, timeout: float | None = None):
+        if self.server.drops_the_connection:
+            # What the reader does to every pending call when the socket
+            # dies under it (`SessionClient._fail_pending`).
+            raise sessionclient.RemoteTransportError(
+                "The connection to the build server failed.", hint=""
+            )
         return await self.server.finished()
 
     async def cancel(self, invocation_id: str) -> dict[str, Any]:
@@ -623,7 +638,13 @@ class FakeClient:
             self.server.finished().set_result(verdict)
         return {"status": "accepted"}
 
+    async def get_artifact(self, invocation_id: str, *, into: Path, **kwargs) -> Any:
+        self.fetched.append(invocation_id)
+        return None
+
     async def close_session(self) -> dict[str, Any]:
+        self.server.verbs.append("close-session")
+        await asyncio.sleep(self.server.close_takes)
         self.session_closed = True
         return {}
 
@@ -740,6 +761,152 @@ def test_a_server_that_does_not_even_acknowledge_the_stop_is_bounded_too(
     assert server.cancelled == [INVOCATION]
     assert result.status == sessionclient.STATUS_CANCELLED
     assert elapsed < bound * 10, "the acknowledgement is bounded by the ladder, not by the call"
+
+
+def test_the_whole_tail_of_a_stopped_build_is_inside_the_bound(tmp_path, monkeypatch) -> None:
+    """Not only the cancel and the verdict: closing the session too.
+
+    Every one of the three is a command frame, and a frame waits five
+    minutes for an answer. A caller of `build_firmware` holds its build
+    directory for all of them, so a bound that stopped at the verdict
+    would be a bound on paper — which is what this asserts against: one
+    server, silent in all three places, and one clock over the lot.
+    """
+    _scaled_ladder(monkeypatch, poll=0.02, rung=0.05)
+    monkeypatch.setattr(sessionclient, "_STOP_POLL_SECONDS", 0.02)
+    server = FakeServer().install(monkeypatch)
+    server.cancel_takes = 30.0
+    server.close_takes = 30.0
+    bound = resolve_shutdown_seconds(cancel_grace_seconds=0)
+
+    started = time.monotonic()
+    result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
+    elapsed = time.monotonic() - started
+
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert "close-session" in server.verbs, "it was tried"
+    assert not server.clients[0].session_closed, "and abandoned when it did not answer"
+    assert server.clients[0].closed, "the transport is what ends the conversation then"
+    assert elapsed < bound * 10, (
+        "the stop's bound covers the cancel, the verdict and the close together"
+    )
+
+
+def test_a_connection_that_dies_while_stopping_is_a_stopped_build(tmp_path, monkeypatch) -> None:
+    """The caller asked for it to end, and it ended.
+
+    A socket that dies under a *running* build is news and a refusal;
+    under one somebody is stopping it is the same answer the stop was
+    going to produce, and raising instead would replace an answer about
+    the build with one about the connection.
+    """
+    monkeypatch.setattr(sessionclient, "_STOP_POLL_SECONDS", 0.02)
+    server = FakeServer().install(monkeypatch)
+    server.drops_the_connection = True
+
+    result = _remote_build(tmp_path, server, should_stop=lambda: True)
+
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert result.ok is False
+
+
+def test_a_dead_connection_without_a_stop_is_still_a_refusal(tmp_path, monkeypatch) -> None:
+    """The other half of the rule: off the stop path nothing is swallowed."""
+    server = FakeServer().install(monkeypatch)
+    server.drops_the_connection = True
+
+    with pytest.raises(sessionclient.RemoteTransportError):
+        _remote_build(tmp_path, server)
+
+
+def test_a_cancelled_verdict_delivers_nothing_of_what_it_declares(tmp_path, monkeypatch) -> None:
+    """A stopped invocation's files stay on the machine that ran it.
+
+    A verdict that says ``cancelled`` and lists artifacts anyway is a
+    half-built firmware being offered: fetching it would mean a download
+    inside the stop's own bound, and a caller unable to tell those files
+    from the ones a finished build delivers.
+    """
+    server = FakeServer().install(monkeypatch)
+    server.verdict_on_cancel = {
+        "status": "cancelled",
+        "artifacts": [
+            {"root": "out", "path": "firmware.bin", "role": "firmware", "sha256": "0" * 64}
+        ],
+    }
+
+    result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
+
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert result.artifacts == ()
+    assert result.out_dir is None
+    assert server.clients[0].fetched == [], "nothing was downloaded"
+
+
+def test_a_build_that_finished_while_the_stop_arrived_is_not_a_stopped_build(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The race, and the rule it settles: a firmware that exists is the answer.
+
+    The predicate turns true while the last step is already succeeding.
+    Telling the caller its build was stopped would throw away what it
+    asked for and what is on disk.
+    """
+    asked = Asked()
+
+    def fake(model_, **kwargs):
+        kwargs["should_stop"]()
+        return containerbuild.ContainerBuildResult(
+            outcome=StepResult(
+                action="build",
+                context_id="sha256:" + "f" * 64,
+                exit_code=0,
+                status="success",
+            ),
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            container_image="",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    result = asyncio.run(
+        build.build_firmware(_build_request(model, tmp_path, should_stop=asked), target="local")
+    )
+
+    assert asked.calls == 1
+    assert result.ok is True
+    assert result.stopped is False
+
+
+def test_a_remote_build_that_succeeded_while_the_stop_arrived_is_not_stopped(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The same race at the remote target, where the verdict decides."""
+    (tmp_path / "ctx").mkdir()
+
+    async def fake(context_dir, **kwargs):
+        kwargs["should_stop"]()
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id=IDENTITY,
+            status="success",
+            artifacts=(),
+            out_dir=tmp_path / "out",
+            invocation_id=INVOCATION,
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake)
+    request = _build_request(
+        model,
+        tmp_path,
+        context_dir=tmp_path / "ctx",
+        builder=SelectedBuilder(target=build.TARGET_REMOTE, server="ws://build.example/session"),
+        should_stop=Asked(),
+    )
+    result = asyncio.run(build.build_firmware(request, target=build.TARGET_REMOTE))
+
+    assert result.ok is True
+    assert result.stopped is False
 
 
 def test_a_remote_build_that_was_not_stopped_waits_for_its_verdict(tmp_path, monkeypatch) -> None:
