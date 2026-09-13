@@ -26,13 +26,14 @@ that a later reader can keep the document parseable:
   in passing and are not part of this check, and ``class`` blocks state
   fields rather than a call, so they are not either.
 
-**The pending list.** Step by step the workbench is being rewritten onto
-this surface, and the reference states the whole target while the package
-holds the part that exists. :data:`PENDING` names what is still missing
-and which sub-step owes it. It is the only place that difference is
-allowed to be recorded: a name that is exported while still listed here
-fails, and so does one that is neither exported nor listed. The list
-shrinks with every sub-step and is empty when the surface is complete.
+**The pending list.** The workbench is being rewritten onto this surface
+one feature at a time, and the reference states the whole target while
+the package holds the part that exists. :data:`PENDING` names what is
+still missing and which feature it belongs to. It is the only place that
+difference is allowed to be recorded: a name that is exported while
+still listed here fails, and so does one that is neither exported nor
+listed. The list shrinks as features land and is empty when the surface
+is complete.
 """
 
 from __future__ import annotations
@@ -50,64 +51,64 @@ from mcuhome.workbench import api
 REFERENCE = REPO_ROOT / "docs" / "api.md"
 
 #: What the reference already promises and the package does not carry
-#: yet, by the sub-step that brings it. Entries leave this list in the
+#: yet, by the feature that brings it. Entries leave this list in the
 #: same commit that adds the name to ``__all__``; nothing is ever added
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
     # Result and document contracts: the located finding and the two
     # `create_*` answers that are renamed with their `to_dict()`.
-    "Diagnostic": "3g",
-    "NewPairing": "3g",
-    "NewProject": "3g",
+    "Diagnostic": "result documents",
+    "NewPairing": "result documents",
+    "NewProject": "result documents",
     # Signing, the build report and OTA: a read that no longer writes a
     # key, signing that answers a result, the project's key file names.
-    "PUBLIC_KEY_FILE": "3h",
-    "SIGNED_FIRMWARE_NAMES": "3h",
-    "SIGNING_KEY_FILE": "3h",
-    "SignedArtifact": "3h",
-    "SigningResult": "3h",
-    "create_signing_key": "3h",
-    "is_p256_private_key": "3h",
-    "is_p256_public_key": "3h",
-    "plan_signing": "3h",
-    "resolve_signing_key": "3h",
-    "sign_firmware": "3h",
-    "write_ota_image": "3h",
+    "PUBLIC_KEY_FILE": "signing",
+    "SIGNED_FIRMWARE_NAMES": "signing",
+    "SIGNING_KEY_FILE": "signing",
+    "SignedArtifact": "signing",
+    "SigningResult": "signing",
+    "create_signing_key": "signing",
+    "is_p256_private_key": "signing",
+    "is_p256_public_key": "signing",
+    "plan_signing": "signing",
+    "resolve_signing_key": "signing",
+    "sign_firmware": "signing",
+    "write_ota_image": "signing",
     # The host check and the container-profile seams as a designed set.
-    "HostCheckResult": "3i",
-    "HostFinding": "3i",
-    "check_build_host": "3i",
-    "create_launcher": "3i",
-    "open_builder_session": "3i",
+    "HostCheckResult": "host check and container seams",
+    "HostFinding": "host check and container seams",
+    "check_build_host": "host check and container seams",
+    "create_launcher": "host check and container seams",
+    "open_builder_session": "host check and container seams",
     # Provisioning a build environment outside a build.
-    "provision_environment": "3j",
+    "provision_environment": "environment provisioning",
     # Contexts and patches: the public `create_context` is the one that
     # resolves pins; the internal function of that name becomes
     # `write_context` and stays internal.
-    "create_context": "3k",
+    "create_context": "contexts and patches",
     # Reading a finished build, its pairing, and the step vocabulary.
-    "BUILD_STEPS": "3l",
-    "BuildRecord": "3l",
-    "build_steps": "3l",
-    "clean_build": "3l",
-    "read_build": "3l",
-    "read_pairing": "3l",
+    "BUILD_STEPS": "reading a build, pairing, steps",
+    "BuildRecord": "reading a build, pairing, steps",
+    "build_steps": "reading a build, pairing, steps",
+    "clean_build": "reading a build, pairing, steps",
+    "read_build": "reading a build, pairing, steps",
+    "read_pairing": "reading a build, pairing, steps",
     # Secrets management.
-    "SECRET_KINDS": "3m",
-    "SecretFile": "3m",
-    "SecretKey": "3m",
-    "SecretScope": "3m",
-    "delete_secret_file": "3m",
-    "find_secret_scopes": "3m",
-    "read_secrets": "3m",
-    "reveal_secret": "3m",
-    "set_secret": "3m",
-    "unset_secret": "3m",
+    "SECRET_KINDS": "secrets management",
+    "SecretFile": "secrets management",
+    "SecretKey": "secrets management",
+    "SecretScope": "secrets management",
+    "delete_secret_file": "secrets management",
+    "find_secret_scopes": "secrets management",
+    "read_secrets": "secrets management",
+    "reveal_secret": "secrets management",
+    "set_secret": "secrets management",
+    "unset_secret": "secrets management",
     # Device lifecycle.
-    "LOCK_OPERATIONS": "3n",
-    "delete_device": "3n",
-    "rename_device": "3n",
+    "LOCK_OPERATIONS": "device lifecycle",
+    "delete_device": "device lifecycle",
+    "rename_device": "device lifecycle",
 }
 
 
@@ -236,7 +237,7 @@ def _default_matches(stated: ast.expr, real: Any) -> bool:
 
 
 def test_the_index_and_the_surface_are_the_same_list() -> None:
-    """``__all__`` is the index, minus what a later sub-step still owes.
+    """``__all__`` is the index, minus what a later feature still owes.
 
     Both directions matter. A name in the index that nothing exports is a
     promise the package does not keep; a name exported without the index
@@ -252,7 +253,7 @@ def test_the_index_and_the_surface_are_the_same_list() -> None:
 def test_no_pending_name_is_exported() -> None:
     """A name is either owed or delivered, never both.
 
-    Separate from the equality above so that a sub-step which adds a name
+    Separate from the equality above so that a change which adds a name
     and forgets to strike it from :data:`PENDING` fails with the reason
     rather than with a set difference.
     """
