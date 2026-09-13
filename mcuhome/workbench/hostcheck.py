@@ -43,6 +43,7 @@ from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 from mcuhome.workbench import buildenvstore, devworkspace
 from mcuhome.workbench.build import BuildOptions
 from mcuhome.workbench.buildtarget import MODE_CONTAINER
+from mcuhome.workbench.configuration import option
 from mcuhome.workbench.containerbuild import (
     ContainerRuntime,
     require_container_runtime,
@@ -75,6 +76,12 @@ HOST_CHECKS = (
     "imgtool",
     "cache",
 )
+
+#: The two configured values a probe here expands itself, named off the
+#: registry rather than spelled a second time: what a finding says is the
+#: key a person sets, in the one spelling that exists for it.
+ENV_STORE_OPTION = option("build.env_store").name
+IMGTOOL_OPTION = option("signing.imgtool").name
 
 #: What the interpreter is asked, in one line: the version that decides
 #: whether a build environment's wheels can be installed, and whether
@@ -253,6 +260,8 @@ def _env_store(
         root = buildenvstore.store_root(dict(env), override=options.env_store)
     except MCUHomeError as refusal:
         return _refused("store", refusal)
+    except RuntimeError as unresolvable:
+        return _unresolvable("store", ENV_STORE_OPTION, options.env_store, unresolvable)
     shown = _shown(root, project)
     writable, obstacle = _writable(root)
     if not writable:
@@ -403,13 +412,16 @@ def _signing_imgtool(env: Mapping[str, str], stated: str | None) -> HostFinding:
 
     A stated one is a path like any other and is expanded against the
     environment this check was handed, so a ``~`` without a home
-    directory is a refusal — which here is a finding like every other,
-    because this call raises nothing.
+    directory is a refusal and a ``~somebody`` this machine has no
+    account for is an error out of the path library — which here are both
+    findings like every other, because this call raises nothing.
     """
     try:
         program = find_imgtool(env=dict(env), stated=stated)
     except MCUHomeError as refusal:
         return _refused("imgtool", refusal)
+    except RuntimeError as unresolvable:
+        return _unresolvable("imgtool", IMGTOOL_OPTION, stated, unresolvable)
     if program is None:
         return HostFinding(
             check="imgtool",
@@ -472,6 +484,25 @@ def _refused(check: str, refusal: MCUHomeError) -> HostFinding:
         ok=False,
         detail=getattr(refusal, "message", None) or str(refusal),
         hint=getattr(refusal, "hint", None) or "",
+    )
+
+
+def _unresolvable(check: str, key: str, value: object, error: Exception) -> HostFinding:
+    """A configured path this machine cannot even resolve.
+
+    ``~somebody`` names an account, and a machine that has no such
+    account cannot answer what the path means — which comes out of the
+    path library as an error rather than as one of this package's
+    refusals, and would otherwise leave the check itself raising.
+    """
+    return HostFinding(
+        check=check,
+        ok=False,
+        detail=f"{key} is {value} and cannot be resolved on this machine ({error})",
+        hint=(
+            f"`~name` is the home directory of the account *name*, and there is no "
+            f"such account here — set {key} to a path this machine has"
+        ),
     )
 
 

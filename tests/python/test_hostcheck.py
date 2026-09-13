@@ -452,6 +452,53 @@ def test_a_path_inside_the_project_is_reported_relative_to_it(tmp_path: Path) ->
     assert _finding(result, "store").detail.startswith(".mcuhome-store")
 
 
+@pytest.mark.parametrize(
+    ("check", "key", "options", "imgtool"),
+    [
+        pytest.param(
+            "store",
+            "build.env_store",
+            {"mode": "subprocess", "env_store": Path("~nosuchaccount/store")},
+            None,
+            id="store",
+        ),
+        pytest.param(
+            "imgtool",
+            "signing.imgtool",
+            {"mode": "container"},
+            "~nosuchaccount/bin/imgtool",
+            id="imgtool",
+        ),
+    ],
+)
+def test_a_path_naming_an_account_this_machine_has_not_got_is_a_finding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    check: str,
+    key: str,
+    options: dict[str, Any],
+    imgtool: str | None,
+) -> None:
+    """``~somebody`` is a question the path library answers by raising.
+
+    Not one of this package's refusals — an account that does not exist
+    is a `RuntimeError` out of `expanduser` — and a check that promises
+    to raise nothing has to answer it too. The finding names the key the
+    person set, because that is what they have to change.
+    """
+    monkeypatch.setattr(hostcheck, "find_imgtool", find_imgtool)
+
+    result = check_build_host(
+        options=_options(**options), env={"HOME": str(tmp_path), "PATH": ""}, imgtool=imgtool
+    )
+
+    finding = _finding(result, check)
+    assert not finding.ok
+    assert key in finding.detail
+    assert "~nosuchaccount" in finding.detail
+    assert key in finding.hint
+
+
 def test_a_signing_tool_that_cannot_even_be_resolved_is_a_finding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
