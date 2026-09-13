@@ -132,6 +132,11 @@ What is here, in the order a caller needs it:
     methods above do goes through the same code, which is the point:
     what a local build does and what a build server does differ in who
     owns the session, not in what a build is.
+``resolve_shutdown_seconds``
+    How long stopping a step can take, from the decision to the last
+    rung of the liveness ladder — the caller's grace period plus the
+    fixed ones. For the caller that has to wait for a build it stopped
+    instead of restating those numbers itself. A bound, not a promise.
 ``build_lock`` / ``BuildDirectoryBusy``
     One build directory, one operation at a time. ``build_firmware``
     takes the lock itself, so an embedder gets the guard for free; a
@@ -207,6 +212,7 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.builders import Builder, SelectedBuilder
 from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
+from mcuhome.workbench.buildprocess import resolve_shutdown_seconds
 from mcuhome.workbench.buildtarget import (
     BuildTarget,
     ContainerExecution,
@@ -390,6 +396,7 @@ __all__ = [
     "resolve_build_target",
     "resolve_project",
     "resolve_settings",
+    "resolve_shutdown_seconds",
     "running_builds",
     "scope_config_file",
     "set_config_value",

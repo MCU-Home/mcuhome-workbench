@@ -14,6 +14,15 @@ ladder when it will not stop.
 build are one stream: a build log with the two halves interleaved by
 anybody but the build is a log nobody can read.
 
+**Three ways onto one ladder.** A step is torn down because its deadline
+passed, because somebody touched the cancel sentinel, or because the
+predicate a caller handed down
+(:attr:`Liveness.should_stop`) said so — and from
+that point on all three walk the same rungs, signal and kill and give up,
+in the same order and with the same timing. How long that can take is
+:func:`resolve_shutdown_seconds`, so that a caller waiting for a stopped
+step waits for this ladder instead of a number of its own.
+
 **Two handles, and the difference between them is the point.**
 :class:`_Child` is a process; the absent one answers every question with
 ``None``, which reads as "still running" to anything that only calls
@@ -46,6 +55,7 @@ __all__ = [
     "Running",
     "Spawner",
     "current_user",
+    "resolve_shutdown_seconds",
     "run_command",
     "spawn_process",
 ]
@@ -148,6 +158,38 @@ _KILL_AFTER_SECONDS = 10.0
 #: which is worse: this side is what tears the environment down, and
 #: tearing it down is what actually stops the build.
 _GIVE_UP_AFTER_SECONDS = 30.0
+
+#: How many ticks the ladder can lose to its own clock. Four of them are
+#: the rungs: the decision to stop is noticed on a tick, and so is each
+#: of the three that follow it. Four more are the log pump, which is
+#: joined for that long when the step is finally reaped — the last lines
+#: of a build are delivered before its status is, stopped or not.
+_LADDER_TICKS = 8
+
+
+def resolve_shutdown_seconds(*, cancel_grace_seconds: float) -> float:
+    """How long stopping a step can take, from the decision to the last rung.
+
+    The caller's grace period plus the fixed rungs of the ladder
+    :class:`Liveness` walks: SIGTERM one grace period after the stop,
+    SIGKILL ten seconds later, thirty more before the supervisor gives up
+    on a process that survived it, and the slack the ladder's own clock
+    costs. It is read off those numbers rather than restated, so that a
+    caller which has to wait for a stopped step — a build server
+    releasing a session, a client waiting for the verdict of an
+    invocation it cancelled — waits for this ladder and not for a second
+    policy beside it.
+
+    **A bound, not a promise.** What follows the supervisor is not in it:
+    reading the result document, hashing what a step declared, and
+    whatever the caller does with the answer can outlast the number.
+    """
+    return (
+        float(cancel_grace_seconds)
+        + _KILL_AFTER_SECONDS
+        + _GIVE_UP_AFTER_SECONDS
+        + _POLL_SECONDS * _LADDER_TICKS
+    )
 
 
 class Running(Protocol):
@@ -317,21 +359,42 @@ class Liveness:
 
     The deadline enters at the top of the same ladder rather than beside
     it, so that a step which runs too long walks exactly the rungs a
-    cancelled one does.
+    cancelled one does. So does :attr:`should_stop`, which is the same
+    rung reached from the other side: a caller that decides to stop is
+    answered by the ladder a deadline walks, and
+    :func:`resolve_shutdown_seconds` is how long the whole of it can
+    take.
     """
 
     cancel: Path
     deadline_seconds: int
     cancel_grace_seconds: int
+    #: Asked on every tick while the step runs: ``True`` means stop.
+    #: Supplied by whoever wants a running build to end — a person at a
+    #: command line, a client that closed its window — and polled here
+    #: rather than delivered, because this loop is the one place that
+    #: knows the step is still running. The first ``True`` writes the
+    #: sentinel and starts the ladder; nothing asks it again afterwards.
+    should_stop: Callable[[], bool] | None = None
 
     def supervise(self, child: Running, *, on_poll: Callable[[], None] | None = None) -> int | None:
         """Wait for *child*, walking the ladder, and answer its status.
 
         *on_poll* is called on every tick, for a caller with something of
         its own to watch on the same clock — a second clock would be a
-        second thing to get wrong.
+        second thing to get wrong. :attr:`should_stop` is asked on that
+        same tick.
+
+        A predicate that **raises** is asked once and then no more: it
+        cannot say whether to stop, and the two ways of reading that are
+        killing a build over a caller's bug or letting it run to the end
+        it was going to have anyway. The second is the one that destroys
+        nothing, and the deadline still bounds the step. What happened is
+        logged, because a stop button that answers nothing is news about
+        the program that supplied it.
         """
         deadline = time.monotonic() + self.deadline_seconds
+        asked = self.should_stop
         stopping_at: float | None = None
         terminated_at: float | None = None
         killed_at: float | None = None
@@ -340,6 +403,21 @@ class Liveness:
             if on_poll is not None:
                 on_poll()
             now = time.monotonic()
+            if stopping_at is None and asked is not None:
+                try:
+                    wants_stop = bool(asked())
+                except Exception:
+                    logger.exception("the stop predicate of this build raised")
+                    asked = None
+                else:
+                    if wants_stop:
+                        # The sentinel is written here as well as by the
+                        # deadline: from this line on the two are one
+                        # ladder, and a step's own file says why it is
+                        # being torn down.
+                        with contextlib.suppress(OSError):
+                            self.cancel.touch()
+                        stopping_at = now
             if stopping_at is None and self.cancel.exists():
                 stopping_at = now
             if stopping_at is None and now >= deadline:
