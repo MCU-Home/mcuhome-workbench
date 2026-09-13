@@ -669,14 +669,16 @@ class BuildRequest:
     #: pair a build ever sees.
     signing_pub: str = ""
     #: Patches to carry into the build context, laid out as
-    #: ``<layer>/NNNN-name.patch``.
+    #: ``<layer>/NNNN-name.patch``. The embedder's seam: a caller that
+    #: keeps its patches somewhere of its own names that directory, and
+    #: one it names that does not exist is refused rather than built
+    #: without.
     #:
-    #: Carried and **not yet read**: the context writer does not take
-    #: them yet, so a request that states this field builds exactly the
-    #: context it would have built without it. It is stated here because
-    #: it is a field of the request in the surface this package is being
-    #: brought to, and a field that appeared later would be a second
-    #: shape of the same request.
+    #: Left ``None`` — the ordinary case — the device's own
+    #: ``devices/<name>/patches/`` under :attr:`project_root` is picked
+    #: up when it is there. Either way the patches are context content:
+    #: they are hashed into the context ID, so the same device builds
+    #: something else with a patch than without one.
     patches_dir: Path | None = None
     #: A build context directory to build instead of creating one. For a
     #: caller that already holds one — an embedder that assembled a
@@ -1045,6 +1047,40 @@ def _package_hosts(
     )
 
 
+def _device_patches_dir(
+    model: DeviceModel, *, patches_dir: Path | None, project_root: Path | None
+) -> Path | None:
+    """The patches a context carries: what was stated, else the device's own.
+
+    Two ways in, and the explicit one wins. A caller that names a
+    directory gets exactly that directory — an embedder assembling
+    patches somewhere of its own, and a directory it names that does not
+    exist is a refusal rather than a silent build without them. A caller
+    that names none gets the project convention:
+    ``devices/<name>/patches/<layer>/NNNN-name.patch``, the device's own
+    folder, picked up because it is there.
+
+    **Nobody asks for the convention and nothing switches it on.** A
+    device whose folder carries patches is a device whose firmware is
+    patched, on every machine that builds it, with no flag to forget —
+    which is the only way the patches and the device stay one thing. An
+    absent or empty folder changes nothing: there is then no patch
+    directory in the context and the context ID is what it would have
+    been.
+    """
+    if patches_dir is not None:
+        return Path(patches_dir)
+    if project_root is None:
+        return None
+    # Taken as a directory and not read as a project, for the reason
+    # `options_for` states: what is wanted is one path under it, and a
+    # build is not the moment to refuse over a project marker.
+    convention = Project(root=Path(project_root), discovered=True).device_patches_dir(
+        model.device.name
+    )
+    return convention if convention.is_dir() else None
+
+
 def create_context(
     model: DeviceModel,
     *,
@@ -1086,11 +1122,13 @@ def create_context(
     ``sources.build_tools``) overrides that package alone, outside the
     declared range too, with a note on *on_line* rather than a refusal.
 
-    **The patches are context content.** *patches_dir* names a directory
-    laid out as ``<layer>/NNNN-name.patch``; every file in it is copied
-    into the context and hashed into the context ID like the model and
-    the key, so a build with a patch is a different build from the same
-    device without one.
+    **The patches are the device's own unless stated.** Without a
+    *patches_dir* the device's own ``devices/<name>/patches/`` under
+    *project_root* is picked up when it is there, and *patches_dir*
+    replaces it (:func:`_device_patches_dir`). Either way the patches are
+    context content: every patch is copied into the context and hashed
+    into the context ID like the model and the key, so a build with a
+    patch is a different build from the same device without one.
 
     *work_root* is a directory this function may use as scratch — the SDK
     package is unpacked there to read its meta file out of bytes verified
@@ -1120,6 +1158,7 @@ def create_context(
         tools_sources=options.tools_sources,
         sdk_max_bytes=options.sdk_max_bytes,
         patches_dir=patches_dir,
+        project_root=project_root,
         registry=_package_registry(
             model,
             project_root=project_root,
@@ -1149,6 +1188,7 @@ def _create_context(
     tools_sources: Sequence[Path] = (),
     sdk_max_bytes: int | None = None,
     patches_dir: Path | None = None,
+    project_root: Path | None = None,
     created: datetime | None = None,
     constraint: str | None = None,
     registry: RegistrySource | None = None,
@@ -1207,8 +1247,9 @@ def _create_context(
     names that place; one that keeps all three together names it three
     times, which is the statement it is actually making.
 
-    *patches_dir* is the directory of patches the context carries, laid
-    out as ``<layer>/NNNN-name.patch``.
+    *patches_dir* and *project_root* are the two ways patches reach the
+    context, settled by :func:`_device_patches_dir`: the stated
+    directory, else the device's own ``devices/<name>/patches/``.
 
     *out_dir* is **removed if it exists**, because
     :func:`~mcuhome.workbench.contextdir.write_context` requires an empty
@@ -1243,6 +1284,7 @@ def _create_context(
     server. The server accepts both empty; absence, not emptiness, is
     what a reader refuses as malformed.
     """
+    patches = _device_patches_dir(model, patches_dir=patches_dir, project_root=project_root)
     if developer:
         # Nothing to resolve and nothing to fetch: this build compiles a
         # checkout, and the format says so in the one way it can — the
@@ -1299,7 +1341,7 @@ def _create_context(
             sdk=SdkPin(constraint="", version="", url="", sha256=""),
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
-            patches_dir=patches_dir,
+            patches_dir=patches,
         )
     prereleases = None
     if constraint is None:
@@ -1338,7 +1380,7 @@ def _create_context(
         ),
         signing_pub=signing_pub,
         created=created or datetime.now(UTC),
-        patches_dir=patches_dir,
+        patches_dir=patches,
     )
 
 
@@ -1634,6 +1676,7 @@ def compose_local_build(
     env: dict[str, str],
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
+    patches_dir: Path | None = None,
     container_image: str | None = None,
     cache_root: Path | None = None,
     created: datetime | None = None,
@@ -1672,6 +1715,7 @@ def compose_local_build(
             signing_pub=signing_pub,
             project_root=project_root,
             registries=registries,
+            patches_dir=patches_dir,
             environment=environment,
             created=created,
             cache_root=cache_root,
@@ -1691,6 +1735,7 @@ def compose_local_build(
         env=env,
         project_root=project_root,
         registries=registries,
+        patches_dir=patches_dir,
         container_image=container_image,
         cache_root=cache_root,
         created=created,
@@ -1714,6 +1759,7 @@ def compose_container_build(
     env: dict[str, str],
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
+    patches_dir: Path | None = None,
     container_image: str | None = None,
     cache_root: Path | None = None,
     created: datetime | None = None,
@@ -1791,6 +1837,8 @@ def compose_container_build(
             workspace_sources=options.workspace_sources,
             tools_sources=options.tools_sources,
             sdk_max_bytes=options.sdk_max_bytes,
+            patches_dir=patches_dir,
+            project_root=project_root,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
@@ -1893,6 +1941,7 @@ def compose_subprocess_build(
     environment: Any = None,
     project_root: Path | None = None,
     registries: Sequence[RegistrySettings] = (),
+    patches_dir: Path | None = None,
     created: datetime | None = None,
     cache_root: Path | None = None,
     context_dir: Path | None = None,
@@ -1994,6 +2043,8 @@ def compose_subprocess_build(
             workspace_sources=options.workspace_sources,
             tools_sources=options.tools_sources,
             sdk_max_bytes=options.sdk_max_bytes,
+            patches_dir=patches_dir,
+            project_root=project_root,
             signing_pub=signing_pub,
             created=created or datetime.now(UTC),
             registry=packages,
@@ -2135,6 +2186,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
+        patches_dir=request.patches_dir,
         cache_root=execution.cache_root,
         context_dir=request.context_dir,
         on_line=request.on_line,
@@ -2186,6 +2238,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
+        patches_dir=request.patches_dir,
         container_image=execution.container_image,
         cache_root=execution.cache_root,
         context_dir=request.context_dir,
@@ -2269,6 +2322,8 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
         workspace_sources=options.workspace_sources,
         tools_sources=options.tools_sources,
         sdk_max_bytes=options.sdk_max_bytes,
+        patches_dir=request.patches_dir,
+        project_root=request.project_root,
         signing_pub=request.signing_pub,
         registry=_package_registry(
             request.model,

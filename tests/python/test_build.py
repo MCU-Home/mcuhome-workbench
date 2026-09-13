@@ -2035,3 +2035,213 @@ def test_the_configured_cache_root_reaches_the_subprocess_profile(
     )
     assert seen["cache_root"] == tmp_path / "operators-disk"
     assert seen["tiers"]["local"].path == tmp_path / "operators-disk" / "cache-local"
+
+
+# --------------------------------------------------------------------------
+# The patches a context carries
+# --------------------------------------------------------------------------
+
+
+def _write_patch(directory: Path, name: str, body: str) -> Path:
+    """One patch file, with content of its own so its hash is its own."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(f"--- a/{body}\n+++ b/{body}\n", encoding="utf-8")
+    return path
+
+
+def _device_patches(root: Path, device: str) -> Path:
+    """``<project>/devices/<device>/patches/`` — the convention's folder."""
+    return root / "devices" / device / "patches"
+
+
+def _context_of(
+    model, tmp_path: Path, *, out: str, source: Path, project_root=None, patches_dir=None
+) -> Path:
+    """One context created the way a build creates it, and where it went."""
+    out_dir = tmp_path / out
+    build.create_context(
+        model,
+        out_dir=out_dir,
+        work_root=tmp_path / f"{out}-work",
+        options=build.BuildOptions(
+            sdk_sources=(source,),
+            workspace_sources=(source,),
+            tools_sources=(source,),
+        ),
+        signing_pub=_PUBLIC_PEM,
+        project_root=project_root,
+        patches_dir=patches_dir,
+    )
+    return out_dir
+
+
+def test_a_devices_patch_folder_is_carried_into_its_context(model, tmp_path) -> None:
+    """The convention, and nobody asked for it.
+
+    A device that keeps patches beside its file is a device whose
+    firmware is patched — on every machine that builds it, with no flag
+    to pass and none to forget. The folder is the whole statement.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+    _write_patch(
+        _device_patches(project, model.device.name) / "zephyr", "0001-fix-uart.patch", "uart.c"
+    )
+
+    context = _context_of(model, tmp_path, out="context", source=source, project_root=project)
+
+    assert (context / "patches" / "zephyr" / "0001-fix-uart.patch").is_file()
+
+
+def test_a_patch_changes_the_context_id(model, tmp_path) -> None:
+    """The identity moves with the patch, which is what makes it an identity.
+
+    A patch is source that gets compiled, so a build that applies one is
+    not the build that did not: the file is context content, it is hashed
+    into the ``files`` list like the model and the key, and the ID
+    follows. Two builds of one device, with and without, cannot claim to
+    be the same firmware.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+
+    plain = build.lock_context(
+        _context_of(model, tmp_path, out="plain", source=source, project_root=project)
+    )
+    _write_patch(
+        _device_patches(project, model.device.name) / "zephyr", "0001-fix-uart.patch", "uart.c"
+    )
+    patched = build.lock_context(
+        _context_of(model, tmp_path, out="patched", source=source, project_root=project)
+    )
+
+    assert "patches/zephyr/0001-fix-uart.patch" in [entry.path for entry in patched.files]
+    assert plain.id != patched.id
+
+
+def test_an_empty_or_absent_patch_folder_changes_nothing(model, tmp_path) -> None:
+    """Absent and empty are the same statement: this device has no patches.
+
+    Both have to leave the context exactly as it would have been —
+    identical ID included — because a folder somebody created and never
+    filled must not be able to make one build differ from another.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    absent = tmp_path / "absent"
+    empty = tmp_path / "empty"
+    _device_patches(empty, model.device.name).mkdir(parents=True)
+
+    without = build.lock_context(_context_of(model, tmp_path, out="without", source=source))
+    missing = build.lock_context(
+        _context_of(model, tmp_path, out="missing", source=source, project_root=absent)
+    )
+    unfilled = build.lock_context(
+        _context_of(model, tmp_path, out="unfilled", source=source, project_root=empty)
+    )
+
+    assert not (tmp_path / "unfilled" / "patches").exists()
+    assert without.id == missing.id == unfilled.id
+
+
+def test_a_patch_outside_a_layer_folder_is_refused(model, tmp_path) -> None:
+    """A patch has to say which tree it patches, and the folder is how.
+
+    The layer is the subfolder and the number is the order — that is the
+    whole of what a patch set states, so a file the layout cannot express
+    is refused here rather than carried into a context no build
+    environment would ever apply it from.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+    _write_patch(_device_patches(project, model.device.name), "0001-fix-uart.patch", "uart.c")
+
+    with pytest.raises(BuildError, match="is not a patch layer") as refused:
+        _context_of(model, tmp_path, out="context", source=source, project_root=project)
+
+    assert "patches/<layer>/NNNN-name.patch" in refused.value.hint
+
+
+def test_a_stated_patches_directory_replaces_the_devices_own(model, tmp_path) -> None:
+    """Two statements, and the explicit one wins — it does not add to the other.
+
+    An embedder that hands a directory over is saying what this context
+    carries, and a convention that quietly appended to it would build
+    something neither party asked for.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+    _write_patch(
+        _device_patches(project, model.device.name) / "zephyr",
+        "0001-from-the-device.patch",
+        "uart.c",
+    )
+    stated = tmp_path / "elsewhere"
+    _write_patch(stated / "sdk", "0001-from-the-caller.patch", "main.c")
+
+    context = _context_of(
+        model,
+        tmp_path,
+        out="context",
+        source=source,
+        project_root=project,
+        patches_dir=stated,
+    )
+
+    assert (context / "patches" / "sdk" / "0001-from-the-caller.patch").is_file()
+    assert not (context / "patches" / "zephyr").exists()
+
+
+def test_a_build_carries_the_devices_patches_into_the_context_it_creates(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The whole way through: a build, not a call to the context writer.
+
+    The request states a project root and nothing about patches, the
+    composition creates its own context, and the device's folder is in
+    it. This is the seam that makes the convention a property of building
+    the device rather than of one function.
+    """
+    monkeypatch.setattr(
+        subprocessbuild,
+        "run_locked_build",
+        lambda context_dir, **kwargs: subprocessbuild.SubprocessBuildResult(
+            outcome=StepResult(action="build", context_id="", exit_code=0),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=kwargs["environment"],
+        ),
+    )
+    monkeypatch.setattr(build, "lock_context", lambda directory: None)
+    monkeypatch.setattr(subprocessbuild, "check_environment", lambda environment, **facts: None)
+
+    class FakeEnvironment:
+        developer = False
+
+        def described(self) -> str:
+            return "mcuhome-build-workspace 0.1.0"
+
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+    _write_patch(
+        _device_patches(project, model.device.name) / "zephyr", "0001-fix-uart.patch", "uart.c"
+    )
+
+    build.compose_subprocess_build(
+        model,
+        sdk_sources=(source,),
+        work_root=tmp_path / "work",
+        env={"XDG_CACHE_HOME": str(tmp_path / "cache")},
+        signing_pub=_PUBLIC_PEM,
+        project_root=project,
+        options=build.BuildOptions(workspace_sources=(source,), tools_sources=(source,)),
+        environment=FakeEnvironment(),
+    )
+
+    assert (tmp_path / "work" / "context" / "patches" / "zephyr" / "0001-fix-uart.patch").is_file()

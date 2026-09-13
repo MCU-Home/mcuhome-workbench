@@ -386,7 +386,8 @@ Frozen dataclass. Fields `root`, `discovered: bool`, `file: ProjectFile |
 None`. Properties `marker`, `id`, `config_file`, `devices_dir`,
 `secrets_dir`, `secrets_file`, `signing_secrets_file`. Methods
 `builder_secrets_file(name)`, `device_secrets_file(name)`,
-`device_file(name)`, `device_names()`, `to_dict()` → `{root, id,
+`device_file(name)`, `device_patches_dir(name)`, `device_names()`,
+`to_dict()` → `{root, id,
 discovered, version}`. `discovered` is false for the stand-in project a
 device file outside any project gets.
 
@@ -673,7 +674,7 @@ does not use is ignored rather than refused.
 | `project_root: Path \| None` | `None` | where the trust anchors are; `None` builds from the configured sources alone |
 | `registries: Sequence[RegistrySettings]` | `()` | mirror overrides and trust per base domain |
 | `signing_pub: str` | `""` | PEM of the public signing key; becomes `keys/signing.pub` in the context |
-| `patches_dir: Path \| None` | `None` | patches to carry into the context, laid out as `<layer>/NNNN-name.patch` |
+| `patches_dir: Path \| None` | `None` | patches to carry into the context, laid out as `<layer>/NNNN-name.patch`; `None` takes the device's own `devices/<name>/patches/` under `project_root` |
 | `context_dir: Path \| None` | `None` | a base context to build instead of creating one |
 | `work_root: Path \| None` | `None` | scratch area; defaults to a hidden directory under `out_dir` |
 | `wait_for_turn: bool` | `True` | wait when a build server has no room |
@@ -787,8 +788,19 @@ removed if it exists. The SDK constraint resolves to one release, that
 release states the build workspace range it belongs with, and that
 workspace states the tools range. A device that pins either overrides
 that package alone, with a note on *on_line* rather than a refusal.
+*options* says which package directories the pins resolve against,
+*project_root* whether there is a registry to fall through to at all.
+
+The patches a context carries are the device's own unless stated: without
+a *patches_dir*, `<project>/devices/<name>/patches/` is picked up when it
+is there — no flag switches it on — and a stated *patches_dir* replaces
+it rather than adding to it. An empty directory, or none, changes
+nothing. Patches are context content: they are hashed into the context ID
+like the model and the key, so a device builds something else with a
+patch than without one.
 Raises `SdkUnavailable`, `PackageRegistryError`, `TrustAnchorMissing`,
-`ConfigError`.
+`ConfigError`, and `BuildError` for a patch layout the context format
+cannot express or a *signing_pub* that is not a P-256 public key.
 
 ```python
 def lock_context(out_dir: Path) -> ContextManifest
@@ -1541,6 +1553,7 @@ workspace, and passed to that build alone.
 | project marker | `<project>/.mcuhome-project-root` | TOML |
 | upgrade marker | `<project>/.mcuhome-project-root.upgrade` | TOML |
 | devices | `<project>/devices/<name>/main.yaml` | YAML |
+| device patches | `<project>/devices/<name>/patches/<layer>/NNNN-*.patch`, carried into every context of that device | patch |
 | project secrets | `<project>/secrets/` (mode 0700), never committed | |
 | shared secrets | `secrets/main.yaml` | YAML |
 | signing key | `secrets/signing/key.pem`, its public half `key.pub`, the reference `key.yaml` | PEM, YAML |

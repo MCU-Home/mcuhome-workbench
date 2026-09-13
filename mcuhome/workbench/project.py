@@ -184,6 +184,21 @@ class Project:
     def device_entry(self, name: str) -> Path:
         return self.devices_dir / name / DEVICE_FILE
 
+    def device_patches_dir(self, name: str) -> Path:
+        """``devices/<name>/patches/`` — the source patches of one device.
+
+        Laid out as ``<layer>/NNNN-name.patch`` — the build context
+        format's own layout, so the folder is carried into a context as
+        it stands. It lives beside the device file because that is what
+        it belongs to: a patch is part of what this device's firmware
+        *is*, and a build picks the folder up because it is there rather
+        than because somebody remembered a flag.
+
+        A path, not a promise: the folder is optional and most devices
+        have none.
+        """
+        return self.devices_dir / name / "patches"
+
     def device_names(self) -> list[str]:
         if not self.devices_dir.is_dir():
             return []

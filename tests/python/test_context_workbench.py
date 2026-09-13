@@ -517,6 +517,22 @@ def test_a_directory_inside_a_layer_is_refused(model, tmp_path: Path) -> None:
     assert "not a patch file" in caught.value.message
 
 
+def test_an_empty_patches_directory_leaves_no_trace(model, tmp_path: Path) -> None:
+    """A folder somebody made and never filled is not a patch set.
+
+    It has to leave the context exactly as it would have been — no
+    ``patches/`` in it, and the same ID — because the device convention
+    hands this writer whatever folder is there, and an empty one must not
+    be able to make one build differ from another.
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    plain = _lock(model, tmp_path / "plain")
+    unfilled = _lock(model, tmp_path / "unfilled", patches_dir=empty)
+    assert not (tmp_path / "unfilled" / "patches").exists()
+    assert plain.id == unfilled.id
+
+
 def test_a_missing_patches_directory_is_refused(model, tmp_path: Path) -> None:
     with pytest.raises(BuildError) as caught:
         _create(model, tmp_path / "context", patches_dir=tmp_path / "no-such-dir")
