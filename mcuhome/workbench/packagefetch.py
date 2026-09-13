@@ -582,7 +582,7 @@ def _safe_link_target(member: tarfile.TarInfo, name: str, *, what: str) -> str:
 
 
 class SdkUnavailable(BuildError):
-    """The SDK package this context pins is not in any configured source.
+    """A package that was asked for is in no configured source, whatever its kind.
 
     A typed refusal rather than a message to match on: the same
     condition is a command line printing a fix and a build server

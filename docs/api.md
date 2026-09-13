@@ -866,8 +866,13 @@ from the name, since the bound it unpacks under and what is made of it
 are settled before anything is read: `mcuhome-sdk`,
 `mcuhome-build-workspace` and `mcuhome-build-tools` (with this host's
 architecture after the underscore) are the three, and any other name is
-refused. *sources* are searched before the directories `options` holds
-for that kind, and no other kind's directories are searched at all.
+refused. A file, or a reference pinning its own bytes, names the package
+its architecture suffix says it is; the bare family name
+`mcuhome-build-tools` is resolved per platform through an index and is
+never stored as a family — a file named for the family without the
+suffix is refused. *sources* are searched before the directories
+`options` holds for that kind, and no other kind's directories are
+searched at all.
 *registry* is asked when no directory offers the package; the shelf it is
 asked for is the one that kind of package is published on, and a
 reference that names a shelf or a registry of its own — the spelling a
