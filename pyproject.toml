@@ -135,6 +135,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
+# `-rs`: a skipped test states its reason in the summary, every run.
+# Several files here skip whole modules over what the environment has —
+# an absent peer, an unpublished package set, an optional dependency —
+# and a skip nobody reads is indistinguishable from a test that ran.
+addopts = "-rs"
 
 # The ignored words are deliberate spellings, not slips: Requestor and PASE
 # are the Matter specification's own, OT is OpenThread, rsource is
