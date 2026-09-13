@@ -96,6 +96,7 @@ import shutil
 import stat
 import tarfile
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -117,6 +118,7 @@ from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench.build import DEFAULT_MAX_WAIT_SECONDS
 from mcuhome.workbench.buildenvsession import STATUS_SUCCESS
+from mcuhome.workbench.buildprocess import resolve_shutdown_seconds
 from mcuhome.workbench.contextdir import read_context_request
 
 __all__ = [
@@ -128,6 +130,7 @@ __all__ = [
     "MAX_ARTIFACT_BYTES",
     "MAX_INBOUND_FRAME_BYTES",
     "SESSION_PROTOCOL_VERSION",
+    "STATUS_CANCELLED",
     "ZSTD_LEVEL",
     "ArtifactDelivery",
     "Capabilities",
@@ -216,6 +219,22 @@ _BLOCK = 1 << 20
 #: is *not* bounded by this: the verb answers immediately with an
 #: invocation id and the completion arrives as an event.
 DEFAULT_CALL_TIMEOUT = 300.0
+
+#: The verdict of an invocation this side stopped. Three of the four
+#: statuses a verdict frame carries are the result document's; this one
+#: is the server's own, for an invocation it cancelled — the build
+#: environment specification has no cancelled status, so a stopped step
+#: is a step that wrote no result document and only the side that asked
+#: for the stop can say why. This client states it as well, for the one
+#: case where nobody else can: a build it stopped whose server never
+#: answered.
+STATUS_CANCELLED = "cancelled"
+
+#: How often a remote build looks at its stop predicate — while it waits
+#: for a turn, and while it waits for a verdict. The same half second the
+#: local supervisor looks at the world on, so that stopping feels the
+#: same whichever target is running.
+_STOP_POLL_SECONDS = 0.5
 
 
 # --------------------------------------------------------------------------
@@ -2334,6 +2353,125 @@ def served_environment(accepted: Mapping[str, Any]) -> str:
     return str(parsed.with_digest(digest))
 
 
+class _Stopped(Exception):
+    """Raised inside this module when the caller's predicate said stop.
+
+    Never reaches a caller: :func:`run_remote_build` catches it and
+    answers the stopped result, because "somebody pressed stop" is an
+    answer about a build and not a failure of the transport.
+    """
+
+
+def _never_stops() -> bool:
+    """The stop predicate of a caller that supplied none.
+
+    A named function rather than ``None`` at every site that asks: the
+    paths a build takes here are long enough already without each of them
+    telling a missing predicate from a quiet one.
+    """
+    return False
+
+
+class _StopPoll:
+    """A caller's stop predicate, asked safely and at most once too often.
+
+    ``None`` answers "no" forever, so the paths that ask do not each have
+    to tell a missing predicate from a quiet one.
+
+    A predicate that **raises** is asked once and then no more, and its
+    answer is taken as "no" — the same rule the local supervisor follows
+    (:class:`~mcuhome.workbench.buildprocess.Liveness`): a caller's bug
+    must not end a build that was going to finish, and a stop button that
+    answers nothing is news about the program that supplied it.
+    """
+
+    def __init__(self, predicate: Callable[[], bool] | None) -> None:
+        self._predicate = predicate
+
+    def __call__(self) -> bool:
+        if self._predicate is None:
+            return False
+        try:
+            return bool(self._predicate())
+        except Exception:
+            _logger.exception("the stop predicate of this remote build raised")
+            self._predicate = None
+            return False
+
+
+async def _sleep_or_stop(seconds: float, should_stop: Callable[[], bool]) -> None:
+    """Sleep *seconds*, looking at *should_stop* on the way.
+
+    A turn a server offers can be a minute away, and a person who pressed
+    stop is not waiting for it. So the wait is spent in ticks with the
+    predicate asked on each one, which is the same clock the supervisor
+    of a running step uses.
+    """
+    remaining = seconds
+    while remaining > 0:
+        if should_stop():
+            raise _Stopped
+        await asyncio.sleep(min(_STOP_POLL_SECONDS, remaining))
+        remaining -= _STOP_POLL_SECONDS
+    if should_stop():
+        raise _Stopped
+
+
+async def _follow_invocation(
+    client: SessionClient,
+    invocation_id: str,
+    *,
+    should_stop: Callable[[], bool],
+    timeout: float | None,
+) -> dict[str, Any] | None:
+    """Wait for the verdict, and cancel the invocation if the caller stops.
+
+    Answers the verdict frame, or ``None`` for a build this side stopped
+    whose server never answered for it.
+
+    **The verb, because a closed socket is not a stop signal.** The work
+    is on the server's machine: dropping the connection would leave a
+    container compiling and a session holding a seat, so stopping means
+    telling the server — ``cancel`` — and then waiting for the verdict
+    that says the invocation ended.
+
+    **And a bound on that wait**, because the far side may say nothing at
+    all: a server that is gone, one that lost the invocation, one that
+    never implemented the verb. The bound is the liveness ladder's own
+    (:func:`~mcuhome.workbench.buildprocess.resolve_shutdown_seconds`)
+    with no grace period in it — the grace period of *that* machine is
+    its operator's number and is not announced — so what this side waits
+    for is the ladder it knows and never a figure it made up. After it,
+    the build counts as stopped: the person who pressed stop gets an
+    answer, and what the server does with the container it started is the
+    server's own business.
+    """
+    waiter = asyncio.ensure_future(client.wait_finished(invocation_id, timeout=timeout))
+    give_up_at: float | None = None
+    try:
+        while True:
+            try:
+                return await asyncio.wait_for(asyncio.shield(waiter), _STOP_POLL_SECONDS)
+            except TimeoutError:
+                pass
+            if give_up_at is None and should_stop():
+                # Best effort: a cancel that is refused — a session the
+                # server already took away, an invocation it no longer
+                # knows — changes nothing about the build being over for
+                # this side, and a refusal here would replace the
+                # caller's answer with one about the stop.
+                with contextlib.suppress(Exception):
+                    await client.cancel(invocation_id)
+                give_up_at = time.monotonic() + resolve_shutdown_seconds(cancel_grace_seconds=0)
+            if give_up_at is not None and time.monotonic() >= give_up_at:
+                return None
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            with contextlib.suppress(BaseException):
+                await waiter
+
+
 async def _wait_for_admission(
     make_client: Callable[[], SessionClient],
     *,
@@ -2341,6 +2479,7 @@ async def _wait_for_admission(
     wait: bool,
     max_wait: float,
     on_wait: Callable[[SeatWait], None] | None,
+    should_stop: Callable[[], bool] = _never_stops,
 ) -> SessionClient:
     """Connect, ask for a session, and keep the turn a busy server gave.
 
@@ -2360,11 +2499,18 @@ async def _wait_for_admission(
     A refusal carrying no turn is raised as it stands: nothing was
     promised, so there is nothing to come back with, and a client that
     retried anyway would be the retry storm the seat exists to prevent.
+
+    *should_stop* is asked before every attempt and through every wait.
+    A build stopped here has nothing to tell the server about: no
+    session was opened, and the turn it was holding is one the server
+    reclaims when nobody comes back for it.
     """
     seat: str | None = None
     waited = 0.0
     attempt = 0
     while True:
+        if should_stop():
+            raise _Stopped
         client = make_client()
         await client.connect()
         try:
@@ -2387,7 +2533,7 @@ async def _wait_for_admission(
             await client.close()
             if on_wait is not None:
                 on_wait(SeatWait(retry_after=offer.retry_after, waited=waited, attempt=attempt))
-            await asyncio.sleep(offer.retry_after)
+            await _sleep_or_stop(offer.retry_after, should_stop)
             waited += offer.retry_after
             continue
         except BaseException:
@@ -2409,6 +2555,7 @@ async def run_remote_build(
     on_line: LineSink | None = None,
     on_event: EventSink | None = None,
     on_wait: Callable[[SeatWait], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
     wait: bool = True,
     max_wait: float = DEFAULT_MAX_WAIT_SECONDS,
     timeout: float | None = None,
@@ -2436,6 +2583,16 @@ async def run_remote_build(
     and *max_wait* bounds it (``0`` removes the bound). ``on_wait`` is
     told about each wait, so a caller can say something true while
     nothing is happening.
+
+    *should_stop* ends the build wherever it currently is. While it is
+    waiting for a turn, that costs nothing: no session was opened and the
+    server takes the turn back. Once an invocation is running, stopping
+    means telling the server — the protocol's ``cancel`` — and waiting
+    for the verdict it answers with; a server that says nothing within
+    the liveness ladder's bound is taken as stopped anyway. Either way
+    the answer carries :data:`STATUS_CANCELLED` and therefore no
+    artifacts: what a stopped build produced is on the machine that ran
+    it and is not fetched.
     """
     if action not in ("build", "verify"):
         raise RemoteError(
@@ -2449,19 +2606,30 @@ async def run_remote_build(
     # signer scanning this directory afterwards finds.
     out = Path(work_root) / "out"
     await asyncio.to_thread(shutil.rmtree, out, ignore_errors=True)
-    client = await _wait_for_admission(
-        lambda: SessionClient(
-            url,
-            token=token,
-            on_line=on_line,
-            on_event=on_event,
-            spool_dir=Path(work_root) / "spool",
-        ),
-        profile=profile,
-        wait=wait,
-        max_wait=max_wait,
-        on_wait=on_wait,
-    )
+    stopping = _StopPoll(should_stop)
+    try:
+        client = await _wait_for_admission(
+            lambda: SessionClient(
+                url,
+                token=token,
+                on_line=on_line,
+                on_event=on_event,
+                spool_dir=Path(work_root) / "spool",
+            ),
+            profile=profile,
+            wait=wait,
+            max_wait=max_wait,
+            on_wait=on_wait,
+            should_stop=stopping,
+        )
+    except _Stopped:
+        return RemoteBuildResult(
+            action=action,
+            context_id="",
+            status=STATUS_CANCELLED,
+            artifacts=(),
+            out_dir=None,
+        )
     try:
         try:
             accepted = await client.send_context(Path(context_dir), image=image)
@@ -2471,7 +2639,22 @@ async def run_remote_build(
                 invocation_id = await client.verify()
             else:
                 invocation_id = await client.build(mode=mode)
-            verdict = await client.wait_finished(invocation_id, timeout=timeout)
+            verdict = await _follow_invocation(
+                client, invocation_id, should_stop=stopping, timeout=timeout
+            )
+            if verdict is None:
+                # Stopped, and the server never said so. The invocation
+                # id is in the answer because it is the one thing a
+                # person can take back to the operator of that machine.
+                return RemoteBuildResult(
+                    action=action,
+                    context_id=identity,
+                    status=STATUS_CANCELLED,
+                    artifacts=(),
+                    out_dir=None,
+                    invocation_id=invocation_id,
+                    container_image=served,
+                )
             status = str(verdict.get("status") or "failure")
             artifacts = artifacts_from_wire(verdict.get("artifacts") or ())
             delivered: Path | None = None
