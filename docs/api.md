@@ -129,6 +129,16 @@ seconds later, the container removed — releases the build lock, leaves
 `ok=False, stopped=True`. `UpgradeSession.apply` takes the same
 predicate.
 
+It is asked while the build environment runs, and at the remote target
+also while the build waits for a turn; the phases before that — creating
+the context, fetching or provisioning an environment — run to their end,
+because they are bounded by what they fetch rather than by a caller's
+patience. At the remote target the server is told: the session
+protocol's `cancel`, because a closed socket is not a stop signal, and a
+server that answers nothing within `resolve_shutdown_seconds` counts as
+stopped anyway. A verdict of `cancelled` is a stopped build as well,
+whichever side ended it.
+
 Value objects on this surface are frozen and safe to share between
 threads: `Project`, `Settings`, `BuildOptions`, every `*Result`. Handles
 are not: one `BuilderSession`, one `UpgradeSession` or one held build
@@ -805,6 +815,7 @@ def open_builder_session(
     limits: BuildLimits | None = None,
     deadline_seconds: int = 5400,
     cancel_grace_seconds: int = 0,
+    should_stop: Callable[[], bool] | None = None,
 ) -> BuilderSession
 ```
 The backend role, for the caller that owns its own sessions rather than
@@ -816,7 +827,10 @@ session, not in what a build is.
 
 `BuilderSession` — attributes `root`, `context_dir`, `sdk_tree`,
 `entry_point`, `launcher`, `context_id`, `session_id`, `tiers`, `limits`,
-`deadline_seconds`, `cancel_grace_seconds`, `out_dir`, `home_dir`.
+`deadline_seconds`, `cancel_grace_seconds`, `should_stop`, `out_dir`,
+`home_dir`. *should_stop* belongs to the session and not to one call,
+because a caller stops a build rather than an invocation it cannot see:
+every step this session runs is supervised with it.
 Methods `liveness(step)`, `prepare(action, *, parameters=None) -> Step`,
 `invoke(action, *, parameters=None, on_line=None) -> StepResult`,
 `close()`; it is a context manager. Steps run strictly one after another.
@@ -835,7 +849,10 @@ sentinel whose existence means stop is known before the call that blocks.
 
 `Liveness` (frozen) — what `BuilderSession.liveness(step)` answers: the
 supervision policy of one step, `cancel` (the sentinel whose existence
-means stop), `deadline_seconds` and `cancel_grace_seconds`.
+means stop), `deadline_seconds`, `cancel_grace_seconds` and
+`should_stop`. The predicate is asked on the supervisor's own tick, and
+the first yes writes the sentinel and starts the same ladder a deadline
+starts. One that raises is asked once and then no more, and counts as no.
 
 ```python
 def resolve_cache_tiers(
