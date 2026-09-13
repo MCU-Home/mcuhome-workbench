@@ -69,6 +69,7 @@ from mcuhome.workbench.ociregistry import (
     ImageFacts,
     ImageRegistry,
     ImageRegistryError,
+    ImageRegistryUnauthorized,
     ImageRegistryUnreachable,
 )
 
@@ -86,6 +87,17 @@ __all__ = [
 #: optionally followed by a platform suffix (``…-r1-amd64``). A tag that
 #: carries none is not refused — it is simply the oldest candidate.
 _REVISION = re.compile(r"-r(\d+)(?:-[A-Za-z0-9._-]+)?\Z")
+
+#: How one repository answered a search. ``asked`` is every answer the
+#: registry actually gave — a tag list, a label set, and equally a "there
+#: is nothing under that name" or an answer this side could not use:
+#: whatever came back, the machine reached the registry and what is
+#: missing is the image. The other two are the ways of not getting an
+#: answer at all, and they are the only ones that can change what the
+#: search refuses with.
+_ASKED = "asked"
+_UNREACHABLE = "unreachable"
+_UNAUTHORIZED = "unauthorized"
 
 
 @dataclass(frozen=True)
@@ -330,23 +342,24 @@ def resolve_container_image(
         )
     client = registry if registry is not None else ImageRegistry()
     rejected: list[str] = []
-    # Whether any registry answered this search at all. One repository
-    # that cannot be asked is a candidate fewer; *none* of them being
-    # askable is a different question with a different answer, and the
-    # two are told apart here rather than by the person reading a list of
-    # timeouts.
-    answered = False
+    # How each repository answered, so that the refusal at the end is the
+    # one the person can act on. A registry that answers "no such tag" has
+    # been asked and the image is what is missing; one that cannot be
+    # reached at all, or that refuses every anonymous request, is a
+    # different day's work — and telling them apart here is the whole
+    # reason this is collected rather than counted.
+    outcomes: list[str] = []
     for repository in searched:
         reference = parse_reference(
             repository, default_registry=DOCKER_HUB, what="build environment"
         )
-        candidates, listed = _candidates(client, reference, pin, rejected)
-        answered = answered or listed
+        candidates, listing = _candidates(client, reference, pin, rejected)
+        seen = [listing] if listing is not None else []
         for candidate in candidates:
-            facts = _facts_of(client, candidate, platform, rejected)
+            facts, state = _facts_of(client, candidate, platform, rejected)
+            seen.append(state)
             if facts is None:
                 continue
-            answered = True
             if not declares_exactly(facts.labels, packages):
                 rejected.append(f"{candidate} declares {_described(facts.labels)}")
                 continue
@@ -358,14 +371,30 @@ def resolve_container_image(
                 declaration=declaration_from_labels(facts.labels),
                 found_under=candidate.tag or "",
             )
-    if not answered:
+        outcomes.append(_outcome(seen))
+    if outcomes and all(outcome == _UNREACHABLE for outcome in outcomes):
         raise _no_registry_answered(searched, rejected)
+    if outcomes and all(outcome == _UNAUTHORIZED for outcome in outcomes):
+        raise _every_registry_refused(searched, rejected)
     raise _no_image_declares(packages, pin, searched, rejected)
+
+
+def _outcome(seen: Sequence[str]) -> str:
+    """How one repository answered the search, in one word.
+
+    :data:`_ASKED` unless every attempt against it failed for the same
+    reason: a repository that was unreachable once and refused once did
+    not fail for *a* reason, so it decides nothing and leaves the missing
+    image as the answer.
+    """
+    if not seen or _ASKED in seen:
+        return _ASKED
+    return seen[0] if all(state == seen[0] for state in seen) else _ASKED
 
 
 def _candidates(
     client: ImageRegistry, reference: Reference, pin: ContainerImagePin, rejected: list[str]
-) -> tuple[list[Reference], bool]:
+) -> tuple[list[Reference], str | None]:
     """Which images of *reference*'s repository are worth a label read.
 
     A pinned digest or tag is one candidate and costs no listing. Without
@@ -373,44 +402,61 @@ def _candidates(
     highest ``-r<n>``, then the tag itself, so that the order is a fact
     rather than the registry's mood.
 
-    The second answer is whether the registry *answered* about this
-    repository: a listing that succeeded, empty or not, is an answer. A
-    pin costs no listing, so it answers nothing here and the label read
-    settles it instead.
+    The second answer is how the registry answered the listing —
+    :data:`_ASKED`, :data:`_UNREACHABLE` or :data:`_UNAUTHORIZED` — or
+    ``None`` where no listing was made, because a pin costs none and the
+    label read is then the only question this repository is put.
     """
     if pin.digest:
-        return [replace(reference, tag=None, digest=pin.digest)], False
+        return [replace(reference, tag=None, digest=pin.digest)], None
     if pin.tag:
-        return [replace(reference, tag=pin.tag, digest=None)], False
+        return [replace(reference, tag=pin.tag, digest=None)], None
     try:
         tags = client.tags(reference)
-    except ImageRegistryError as unreachable:
+    except ImageRegistryUnreachable as unreachable:
         # One unreachable repository is not the end of the search: a
         # search list exists to have alternatives in it.
-        rejected.append(f"{reference.repository} could not be asked ({unreachable})")
-        return [], False
+        rejected.append(f"{reference.repository} could not be reached ({unreachable})")
+        return [], _UNREACHABLE
+    except ImageRegistryUnauthorized as refused:
+        rejected.append(f"{reference.repository} refused an anonymous request ({refused})")
+        return [], _UNAUTHORIZED
+    except ImageRegistryError as unusable:
+        # The registry answered, and the answer was not a tag list. It
+        # has been asked, so what is missing is still the image.
+        rejected.append(f"{reference.repository} could not be listed ({unusable})")
+        return [], _ASKED
     if not tags:
         rejected.append(f"{reference.repository} publishes no image")
     return [
         replace(reference, tag=tag, digest=None)
         for tag in sorted(tags, key=lambda tag: (-revision_of(tag), tag))
-    ], True
+    ], _ASKED
 
 
 def _facts_of(
     client: ImageRegistry, candidate: Reference, platform: str | None, rejected: list[str]
-) -> ImageFacts | None:
+) -> tuple[ImageFacts | None, str]:
     """This host's manifest of *candidate* and its labels, or a reason why not.
 
     An image published for other architectures only lands here too: the
     registry refuses to pick a foreign manifest, and that refusal is one
-    more candidate rejected rather than the end of the search.
+    more candidate rejected rather than the end of the search. The second
+    answer says how the registry answered, and a "there is nothing under
+    that name" is an answer like any other: the tag is what is missing,
+    not the network.
     """
     try:
-        return client.facts(candidate, platform=platform)
+        return client.facts(candidate, platform=platform), _ASKED
+    except ImageRegistryUnreachable as unreachable:
+        rejected.append(f"{candidate} could not be reached ({unreachable})")
+        return None, _UNREACHABLE
+    except ImageRegistryUnauthorized as refused:
+        rejected.append(f"{candidate} refused an anonymous request ({refused})")
+        return None, _UNAUTHORIZED
     except ImageRegistryError as unreadable:
         rejected.append(f"{candidate} could not be read ({unreadable})")
-        return None
+        return None, _ASKED
 
 
 def _described(labels: Mapping[str, str]) -> str:
@@ -424,14 +470,16 @@ def _described(labels: Mapping[str, str]) -> str:
 def _no_registry_answered(
     searched: Sequence[str], rejected: Sequence[str]
 ) -> ImageRegistryUnreachable:
-    """No repository could be asked at all — which is about this machine.
+    """Not one repository could be reached — which is about this machine.
 
-    The opposite answer to the one below, and the reason the two are
-    separate: "publish an image for this package set" and "your machine
-    cannot reach a registry right now" are different days' work. A
-    *partial* outage never comes here, because a search list exists to
-    have alternatives in it and one silent mirror must not fail a build
-    the next repository can serve.
+    A different answer from "no image declares this set", and the reason
+    the two are separate: "publish an image for this package set" and
+    "this machine cannot reach a registry right now" are different days'
+    work. Only a transport failure counts — a registry that answered
+    *anything*, a missing tag included, has been reached. A *partial*
+    outage never comes here either, because a search list exists to have
+    alternatives in it and one silent mirror must not fail a build the
+    next repository can serve.
     """
     tried = "\n".join(f"    {reason}" for reason in rejected) or "    nothing answered"
     return ImageRegistryUnreachable(
@@ -439,8 +487,31 @@ def _no_registry_answered(
         hint=(
             f"the build environment is fetched from {', '.join(searched)}, and none of "
             f"them answered:\n{tried}\n"
-            "check this machine's network access and its proxy settings, log in where "
-            "a repository is private, or build without a container."
+            "check this machine's network access and its proxy settings, or build "
+            "without a container."
+        ),
+    )
+
+
+def _every_registry_refused(
+    searched: Sequence[str], rejected: Sequence[str]
+) -> ImageRegistryUnauthorized:
+    """Every repository answered, and every one of them refused to serve us.
+
+    MCUHome reads a registry without credentials of its own, so a search
+    list made of private repositories ends here — and the fix is one
+    command rather than anything to do with the network, which is why it
+    is not the refusal above.
+    """
+    tried = "\n".join(f"    {reason}" for reason in rejected) or "    nothing was served"
+    registries = sorted({repository.split("/", 1)[0] for repository in searched})
+    logins = "\n".join(f"    docker login {registry}" for registry in registries)
+    return ImageRegistryUnauthorized(
+        "No registry served MCUHome a build environment without credentials.",
+        hint=(
+            f"every repository this build may take an environment from refused an "
+            f"anonymous request:\n{tried}\n"
+            f"log the container program in to the registries that hold them:\n{logins}"
         ),
     )
 

@@ -974,13 +974,23 @@ declaration, found_under)` or raises `EnvironmentUnavailable` — no
 image delivers this package set. A repository that could not be asked is
 one candidate fewer and not a failure of the search: the refusal lists it
 among the ones it tried, with the reason, because a search list exists to
-have alternatives in it. Where **no** repository could be asked at all it
-raises `ImageRegistryUnreachable` instead, since "publish an image for
-this package set" and "this machine cannot reach a registry" are
-different answers to the person reading them. A search list configured
-empty is refused before any registry is asked (`BuildError`): which
-repositories a build may take an environment from is a decision about
-trust, not a default.
+have alternatives in it.
+
+Two searches end in a different refusal, because the person has to do
+something else about them. Where **every** repository failed at the
+transport level — no answer at all: DNS, TLS, a timeout, a proxy — it
+raises `ImageRegistryUnreachable`; where every repository answered and
+every one of them refused an anonymous request, it raises
+`ImageRegistryUnauthorized`, whose fix is `docker login` and not network
+work. Anything else is `EnvironmentUnavailable`, and "anything else"
+includes every answer a registry actually gave: a tag that is not there,
+an image declaring other bytes, a repository that publishes nothing, and
+any mix of causes. A registry that says "there is nothing under that
+name" has been reached, so a mistyped or collected `:tag` is a missing
+image and never a network diagnosis. A search list configured empty is
+refused before any registry is asked (`BuildError`): which repositories
+a build may take an environment from is a decision about trust, not a
+default.
 `require_container_image` refuses an image whose declaration does not
 match this generation, generator constraint or Zephyr release
 (`EnvironmentUnusable`). `require_container_runtime` refuses with the one
@@ -1265,8 +1275,8 @@ with file paths relative to *root* where one is given.
 | `PackageRegistryError` | `BuildError` | a package registry could not be read or verified |
 | `TrustAnchorMissing` | `PackageRegistryError` | no trust anchor for a base domain |
 | `ImageRegistryError` | `BuildError` | a container registry could not be reached or read |
-| `ImageRegistryUnauthorized` | `ImageRegistryError` | it refused the credentials |
-| `ImageRegistryUnreachable` | `ImageRegistryError` | it could not be reached |
+| `ImageRegistryUnauthorized` | `ImageRegistryError` | it refused the credentials — also what `resolve_container_image` raises when every repository it may search refuses an anonymous request |
+| `ImageRegistryUnreachable` | `ImageRegistryError` | it could not be reached at all — also what `resolve_container_image` raises when that is true of every repository it may search |
 | `UnknownBuildTarget` | `BuildError` | a target name that is not one of `BUILD_TARGETS` |
 | `UnknownBuildMode` | `BuildError` | a mode name that is not one of `BUILD_MODES` |
 | `RemoteNotConfigured` | `BuildError` | `remote` was selected and the server or the SDK pin is missing |

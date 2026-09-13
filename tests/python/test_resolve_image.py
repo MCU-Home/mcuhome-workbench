@@ -31,6 +31,7 @@ from mcuhome.workbench.buildenvsession import EnvironmentUnavailable
 from mcuhome.workbench.ociregistry import (
     ImageFacts,
     ImageRegistryError,
+    ImageRegistryUnauthorized,
     ImageRegistryUnreachable,
 )
 from mcuhome.workbench.resolve_image import (
@@ -106,28 +107,40 @@ class ScriptedImages:
 
     A resolver that searches an *allowlist* of repositories and matches
     on an open-ended ``packages.`` label set, rather than one repository
-    with a fixed label set, so the stub needs a tag map per repository and
-    the option to make one of them unreachable.
+    with a fixed label set, so the stub needs a tag map per repository —
+    and, per repository, the way it fails.
+
+    *failing* maps a repository to the exception every question about it
+    raises, and the **class** is the point: the real client raises
+    :class:`ImageRegistryUnreachable` only when it never got an answer,
+    :class:`ImageRegistryUnauthorized` when the registry refused an
+    anonymous request, and a plain :class:`ImageRegistryError` when the
+    registry answered something this side cannot use — a missing tag, a
+    500. A stub that raised one class for all three would let the
+    resolver's own classification pass untested, which is exactly the
+    defect these tests exist for.
     """
 
     def __init__(
         self,
         repositories: Mapping[str, Mapping[str, tuple[str, Mapping[str, str]]]] | None = None,
         *,
-        unreachable: frozenset[str] = frozenset(),
+        failing: Mapping[str, Exception] | None = None,
     ) -> None:
         self.repositories = {repo: dict(tags) for repo, tags in (repositories or {}).items()}
-        self.unreachable = set(unreachable)
+        self.failing = dict(failing or {})
         #: Repositories a tag listing actually succeeded for, in order.
         self.tag_listings: list[str] = []
         self.label_reads: list[tuple[str, str]] = []
 
+    def _failure(self, reference) -> None:
+        """However this repository fails, raised freshly every time."""
+        failure = self.failing.get(reference.repository)
+        if failure is not None:
+            raise type(failure)(str(failure), hint=getattr(failure, "hint", None))
+
     def tags(self, reference):
-        if reference.repository in self.unreachable:
-            raise ImageRegistryError(
-                f"{reference.repository} did not answer.",
-                hint="an allowlist exists to have alternatives in it",
-            )
+        self._failure(reference)
         self.tag_listings.append(reference.repository)
         return tuple(self.repositories.get(reference.repository, {}))
 
@@ -139,6 +152,7 @@ class ScriptedImages:
         not carry is the registry's own refusal, exactly as it is against
         a real index.
         """
+        self._failure(reference)
         self.label_reads.append((reference.repository, reference.tag or ""))
         key = reference.tag or reference.digest or ""
         found = self.repositories.get(reference.repository, {}).get(key)
@@ -153,6 +167,21 @@ class ScriptedImages:
                 )
             found = found[wanted]
         return ImageFacts(digest=found[0], labels=dict(found[1]))
+
+
+def down(repository: str) -> ImageRegistryUnreachable:
+    """A repository whose host never answered: DNS, TLS, timeout, proxy."""
+    return ImageRegistryUnreachable(f"MCUHome cannot reach {repository}: timed out.")
+
+
+def private(repository: str) -> ImageRegistryUnauthorized:
+    """A repository that answered, and refused an anonymous request."""
+    return ImageRegistryUnauthorized(f"{repository} does not serve anonymously.")
+
+
+def unusable(repository: str, *, what: str = "has nothing under that name") -> ImageRegistryError:
+    """A repository that answered something this side cannot use (a 404, a 500)."""
+    return ImageRegistryError(f"{repository} {what}.")
 
 
 class _UntouchedRegistry:
@@ -317,7 +346,7 @@ def test_a_repository_that_raises_registryerror_is_skipped_not_fatal() -> None:
     matching = image_labels(packages=wanted_values())
     registry = ScriptedImages(
         {OTHER_REPO: {"v1": (digest("b"), matching)}},
-        unreachable=frozenset({REPO}),
+        failing={REPO: down(REPO)},
     )
 
     found = resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
@@ -328,32 +357,55 @@ def test_a_repository_that_raises_registryerror_is_skipped_not_fatal() -> None:
     assert registry.tag_listings == [OTHER_REPO]
 
 
-def test_a_partial_outage_is_a_miss_the_refusal_names(monkeypatch) -> None:
-    """One repository silent, one answering nothing: still a missing image.
+def test_a_partial_outage_is_a_miss_the_refusal_names() -> None:
+    """One repository down, one answering nothing: still a missing image.
 
     The refusal a person can act on says which repository was asked and
-    what came back — so the one that could not be asked is named in it
+    what came back — so the one that could not be reached is named in it
     rather than deciding it.
     """
-    registry = ScriptedImages({OTHER_REPO: {}}, unreachable=frozenset({REPO}))
+    registry = ScriptedImages({OTHER_REPO: {}}, failing={REPO: down(REPO)})
 
     with pytest.raises(EnvironmentUnavailable) as refusal:
         resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
 
     hint = refusal.value.hint or ""
-    assert f"{REPO} could not be asked" in hint
+    assert f"{REPO} could not be reached" in hint
     assert f"{OTHER_REPO} publishes no image" in hint
 
 
-def test_no_registry_answering_at_all_is_about_this_machine() -> None:
+def test_a_pinned_tag_that_is_not_there_is_about_the_image() -> None:
+    """A 404 is an answer: the registry was reached and the tag is gone.
+
+    The case that made this classification necessary — a mistyped or
+    garbage-collected ``--container-image repo:tag`` used to come back as
+    a network diagnosis, which sends a person to look at their proxy over
+    a typo.
+    """
+    registry = ScriptedImages(failing={REPO: unusable(REPO)})
+
+    with pytest.raises(EnvironmentUnavailable) as refusal:
+        resolve_container_image(
+            WANTED,
+            registry=registry,
+            repositories=(REPO,),
+            pin=parse_container_image(":0.1.0-r7"),
+        )
+
+    hint = refusal.value.hint or ""
+    assert "has nothing under that name" in hint, "the registry's own reason, not a guess"
+    assert "could not be reached" not in hint
+
+
+def test_no_registry_reachable_at_all_is_about_this_machine() -> None:
     """The total outage, which needs the opposite answer from the person.
 
     "Publish an image for this package set" and "this machine cannot
     reach a registry" are different days' work, so they are different
-    refusals: every repository unreachable and none rejected for what it
-    declares is the second one.
+    refusals: every repository unreachable at the transport level and
+    none of them rejected for what it declares is the second one.
     """
-    registry = ScriptedImages(unreachable=frozenset({REPO, OTHER_REPO}))
+    registry = ScriptedImages(failing={REPO: down(REPO), OTHER_REPO: down(OTHER_REPO)})
 
     with pytest.raises(ImageRegistryUnreachable) as refusal:
         resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
@@ -361,7 +413,39 @@ def test_no_registry_answering_at_all_is_about_this_machine() -> None:
     assert "could not reach any registry" in str(refusal.value)
     hint = refusal.value.hint or ""
     assert REPO in hint and OTHER_REPO in hint
-    assert "network" in hint
+    assert "network access" in hint
+
+
+def test_every_repository_refusing_anonymously_is_a_login() -> None:
+    """Every registry answered and none of them served us: one command fixes it.
+
+    Distinct from the outage above on purpose — the machine's network is
+    fine, and telling that person to check their proxy would be sending
+    them to the wrong place.
+    """
+    registry = ScriptedImages(failing={REPO: private(REPO), OTHER_REPO: private(OTHER_REPO)})
+
+    with pytest.raises(ImageRegistryUnauthorized) as refusal:
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+
+    hint = refusal.value.hint or ""
+    assert "docker login ghcr.io" in hint
+    assert "docker login example.com" in hint
+    assert "network" not in hint
+
+
+def test_one_repository_down_and_one_without_the_image_names_both() -> None:
+    """A mix is neither diagnosis, so the missing image stays the answer."""
+    registry = ScriptedImages(
+        failing={REPO: down(REPO), OTHER_REPO: unusable(OTHER_REPO, what="answered with a 500")}
+    )
+
+    with pytest.raises(EnvironmentUnavailable) as refusal:
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+
+    hint = refusal.value.hint or ""
+    assert f"{REPO} could not be reached" in hint
+    assert "answered with a 500" in hint
 
 
 def test_a_repository_that_answers_with_nothing_has_been_asked() -> None:
@@ -375,29 +459,6 @@ def test_a_repository_that_answers_with_nothing_has_been_asked() -> None:
 
     with pytest.raises(EnvironmentUnavailable):
         resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
-
-
-def test_a_pinned_image_nobody_could_read_is_the_unreachable_refusal() -> None:
-    """A pin costs no tag listing, so the label read is what answers.
-
-    Nothing was listed and nothing was read: the search learned nothing
-    about the pinned image at all, which is the machine's problem and not
-    the image's.
-    """
-    registry = ScriptedImages(unreachable=frozenset({REPO}))
-
-    def unreadable(reference, *, platform=None):
-        raise ImageRegistryError(f"{reference.repository} did not answer.")
-
-    registry.facts = unreadable  # type: ignore[method-assign]
-
-    with pytest.raises(ImageRegistryUnreachable):
-        resolve_container_image(
-            WANTED,
-            registry=registry,
-            repositories=(REPO,),
-            pin=parse_container_image(":v1"),
-        )
 
 
 # --------------------------------------------------------------------------
@@ -595,14 +656,14 @@ def test_the_refusal_lists_every_candidate_and_why_it_was_rejected() -> None:
     other = image_labels(packages={**wanted_values(), "tool-b": f"2.0.0@sha256:{HASH_D}"})
     registry = ScriptedImages(
         {REPO: {"1.0.0-r1": (digest("a"), other)}, OTHER_REPO: {}},
-        unreachable=frozenset({OTHER_REPO}),
+        failing={OTHER_REPO: down(OTHER_REPO)},
     )
     with pytest.raises(BuildError) as refusal:
         resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
     message = str(refusal.value)
     assert "1.0.0-r1" in message
     assert HASH_D in message, "the near miss says which bytes it has instead"
-    assert "could not be asked" in message, "and the repository that never answered"
+    assert "could not be reached" in message, "and the repository that never answered"
     assert f"tool-a {WANTED['tool-a'].value()}" in message
 
 
