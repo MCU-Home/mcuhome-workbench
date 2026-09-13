@@ -18,6 +18,7 @@ monkeypatched system directory, and throwaway project directories.
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -568,11 +569,22 @@ def test_the_build_options_carry_the_target_and_where_it_came_from(project: Proj
     person is not looking at.
     """
     write_project(project, "build:\n  target: remote\n")
-    options = build_options(resolve_settings(project=project, env={}))
+    options = build_options(
+        resolve_settings(project=project, env={"MCUHOME_BUILD_CACHE_ROOT": "/srv/cache"})
+    )
     assert options.target == TARGET_REMOTE
     assert options.source("target") == str(project.root / "mcuhome.yaml")
+    # Not only the two keys the object used to carry a field for: a value
+    # out of the environment names the variable it came from.
+    assert options.cache_root == Path("/srv/cache")
+    assert options.source("cache_root") == "MCUHOME_BUILD_CACHE_ROOT"
+
     unset = build_options(resolve_settings(project=None, env={}))
     assert unset.target == TARGET_LOCAL
     assert unset.source("target") == "default"
-    # Not only the two the object used to carry a field for.
-    assert unset.source("cache_root") == "default"
+
+    # And every key of the section can answer, not a chosen few: each
+    # field of the object except the map itself has an entry in it.
+    carried = {entry.name for entry in dataclasses.fields(unset)} - {"sources"}
+    assert carried and carried <= set(unset.sources)
+    assert set(unset.sources.values()) == {"default"}
