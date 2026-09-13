@@ -1017,10 +1017,15 @@ def test_a_hash_the_index_contradicts_is_refused(published, options, env, store_
     assert not store.entry_directory(store_dir, WORKSPACE, VERSION).exists()
 
 
-def test_a_package_built_for_another_architecture_is_refused_by_its_name(
+def test_a_file_for_another_architecture_reaches_the_package_searchs_own_check(
     tmp_path, options, env
 ) -> None:
-    """Said before half a gigabyte is unpacked, and said by the name."""
+    """The refusal is not this wrapper's: deriving the name off the file
+    hands it to the package search, whose architecture check
+    (:func:`~mcuhome.workbench.packageregistry.check_platform`) refuses a
+    suffix that is not this host's before a byte is read. Asserted here
+    because the file form is the one path on which nothing else would
+    catch it — no index resolved this name for the platform."""
     other = "mcuhome-build-tools_haiku-m68k"
     directory = tmp_path / "built"
     put_package(directory, other, VERSION, tools_members())
