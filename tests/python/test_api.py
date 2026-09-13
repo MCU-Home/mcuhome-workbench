@@ -291,7 +291,7 @@ def test_the_validation_result_serializes_whole(tmp_path) -> None:
 
 def test_registry_data_and_schema_are_reachable_from_the_api() -> None:
     assert api.registry_data()["registry_version"] >= 1
-    assert api.config_json_schema()["type"] == "object"
+    assert api.device_schema()["type"] == "object"
 
 
 def test_the_example_still_resolves_through_the_api() -> None:

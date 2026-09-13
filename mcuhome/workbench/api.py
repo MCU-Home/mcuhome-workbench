@@ -77,7 +77,7 @@ What is here, in the order a caller needs it:
 ``error_dicts`` / ``ConfigError.to_dict``
     Those errors as plain dictionaries: message, file (relative to the
     project), line, column, key, hint, kind.
-``registry_data`` / ``config_json_schema``
+``registry_data`` / ``device_schema``
     What the builder knows about hardware and Matter, and the shape of
     ``main.yaml``, as data an editor or a picker can consume.
 ``generate_tree`` / ``CompilerUnavailable``
@@ -221,7 +221,7 @@ from mcuhome.workbench.buildtarget import (
     RemoteBuild,
     SubprocessExecution,
 )
-from mcuhome.workbench.configschema import config_json_schema
+from mcuhome.workbench.configschema import device_schema
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
     CONFIG_SCOPES,
@@ -374,7 +374,7 @@ __all__ = [
     "build_firmware",
     "resolve_build_options",
     "open_build_lock",
-    "config_json_schema",
+    "device_schema",
     "error_dicts",
     "find_device",
     "find_project_root",

@@ -36,7 +36,7 @@ from mcuhome.workbench import schema
 __all__ = [
     "SCHEMA_DIALECT",
     "SCHEMA_ID",
-    "config_json_schema",
+    "device_schema",
     "to_json",
 ]
 
@@ -150,7 +150,7 @@ def _endpoint_schema() -> dict[str, Any]:
     }
 
 
-def config_json_schema() -> dict[str, Any]:
+def device_schema() -> dict[str, Any]:
     """A JSON Schema for ``devices/<name>/main.yaml``.
 
     Editor validation and autocomplete. See the

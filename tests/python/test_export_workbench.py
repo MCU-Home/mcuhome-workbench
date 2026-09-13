@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The configuration schema, as exported data.
+"""The device file schema, as exported data.
 
 The workbench half of the subject: :mod:`mcuhome.workbench.configschema`
 builds the ``main.yaml`` JSON Schema, and it has to describe exactly the
@@ -46,16 +46,14 @@ def _stable(text: str) -> str:
 
 
 def test_the_config_schema_is_what_it_was() -> None:
-    assert _stable(export.to_json(configschema.config_json_schema())) == SCHEMA_GOLDEN.read_text(
-        "utf-8"
-    )
+    assert _stable(export.to_json(configschema.device_schema())) == SCHEMA_GOLDEN.read_text("utf-8")
 
 
 def test_both_documents_are_deterministic() -> None:
     """Same process, same bytes — twice, so nothing leaks in from a set."""
     assert export.to_json(export.registry_data()) == export.to_json(export.registry_data())
-    assert export.to_json(configschema.config_json_schema()) == export.to_json(
-        configschema.config_json_schema()
+    assert export.to_json(configschema.device_schema()) == export.to_json(
+        configschema.device_schema()
     )
 
 
@@ -65,13 +63,13 @@ def test_both_documents_are_deterministic() -> None:
 
 
 def test_the_schema_offers_the_boards_the_registry_has() -> None:
-    device = configschema.config_json_schema()["properties"]["device"]
+    device = configschema.device_schema()["properties"]["device"]
     assert device["properties"]["board"]["enum"] == sorted(registry.BOARDS)
     assert device["required"] == ["name", "board"]
 
 
 def test_the_schema_offers_the_drivers_clusters_and_device_types() -> None:
-    document = configschema.config_json_schema()
+    document = configschema.device_schema()
     peripherals = document["properties"]["hardware"]["properties"]["peripherals"]
     assert peripherals["additionalProperties"]["properties"]["driver"]["enum"] == sorted(
         registry.DRIVERS
@@ -83,14 +81,14 @@ def test_the_schema_offers_the_drivers_clusters_and_device_types() -> None:
 
 def test_the_schema_rejects_a_section_the_parser_rejects() -> None:
     """`additionalProperties: false` mirrors the parser's reject_unknown."""
-    document = configschema.config_json_schema()
+    document = configschema.device_schema()
     assert document["additionalProperties"] is False
     assert document["properties"]["device"]["additionalProperties"] is False
 
 
 def test_peripheral_properties_stay_open() -> None:
     """Driver properties are per-driver; only the validator can check them."""
-    peripherals = configschema.config_json_schema()["properties"]["hardware"]["properties"][
+    peripherals = configschema.device_schema()["properties"]["hardware"]["properties"][
         "peripherals"
     ]
     assert peripherals["additionalProperties"]["additionalProperties"] is True
@@ -129,7 +127,7 @@ def test_the_pin_pattern_agrees_with_the_parser(text: str, accepted: bool) -> No
 
 
 def test_the_device_name_pattern_is_the_parsers_own() -> None:
-    name = configschema.config_json_schema()["properties"]["device"]["properties"]["name"]
+    name = configschema.device_schema()["properties"]["device"]["properties"]["name"]
     assert name["pattern"] == schema.DEVICE_NAME_RE.pattern
     assert name["maxLength"] == schema.DEVICE_NAME_MAX
 
@@ -141,7 +139,7 @@ def test_the_schema_validates_the_example_when_a_validator_is_installed() -> Non
 
     from mcuhome.workbench.loader import read_yaml_file
 
-    document = configschema.config_json_schema()
+    document = configschema.device_schema()
     jsonschema.Draft202012Validator.check_schema(document)
     data = read_yaml_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
     jsonschema.Draft202012Validator(document).validate(json.loads(json.dumps(data, default=str)))
