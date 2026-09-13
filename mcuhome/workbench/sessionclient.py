@@ -1716,7 +1716,7 @@ class SessionClient:
 
         *image* is the build-environment pin for **this build**, in the
         four forms
-        :func:`~mcuhome.workbench.resolve_image.parse_image_pin` reads,
+        :func:`~mcuhome.workbench.resolve_image.parse_container_image` reads,
         and it travels here rather than in the context: a context
         references packages and never an image, so a pin inside it would
         change the context's identity without changing a build input.

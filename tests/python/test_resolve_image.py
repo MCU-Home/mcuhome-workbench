@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Finding the image that delivers a wanted package set.
+"""The image that answers a wanted package set, or the refusal instead.
 
 The rule under test is "exactly, not compatibly": an image's ``packages.``
 labels must state the wanted set and nothing else — every member present,
@@ -28,7 +28,11 @@ from mcuhome.model.buildenvironment import (
 from mcuhome.model.errors import BuildError
 
 from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistryError
-from mcuhome.workbench.resolve_image import image_for_packages, parse_image_pin, revision_of
+from mcuhome.workbench.resolve_image import (
+    parse_container_image,
+    resolve_container_image,
+    revision_of,
+)
 
 REPO = "ghcr.io/mcu-home/build-environment"
 OTHER_REPO = "example.com/other/build-environment"
@@ -40,7 +44,7 @@ HASH_D = "d" * 64
 
 #: The concrete set every "does it match" test wants — two packages, each
 #: pinned to a version and a hash, because that is what an image contains
-#: and therefore what :func:`image_for_packages` is asked to find.
+#: and therefore what :func:`resolve_container_image` is asked to answer or refuse.
 WANTED = {
     "tool-a": PackageMember(name="tool-a", version="1.0.0", sha256=HASH_A),
     "tool-b": PackageMember(name="tool-b", version="2.0.0", sha256=HASH_B),
@@ -168,9 +172,9 @@ class _UntouchedRegistry:
 def test_an_exact_match_is_pinned_by_digest_and_carries_its_own_declaration() -> None:
     """A match is pinned by the digest the registry answers, not the tag.
 
-    The tag is only where the search looked; :attr:`ImageMatch.found_under`
+    The tag is only where the search looked; :attr:`ContainerImageMatch.found_under`
     keeps it as a location worth a log line, while
-    :attr:`ImageMatch.declaration` is parsed from the same labels the match
+    :attr:`ContainerImageMatch.declaration` is parsed from the same labels the match
     was decided from, so a caller learns the generation, Zephyr version and
     generator constraint the image states without a second read.
     """
@@ -182,7 +186,7 @@ def test_an_exact_match_is_pinned_by_digest_and_carries_its_own_declaration() ->
     )
     registry = ScriptedImages({REPO: {"v1": (digest("a"), labels)}})
 
-    found = image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+    found = resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
     assert str(found.reference) == f"{REPO}:v1@{digest('a')}"
     assert found.reference.digest == digest("a")
@@ -209,7 +213,7 @@ def test_labels_outside_the_build_environment_prefix_are_ignored() -> None:
     )
     registry = ScriptedImages({REPO: {"v1": (digest("a"), labels)}})
 
-    found = image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+    found = resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
     assert found.reference.digest == digest("a")
 
@@ -233,7 +237,7 @@ def test_the_near_miss_a_different_hash_under_the_same_name_and_version_is_refus
     registry = ScriptedImages({REPO: {"v1": (digest("z"), labels)}})
 
     with pytest.raises(BuildError):
-        image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
 
 def test_an_image_assembled_from_one_extra_package_does_not_match() -> None:
@@ -248,7 +252,7 @@ def test_an_image_assembled_from_one_extra_package_does_not_match() -> None:
     registry = ScriptedImages({REPO: {"v1": (digest("z"), labels)}})
 
     with pytest.raises(BuildError):
-        image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
 
 def test_an_image_missing_one_wanted_package_does_not_match() -> None:
@@ -257,7 +261,7 @@ def test_an_image_missing_one_wanted_package_does_not_match() -> None:
     registry = ScriptedImages({REPO: {"v1": (digest("z"), labels)}})
 
     with pytest.raises(BuildError):
-        image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
 
 def test_a_package_stated_without_a_hash_does_not_match() -> None:
@@ -274,7 +278,7 @@ def test_a_package_stated_without_a_hash_does_not_match() -> None:
     registry = ScriptedImages({REPO: {"v1": (digest("z"), labels)}})
 
     with pytest.raises(BuildError):
-        image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
 
 # --------------------------------------------------------------------------
@@ -293,7 +297,7 @@ def test_several_tags_are_searched_and_the_matching_one_wins_even_when_not_first
     right = image_labels(packages=wanted_values())
     registry = ScriptedImages({REPO: {"v1": (digest("1"), wrong), "v2": (digest("2"), right)}})
 
-    found = image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+    found = resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
     assert found.found_under == "v2"
     assert found.reference.digest == digest("2")
@@ -311,7 +315,7 @@ def test_a_repository_that_raises_registryerror_is_skipped_not_fatal() -> None:
         unreachable=frozenset({REPO}),
     )
 
-    found = image_for_packages(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+    found = resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
 
     assert found.reference.digest == digest("b")
     # Only the repository that answered ever got a tag listing counted;
@@ -332,7 +336,7 @@ def test_an_empty_allowlist_is_a_typed_refusal_that_never_touches_a_registry() -
     back to some registry the caller did not name.
     """
     with pytest.raises(BuildError):
-        image_for_packages(WANTED, registry=_UntouchedRegistry(), repositories=())
+        resolve_container_image(WANTED, registry=_UntouchedRegistry(), repositories=())
 
 
 def test_the_refusal_names_the_wanted_package_set_when_nothing_matches() -> None:
@@ -340,7 +344,7 @@ def test_the_refusal_names_the_wanted_package_set_when_nothing_matches() -> None
     registry = ScriptedImages({REPO: {}})
 
     with pytest.raises(BuildError) as refusal:
-        image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
 
     message = str(refusal.value)
     assert f"tool-a {WANTED['tool-a'].value()}" in message
@@ -365,9 +369,11 @@ def test_a_wanted_set_whose_member_states_no_hash_matches_nothing() -> None:
         "tool-b": PackageMember(name="tool-b", version="2.0.0", sha256=HASH_B),
     }
     with pytest.raises(BuildError):
-        image_for_packages(hashless, registry=registry, repositories=(REPO,))
+        resolve_container_image(hashless, registry=registry, repositories=(REPO,))
     # And the same image is taken the moment the hash is stated.
-    assert image_for_packages(WANTED, registry=registry, repositories=(REPO,)).found_under == "v1"
+    assert (
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO,)).found_under == "v1"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -382,7 +388,7 @@ def test_no_pin_searches_the_configured_repositories_in_order() -> None:
     registry = ScriptedImages(
         {REPO: {}, OTHER_REPO: {"v1": (digest("other"), labels)}},
     )
-    found = image_for_packages(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+    found = resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
     assert found.reference.repository == OTHER_REPO
     assert registry.tag_listings == [REPO, OTHER_REPO]
 
@@ -394,11 +400,11 @@ def test_a_repository_only_pin_searches_that_repository_alone() -> None:
     registry = ScriptedImages(
         {REPO: {"v1": (digest("a"), labels)}, OTHER_REPO: {"v1": (digest("b"), labels)}},
     )
-    found = image_for_packages(
+    found = resolve_container_image(
         WANTED,
         registry=registry,
         repositories=(REPO,),
-        pin=parse_image_pin(OTHER_REPO),
+        pin=parse_container_image(OTHER_REPO),
     )
     assert found.reference.repository == OTHER_REPO
     assert registry.tag_listings == [OTHER_REPO]
@@ -409,8 +415,8 @@ def test_a_tag_only_pin_looks_at_that_one_name_in_the_search_list() -> None:
     and the search list says where."""
     labels = image_labels(packages=wanted_values())
     registry = ScriptedImages({REPO: {"v1": (digest("a"), labels), "v2": (digest("b"), labels)}})
-    found = image_for_packages(
-        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin(":v2")
+    found = resolve_container_image(
+        WANTED, registry=registry, repositories=(REPO,), pin=parse_container_image(":v2")
     )
     assert found.found_under == "v2"
     assert found.reference.digest == digest("b")
@@ -425,11 +431,11 @@ def test_a_canonical_pin_names_one_image_and_its_labels_still_decide() -> None:
     other = image_labels(packages={**wanted_values(), "tool-a": f"1.0.0@sha256:{HASH_C}"})
     registry = ScriptedImages({REPO: {"v1": (digest("a"), other)}})
     with pytest.raises(BuildError) as refusal:
-        image_for_packages(
+        resolve_container_image(
             WANTED,
             registry=registry,
             repositories=(),
-            pin=parse_image_pin(f"{REPO}:v1"),
+            pin=parse_container_image(f"{REPO}:v1"),
         )
     # A canonical pin names that one image, so the refusal does too.
     assert f"{REPO}:v1" in str(refusal.value)
@@ -443,8 +449,8 @@ def test_a_digest_only_pin_is_read_out_of_the_repositories_that_are_searched() -
     labels = image_labels(packages=wanted_values())
     pinned = digest("pinned")
     registry = ScriptedImages({REPO: {pinned: (pinned, labels)}})
-    found = image_for_packages(
-        WANTED, registry=registry, repositories=(REPO,), pin=parse_image_pin(f"@{pinned}")
+    found = resolve_container_image(
+        WANTED, registry=registry, repositories=(REPO,), pin=parse_container_image(f"@{pinned}")
     )
     assert found.reference.digest == pinned
     assert found.found_under == "", "a digest pin was reached through no tag"
@@ -469,7 +475,7 @@ def test_the_highest_revision_wins_among_images_that_declare_the_same_set() -> N
             }
         }
     )
-    found = image_for_packages(WANTED, registry=registry, repositories=(REPO,))
+    found = resolve_container_image(WANTED, registry=registry, repositories=(REPO,))
     assert found.found_under == "1.0.0-r10"
     # And it was the first candidate read, so the others cost nothing.
     assert registry.label_reads == [(REPO, "1.0.0-r10")]
@@ -480,7 +486,7 @@ def test_a_tag_without_a_revision_is_tried_after_every_tag_that_has_one() -> Non
     registry = ScriptedImages(
         {REPO: {"latest": (digest("l"), labels), "1.0.0-r1": (digest("r1"), labels)}}
     )
-    assert image_for_packages(WANTED, registry=registry, repositories=(REPO,)).found_under == (
+    assert resolve_container_image(WANTED, registry=registry, repositories=(REPO,)).found_under == (
         "1.0.0-r1"
     )
 
@@ -510,7 +516,7 @@ def test_the_refusal_lists_every_candidate_and_why_it_was_rejected() -> None:
         unreachable=frozenset({OTHER_REPO}),
     )
     with pytest.raises(BuildError) as refusal:
-        image_for_packages(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
+        resolve_container_image(WANTED, registry=registry, repositories=(REPO, OTHER_REPO))
     message = str(refusal.value)
     assert "1.0.0-r1" in message
     assert HASH_D in message, "the near miss says which bytes it has instead"
@@ -541,7 +547,7 @@ def test_the_image_is_resolved_for_the_platform_the_packages_were(monkeypatch) -
     }
     registry = ScriptedImages({REPO: {"1.0.0-r1": per_platform}})
 
-    amd = image_for_packages(
+    amd = resolve_container_image(
         {amd_tools.name: amd_tools},
         registry=registry,
         repositories=(REPO,),
@@ -549,7 +555,7 @@ def test_the_image_is_resolved_for_the_platform_the_packages_were(monkeypatch) -
     )
     assert amd.reference.digest == digest("amd64")
 
-    arm = image_for_packages(
+    arm = resolve_container_image(
         {arm_tools.name: arm_tools},
         registry=registry,
         repositories=(REPO,),
@@ -559,7 +565,7 @@ def test_the_image_is_resolved_for_the_platform_the_packages_were(monkeypatch) -
 
     # And the set of one platform is not delivered by the other's image.
     with pytest.raises(BuildError):
-        image_for_packages(
+        resolve_container_image(
             {amd_tools.name: amd_tools},
             registry=registry,
             repositories=(REPO,),

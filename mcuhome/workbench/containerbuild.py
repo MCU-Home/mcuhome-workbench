@@ -107,9 +107,9 @@ from mcuhome.workbench.contextdir import read_context_manifest, read_generator_c
 from mcuhome.workbench.packagefetch import acquire_sdk
 from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_image import (
-    ImageMatch,
-    image_for_packages,
-    parse_image_pin,
+    ContainerImageMatch,
+    parse_container_image,
+    resolve_container_image,
 )
 from mcuhome.workbench.resolve_pins import concrete_package
 
@@ -666,7 +666,7 @@ class ResolvedImage:
     pulled, which is worth a line in the log.
     """
 
-    match: ImageMatch
+    match: ContainerImageMatch
     fetched: bool = False
 
     @property
@@ -697,7 +697,7 @@ def image_for_context(
     registry: RegistrySource | None = None,
     images: Any = None,
     platform: str | None = None,
-) -> ImageMatch:
+) -> ContainerImageMatch:
     """The image that delivers the package set *pin* names.
 
     Two steps, and the first is the one that makes the second possible.
@@ -715,7 +715,7 @@ def image_for_context(
     needs, and the image is what carries the bytes.
 
     *image_pin* is what this build asks for, in any of the four forms
-    :func:`~mcuhome.workbench.resolve_image.parse_image_pin` reads —
+    :func:`~mcuhome.workbench.resolve_image.parse_container_image` reads —
     whichever of the device's own ``sources.container_image`` and a
     one-invocation override the caller resolved them to. It narrows
     which images are looked at; the labels are checked either way.
@@ -745,11 +745,11 @@ def image_for_context(
         wanted[found.name] = PackageMember(
             name=found.name, version=found.version, sha256=found.sha256
         )
-    return image_for_packages(
+    return resolve_container_image(
         wanted,
         registry=images,
         repositories=tuple(repositories),
-        pin=parse_image_pin(image_pin),
+        pin=parse_container_image(image_pin),
         platform=platform,
     )
 

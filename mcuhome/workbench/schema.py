@@ -630,7 +630,7 @@ def _parse_sources(reader: MapReader) -> RawSources:
     and the one place that knows it is the resolution that has to answer
     with a pin (:mod:`mcuhome.workbench.resolve_pins`); the image pin's
     forms are the container profile's
-    (:func:`~mcuhome.workbench.resolve_image.parse_image_pin`), and it
+    (:func:`~mcuhome.workbench.resolve_image.parse_container_image`), and it
     refuses a value that is not a reference naming the part that is
     wrong. Splitting that knowledge in two would give a device file two
     graders of the same string.

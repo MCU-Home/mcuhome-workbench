@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Finding the container image that delivers a pinned package set.
+"""Answering the container image that delivers a pinned package set, or refusing.
 
 A build context pins the build environment by its **packages**, and a
 container image is one delivery of such a set: the build environment
@@ -65,11 +65,11 @@ from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistry, ImageRegistryError
 
 __all__ = [
-    "ImageMatch",
-    "ImagePin",
+    "ContainerImageMatch",
+    "ContainerImagePin",
     "declares_exactly",
-    "image_for_packages",
-    "parse_image_pin",
+    "parse_container_image",
+    "resolve_container_image",
     "revision_of",
 ]
 
@@ -81,7 +81,7 @@ _REVISION = re.compile(r"-r(\d+)(?:-[A-Za-z0-9._-]+)?\Z")
 
 
 @dataclass(frozen=True)
-class ImageMatch:
+class ContainerImageMatch:
     """One image that delivers the wanted package set.
 
     :attr:`reference` carries the digest — that is what runs.
@@ -95,13 +95,13 @@ class ImageMatch:
 
 
 @dataclass(frozen=True)
-class ImagePin:
+class ContainerImagePin:
     """What a caller pinned, in one of the forms it may be written in.
 
     The four forms of the build-environment image pin, and each of them
     narrows the search differently:
 
-    ``ImagePin()``
+    ``ContainerImagePin()``
         Nothing pinned. The configured repositories are searched in
         order, newest revision first.
     :attr:`repository` alone — a bare name
@@ -143,7 +143,7 @@ class ImagePin:
         return self.repository or self.tag or self.digest
 
 
-def parse_image_pin(text: str | None) -> ImagePin:
+def parse_container_image(text: str | None) -> ContainerImagePin:
     """Read one of the four pin forms out of *text*.
 
     The forms are told apart by what the value **starts** with, so that
@@ -163,7 +163,7 @@ def parse_image_pin(text: str | None) -> ImagePin:
     """
     stated = (text or "").strip()
     if not stated:
-        return ImagePin()
+        return ContainerImagePin()
     if stated.startswith("@"):
         digest = stated[1:]
         parse_reference(
@@ -171,7 +171,7 @@ def parse_image_pin(text: str | None) -> ImagePin:
             default_registry=DOCKER_HUB,
             what="build environment",
         )
-        return ImagePin(digest=digest)
+        return ContainerImagePin(digest=digest)
     if stated.startswith(":"):
         tag = stated[1:]
         # Checked as a tag by parsing it in a reference, so that a
@@ -181,9 +181,9 @@ def parse_image_pin(text: str | None) -> ImagePin:
             default_registry=DOCKER_HUB,
             what="build environment",
         )
-        return ImagePin(tag=tag)
+        return ContainerImagePin(tag=tag)
     reference = parse_reference(stated, default_registry=DOCKER_HUB, what="build environment")
-    return ImagePin(
+    return ContainerImagePin(
         repository=reference.repository,
         tag=reference.tag or "",
         digest=reference.digest or "",
@@ -248,14 +248,14 @@ def _members(labels: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def image_for_packages(
+def resolve_container_image(
     packages: Mapping[str, PackageMember],
     *,
     registry: ImageRegistry | None = None,
     repositories: Sequence[str] = (ENVIRONMENT_IMAGE_REPOSITORY,),
-    pin: ImagePin | None = None,
+    pin: ContainerImagePin | None = None,
     platform: str | None = None,
-) -> ImageMatch:
+) -> ContainerImageMatch:
     """The image whose ``packages.`` labels are exactly *packages*.
 
     *packages* is the **concrete** set — one platform's packages, hashes
@@ -268,7 +268,7 @@ def image_for_packages(
     environment from is a decision about trust, and a resolver that
     searched wherever it liked would be making it.
 
-    *pin* narrows what is looked at (:class:`ImagePin`) and never what is
+    *pin* narrows what is looked at (:class:`ContainerImagePin`) and never what is
     accepted.
 
     *platform* is the host the image has to run on, in the package
@@ -286,7 +286,7 @@ def image_for_packages(
     same package names under other hashes, which is a different
     environment and never a fallback.
     """
-    pin = pin or ImagePin()
+    pin = pin or ContainerImagePin()
     searched = list(repositories) if not pin.repository else [pin.repository]
     if not searched:
         raise BuildError(
@@ -312,7 +312,7 @@ def image_for_packages(
             # The digest of the manifest whose labels were just checked —
             # for a multi-architecture image that is this host's manifest
             # and not the index that lists it.
-            return ImageMatch(
+            return ContainerImageMatch(
                 reference=candidate.with_digest(facts.digest),
                 declaration=declaration_from_labels(facts.labels),
                 found_under=candidate.tag or "",
@@ -321,7 +321,7 @@ def image_for_packages(
 
 
 def _candidates(
-    client: ImageRegistry, reference: Reference, pin: ImagePin, rejected: list[str]
+    client: ImageRegistry, reference: Reference, pin: ContainerImagePin, rejected: list[str]
 ) -> list[Reference]:
     """Which images of *reference*'s repository are worth a label read.
 
@@ -375,7 +375,7 @@ def _described(labels: Mapping[str, str]) -> str:
 
 def _no_image_declares(
     packages: Mapping[str, PackageMember],
-    pin: ImagePin,
+    pin: ContainerImagePin,
     searched: Sequence[str],
     rejected: Sequence[str],
 ) -> BuildError:
