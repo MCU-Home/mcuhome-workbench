@@ -65,8 +65,8 @@ from mcuhome.workbench.project import Project
 
 __all__ = [
     "BUILD_REPORT_FILE",
-    "REPORT_FIRMWARE",
     "REPORT_VERSION",
+    "SIGNED_FIRMWARE_NAMES",
     "Runner",
     "SignPlan",
     "find_imgtool",
@@ -98,7 +98,10 @@ REPORT_VERSION = 1
 #: ``firmware.hex`` to flash, ``firmware.bin`` to sign). The §2.2
 #: signing parameters "apply to **every** artifact declared with role
 #: ``firmware``", so both are signed with the one set of arguments.
-REPORT_FIRMWARE = (("firmware.bin", "firmware.signed.bin"), ("firmware.hex", "firmware.signed.hex"))
+SIGNED_FIRMWARE_NAMES = (
+    ("firmware.bin", "firmware.signed.bin"),
+    ("firmware.hex", "firmware.signed.hex"),
+)
 
 #: Runs one imgtool invocation and answers with its exit status and
 #: whatever it printed. Injectable so the test suite can watch the
@@ -321,7 +324,7 @@ def plan_report_signing(
 
     program = require_imgtool(env=env, stated=imgtool)
     commands: list[tuple[str, tuple[str, ...], Path]] = []
-    for source_name, output_name in REPORT_FIRMWARE:
+    for source_name, output_name in SIGNED_FIRMWARE_NAMES:
         source = out_dir / source_name
         if not source.is_file():
             continue
