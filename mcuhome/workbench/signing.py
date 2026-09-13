@@ -72,7 +72,7 @@ from mcuhome.model.userpaths import expand
 from ruamel.yaml.comments import TaggedScalar
 
 from mcuhome.workbench.loader import FileRef, editing_yaml, read_yaml_file
-from mcuhome.workbench.project import Project, check_secret_file, ensure_secrets_dir
+from mcuhome.workbench.project import Project, ensure_secrets_dir, require_secret_file
 
 __all__ = [
     "FIRMWARE_KEY",
@@ -451,7 +451,7 @@ def _plain_file_key(path: Path, *, create: bool) -> SigningKey:
     if path.exists():
         if path.is_dir():
             raise _refuse_unreadable(path, "it is a directory")
-        check_secret_file(path, key_material=True)
+        require_secret_file(path, key_material=True)
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as error:
@@ -488,7 +488,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
     if file.exists():
         if file.is_dir():
             raise _refuse_unreadable(file, "it is a directory")
-        check_secret_file(file, key_material=True)
+        require_secret_file(file, key_material=True)
         data = read_yaml_file(file)
         if data is None:
             data = {}
@@ -498,7 +498,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
         if value is not None:
             if not isinstance(value, FileRef):
                 raise _refuse_inline_key(file)
-            check_secret_file(value.path, key_material=True)
+            require_secret_file(value.path, key_material=True)
             if not looks_like_p256_key(str(value)):
                 raise _refuse_not_a_key(value.path)
             return SigningKey(path=value.path, pem=str(value), in_secrets=True, created=False)
@@ -521,7 +521,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
         # the crash recovery above. Adopt it rather than overwrite it:
         # generating over existing key material is the one thing this
         # function must never do.
-        check_secret_file(pem_path, key_material=True)
+        require_secret_file(pem_path, key_material=True)
         try:
             pem = pem_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:

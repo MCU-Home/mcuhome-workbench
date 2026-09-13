@@ -43,7 +43,7 @@ from typing import Any
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML, YAMLError
 
-from mcuhome.workbench.project import DEVICES_DIR, check_secret_file
+from mcuhome.workbench.project import DEVICES_DIR, require_secret_file
 
 __all__ = [
     "FileRef",
@@ -244,7 +244,7 @@ def _read_secret_file(
     ref: SecretRef,
     on_warning: Callable[[str], None] | None,
 ) -> dict[str, Any]:
-    check_secret_file(secrets_file, key_material=False, on_warning=on_warning)
+    require_secret_file(secrets_file, key_material=False, on_warning=on_warning)
     data = read_yaml_file(secrets_file)
     if data is None:
         return {}

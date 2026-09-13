@@ -105,7 +105,7 @@ from mcuhome.workbench.buildtarget import (
     DEFAULT_CONTAINER_REPOSITORIES,
 )
 from mcuhome.workbench.loader import FileRef, editing_yaml, read_yaml_file
-from mcuhome.workbench.project import BUILDER_SECRETS_DIR, Project, check_secret_file
+from mcuhome.workbench.project import BUILDER_SECRETS_DIR, Project, require_secret_file
 
 __all__ = [
     "CONFIG_FILE",
@@ -1090,7 +1090,7 @@ def _builder_token(
     for file in candidates:
         if not file.is_file():
             continue
-        check_secret_file(file, key_material=False, on_warning=on_warning)
+        require_secret_file(file, key_material=False, on_warning=on_warning)
         data = read_yaml_file(file)
         if data is None:
             return None
@@ -1112,7 +1112,7 @@ def _builder_token(
             # old token-file rule holds for its content: surrounding
             # whitespace is an editor's newline, whitespace inside is a
             # file with something else in it.
-            check_secret_file(token.path, key_material=False, on_warning=on_warning)
+            require_secret_file(token.path, key_material=False, on_warning=on_warning)
             bare = token.strip()
             if not bare or any(character.isspace() for character in bare):
                 raise ConfigError(

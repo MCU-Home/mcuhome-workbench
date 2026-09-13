@@ -52,7 +52,7 @@ from two projects stands in neither.
 This module also owns the two duties that come with the layout:
 ``mcuhome project init`` (:func:`create_project` — the durable part of the layout,
 created once, refusing a non-empty directory) and the secrets hygiene
-(:func:`check_secret_file` — ``secrets/`` is created mode
+(:func:`require_secret_file` — ``secrets/`` is created mode
 700 and its files 600; every reader checks, insecure permissions draw a
 warning, and for key material the tools refuse).
 """
@@ -85,22 +85,22 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle, typing only
     from mcuhome.workbench.configuration import Option
 
 __all__ = [
+    "BUILDER_SECRETS_DIR",
     "BUILD_DIR",
     "DEVICES_DIR",
     "DEVICE_FILE",
     "GITIGNORE_LINES",
-    "BUILDER_SECRETS_DIR",
-    "PROJECT_MARKER_FILE",
     "PROJECT_CONFIG_FILE",
+    "PROJECT_MARKER_FILE",
     "PROJECT_VERSION",
     "SECRETS_DIR",
     "InitResult",
     "Project",
-    "check_secret_file",
-    "find_project_root",
     "create_project",
+    "find_project_root",
     "is_project_root",
     "is_upgrading",
+    "require_secret_file",
     "resolve_device",
     "resolve_project",
 ]
@@ -408,13 +408,13 @@ def resolve_device(
 _EXPOSED_BITS = 0o077
 
 
-def check_secret_file(
+def require_secret_file(
     path: Path,
     *,
     key_material: bool,
     on_warning: Callable[[str], None] | None = None,
 ) -> None:
-    """The permission check every reader of a secrets file runs.
+    """The permission guard every reader of a secrets file runs.
 
     ``secrets/`` files are created mode 600, and this is the other half
     of that promise: a file that group or world can reach draws a
@@ -424,8 +424,8 @@ def check_secret_file(
     notification, not a protection.
 
     On platforms whose ``stat`` does not carry POSIX permission bits the
-    check is a no-op rather than a guess. A missing file is the caller's
-    case to handle — this checks what is there, it does not require
+    guard is a no-op rather than a guess. A missing file is the caller's
+    case to handle — this refuses over what is there, it does not require
     anything to be.
     """
     if os.name != "posix":

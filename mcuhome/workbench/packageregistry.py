@@ -83,7 +83,7 @@ from mcuhome.packagetool.verify import (
 )
 from packaging.version import InvalidVersion, Version
 
-from mcuhome.workbench.project import SECRETS_DIR, check_secret_file, ensure_secrets_dir
+from mcuhome.workbench.project import SECRETS_DIR, ensure_secrets_dir, require_secret_file
 
 __all__ = [
     "BUNDLED_ANCHOR_DIR",
@@ -311,11 +311,11 @@ def trust_anchor_for(
                     "secrets/trust-anchor/ instead."
                 ),
             )
-        check_secret_file(path, key_material=False, on_warning=on_warning)
+        require_secret_file(path, key_material=False, on_warning=on_warning)
         return path
     path = anchor_file(project_root, base_domain)
     if path.is_file():
-        check_secret_file(path, key_material=False, on_warning=on_warning)
+        require_secret_file(path, key_material=False, on_warning=on_warning)
         return path
     if untrusted:
         return None

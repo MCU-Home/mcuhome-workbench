@@ -26,11 +26,11 @@ from mcuhome.workbench.project import (
     GITIGNORE_LINES,
     PROJECT_MARKER_FILE,
     Project,
-    check_secret_file,
     create_project,
     ensure_secrets_dir,
     find_project_root,
     is_project_root,
+    require_secret_file,
     resolve_device,
     resolve_project,
 )
@@ -324,7 +324,7 @@ def test_an_owner_only_secrets_file_draws_no_warning(tmp_path: Path) -> None:
     path.write_text("a: 1\n", encoding="utf-8")
     path.chmod(0o600)
     warnings: list[str] = []
-    check_secret_file(path, key_material=False, on_warning=warnings.append)
+    require_secret_file(path, key_material=False, on_warning=warnings.append)
     assert warnings == []
 
 
@@ -334,7 +334,7 @@ def test_an_exposed_secrets_file_draws_a_warning_with_the_fix(tmp_path: Path) ->
     path.write_text("a: 1\n", encoding="utf-8")
     path.chmod(0o644)
     warnings: list[str] = []
-    check_secret_file(path, key_material=False, on_warning=warnings.append)
+    require_secret_file(path, key_material=False, on_warning=warnings.append)
     assert len(warnings) == 1
     assert "readable by other users" in warnings[0]
     assert "mode 644" in warnings[0]
@@ -347,14 +347,14 @@ def test_exposed_key_material_is_refused_not_warned_about(tmp_path: Path) -> Non
     path.write_text("firmware_signing_key: x\n", encoding="utf-8")
     path.chmod(0o640)
     with pytest.raises(ConfigError) as caught:
-        check_secret_file(path, key_material=True, on_warning=lambda _: None)
+        require_secret_file(path, key_material=True, on_warning=lambda _: None)
     assert "refuses to use the key material" in caught.value.message
     assert "mode 640" in caught.value.message
     assert f"chmod 600 {path}" in (caught.value.hint or "")
 
 
 def test_a_missing_file_is_not_this_checks_problem(tmp_path: Path) -> None:
-    check_secret_file(tmp_path / "absent.yaml", key_material=True)
+    require_secret_file(tmp_path / "absent.yaml", key_material=True)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
