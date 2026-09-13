@@ -25,6 +25,7 @@ from conftest import VALID_CONFIG
 from mcuhome.model.buildenvironment import Declaration
 from mcuhome.model.context import PackagePin
 from mcuhome.model.errors import BuildError, ConfigError
+from test_resolve_image import REPO, WANTED, ScriptedImages, digest, image_labels
 
 from mcuhome.workbench import containerbuild
 from mcuhome.workbench.buildenvsession import (
@@ -172,9 +173,21 @@ def test_ensure_container_image_names_the_image_and_its_registry() -> None:
 
 
 def test_resolve_container_image_names_the_packages_it_looked_for() -> None:
+    """The refusal after a real search, not the empty-allowlist guard.
+
+    A repository that publishes an image is searched, its labels are
+    read, and the image declares another package set — which is the case
+    the person needs the wanted set spelled out for, because "no image
+    declares it" and "an image with these names under other bytes" read
+    alike otherwise.
+    """
+    images = ScriptedImages({REPO: {"0.1.0-r1": (digest("other"), image_labels(packages={}))}})
     with pytest.raises(BuildError) as caught:
-        resolve_container_image({}, repositories=())
-    assert "build environment" in caught.value.message.lower()
+        resolve_container_image(WANTED, registry=images, repositories=(REPO,))
+    hint = caught.value.hint or ""
+    for member in WANTED.values():
+        assert f"{member.name} {member.value()}" in hint
+    assert REPO in hint
 
 
 def test_fetch_sdk_package_names_the_version_it_could_not_find(tmp_path) -> None:
