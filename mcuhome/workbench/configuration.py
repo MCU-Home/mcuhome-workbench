@@ -119,8 +119,8 @@ __all__ = [
     "Settings",
     "option",
     "resolve_builder",
+    "resolve_config_file",
     "resolve_settings",
-    "scope_config_file",
     "set_config_value",
     "system_config_dir",
     "unset_config_value",
@@ -1139,7 +1139,7 @@ def _builder_token(
 # --------------------------------------------------------------------------
 
 
-def scope_config_file(
+def resolve_config_file(
     scope: str,
     *,
     project: Project | None,

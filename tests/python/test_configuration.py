@@ -387,7 +387,7 @@ def test_a_stated_system_directory_is_the_layer_that_is_read(
 
 
 def test_set_writes_a_value_the_next_resolve_reads_back(project: Project) -> None:
-    file = configuration.scope_config_file("project", project=project, env={})
+    file = configuration.resolve_config_file("project", project=project, env={})
     written = configuration.set_config_value(file, "build.sdk_max_bytes", "4", env={})
     assert written == 4
     resolved = resolve_settings(project=project, env={})
@@ -406,7 +406,7 @@ def test_set_preserves_comments_and_neighboring_keys(project: Project) -> None:
 
 def test_set_creates_the_file_and_its_directory(tmp_path: Path) -> None:
     env = {"XDG_CONFIG_HOME": str(tmp_path / "fresh-xdg")}
-    file = configuration.scope_config_file("user", project=None, env=env)
+    file = configuration.resolve_config_file("user", project=None, env=env)
     configuration.set_config_value(file, "build.builder", "attic", env=env)
     assert file.is_file()
     assert "builder: attic" in file.read_text(encoding="utf-8")
@@ -490,17 +490,18 @@ def test_unset_refuses_a_typo_rather_than_confirming_nothing(project: Project) -
 def test_scope_files_answer_per_scope(tmp_path: Path, project: Project) -> None:
     env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg")}
     assert (
-        configuration.scope_config_file("project", project=project, env=env) == project.config_file
+        configuration.resolve_config_file("project", project=project, env=env)
+        == project.config_file
     )
     assert (
-        configuration.scope_config_file("user", project=None, env=env)
+        configuration.resolve_config_file("user", project=None, env=env)
         == tmp_path / "xdg" / "mcuhome" / CONFIG_FILE
     )
     # The system scope follows the same stated environment; where that
     # directory *is* by default is asserted where the directories are
     # (the suite never lets a test read the machine's own /etc).
     assert (
-        configuration.scope_config_file(
+        configuration.resolve_config_file(
             "system", project=None, env={"XDG_CONFIG_DIRS": str(tmp_path / "etc")}
         )
         == tmp_path / "etc" / "mcuhome" / CONFIG_FILE
@@ -509,17 +510,17 @@ def test_scope_files_answer_per_scope(tmp_path: Path, project: Project) -> None:
 
 def test_the_project_scope_needs_a_project(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as caught:
-        configuration.scope_config_file("project", project=None, env={})
+        configuration.resolve_config_file("project", project=None, env={})
     assert "no project here" in caught.value.message
     assert "mcuhome project init" in (caught.value.hint or "")
 
 
 def test_an_unnameable_scope_directory_is_a_refusal_when_editing(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
-        configuration.scope_config_file("user", project=project, env={})
+        configuration.resolve_config_file("user", project=project, env={})
     assert "names no user configuration directory" in caught.value.message
     with pytest.raises(ValueError):
-        configuration.scope_config_file("galaxy", project=project, env={})
+        configuration.resolve_config_file("galaxy", project=project, env={})
 
 
 #: Keys whose unset value is answered by whoever consumes them — the

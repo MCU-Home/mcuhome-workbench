@@ -234,8 +234,8 @@ from mcuhome.workbench.configuration import (
     Settings,
     option,
     resolve_builder,
+    resolve_config_file,
     resolve_settings,
-    scope_config_file,
     set_config_value,
     unset_config_value,
 )
@@ -397,7 +397,7 @@ __all__ = [
     "resolve_settings",
     "resolve_shutdown_seconds",
     "find_running_builds",
-    "scope_config_file",
+    "resolve_config_file",
     "set_config_value",
     "unset_config_value",
     "plan_upgrade",
