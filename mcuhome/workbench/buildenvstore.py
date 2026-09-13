@@ -56,6 +56,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand, home
@@ -185,6 +186,16 @@ class StoreEntry:
     @property
     def marker(self) -> Path:
         return self.path / MARKER_FILE
+
+    def to_dict(self) -> dict[str, Any]:
+        """This store entry as a document, JSON-ready."""
+        return {
+            "kind": self.kind,
+            "name": self.name,
+            "version": self.version,
+            "sha256": self.sha256,
+            "path": str(self.path),
+        }
 
 
 @dataclass(frozen=True)

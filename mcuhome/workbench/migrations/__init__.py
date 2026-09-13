@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 from mcuhome.workbench.migrations import v1_project_identity
 from mcuhome.workbench.projectfile import ProjectFile
@@ -64,6 +65,21 @@ class Migration:
             details=module.DETAILS.strip("\n"),
             run=module.migrate,
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """This step as a document, JSON-ready.
+
+        :attr:`run` is deliberately not in here: it is the callable that
+        does the migration, not data about it, and a document that named
+        it could only ever carry a Python object's repr.
+        """
+        return {
+            "from_version": self.from_version,
+            "to_version": self.to_version,
+            "name": self.name,
+            "description": self.description,
+            "details": self.details,
+        }
 
 
 #: Every migration, oldest first. Append here when adding one.

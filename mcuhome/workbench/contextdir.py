@@ -931,6 +931,14 @@ class FileMismatch:
             f"{self.path}: hashes to {self.actual_sha256}, the manifest says {self.declared_sha256}"
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        """This one disagreement as a document, JSON-ready."""
+        return {
+            "path": self.path,
+            "declared_sha256": self.declared_sha256,
+            "actual_sha256": self.actual_sha256,
+        }
+
 
 @dataclass(frozen=True)
 class ContextVerification:
@@ -960,6 +968,22 @@ class ContextVerification:
                 f"the manifest says {self.declared_id}"
             )
         return messages
+
+    def to_dict(self) -> dict[str, Any]:
+        """This verification as a document, JSON-ready.
+
+        ``context_id`` is the *declared* id — the one the manifest
+        states, out of :attr:`declared_id` — because that is the identity
+        a caller checked the context against; :attr:`actual_id` answers
+        what the bytes present actually hash to, under its own key.
+        """
+        return {
+            "ok": self.ok,
+            "root": str(self.root),
+            "context_id": self.declared_id,
+            "actual_id": self.actual_id,
+            "mismatches": [mismatch.to_dict() for mismatch in self.mismatches],
+        }
 
 
 def verify_context(root: Path) -> ContextVerification:

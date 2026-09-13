@@ -166,6 +166,26 @@ class StepResult:
         """
         return self.status == STATUS_SUCCESS and not self.problems
 
+    def to_dict(self) -> dict[str, Any]:
+        """This step's result as a document, JSON-ready.
+
+        :attr:`result` — the environment's own result document — is not
+        in here: it is the specification's document and not this
+        orchestrator's, and this is the account the orchestrator itself
+        gives of a step.
+        """
+        return {
+            "ok": self.ok,
+            "status": self.status,
+            "action": self.action,
+            "context_id": self.context_id,
+            "exit_code": self.exit_code,
+            "problems": list(self.problems),
+            "violation": self.violation,
+            "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+            "out_dir": None if self.out_dir is None else str(self.out_dir),
+        }
+
 
 # --------------------------------------------------------------------------
 # The frozen names of the specification, from the orchestrator's side

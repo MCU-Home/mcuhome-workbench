@@ -1502,11 +1502,16 @@ and the warnings, each with its severity, so a client renders one list:
 ```
 
 `Settings.to_dict()` answers one entry per declared option, in
-declaration order:
+declaration order — the key is the option's name and the value is
+`Setting.to_dict()`:
 ```json
 {"build.mode": {"value": "subprocess", "origin": "project",
                 "source": "/…/mcuhome.yaml"}}
 ```
+
+`Setting.to_dict()`: `{value, origin, source}` — a structured value
+(a builder, a registry) is rendered through its own document, so no
+client ever meets a Python object where it asked for data.
 
 `Diagnostic.to_dict()`: `{severity, message, file, line, column, key,
 hint, kind}` — the error document's keys plus the severity, so the two
@@ -1514,7 +1519,19 @@ are one shape.
 `BuildRecord.to_dict()`: `{out_dir, device, context_id, artifacts,
 report, signed, container_image, busy}`.
 `ContextVerification.to_dict()`: `{ok, root, context_id, actual_id,
-mismatches: [{path, declared_sha256, actual_sha256}]}`.
+mismatches}` — `context_id` is the identity the manifest declares and
+`actual_id` what the bytes present hash to.
+`FileMismatch.to_dict()`: `{path, declared_sha256, actual_sha256}`.
+`StoreEntry.to_dict()`: `{kind, name, version, sha256, path}`.
+`NewDevice.to_dict()`: `{project, entry, name, board}`.
+`Migration.to_dict()`: `{from_version, to_version, name, description,
+details}` — `run` is the callable that does the work and is in no
+document.
+`UpgradeResult.to_dict()`: `{from_version, to_version, applied, stopped,
+remaining}`, with `applied` and `remaining` holding migration documents.
+`RunningBuild.to_dict()`: `{directory, device, operation, process,
+started, name}`.
+`UpgradeRecord.to_dict()`: `{started, process, host, running}`.
 `SignPlan.to_dict()`: `{out_dir, report_path, key, commands: [{format,
 argv, output}]}`.
 `Builder.to_dict()`: `{name, target, origin, source, server,

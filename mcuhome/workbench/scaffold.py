@@ -51,6 +51,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model import ota, registry
 from mcuhome.model.errors import ConfigError, Location
@@ -78,6 +79,20 @@ class NewDevice:
     entry: Path
     name: str
     board: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """This new device as a document, JSON-ready.
+
+        :attr:`project` is asked for its own document rather than
+        flattened in here, the same way a nested value is treated
+        anywhere else on this surface.
+        """
+        return {
+            "project": self.project.to_dict(),
+            "entry": str(self.entry),
+            "name": self.name,
+            "board": self.board,
+        }
 
 
 @dataclass(frozen=True)

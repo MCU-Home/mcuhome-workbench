@@ -61,6 +61,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.errors import ConfigError, MCUHomeError
 
@@ -123,6 +124,17 @@ class RunningBuild:
     def name(self) -> str:
         return self.device or self.directory.name
 
+    def to_dict(self) -> dict[str, Any]:
+        """This busy build directory as a document, JSON-ready."""
+        return {
+            "directory": str(self.directory),
+            "device": self.device,
+            "operation": self.operation,
+            "process": self.process,
+            "started": self.started,
+            "name": self.name,
+        }
+
 
 @dataclass(frozen=True)
 class UpgradeResult:
@@ -137,6 +149,21 @@ class UpgradeResult:
     @property
     def remaining(self) -> tuple[Migration, ...]:
         return plan_upgrade(self.to_version)
+
+    def to_dict(self) -> dict[str, Any]:
+        """This upgrade as a document, JSON-ready.
+
+        :attr:`applied` and :attr:`remaining` are each the migration
+        document :meth:`Migration.to_dict` states, in the order they ran
+        or would run — the plan a user is shown, before and after.
+        """
+        return {
+            "from_version": self.from_version,
+            "to_version": self.to_version,
+            "applied": [migration.to_dict() for migration in self.applied],
+            "stopped": self.stopped,
+            "remaining": [migration.to_dict() for migration in self.remaining],
+        }
 
 
 def is_upgrading(root: Path) -> bool:
