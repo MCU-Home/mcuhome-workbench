@@ -292,7 +292,13 @@ into `main.yaml`, the values into the device's own secrets file beside
 the project's `secrets/main.yaml`. Raises `ConfigError` when the device
 already has credentials unless *force*, and when the file cannot be
 edited in place. *draw* is the source of randomness, injected so a test
-can pin it. `read_pairing` answers what a device already has.
+can pin it; its default is `random_pairing`, which draws one group of
+credentials from the operating system's random source.
+`read_pairing` answers what a device already has.
+
+```python
+def random_pairing() -> Pairing
+```
 
 ```python
 def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]
@@ -783,6 +789,14 @@ def verify_context(root: Path) -> ContextVerification
 def read_context_manifest(path: Path) -> ContextManifest
 def read_generator_chain(path: Path) -> tuple[GeneratorEntry, ...]
 def read_context_facts(root: Path) -> dict[str, Any]
+def context_id(
+    *,
+    sdk_sha256: str,
+    environment: ContextEnvironment,
+    board: str,
+    files: Iterable[ContextFile],
+) -> str
+def format_generator_chain(entries: Iterable[GeneratorEntry]) -> str
 ```
 Locking computes the integrity list and the context ID — it is the act of
 whoever builds the context, and a client that sent one checks the
@@ -795,6 +809,12 @@ close and `ContextFormatVersionError` for one this version does not read;
 `read_context_manifest` raises the same for a manifest it cannot read.
 `read_generator_chain` raises `ContextFormatVersionError` for a context
 format this version does not read.
+
+`context_id` is the identity rule itself and `format_generator_chain`
+renders a chain the way a manifest states it. Both are re-exported from
+the device-model package unchanged, because the whole point of that
+value is that two parties who never share build code arrive at the same
+one: a build server recomputes it from the bytes it received.
 
 ## Build environments
 A build environment is the compiler stack a build runs in: a container
@@ -925,6 +945,9 @@ def resolve_container_image(
     platform: str | None = None,
 ) -> ContainerImageMatch
 def parse_container_image(text: str | None) -> ContainerImagePin
+def parse_container_reference(
+    text: str, *, default_registry: str, what: str = "reference"
+) -> Reference
 def create_launcher(
     *,
     container_image: str,
@@ -966,6 +989,11 @@ tag, digest)` with the properties `stated` and `canonical` and the
 method `described()` is what `parse_container_image` answers.
 `Launcher` is `Callable[[Step, LineSink | None], Running]` — a type
 alias, so a caller may supply its own.
+`parse_container_reference` is the device-model package's own parser for
+`[registry/]path[:tag][@digest]`, re-exported for the caller that has to
+split an address itself; *default_registry* is the host an absent one
+means and *what* names the thing in a refusal. It answers the same
+`Reference` object `ContainerImageMatch.reference` carries.
 
 ## Packages and registries
 ```python
@@ -975,7 +1003,9 @@ def open_package_registry(
     project_root: Path,
     settings: Sequence[RegistrySettings] = (),
     into: Path,
+    opener: Callable[[str, float], IO[bytes]] | None = None,
     on_warning: Callable[[str], None] | None = None,
+    now: datetime | None = None,
 ) -> RegistrySource
 def fetch_sdk_package(
     *, version: str, sha256: str, sources: Sequence[Path], into: Path,
@@ -1003,6 +1033,13 @@ callable that builds one on first use.
 `RegistrySettings` (frozen): `base_domain`, `untrusted`, `mirrors`,
 `anchor`, `to_dict()`.
 
+*opener* and *now* are the two injection seams of this function — an
+HTTP opener and a clock — and they exist for MCUHome's own tests, which
+serve a registry tree out of a directory and check freshness against a
+fixed date. They are stated here because they are in the signature, not
+because a consumer should pass them: left out, the registry opens the
+network and asks the machine what time it is.
+
 ## Signing, reports and OTA
 The private key never reaches a build. A build produces unsigned
 artifacts and a build report; signing happens where the key is.
@@ -1020,7 +1057,7 @@ def create_signing_key(
     project: Project | None = None,
     path: Path | None = None,
 ) -> SigningKey
-def generate_key_pem() -> str
+def generate_key_pem(scalar: int | None = None) -> str
 def public_key_pem(private_pem: str) -> str
 def is_p256_private_key(text: str) -> bool
 def is_p256_public_key(text: str) -> bool
@@ -1034,6 +1071,12 @@ file is exposed to other users. A caller that wants one generated says so
 `created` true, which is worth saying out loud: a device only accepts
 images signed with the key its bootloader carries. `SigningKey` (frozen):
 `path`, `pem`, `in_secrets`, `created`.
+
+*scalar* is `generate_key_pem`'s injection seam and exists for MCUHome's
+own tests, which need one known key to compare bytes against. Left out —
+which is how it is called — the private scalar is drawn from the
+operating system's random source by rejection sampling, so it is uniform
+over the curve's order rather than biased by a modulo.
 
 ```python
 def read_build_report(path: Path) -> dict[str, Any]
