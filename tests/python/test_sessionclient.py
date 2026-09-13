@@ -1464,13 +1464,24 @@ def test_the_packer_refuses_private_key_material_by_name_and_by_content(tmp_path
     packed = sc.pack_context(context, spool=tmp_path / "clean.tar.zst")
     assert "keys/signing.pub" in packed.members
 
-    # Also refuse the other known private-key names outright: the
-    # project's mcuboot.yaml (which references the key) and the
-    # referenced mcuboot.pem (which IS the key).
-    for name in ("mcuboot.yaml", "mcuboot.pem"):
+    # The project's key file and the secrets YAML that references it,
+    # under the names a project carries today and under the ones an
+    # older one still has.
+    for name in ("key.pem", "key.yaml", "mcuboot.yaml", "mcuboot.pem"):
         (context / "keys" / name).write_text(private_pem, encoding="utf-8")
         with pytest.raises(sc.PrivateKeyRefused, match=f"keys/{name}"):
             sc.pack_context(context, spool=tmp_path / f"{name}.tar.zst")
+        (context / "keys" / name).unlink()
+
+    # And the name layer alone, with nothing in the file for the content
+    # check to find: a key file somebody emptied or moved the key out of
+    # is still one of these names, and this is the half that says so.
+    # The names are written out rather than read off the module — a loop
+    # over the tuple under test would pass a tuple that lost one.
+    for name in ("key.pem", "key.yaml", "signing.key", "mcuboot.yaml", "mcuboot.pem"):
+        (context / "keys" / name).write_text("# the key is not here\n", encoding="utf-8")
+        with pytest.raises(sc.PrivateKeyRefused, match=f"keys/{name}"):
+            sc.pack_context(context, spool=tmp_path / f"empty-{name}.tar.zst")
         (context / "keys" / name).unlink()
 
 

@@ -877,9 +877,19 @@ def pack_context(
 _PRIVATE_KEY_MARKER = b"PRIVATE KEY-----"
 
 #: File names this workbench has ever kept private key material under:
-#: a plain key file (the ``--signing-key``/dashboard form) and the
-#: project's ``secrets/firmware/mcuboot.yaml``.
-_PRIVATE_KEY_NAMES = ("signing.key", "mcuboot.yaml", "mcuboot.pem")
+#: the project's key file and the secrets YAML that references it —
+#: under today's names and under the ones older projects still carry —
+#: plus the plain key file of the ``--signing-key`` / dashboard form. A
+#: file under one of these names is refused whatever is in it: a key
+#: file that was emptied or moved out is not a thing to pack and shrug
+#: about.
+_PRIVATE_KEY_NAMES = (
+    "key.pem",
+    "key.yaml",
+    "signing.key",
+    "mcuboot.yaml",
+    "mcuboot.pem",
+)
 
 
 def _holds_private_key(source: Path) -> bool:
@@ -922,13 +932,12 @@ def _check_member(name: str, source: Path, caps: IngressCaps) -> None:
     # The API has no slot a private key could be passed in, but a file
     # left in the context directory needs no slot: it is packed as
     # ordinary content, and the server's own whitelist takes *any* file
-    # name under `keys/`. So the packer looks — by name, because these
-    # are the names this workbench has ever kept private key material
-    # under (the plain file of a --signing-key override, and the
-    # project's secrets YAML) — and at the bytes, because
-    # a stray key under another name is the same accident. The content
-    # check catches the YAML form too: the PEM block inside it carries
-    # the same marker.
+    # name under `keys/`. So the packer looks — by name, because
+    # _PRIVATE_KEY_NAMES are the names this workbench has ever kept
+    # private key material under, and at the bytes, because a stray key
+    # under another name is the same accident. The content check catches
+    # the YAML form too: the PEM block inside it carries the same
+    # marker.
     if name.rsplit("/", 1)[-1] in _PRIVATE_KEY_NAMES or _holds_private_key(source):
         raise PrivateKeyRefused(
             f'"{name}" holds private key material, and nothing was sent.',
