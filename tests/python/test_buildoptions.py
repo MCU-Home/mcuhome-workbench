@@ -364,7 +364,7 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
         lambda device_model, **kwargs: created.update(kwargs),
     )
     monkeypatch.setattr(build, "lock_context", lambda directory: None)
-    monkeypatch.setattr(build, "context_facts", lambda directory: {})
+    monkeypatch.setattr(build, "read_context_facts", lambda directory: {})
     monkeypatch.setattr(build, "read_context_request", lambda path: _Pinned())
     monkeypatch.setattr(build, "read_generator_chain", lambda path: ("mcuhome-workbench", "0.1.0"))
     monkeypatch.setattr(build, "format_generator_chain", lambda chain: "mcuhome-workbench:0")
@@ -422,7 +422,7 @@ def test_the_configured_container_program_reaches_both_container_calls(
         lambda device_model, **kwargs: None,
     )
     monkeypatch.setattr(build, "lock_context", lambda directory: None)
-    monkeypatch.setattr(build, "context_facts", lambda directory: {})
+    monkeypatch.setattr(build, "read_context_facts", lambda directory: {})
     monkeypatch.setattr(build, "read_context_request", lambda path: _Pinned())
     monkeypatch.setattr(build, "read_generator_chain", lambda path: ("mcuhome-workbench", "0.1.0"))
     monkeypatch.setattr(build, "format_generator_chain", lambda chain: "mcuhome-workbench:0")
@@ -509,7 +509,7 @@ def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch
         "create_build_context",
         lambda device_model, **kwargs: created.update(kwargs),
     )
-    monkeypatch.setattr(build, "context_facts", lambda directory: {"build_environment": ""})
+    monkeypatch.setattr(build, "read_context_facts", lambda directory: {"build_environment": ""})
 
     request = BuildRequest(
         model=model,

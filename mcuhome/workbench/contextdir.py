@@ -73,11 +73,11 @@ __all__ = [
     "ContextFormatVersionError",
     "ContextVerification",
     "FileMismatch",
-    "context_facts",
     "create_build_context",
     "create_context",
     "generator_chain",
     "lock_context",
+    "read_context_facts",
     "read_context_manifest",
     "read_context_request",
     "read_generator_chain",
@@ -87,7 +87,7 @@ __all__ = [
     "write_context_request",
 ]
 
-#: What :func:`context_facts` reports as the SDK of a development build.
+#: What :func:`read_context_facts` reports as the SDK of a development build.
 #: The context states no version and no hash there, and a renderer that
 #: printed the empty string would say nothing where it means to say where
 #: the code came from.
@@ -848,7 +848,7 @@ def read_context_manifest(path: Path) -> ContextManifest:
     return manifest
 
 
-def context_facts(root: Path) -> dict[str, Any]:
+def read_context_facts(root: Path) -> dict[str, Any]:
     """What a person wants to know about the context at *root*.
 
     Not a document and part of no protocol: a build that says "context"

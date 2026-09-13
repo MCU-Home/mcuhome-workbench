@@ -45,9 +45,9 @@ from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench.contextdir import (
     DEVELOPER_SDK_FACT,
     GENERATOR_PRODUCT,
-    context_facts,
     create_context,
     lock_context,
+    read_context_facts,
     read_context_manifest,
     read_context_request,
     read_generator_chain,
@@ -427,7 +427,7 @@ def test_the_facts_of_a_context_name_its_pins_and_its_patches(model, tmp_path: P
     """
     out_dir = tmp_path / "context"
     manifest = _lock(model, out_dir, patches_dir=_patches_source(tmp_path))
-    facts = context_facts(out_dir)
+    facts = read_context_facts(out_dir)
     assert facts["sdk"] == SDK.version
     assert facts["sdk_sha256"] == SDK.sha256
     assert facts["build_environment"] == ENVIRONMENT.described()
@@ -458,7 +458,7 @@ def test_the_facts_of_a_development_context_say_where_the_code_came_from(
         build_environment=DeveloperEnvironment(),
         sdk=SdkPin(constraint="", version="", url="", sha256=""),
     )
-    facts = context_facts(out_dir)
+    facts = read_context_facts(out_dir)
 
     assert facts["sdk"] == DEVELOPER_SDK_FACT
     assert facts["sdk_sha256"] == ""
@@ -472,7 +472,7 @@ def test_a_base_context_has_facts_but_no_identity_yet(model, tmp_path: Path) -> 
     """Freezing is the locking party's act, so an unlocked context has no ID."""
     out_dir = tmp_path / "context"
     _create(model, out_dir)
-    facts = context_facts(out_dir)
+    facts = read_context_facts(out_dir)
     assert "id" not in facts
     assert facts["sdk"] == SDK.version
     assert facts["patches"] == []

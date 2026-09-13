@@ -126,9 +126,9 @@ from mcuhome.workbench.buildtarget import (
 )
 from mcuhome.workbench.configuration import Setting, Settings, resolve_settings
 from mcuhome.workbench.contextdir import (
-    context_facts,
     create_build_context,
     lock_context,
+    read_context_facts,
     read_context_request,
     read_generator_chain,
 )
@@ -1430,7 +1430,7 @@ def compose_container_build(
             # What the context turned out to be, read back off the
             # directory: the step announced itself before any of this was
             # decided, and the decisions are the interesting part.
-            on_step("context", **context_facts(context_dir))
+            on_step("context", **read_context_facts(context_dir))
 
     if on_step is not None:
         on_step("environment")
@@ -1629,7 +1629,7 @@ def compose_subprocess_build(
             on_line=on_line,
         )
         if on_step is not None:
-            on_step("context", **context_facts(context_dir))
+            on_step("context", **read_context_facts(context_dir))
 
     if environment is not None:
         # A development build's refusal, before this composition has read
@@ -1908,7 +1908,7 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     if request.on_step is not None:
         request.on_step(
             "environment",
-            build_environment=context_facts(context_dir)["build_environment"],
+            build_environment=read_context_facts(context_dir)["build_environment"],
             zephyr="",
             found_under="",
             fetched=False,
@@ -1989,7 +1989,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         if request.on_step is not None:
             # No `id` among these: freezing the context is the server's
             # act, so a base context on its way out has none yet.
-            request.on_step("context", **context_facts(context_dir))
+            request.on_step("context", **read_context_facts(context_dir))
 
     from mcuhome.workbench import sessionclient
 
