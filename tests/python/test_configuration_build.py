@@ -25,7 +25,7 @@ import pytest
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import configuration
-from mcuhome.workbench.build import build_options
+from mcuhome.workbench.build import resolve_build_options
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
@@ -273,7 +273,7 @@ def test_a_cpu_share_is_a_number_and_a_memory_figure_is_a_word(project: Project)
     settings = resolve_settings(project=project, env={})
     assert settings.value("build.cpus") == 2.5
     assert settings.value("build.memory") == "6g"
-    limits = build_options(settings).limits()
+    limits = resolve_build_options(settings).limits()
     assert limits.cpus == 2.5
     assert limits.memory_bytes == 6 * 1024**3
 
@@ -569,7 +569,7 @@ def test_the_build_options_carry_the_target_and_where_it_came_from(project: Proj
     person is not looking at.
     """
     write_project(project, "build:\n  target: remote\n")
-    options = build_options(
+    options = resolve_build_options(
         resolve_settings(project=project, env={"MCUHOME_BUILD_CACHE_ROOT": "/srv/cache"})
     )
     assert options.target == TARGET_REMOTE
@@ -579,7 +579,7 @@ def test_the_build_options_carry_the_target_and_where_it_came_from(project: Proj
     assert options.cache_root == Path("/srv/cache")
     assert options.source("cache_root") == "MCUHOME_BUILD_CACHE_ROOT"
 
-    unset = build_options(resolve_settings(project=None, env={}))
+    unset = resolve_build_options(resolve_settings(project=None, env={}))
     assert unset.target == TARGET_LOCAL
     assert unset.source("target") == "default"
 

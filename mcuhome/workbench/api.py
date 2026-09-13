@@ -106,12 +106,12 @@ What is here, in the order a caller needs it:
     same for the other axis — ``MODE_CONTAINER``, ``MODE_SUBPROCESS``
     (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or ``UnknownBuildMode``.
     ``BuildRequest.mode`` is where a caller states the mode.
-``BuildOptions`` / ``build_options``
+``BuildOptions`` / ``resolve_build_options``
     What the ``build`` section of the configuration says about *this
     machine*: the execution it uses, where it keeps unpacked build
     environments and which interpreter finalizes them, how much a package
     may unpack to, which directories each package is looked for in, and
-    where the compiler cache tiers are. ``build_options`` turns resolved
+    where the compiler cache tiers are. ``resolve_build_options`` turns resolved
     ``Settings`` into that object; a request that states none has them
     resolved from the environment and the project it names.
     ``build.target`` is in there too: where a build of this machine runs
@@ -198,8 +198,8 @@ from mcuhome.workbench.build import (
     UnknownBuildMode,
     UnknownBuildTarget,
     build_firmware,
-    build_options,
     resolve_build_mode,
+    resolve_build_options,
     resolve_build_target,
 )
 from mcuhome.workbench.buildenvsession import (
@@ -372,7 +372,7 @@ __all__ = [
     "VERSION",
     "ValidationResult",
     "build_firmware",
-    "build_options",
+    "resolve_build_options",
     "open_build_lock",
     "config_json_schema",
     "error_dicts",

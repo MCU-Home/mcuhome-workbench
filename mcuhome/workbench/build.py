@@ -170,7 +170,7 @@ __all__ = [
     "UnknownBuildMode",
     "UnknownBuildTarget",
     "build_firmware",
-    "build_options",
+    "resolve_build_options",
     "compose_container_build",
     "compose_subprocess_build",
     "image_pin",
@@ -338,7 +338,7 @@ class BuildOptions:
     It travels as one object rather than as a dozen fields on
     :class:`BuildRequest` for two reasons. A caller that has resolved the
     configuration hands over what it resolved
-    (:func:`build_options`), and a caller that has not — an embedder
+    (:func:`resolve_build_options`), and a caller that has not — an embedder
     driving a bare model — gets the machine's own answer without having
     to know that these keys exist (:func:`options_for`). And the build
     compositions take one parameter instead of growing one per key.
@@ -442,7 +442,7 @@ class BuildOptions:
         }.get(kind)
 
 
-def build_options(settings: Settings) -> BuildOptions:
+def resolve_build_options(settings: Settings) -> BuildOptions:
     """The ``build`` section of a resolved configuration, as one object.
 
     Every value comes out of the registry that declared it — this
@@ -528,7 +528,7 @@ def options_for(request: BuildRequest) -> BuildOptions:
         if request.project_root is None
         else Project(root=Path(request.project_root), discovered=True)
     )
-    return build_options(resolve_settings(project=project, env=request.env))
+    return resolve_build_options(resolve_settings(project=project, env=request.env))
 
 
 @dataclass(frozen=True)

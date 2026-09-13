@@ -26,7 +26,7 @@ from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import build, buildenvsession, buildenvstore, subprocessbuild
-from mcuhome.workbench.build import BuildOptions, BuildRequest, build_options, options_for
+from mcuhome.workbench.build import BuildOptions, BuildRequest, options_for, resolve_build_options
 from mcuhome.workbench.configuration import resolve_settings
 from mcuhome.workbench.project import Project, create_project
 
@@ -43,7 +43,7 @@ def project(tmp_path: Path) -> Project:
 
 def configured(project: Project, text: str) -> BuildOptions:
     project.config_file.write_text(text, encoding="utf-8")
-    return build_options(resolve_settings(project=project, env={}))
+    return resolve_build_options(resolve_settings(project=project, env={}))
 
 
 # --------------------------------------------------------------------------
