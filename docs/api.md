@@ -1502,8 +1502,8 @@ and the warnings, each with its severity, so a client renders one list:
 ```
 
 `Settings.to_dict()` answers one entry per declared option, in
-declaration order — the key is the option's name and the value is
-`Setting.to_dict()`:
+declaration order — the key is the option's name, the value the setting
+document below:
 ```json
 {"build.mode": {"value": "subprocess", "origin": "project",
                 "source": "/…/mcuhome.yaml"}}
