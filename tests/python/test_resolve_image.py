@@ -27,7 +27,7 @@ from mcuhome.model.buildenvironment import (
 )
 from mcuhome.model.errors import BuildError
 
-from mcuhome.workbench.ociregistry import ImageFacts, RegistryError
+from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistryError
 from mcuhome.workbench.resolve_image import image_for_packages, parse_image_pin, revision_of
 
 REPO = "ghcr.io/mcu-home/build-environment"
@@ -115,7 +115,7 @@ class ScriptedImages:
 
     def tags(self, reference):
         if reference.repository in self.unreachable:
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.repository} did not answer.",
                 hint="an allowlist exists to have alternatives in it",
             )
@@ -138,7 +138,7 @@ class ScriptedImages:
         if isinstance(found, dict):
             wanted = platform or "linux-amd64"
             if wanted not in found:
-                raise RegistryError(
+                raise ImageRegistryError(
                     f"{reference.repository} publishes no {wanted} image under this name.",
                     hint="the index lists " + ", ".join(sorted(found)),
                 )

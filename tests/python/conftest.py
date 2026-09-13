@@ -499,7 +499,7 @@ def _no_registry(monkeypatch):
             "wherever a build environment is resolved"
         )
 
-    monkeypatch.setattr(ociregistry.Registry, "_urlopen", refuse)
+    monkeypatch.setattr(ociregistry.ImageRegistry, "_urlopen", refuse)
 
 
 # --- resolving a configuration (stages 1-3) --------------------------

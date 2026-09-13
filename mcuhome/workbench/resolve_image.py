@@ -62,7 +62,7 @@ from mcuhome.model.buildenvironment import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 
-from mcuhome.workbench.ociregistry import ImageFacts, Registry, RegistryError
+from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistry, ImageRegistryError
 
 __all__ = [
     "ImageMatch",
@@ -251,7 +251,7 @@ def _members(labels: Mapping[str, str]) -> dict[str, str]:
 def image_for_packages(
     packages: Mapping[str, PackageMember],
     *,
-    registry: Registry | None = None,
+    registry: ImageRegistry | None = None,
     repositories: Sequence[str] = (ENVIRONMENT_IMAGE_REPOSITORY,),
     pin: ImagePin | None = None,
     platform: str | None = None,
@@ -296,7 +296,7 @@ def image_for_packages(
                 "configure at least one, or build outside a container"
             ),
         )
-    client = registry if registry is not None else Registry()
+    client = registry if registry is not None else ImageRegistry()
     rejected: list[str] = []
     for repository in searched:
         reference = parse_reference(
@@ -321,7 +321,7 @@ def image_for_packages(
 
 
 def _candidates(
-    client: Registry, reference: Reference, pin: ImagePin, rejected: list[str]
+    client: ImageRegistry, reference: Reference, pin: ImagePin, rejected: list[str]
 ) -> list[Reference]:
     """Which images of *reference*'s repository are worth a label read.
 
@@ -336,7 +336,7 @@ def _candidates(
         return [replace(reference, tag=pin.tag, digest=None)]
     try:
         tags = client.tags(reference)
-    except RegistryError as unreachable:
+    except ImageRegistryError as unreachable:
         # One unreachable repository is not the end of the search: a
         # search list exists to have alternatives in it.
         rejected.append(f"{reference.repository} could not be asked ({unreachable})")
@@ -350,7 +350,7 @@ def _candidates(
 
 
 def _facts_of(
-    client: Registry, candidate: Reference, platform: str | None, rejected: list[str]
+    client: ImageRegistry, candidate: Reference, platform: str | None, rejected: list[str]
 ) -> ImageFacts | None:
     """This host's manifest of *candidate* and its labels, or a reason why not.
 
@@ -360,7 +360,7 @@ def _facts_of(
     """
     try:
         return client.facts(candidate, platform=platform)
-    except RegistryError as unreadable:
+    except ImageRegistryError as unreadable:
         rejected.append(f"{candidate} could not be read ({unreadable})")
         return None
 

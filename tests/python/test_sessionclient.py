@@ -471,7 +471,7 @@ class ScriptedRegistry:
 
     def tags(self, reference):
         if self.repositories and reference.repository not in self.repositories:
-            raise ociregistry.RegistryError(f"{reference.repository} publishes nothing")
+            raise ociregistry.ImageRegistryError(f"{reference.repository} publishes nothing")
         return self.tags_
 
     def facts(self, reference, *, platform=None):
@@ -902,15 +902,15 @@ async def real_server(
         bs_container.run_docker,
         containerbuild.run_command,
         containerbuild.spawn_process,
-        ociregistry.Registry.tags,
-        ociregistry.Registry.facts,
+        ociregistry.ImageRegistry.tags,
+        ociregistry.ImageRegistry.facts,
         packageregistry.registry_for,
     )
     bs_container.run_docker = fake.run
     containerbuild.run_command = fake.answer
     containerbuild.spawn_process = _spawner(fake)
-    ociregistry.Registry.tags = scripted.tags
-    ociregistry.Registry.facts = scripted.facts
+    ociregistry.ImageRegistry.tags = scripted.tags
+    ociregistry.ImageRegistry.facts = scripted.facts
     packageregistry.registry_for = _no_package_registry
     config = bs_config.Config(
         host="127.0.0.1",
@@ -938,8 +938,8 @@ async def real_server(
             bs_container.run_docker,
             containerbuild.run_command,
             containerbuild.spawn_process,
-            ociregistry.Registry.tags,
-            ociregistry.Registry.facts,
+            ociregistry.ImageRegistry.tags,
+            ociregistry.ImageRegistry.facts,
             packageregistry.registry_for,
         ) = saved
 

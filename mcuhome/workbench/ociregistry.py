@@ -46,10 +46,10 @@ from mcuhome.model.imageref import DOCKER_HUB, Reference
 __all__ = [
     "ACCEPT_MANIFEST",
     "ImageFacts",
-    "Registry",
-    "RegistryError",
-    "RegistryUnauthorized",
-    "RegistryUnreachable",
+    "ImageRegistry",
+    "ImageRegistryError",
+    "ImageRegistryUnauthorized",
+    "ImageRegistryUnreachable",
     "Response",
 ]
 
@@ -130,15 +130,15 @@ def _api(reference: Reference) -> Reference:
     return replace(reference, registry=_HUB_API, path=path)
 
 
-class RegistryError(BuildError):
+class ImageRegistryError(BuildError):
     """The registry answered, and the answer was not usable."""
 
 
-class RegistryUnauthorized(RegistryError):
+class ImageRegistryUnauthorized(ImageRegistryError):
     """The registry refused an anonymous request — it is a private one."""
 
 
-class RegistryUnreachable(RegistryError):
+class ImageRegistryUnreachable(ImageRegistryError):
     """The registry could not be reached at all: DNS, TLS, timeout, proxy."""
 
 
@@ -171,7 +171,7 @@ class _Headers(dict):
 class Response:
     """One HTTP answer, as this module's opener seam hands it over.
 
-    Public because it *is* the seam: whoever replaces :class:`Registry`'s
+    Public because it *is* the seam: whoever replaces :class:`ImageRegistry`'s
     opener — a test, an embedder with its own HTTP stack — has to produce
     one of these, and the header normalization above is part of what a
     correct answer means rather than an implementation detail of the
@@ -212,7 +212,7 @@ class _NoCrossHostAuth(urllib.request.HTTPRedirectHandler):
         return new
 
 
-class Registry:
+class ImageRegistry:
     """One registry host, asked about one repository at a time.
 
     Holds the pull token it was handed for the duration of a resolution,
@@ -302,7 +302,7 @@ class Registry:
         config = document.get("config")
         blob_digest = config.get("digest") if isinstance(config, dict) else None
         if not isinstance(blob_digest, str):
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.repository} answered with a manifest naming no config.",
                 hint="an image without a config blob states nothing about itself",
             )
@@ -310,7 +310,7 @@ class Registry:
         url = f"https://{api.registry}/v2/{api.path}/blobs/{blob_digest}"
         response = self._get(reference, url, accept="application/json")
         if response is None:
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.repository} names a config blob it does not have.",
                 hint=f"{blob_digest} is referenced by the manifest and answered with 404",
             )
@@ -346,7 +346,7 @@ class Registry:
             if found == (system, architecture):
                 return str(entry["digest"])
             offered.append("/".join(part for part in found if part) or "unnamed")
-        raise RegistryError(
+        raise ImageRegistryError(
             f"{reference.repository} publishes no {wanted} image under this name.",
             hint=(
                 "the index lists "
@@ -369,7 +369,7 @@ class Registry:
         url = f"https://{api.registry}/v2/{api.path}/manifests/{name}"
         response = self._get(reference, url, accept=ACCEPT_MANIFEST)
         if response is None:
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.repository} has nothing under {name}.",
                 hint="the tag or digest does not exist in that repository",
             )
@@ -383,7 +383,7 @@ class Registry:
             # on — and it is refused here rather than half a resolution
             # later, where the empty string would read as a malformed
             # digest instead of as a registry that did not answer.
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.repository} answered about {name} without naming a digest.",
                 hint=(
                     "the registry did not send a Docker-Content-Digest header, which "
@@ -407,7 +407,7 @@ class Registry:
         if response.status == 404:
             return None
         if response.status == 401 or response.status == 403:
-            raise RegistryUnauthorized(
+            raise ImageRegistryUnauthorized(
                 f"{reference.registry} does not serve {reference.path} anonymously.",
                 hint=(
                     "MCUHome reads a registry without credentials of its own. Log the "
@@ -417,7 +417,7 @@ class Registry:
                 ),
             )
         if response.status != 200:
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.registry} answered {response.status} for {reference.path}.",
                 hint="the registry rejected an ordinary read — nothing can be resolved from it",
             )
@@ -429,7 +429,7 @@ class Registry:
         fields = dict(_CHALLENGE.findall(challenge))
         realm = fields.get("realm")
         if not realm:
-            raise RegistryUnauthorized(
+            raise ImageRegistryUnauthorized(
                 f"{reference.registry} refused an anonymous read of {reference.path}.",
                 hint=(
                     "it answered 401 without saying where a token comes from, so there "
@@ -446,7 +446,7 @@ class Registry:
         url = f"{realm}?{urllib.parse.urlencode(query)}"
         answer = self._open(url, {"Accept": "application/json"}, self._timeout)
         if answer.status != 200:
-            raise RegistryUnauthorized(
+            raise ImageRegistryUnauthorized(
                 f"{reference.registry} would not hand out a pull token for {reference.path}.",
                 hint=(
                     "anonymous access is what MCUHome resolves an environment with. Log "
@@ -460,7 +460,7 @@ class Registry:
         # wild; the value is the same bearer token.
         token = document.get("token") or document.get("access_token")
         if not isinstance(token, str) or not token:
-            raise RegistryUnauthorized(
+            raise ImageRegistryUnauthorized(
                 f"{reference.registry} answered a token request without a token.",
                 hint="nothing can be read from that registry anonymously",
             )
@@ -481,12 +481,12 @@ class Registry:
         try:
             document = json.loads(response.body.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as error:
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.registry} answered with a {what} that is not JSON.",
                 hint="the response cannot be read — the host may not be a registry",
             ) from error
         if not isinstance(document, dict):
-            raise RegistryError(
+            raise ImageRegistryError(
                 f"{reference.registry} answered with a {what} that is not an object.",
                 hint="the response cannot be read — the host may not be a registry",
             )
@@ -511,7 +511,7 @@ class Registry:
             )
         except (urllib.error.URLError, OSError) as error:
             host = urllib.parse.urlsplit(url).netloc
-            raise RegistryUnreachable(
+            raise ImageRegistryUnreachable(
                 f"MCUHome cannot reach {host}: {error}.",
                 hint=(
                     "the build environment is chosen by asking the registry which "
