@@ -349,6 +349,53 @@ def test_each_pinned_package_is_provisioned_with_its_own_directories_and_bound(
     assert {call["interpreter"] for call in provisioned} == {"python3.13"}
 
 
+def test_the_shelf_a_device_names_reaches_the_fetch_as_well_as_the_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    """A device may publish its environment on a shelf of its own.
+
+    Then the shelf a pin is resolved on and the kind the tree is unpacked
+    as are two different words, and both have to arrive: looking the
+    version up on one shelf and taking the bytes off another would answer
+    two questions as one. The kind stays the kind — it decides the bound
+    and the finalization — and the shelf travels beside it.
+    """
+    provisioned: list[dict] = []
+    looked_up: list[dict] = []
+
+    def fake_concrete(pin, **kwargs):
+        looked_up.append({"name": pin.name, **kwargs})
+        return PackagePin(name=pin.name, version="1", sha256="a" * 64)
+
+    def fake_provision(**kwargs):
+        provisioned.append(kwargs)
+        return StoreEntry(
+            path=tmp_path / kwargs["name"],
+            kind=kwargs["kind"],
+            name=kwargs["name"],
+            version=kwargs["version"],
+            sha256=kwargs["sha256"],
+        )
+
+    monkeypatch.setattr(subprocessbuild, "resolve_package", fake_concrete)
+    monkeypatch.setattr(subprocessbuild, "provision", fake_provision)
+    monkeypatch.setattr(subprocessbuild, "_require_entry_point", lambda entry: entry)
+
+    subprocessbuild.environment_from_pins(
+        EnvironmentPin(
+            workspace=PackagePin(name="mcuhome-build-workspace", version="1", sha256="b" * 64),
+            tools=PackagePin(name="mcuhome-build-tools", version="1", sha256="c" * 64),
+        ),
+        env={},
+        workspace_source="house-workspaces",
+        tools_source="house-tools",
+    )
+
+    assert [call["kind"] for call in looked_up] == ["house-workspaces", "house-tools"]
+    assert [call["source_name"] for call in provisioned] == ["house-workspaces", "house-tools"]
+    assert [call["kind"] for call in provisioned] == [KIND_WORKSPACE, KIND_TOOLS]
+
+
 def test_without_its_own_directories_a_package_is_looked_for_where_the_sdk_is(
     tmp_path, monkeypatch
 ) -> None:

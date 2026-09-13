@@ -402,6 +402,13 @@ def environment_from_pins(
     packages somewhere other than the SDK. *bounds* is how much each
     kind may unpack to, by kind — a kind that is not in it takes the
     store's own bound.
+
+    *workspace_source* and *tools_source* are the **shelves** the
+    device's own references name, which is what a registry is asked for;
+    they equal the package kind on every ordinary build and need not. The
+    shelf travels with the pin all the way to the fetch, because
+    resolving a version on one shelf and taking the bytes from another
+    would be two different questions answered as one.
     """
     if isinstance(pin, DeveloperEnvironment):
         # A context of a development build, handed to the store. There is
@@ -439,6 +446,7 @@ def environment_from_pins(
                 env=env,
                 sources=searched,
                 registry=registry,
+                source_name=source,
                 store=store,
                 platform=platform,
                 interpreter=interpreter,

@@ -1038,3 +1038,37 @@ def test_a_reference_that_names_no_package_is_refused(options, env) -> None:
     with pytest.raises(BuildError) as caught:
         provision_environment(":1.2.3", options=options, env=env)
     assert "does not name a build environment package" in caught.value.message
+
+
+def test_the_registry_is_asked_for_the_shelf_a_package_is_published_on(env, store_dir) -> None:
+    """What a tree *is* and where it is published are two statements.
+
+    The kind decides the bound and the finalization and is one of three
+    fixed values; the shelf is the device's own word and reaches the
+    registry. They are the same on every ordinary build, which is why the
+    shelf defaults to the kind — and why a package published elsewhere
+    would otherwise be resolved in one place and fetched from another.
+    """
+    asked: list[str] = []
+
+    class Shelf:
+        def index(self, source: str):
+            asked.append(source)
+            raise BuildError("nothing is served here", hint="this is a test double")
+
+    def provision_from(**overrides):
+        with pytest.raises(BuildError):
+            store.provision(
+                kind=store.KIND_WORKSPACE,
+                name=WORKSPACE,
+                version=VERSION,
+                sha256="0" * 64,
+                env=env,
+                store=store_dir,
+                registry=lambda: Shelf(),
+                **overrides,
+            )
+
+    provision_from()
+    provision_from(source_name="house-workspaces")
+    assert asked == [store.KIND_WORKSPACE, "house-workspaces"]

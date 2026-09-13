@@ -356,6 +356,7 @@ def provision(
     env: dict[str, str],
     sources: Sequence[Path] = (),
     registry: RegistrySource | None = None,
+    source_name: str = "",
     store: Path | str | None = None,
     platform: str | None = None,
     max_bytes: int | None = None,
@@ -392,6 +393,18 @@ def provision(
     quietly stored under a name that means something else on the next
     machine. Callers resolve the family through the index when they pin
     it, which is where the hash comes from anyway.
+
+    *kind* and *source_name* are two different words for what is the same
+    value on every ordinary build. The *kind* is what this tree **is** —
+    it decides the bound it unpacks under, what is made of it afterwards
+    and what the marker records — and it is one of three fixed values.
+    The *source_name* is the shelf inside a registry the package is
+    published on, which is the device's own statement
+    (``sources.build_workspace`` may name another one), so it is what the
+    registry is asked for. Empty means the two are the same, which is the
+    ordinary case; where a device names another shelf, resolving the pin
+    on one and fetching the bytes from another would look the version up
+    in one place and the bytes in a different one.
     """
     root = store_root(env, override=store)
     entry = entry_directory(root, name, version)
@@ -426,7 +439,7 @@ def provision(
         try:
             _say(on_line, f"Unpacking {name} {version} into {entry}")
             acquired = acquire_package(
-                kind=kind,
+                kind=source_name or kind,
                 name=name,
                 version=version,
                 sha256=sha256,
