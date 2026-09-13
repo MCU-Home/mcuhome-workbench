@@ -83,6 +83,7 @@ __all__ = [
     "STATUS_UNSUPPORTED",
     "SHARED_CACHE_OPTION",
     "STEP_DIR",
+    "STEP_STATUSES",
     "BuilderSession",
     "BuildLimits",
     "CacheTier",
@@ -219,7 +220,7 @@ RESULT_FILE_SUFFIX = ".json"
 STATUS_SUCCESS = "success"
 STATUS_FAILURE = "failure"
 STATUS_UNSUPPORTED = "unsupported"
-_STATUSES = (STATUS_SUCCESS, STATUS_FAILURE, STATUS_UNSUPPORTED)
+STEP_STATUSES = (STATUS_SUCCESS, STATUS_FAILURE, STATUS_UNSUPPORTED)
 
 #: The one action MCUHome's own environments implement today
 #: (``mcuhome-sdk`` ``docs/spec/build-actions.md``). Which actions exist
@@ -402,7 +403,7 @@ def judge_step(
             f"the result document echoes invocation {data.get('invocation_id')!r} for a step "
             f"this orchestrator called {invocation_id!r}"
         )
-    if status not in _STATUSES:
+    if status not in STEP_STATUSES:
         problems.append(f"the result document states status {status!r}")
     elif status != STATUS_SUCCESS:
         message = data.get("message")
@@ -416,7 +417,7 @@ def judge_step(
         context_id=context_id,
         exit_code=exit_code,
         result=data,
-        status=status if status in _STATUSES else STATUS_FAILURE,
+        status=status if status in STEP_STATUSES else STATUS_FAILURE,
         problems=tuple(problems),
         violation=_violation(status, exit_code),
     )

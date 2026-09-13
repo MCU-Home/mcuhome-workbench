@@ -109,6 +109,7 @@ from mcuhome.workbench.project import BUILDER_SECRETS_DIR, Project, check_secret
 
 __all__ = [
     "CONFIG_FILE",
+    "CONFIG_ORIGINS",
     "CONFIG_SCOPES",
     "OPTION_KINDS",
     "Argument",
@@ -145,7 +146,7 @@ _LIST_SEPARATOR = ","
 #: Origin labels, in ascending precedence. ``default`` is what a value
 #: has when no layer set it, and ``program`` what an embedding program
 #: states for a shared key before any file is read.
-_ORIGINS = (
+CONFIG_ORIGINS = (
     "default",
     "program",
     "system",
@@ -566,7 +567,7 @@ class Setting:
 
     option: Option
     value: Any
-    #: One of :data:`_ORIGINS`: ``default``, ``program``, ``system``,
+    #: One of :data:`CONFIG_ORIGINS`: ``default``, ``program``, ``system``,
     #: ``user``, ``project``, ``environment``, ``arguments``.
     origin: str
     #: Where exactly: the file for a file layer, the variable name for

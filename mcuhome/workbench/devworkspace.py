@@ -50,6 +50,7 @@ __all__ = [
     "MANIFEST_DEFAULT_FILE",
     "RECORD_FILE",
     "WEST_CONFIG",
+    "WORKSPACE_LAYERS",
     "WORKSPACE_MANIFEST",
     "manifest_checkout",
     "write_environment",
@@ -71,6 +72,10 @@ LAYER_PROJECTS = {
     "chip": "connectedhomeip",
     "mcuboot": "mcuboot",
 }
+
+#: Every layer a workspace record names, the SDK first: the vocabulary a
+#: consumer reads such a record with.
+WORKSPACE_LAYERS = ("sdk", *LAYER_PROJECTS)
 
 #: The two documents the builder reads, written into the session.
 WORKSPACE_MANIFEST = "build-workspace.json"

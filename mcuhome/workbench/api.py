@@ -224,6 +224,7 @@ from mcuhome.workbench.buildtarget import (
 from mcuhome.workbench.configschema import device_schema
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
+    CONFIG_ORIGINS,
     CONFIG_SCOPES,
     OPTION_KINDS,
     OPTIONS,
@@ -307,6 +308,7 @@ __all__ = [
     "BusChoice",
     "Argument",
     "CONFIG_FILE",
+    "CONFIG_ORIGINS",
     "CONFIG_SCOPES",
     "CacheTier",
     "ClusterChoice",

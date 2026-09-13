@@ -130,6 +130,7 @@ __all__ = [
     "MAX_ARTIFACT_BYTES",
     "MAX_INBOUND_FRAME_BYTES",
     "SESSION_PROTOCOL_VERSION",
+    "SESSION_VERBS",
     "STATUS_CANCELLED",
     "ZSTD_LEVEL",
     "ArtifactDelivery",
@@ -167,6 +168,24 @@ _logger = logging.getLogger(__name__)
 #: downstream failure, which is why the number is stated in
 #: ``open-session`` rather than discovered.
 SESSION_PROTOCOL_VERSION = 2
+
+#: The verbs of the session protocol, in the order one session uses them.
+#: A build server implements all eleven; a client sends what it needs.
+#: The vocabulary is stated once here so that neither side has to read it
+#: out of the other's code.
+SESSION_VERBS = (
+    "capabilities",
+    "open-session",
+    "attach-session",
+    "send-context",
+    "extend-context",
+    "lock-context",
+    "verify",
+    "build",
+    "cancel",
+    "get-artifact",
+    "close-session",
+)
 
 #: How many bytes of an archive go into one outbound BINARY frame, absent
 #: a smaller announced limit. A quarter of a megabyte, which is the same
