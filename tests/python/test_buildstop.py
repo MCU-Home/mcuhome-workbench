@@ -229,14 +229,24 @@ def test_a_predicate_that_raises_leaves_the_step_alone_and_is_not_asked_again(
 
 
 class LongStep:
-    """A spawned step that keeps running until it is signalled."""
+    """A spawned step that keeps running until it is signalled.
+
+    It records what the runtime had been asked to do by the time the
+    signal arrived, because the order is the point: removing the
+    container is what ends a containerized build, and signalling the
+    client in front of it is the tidy-up afterwards. A test that only
+    looked for an ``rm`` would be satisfied by the sweep every session
+    does at its end.
+    """
 
     started = True
     output = "compiling..."
 
-    def __init__(self) -> None:
+    def __init__(self, seam: Seam) -> None:
+        self.seam = seam
         self.status: int | None = None
         self.signals: list[str] = []
+        self.calls_before_signal: list[list[str]] = []
 
     def poll(self) -> int | None:
         return self.status
@@ -245,6 +255,7 @@ class LongStep:
         return self.status
 
     def terminate(self) -> None:
+        self.calls_before_signal = [list(argv) for argv in self.seam.calls]
         self.signals.append("terminate")
         self.status = -15
 
@@ -263,7 +274,7 @@ class StopSeam(Seam):
 
     def __init__(self) -> None:
         super().__init__(build=_half_a_firmware)
-        self.running_step = LongStep()
+        self.running_step = LongStep(self)
 
     def spawn(self, argv, on_line=None):
         # The parent parses the mounts and plays the scripted build
@@ -311,10 +322,13 @@ def test_a_stopped_container_build_removes_the_container_and_keeps_what_was_writ
     assert result.outcome.ok is False
     assert any("no readable result document" in problem for problem in result.outcome.problems)
     # The container was removed by name, and only then was the client
-    # this process started signalled.
+    # this process started signalled — the order the ladder walks, and
+    # not the sweep every session does when it ends.
     name = seam.step[seam.step.index("--name") + 1]
-    assert ["rm" in argv and name in argv for argv in seam.calls].count(True) >= 1
     assert seam.running_step.signals == ["terminate"]
+    last_before_signal = seam.running_step.calls_before_signal[-1]
+    assert last_before_signal[1] == "rm"
+    assert name in last_before_signal
     # What the build had produced is still on disk, in the directory the
     # result names.
     assert (result.out_dir / "firmware.bin.part").read_bytes() == b"half a firmware"
@@ -537,6 +551,10 @@ class FakeServer:
         #: The verdict to answer with when the invocation is cancelled;
         #: ``None`` is the server that says nothing at all.
         self.verdict_on_cancel: dict[str, Any] | None = None
+        #: How long the server takes to acknowledge a cancel. A command
+        #: frame is normally answered at once; a server that is connected
+        #: and silent is the case this exists for.
+        self.cancel_takes: float = 0.0
         self._finished: asyncio.Future | None = None
 
     def finished(self) -> asyncio.Future:
@@ -599,6 +617,7 @@ class FakeClient:
     async def cancel(self, invocation_id: str) -> dict[str, Any]:
         self.server.verbs.append("cancel")
         self.server.cancelled.append(invocation_id)
+        await asyncio.sleep(self.server.cancel_takes)
         verdict = self.server.verdict_on_cancel
         if verdict is not None and not self.server.finished().done():
             self.server.finished().set_result(verdict)
@@ -697,13 +716,48 @@ def test_a_server_that_says_nothing_counts_as_stopped_after_the_ladder_s_bound(
     assert elapsed < 5, "the wait ended on the bound, not on the verdict that never came"
 
 
+def test_a_server_that_does_not_even_acknowledge_the_stop_is_bounded_too(
+    tmp_path, monkeypatch
+) -> None:
+    """The bound starts at the decision, not at the server's answer to it.
+
+    ``cancel`` is a command frame like any other and waits five minutes
+    for a reply. A server that is connected and silent would hold this
+    side for all of them — against a promise of forty-four seconds — if
+    the wait for the acknowledgement were not on the same clock as the
+    wait for the verdict.
+    """
+    _scaled_ladder(monkeypatch, poll=0.02, rung=0.05)
+    monkeypatch.setattr(sessionclient, "_STOP_POLL_SECONDS", 0.02)
+    server = FakeServer().install(monkeypatch)
+    server.cancel_takes = 30.0
+    bound = resolve_shutdown_seconds(cancel_grace_seconds=0)
+
+    started = time.monotonic()
+    result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
+    elapsed = time.monotonic() - started
+
+    assert server.cancelled == [INVOCATION]
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert elapsed < bound * 10, "the acknowledgement is bounded by the ladder, not by the call"
+
+
 def test_a_remote_build_that_was_not_stopped_waits_for_its_verdict(tmp_path, monkeypatch) -> None:
-    """The predicate is asked, says no, and nothing is cancelled."""
+    """The predicate is asked while the invocation runs, says no, and nothing
+    is cancelled.
+
+    The tick is scaled down and the verdict held back for several of
+    them, so the asking is the follow loop's own: a verdict that arrived
+    before the first tick would be answered without the predicate ever
+    being consulted, and the test would pass against a client that polls
+    nothing.
+    """
+    monkeypatch.setattr(sessionclient, "_STOP_POLL_SECONDS", 0.02)
     server = FakeServer().install(monkeypatch)
     asked = Asked(answer=False)
 
     async def answer_later() -> None:
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
         server.finished().set_result({"status": "success", "artifacts": []})
 
     async def scenario():
@@ -720,7 +774,9 @@ def test_a_remote_build_that_was_not_stopped_waits_for_its_verdict(tmp_path, mon
 
     result = asyncio.run(scenario())
 
-    assert asked.calls >= 1
+    # One of them is the admission loop's; the rest are the follow loop
+    # asking on its own tick while the invocation ran.
+    assert asked.calls >= 3
     assert server.cancelled == []
     assert result.status == "success"
 
