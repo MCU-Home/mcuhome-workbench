@@ -66,6 +66,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mcuhome.model.context import PATCHES_DIR
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import expand
 
@@ -197,7 +198,7 @@ class Project:
         A path, not a promise: the folder is optional and most devices
         have none.
         """
-        return self.devices_dir / name / "patches"
+        return self.devices_dir / name / PATCHES_DIR
 
     def device_names(self) -> list[str]:
         if not self.devices_dir.is_dir():
