@@ -1087,6 +1087,19 @@ def _device_patches_dir(
     convention = Project(root=Path(project_root), discovered=True).device_patches_dir(
         model.device.name
     )
+    if convention.exists() and not convention.is_dir():
+        # A file where the folder belongs is somebody's mistake — most
+        # likely a patch saved one level too high — and nothing else
+        # would ever report it: an absent folder is the ordinary case and
+        # says nothing, so this one would build unpatched in silence.
+        raise BuildError(
+            f"{convention} is a file, and a device's patches are a directory.",
+            hint=(
+                "patches live in patches/<layer>/NNNN-name.patch under the device — "
+                "for example patches/zephyr/0001-fix-uart.patch — so make it a "
+                "directory or remove it"
+            ),
+        )
     return convention if convention.is_dir() else None
 
 

@@ -2205,6 +2205,27 @@ def test_a_refused_context_leaves_nothing_behind(model, tmp_path) -> None:
     assert [path.name for path in tmp_path.iterdir() if path.name.startswith(".mcuhome-")] == []
 
 
+def test_a_patches_path_that_is_a_file_is_refused(model, tmp_path) -> None:
+    """The one mistake an absent folder would hide.
+
+    No `patches/` at all is the ordinary case and says nothing, so a
+    *file* of that name — a patch saved one level too high — would build
+    unpatched without a word. It is the same statement made wrongly, and
+    the only way to tell somebody is to refuse it.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    project = tmp_path / "project"
+    patches = _device_patches(project, model.device.name)
+    patches.parent.mkdir(parents=True)
+    patches.write_text("--- a/uart.c\n+++ b/uart.c\n", encoding="utf-8")
+
+    with pytest.raises(BuildError, match="is a file") as refused:
+        _context_of(model, tmp_path, out="context", source=source, project_root=project)
+
+    assert "patches/<layer>/NNNN-name.patch" in refused.value.hint
+
+
 def test_a_stated_patches_directory_replaces_the_devices_own(model, tmp_path) -> None:
     """Two statements, and the explicit one wins — it does not add to the other.
 
