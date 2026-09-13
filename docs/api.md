@@ -1092,11 +1092,11 @@ over the curve's order rather than biased by a modulo.
 def read_build_report(path: Path) -> dict[str, Any]
 def plan_signing(
     out_dir: Path, *, env: Mapping[str, str], key: Path | str | None = None,
-    project: Project | None = None,
+    project: Project | None = None, imgtool: str | None = None,
 ) -> SignPlan
 def sign_firmware(
     out_dir: Path, *, env: Mapping[str, str], key: Path | str | None = None,
-    project: Project | None = None,
+    project: Project | None = None, imgtool: str | None = None,
 ) -> SigningResult
 ```
 `read_build_report` accepts a build directory or the report file inside
@@ -1106,10 +1106,19 @@ before any of them, so a caller can show them, and raises everything the
 run itself would raise — a missing signing program, an unreadable key,
 an artifact the report names and the directory does not hold — so that
 `sign_firmware`'s own failure mode is "the signing program said no".
+Both resolve the key the way `resolve_signing_key` does, and neither
+ever generates one: a delivered build is signed with the key its
+device's bootloader already carries. *key* and *imgtool* are the
+resolved `signing.key` and `signing.imgtool`, stated by the caller for
+the same reason every other option is — nothing under this surface reads
+a configuration channel of its own.
 `SignPlan` (frozen): `out_dir`, `report_path`, `key`, `parameters`,
 `commands`, `outputs`, `to_dict()`. `SigningResult` (frozen): `ok`,
 `out_dir`, `report_path`, `key`, `signed: tuple[SignedArtifact, ...]`,
-`to_dict()`.
+`to_dict()`; `ok` states that every file the plan named is there, not a
+second way of reporting a failure — a signing program that says no is a
+refusal carrying its own words. `SignedArtifact` (frozen): `format`
+(`bin` or `hex`), `path`, `to_dict()`.
 
 ```python
 def write_ota_image(model: DeviceModel, *, payload: Path, out_dir: Path) -> OtaImage | None
@@ -1545,7 +1554,9 @@ remaining}`, with `applied` and `remaining` holding migration documents.
 started, name}`.
 `UpgradeRecord.to_dict()`: `{started, process, host, running}`.
 `SignPlan.to_dict()`: `{out_dir, report_path, key, commands: [{format,
-argv, output}]}`.
+argv, output}]}` — the imgtool parameters are in every `argv` already,
+so the document does not state them a second time.
+`SignedArtifact.to_dict()`: `{format, path}`.
 `Builder.to_dict()`: `{name, target, origin, source, server,
 container_image}` — `origin` is the layer that defined the entry and
 `source` the file it came from, the same pair `Setting` uses.

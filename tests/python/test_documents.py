@@ -54,6 +54,7 @@ from mcuhome.model.context import (
 )
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.pairing import TEST_PAIRING
+from mcuhome.model.signing import SigningParameters
 from test_surface import PENDING
 
 from mcuhome.workbench import api
@@ -165,6 +166,29 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         container_image=None,
     ),
     "Setting": lambda: SETTINGS.setting("build.mode"),
+    "SignPlan": lambda: api.SignPlan(
+        out_dir=ROOT / "build" / "thermostat",
+        report_path=ROOT / "build" / "thermostat" / "build-report.json",
+        key=ROOT / "secrets" / "signing" / "key.pem",
+        parameters=SigningParameters(header_size=512, align=4, slot_size=933888, version="0.1.0"),
+        commands=(
+            (
+                "bin",
+                ("imgtool", "sign", "--key", "/…/key.pem"),
+                ROOT / "build" / "thermostat" / "firmware.signed.bin",
+            ),
+        ),
+    ),
+    "SignedArtifact": lambda: api.SignedArtifact(
+        format="bin", path=ROOT / "build" / "thermostat" / "firmware.signed.bin"
+    ),
+    "SigningResult": lambda: api.SigningResult(
+        ok=True,
+        out_dir=ROOT / "build" / "thermostat",
+        report_path=ROOT / "build" / "thermostat" / "build-report.json",
+        key=ROOT / "secrets" / "signing" / "key.pem",
+        signed=(SAMPLES["SignedArtifact"](),),
+    ),
     "Settings": lambda: SETTINGS,
     "StepResult": lambda: api.StepResult(
         action="build",
@@ -272,7 +296,10 @@ KEYED_BY_DATA = ("Settings",)
 #: it does not answer would otherwise go unnoticed.
 #: :func:`test_an_owed_document_is_still_owed` empties this list from
 #: the other side — the day the method arrives, the entry has to go.
-OWED = {"SignPlan": "signing"}
+#: Empty while every documented class answers its document. The
+#: mechanism stays: the next feature that exports a class before its
+#: document is written names it here rather than leaving it unchecked.
+OWED: dict[str, str] = {}
 
 CHECKED = sorted(
     name

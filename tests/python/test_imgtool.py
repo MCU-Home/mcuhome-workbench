@@ -139,6 +139,38 @@ def _key(tmp_path: Path) -> Path:
     return path
 
 
+def _fake_imgtool(tmp_path: Path, *, exit_code: int = 0, says: str = "", writes: bool = True):
+    """A signing program that records its argv, in a real process.
+
+    The seam the signing tests need is not a callable inside this
+    process: `sign_firmware` starts the program itself, so a double that
+    is a function would leave exactly the step that can go wrong
+    untested. This writes a script `find_imgtool` accepts (a ``.py``
+    runs on this interpreter) and answers a reader for what it was
+    called with.
+    """
+    log = tmp_path / "imgtool-calls.json"
+    script = tmp_path / "fake-imgtool.py"
+    script.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        f"log = Path({str(log)!r})\n"
+        "calls = json.loads(log.read_text()) if log.exists() else []\n"
+        "calls.append(sys.argv)\n"
+        "log.write_text(json.dumps(calls))\n"
+        f"if {writes!r}:\n"
+        "    Path(sys.argv[-1]).write_bytes(Path(sys.argv[-2]).read_bytes() + b'-signed')\n"
+        f"print({says!r})\n"
+        f"sys.exit({exit_code})\n",
+        "utf-8",
+    )
+
+    def calls() -> list[list[str]]:
+        return json.loads(log.read_text("utf-8")) if log.exists() else []
+
+    return script, calls
+
+
 # --------------------------------------------------------------------------
 # The equivalence proof
 # --------------------------------------------------------------------------
@@ -368,13 +400,13 @@ def test_read_build_report_refuses_a_wrong_signature_type(tmp_path) -> None:
     assert SIGNATURE_TYPE in caught.value.message
 
 
-def test_plan_report_signing_signs_both_firmware_encodings(tmp_path) -> None:
+def test_plan_signing_signs_both_firmware_encodings(tmp_path) -> None:
     """The build actions document's report-shape parameters apply to every
     firmware artifact: bin and hex.
     """
     out = _report_dir(tmp_path)
     key = _key(tmp_path)
-    plan = imgtool.plan_report_signing(out, key=key, env={}, imgtool="imgtool")
+    plan = imgtool.plan_signing(out, key=key, env={}, imgtool="imgtool")
     assert {path.name for path in plan.outputs} == {"firmware.signed.bin", "firmware.signed.hex"}
     for _form, command, _dest in plan.commands:
         assert command[command.index("--version") + 1] == "1.2.3+4"
@@ -384,81 +416,117 @@ def test_plan_report_signing_signs_both_firmware_encodings(tmp_path) -> None:
         assert command[command.index("--key") + 1] == str(key)
 
 
-def test_plan_report_signing_needs_a_firmware_to_sign(tmp_path) -> None:
+def test_plan_signing_needs_a_firmware_to_sign(tmp_path) -> None:
     out = tmp_path / "out"
     out.mkdir()
     (out / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(_report()), "utf-8")
     with pytest.raises(BuildError) as caught:
-        imgtool.plan_report_signing(out, key=_key(tmp_path), env={}, imgtool="imgtool")
+        imgtool.plan_signing(out, key=_key(tmp_path), env={}, imgtool="imgtool")
     assert "firmware" in caught.value.message
 
 
-def test_sign_report_runs_the_plan_and_never_generates_a_key(tmp_path) -> None:
+def test_sign_firmware_runs_exactly_the_plan_it_decided(tmp_path) -> None:
+    """The result is what the run produced, and the run is the plan.
+
+    Both halves are checked against a real signing program: what it was
+    called with has to be the argv the plan carries, command for command
+    — a result assembled from a directory listing would pass a weaker
+    test and be wrong the first time a build directory holds a file from
+    an earlier run.
+    """
     out = _report_dir(tmp_path)
-    commands: list[list[str]] = []
-
-    def runner(command: list[str]) -> tuple[int, str]:
-        commands.append(command)
-        Path(command[-1]).write_bytes(b"signed")
-        return 0, ""
-
     key = _key(tmp_path)
-    plan = imgtool.sign_report(out, env={}, key=key, imgtool="imgtool", runner=runner)
-    assert len(commands) == 2
-    assert (out / "firmware.signed.bin").is_file()
-    assert (out / "firmware.signed.hex").is_file()
-    assert plan.parameters.slot_size == 933888
+    program, calls = _fake_imgtool(tmp_path)
+
+    plan = imgtool.plan_signing(out, env={}, key=key, imgtool=str(program))
+    result = imgtool.sign_firmware(out, env={}, key=key, imgtool=str(program))
+
+    assert result.ok
+    assert result.out_dir == out
+    assert result.report_path == out / imgtool.BUILD_REPORT_FILE
+    assert result.key == key
+    assert [artifact.format for artifact in result.signed] == ["bin", "hex"]
+    assert [artifact.path for artifact in result.signed] == plan.outputs
+    assert all(artifact.path.is_file() for artifact in result.signed)
+    # The program sees its own path as argv[0], the plan carries the
+    # interpreter in front of it — the rest has to be identical.
+    assert [list(argv)[1:] for _form, argv, _output in plan.commands] == calls()
+
+
+def test_a_signing_program_that_writes_nothing_is_not_an_ok_result(tmp_path) -> None:
+    """``ok`` is a fact about the files, not a word the result was born with."""
+    out = _report_dir(tmp_path)
+    program, _calls = _fake_imgtool(tmp_path, writes=False)
+    result = imgtool.sign_firmware(out, env={}, key=_key(tmp_path), imgtool=str(program))
+    assert not result.ok
+    assert result.signed  # it said what it meant to produce
+    assert not any(artifact.path.exists() for artifact in result.signed)
+
+
+def test_the_signing_document_is_what_a_client_prints(tmp_path) -> None:
+    out = _report_dir(tmp_path)
+    program, _calls = _fake_imgtool(tmp_path)
+    result = imgtool.sign_firmware(out, env={}, key=_key(tmp_path), imgtool=str(program))
+    document = result.to_dict()
+    assert list(document) == ["ok", "out_dir", "report_path", "key", "signed"]
+    assert document["signed"] == [
+        {"format": "bin", "path": str(out / "firmware.signed.bin")},
+        {"format": "hex", "path": str(out / "firmware.signed.hex")},
+    ]
+    assert json.dumps(document)
 
 
 def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
     tmp_path,
 ) -> None:
-    """imgtool gets the project's ``mcuboot.pem`` itself.
+    """imgtool gets the project's own key file itself.
 
-    Nothing is materialized and nothing cleaned up (PO 2026-08-14): the
-    ``!file`` reference in the secrets YAML resolves to a real file, that
-    file is the ``--key`` argument, and the returned plan carries the
-    same durable path — the one a caller prints to a user after the
-    fact, and the one that is still there when they look.
+    Nothing is materialized and nothing cleaned up: the ``!file``
+    reference in the secrets YAML resolves to a real file, that file is
+    the ``--key`` argument, and the result carries the same durable path
+    — the one a caller prints to a user after the fact, and the one that
+    is still there when they look.
     """
     from mcuhome.workbench.project import create_project
 
     out = _report_dir(tmp_path)
     project = create_project(tmp_path / "project").project
     generated = signing.create_signing_key(env={}, project=project)
-    used_keys: list[Path] = []
+    program, calls = _fake_imgtool(tmp_path)
 
-    def runner(command: list[str]) -> tuple[int, str]:
-        key_arg = Path(command[command.index("--key") + 1])
-        used_keys.append(key_arg)
-        assert key_arg.is_file()
-        Path(command[-1]).write_bytes(b"signed")
-        return 0, ""
+    result = imgtool.sign_firmware(out, env={}, project=project, imgtool=str(program))
 
-    plan = imgtool.sign_report(out, env={}, project=project, imgtool="imgtool", runner=runner)
-    assert used_keys and all(path == generated.path for path in used_keys)
+    used = {Path(argv[argv.index("--key") + 1]) for argv in calls()}
+    assert used == {generated.path}
     assert generated.path.is_file()  # the durable home, untouched
-    assert plan.key == generated.path
-    assert plan.key.name == signing.SIGNING_KEY_FILE
-    assert plan.key != project.firmware_secrets_file  # the YAML is never a --key
+    assert result.key == generated.path
+    assert result.key.name == signing.SIGNING_KEY_FILE
+    assert result.key != project.firmware_secrets_file  # the YAML is never a --key
 
 
-def test_sign_report_refuses_a_missing_key_rather_than_making_one(tmp_path) -> None:
+def test_signing_refuses_a_missing_key_rather_than_making_one(tmp_path) -> None:
     """A delivered build is signed with the key its bootloader carries, not a fresh one."""
+    from mcuhome.workbench.project import create_project
+
     out = _report_dir(tmp_path)
-    empty = tmp_path / "empty"
-    with pytest.raises(BuildError):
-        imgtool.sign_report(out, env={"XDG_CONFIG_HOME": str(empty)}, key=None, imgtool="imgtool")
+    project = create_project(tmp_path / "project").project
+    program, calls = _fake_imgtool(tmp_path)
+    for call in (imgtool.plan_signing, imgtool.sign_firmware):
+        with pytest.raises(BuildError) as caught:
+            call(out, env={}, project=project, imgtool=str(program))
+        assert "no firmware signing key yet" in caught.value.message
     assert not (out / "firmware.signed.bin").exists()
+    assert not calls(), "nothing may run before the key is there"
+    assert not project.firmware_secrets_file.exists()
 
 
 def test_imgtool_failure_carries_imgtools_own_words(tmp_path) -> None:
-    plan = imgtool.plan_report_signing(
-        _report_dir(tmp_path), key=_key(tmp_path), env={}, imgtool="imgtool"
-    )
+    out = _report_dir(tmp_path)
+    program, _calls = _fake_imgtool(tmp_path, exit_code=2, says="Image size too large")
     with pytest.raises(BuildError) as caught:
-        imgtool.run_signing(plan, runner=lambda command: (2, "Image size too large"))
+        imgtool.sign_firmware(out, env={}, key=_key(tmp_path), imgtool=str(program))
     assert "Image size too large" in caught.value.hint
+    assert "--key" in caught.value.hint  # the command, so it can be run by hand
 
 
 def test_the_installed_imgtool_is_the_one_it_signs_with(tmp_path) -> None:
@@ -466,18 +534,38 @@ def test_the_installed_imgtool_is_the_one_it_signs_with(tmp_path) -> None:
 
     ``PATH`` is emptied so the console script beside this interpreter is
     the only answer left — a fallback to anything else would show up as
-    a different argv, and a lost dependency as a refusal.
+    a different argv, and a lost dependency as a refusal. What runs is
+    what the plan carries, which the test above pins against a real
+    process.
     """
     out = _report_dir(tmp_path)
-    key = _key(tmp_path)
     beside = Path(sys.executable).parent / "imgtool"
-
-    ran: list[tuple[str, ...]] = []
-    plan = imgtool.sign_report(
-        out,
-        env={"PATH": str(tmp_path / "nothing-here")},
-        key=key,
-        runner=lambda command: (ran.append(tuple(command)), (0, ""))[1],
+    plan = imgtool.plan_signing(
+        out, env={"PATH": str(tmp_path / "nothing-here")}, key=_key(tmp_path)
     )
     assert plan.commands[0][1][0] == str(beside)
-    assert ran and ran[0][0] == str(beside)
+
+
+def test_the_plan_document_shows_the_commands_before_they_run(tmp_path) -> None:
+    out = _report_dir(tmp_path)
+    key = _key(tmp_path)
+    plan = imgtool.plan_signing(out, env={}, key=key, imgtool="imgtool")
+    document = plan.to_dict()
+    assert list(document) == ["out_dir", "report_path", "key", "commands"]
+    assert document["key"] == str(key)
+    formats = [command["format"] for command in document["commands"]]
+    assert formats == ["bin", "hex"]
+    for command, (_form, argv, output) in zip(document["commands"], plan.commands, strict=True):
+        assert command["argv"] == list(argv)
+        assert command["output"] == str(output)
+    assert json.dumps(document)
+
+
+def test_the_runner_seam_reports_what_the_program_printed(tmp_path) -> None:
+    """The in-process seam the suite uses where a real process buys nothing."""
+    plan = imgtool.plan_signing(
+        _report_dir(tmp_path), key=_key(tmp_path), env={}, imgtool="imgtool"
+    )
+    with pytest.raises(BuildError) as caught:
+        imgtool.run_signing(plan, runner=lambda command: (2, "Slot size too small"))
+    assert "Slot size too small" in caught.value.hint

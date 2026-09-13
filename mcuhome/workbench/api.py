@@ -264,8 +264,13 @@ from mcuhome.workbench.generate import (
 )
 from mcuhome.workbench.imgtool import (
     BUILD_REPORT_FILE,
+    SIGNED_FIRMWARE_NAMES,
+    SignedArtifact,
+    SigningResult,
     SignPlan,
+    plan_signing,
     read_build_report,
+    sign_firmware,
 )
 from mcuhome.workbench.loader import (
     load_config,
@@ -531,6 +536,7 @@ __all__ = [
     "SEVERITIES",
     "SEVERITY_ERROR",
     "SEVERITY_WARNING",
+    "SIGNED_FIRMWARE_NAMES",
     "SIGNING_KEY_FILE",
     "SPEC_GENERATION",
     "SPEC_GENERATION_MEMBER",
@@ -546,7 +552,9 @@ __all__ = [
     "Setting",
     "Settings",
     "SignPlan",
+    "SignedArtifact",
     "SigningKey",
+    "SigningResult",
     "Step",
     "StepResult",
     "StoreEntry",
@@ -602,6 +610,7 @@ __all__ = [
     "parse_container_image",
     "parse_container_reference",
     "parse_memory",
+    "plan_signing",
     "plan_upgrade",
     "public_key_pem",
     "random_pairing",
@@ -634,6 +643,7 @@ __all__ = [
     "resolve_signing_key",
     "set_config_value",
     "sha256_file",
+    "sign_firmware",
     "to_json",
     "unset_config_value",
     "validate_device",

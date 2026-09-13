@@ -31,6 +31,14 @@ signing the same bytes twice with the same key gives two different
 test suite asserts exactly that: same image, same digest, different
 signature, both verifying.
 
+**Deciding, then running.** :func:`plan_signing` answers every command
+signing will run and raises everything the run itself could raise, so a
+caller can show the commands to a user first and so that
+:func:`sign_firmware`'s own failure mode is "the signing program said
+no". What the run answers is a :class:`SigningResult`: the key it used
+and the files it produced, which is what a client prints — it does not
+assemble that out of the plan and a directory listing of its own.
+
 **Where imgtool comes from.** It is a **declared dependency** of
 ``mcuhome-workbench`` — the package MCUboot publishes itself, pinned in
 ``pyproject.toml`` to the release line of the MCUboot revision the SDK's
@@ -51,9 +59,10 @@ import json
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.errors import BuildError
 from mcuhome.model.registry import SIGNATURE_TYPE
@@ -69,13 +78,15 @@ __all__ = [
     "SIGNED_FIRMWARE_NAMES",
     "Runner",
     "SignPlan",
+    "SignedArtifact",
+    "SigningResult",
     "find_imgtool",
-    "plan_report_signing",
+    "plan_signing",
     "read_build_report",
     "require_imgtool",
     "run_signing",
     "sign_command",
-    "sign_report",
+    "sign_firmware",
 ]
 
 #: The build report a build container delivers next to its unsigned
@@ -207,8 +218,9 @@ class SignPlan:
     out_dir: Path
     report_path: Path
     #: The signing key file — the same durable file the commands below
-    #: carry: the project's referenced ``mcuboot.pem`` or the override's
-    #: plain PEM (:attr:`~mcuhome.workbench.signing.SigningKey.path`).
+    #: carry: the one the project's secrets YAML references, or the plain
+    #: PEM a caller named
+    #: (:attr:`~mcuhome.workbench.signing.SigningKey.path`).
     key: Path
     parameters: SigningParameters
     #: One entry per artifact format, in a stable order: format, command,
@@ -218,6 +230,67 @@ class SignPlan:
     @property
     def outputs(self) -> list[Path]:
         return [path for _, _, path in self.commands]
+
+    def to_dict(self) -> dict[str, Any]:
+        """What a caller shows before it signs: the commands themselves.
+
+        The imgtool parameters are in every command already — printing
+        them twice would be two places to read one fact — so the document
+        carries the argv as it will be run.
+        """
+        return {
+            "out_dir": str(self.out_dir),
+            "report_path": str(self.report_path),
+            "key": str(self.key),
+            "commands": [
+                {"format": form, "argv": list(argv), "output": str(output)}
+                for form, argv, output in self.commands
+            ],
+        }
+
+
+@dataclass(frozen=True)
+class SignedArtifact:
+    """One file signing produced, and which encoding it holds."""
+
+    #: ``bin`` or ``hex`` — the encoding of the artifact that was signed,
+    #: taken from its own file name rather than invented here.
+    format: str
+    path: Path
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"format": self.format, "path": str(self.path)}
+
+
+@dataclass(frozen=True)
+class SigningResult:
+    """What signing a build directory produced.
+
+    Answered only when every command ran: a signing program that says no
+    is a refusal carrying its own words, because for a wrong key or a
+    too-small slot that message is the actionable part and MCUHome has
+    nothing to add to it. :attr:`ok` is therefore not a second way of
+    reporting failure — it states that every file the plan named is
+    there, which is the one thing a caller would otherwise have to go and
+    check itself.
+    """
+
+    ok: bool
+    out_dir: Path
+    report_path: Path
+    #: The key file the images were signed with — the durable path, the
+    #: one a caller can still show a user afterwards.
+    key: Path
+    signed: tuple[SignedArtifact, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "out_dir": str(self.out_dir),
+            "report_path": str(self.report_path),
+            "key": str(self.key),
+            "signed": [artifact.to_dict() for artifact in self.signed],
+        }
 
 
 def _resolve_report(target: Path) -> Path:
@@ -298,26 +371,35 @@ def read_build_report(path: Path) -> dict:
     return data
 
 
-def plan_report_signing(
-    target: Path,
+def plan_signing(
+    out_dir: Path,
     *,
-    key: Path,
-    env: dict[str, str],
+    env: Mapping[str, str],
+    key: Path | str | None = None,
+    project: Project | None = None,
     imgtool: str | None = None,
 ) -> SignPlan:
-    """Read a §2.2 build report and decide how to sign the firmware beside it.
+    """Every command signing *out_dir* will run, decided before any of them.
 
-    *target* is the build directory the build delivered into (or the report file
-        itself); the unsigned ``firmware.bin``/``firmware.hex`` sit next to the
-        report, and the report's ``signing.arguments`` are the exact imgtool
-        parameters the build was linked for. Every refusal is raised here,
-        before imgtool runs, so the step's own failure mode is "imgtool said
-        no" and nothing else. *key* is already resolved — this plans the
-        command, it does not choose the key (:func:`sign_report` does) —
-        and *imgtool* is the resolved ``signing.imgtool``, for the same
-        reason: this module reads no configuration of its own.
+    *out_dir* is the build directory the build delivered into (or the
+    build report inside it); the unsigned ``firmware.bin`` /
+    ``firmware.hex`` sit next to the report, and the report's
+    ``signing.arguments`` are the exact imgtool parameters the build was
+    linked for. Every refusal is raised here, before imgtool runs, so the
+    signing step's own failure mode is "imgtool said no" and nothing
+    else: a missing signing program, an unreadable key, an artifact the
+    report names and the directory does not hold.
+
+    The key is resolved exactly as a build resolves it (*key* — the
+    resolved ``signing.key`` — then the *project*'s reference) and, as
+    there, **never generated**: a delivered build has to be signed with
+    the key its device's bootloader already carries. The resolved key is
+    a file either way, and imgtool gets exactly that file. *imgtool* is
+    the resolved ``signing.imgtool``, stated for the same reason as the
+    key: this module reads no configuration channel of its own.
     """
-    report_path = _resolve_report(target)
+    resolved = signing.resolve_signing_key(key, env=env, project=project)
+    report_path = _resolve_report(out_dir)
     out_dir = report_path.parent
     report = read_build_report(report_path)
     parameters = SigningParameters.from_dict(report["signing"]["arguments"])
@@ -335,7 +417,11 @@ def plan_report_signing(
                 form,
                 tuple(
                     sign_command(
-                        program, parameters=parameters, key=key, source=source, output=destination
+                        program,
+                        parameters=parameters,
+                        key=resolved.path,
+                        source=source,
+                        output=destination,
                     )
                 ),
                 destination,
@@ -352,34 +438,42 @@ def plan_report_signing(
     return SignPlan(
         out_dir=out_dir,
         report_path=report_path,
-        key=key,
+        key=resolved.path,
         parameters=parameters,
         commands=tuple(commands),
     )
 
 
-def sign_report(
-    target: Path,
+def sign_firmware(
+    out_dir: Path,
     *,
-    env: dict[str, str],
+    env: Mapping[str, str],
     key: Path | str | None = None,
     project: Project | None = None,
     imgtool: str | None = None,
-    runner: Runner | None = None,
-) -> SignPlan:
-    """Sign the firmware a build container delivered, from its §2.2 report.
+) -> SigningResult:
+    """Sign the firmware a build delivered, from its §2.2 build report.
 
-    The key is resolved exactly as a build resolves it (*key* — the
-    resolved ``signing.key`` — then the *project*'s
-    ``secrets/firmware/mcuboot.yaml`` reference) and, as there, **never
-    generated** here: a delivered build has to be signed with the key
-    its device's bootloader already carries. The resolved key is a file
-    either way, and imgtool gets exactly that file.
+    What :func:`plan_signing` decided, run: the same call for a build
+    that has just finished and for one a build server delivered weeks
+    ago, because everything it needs is in the directory and the key is
+    wherever the user keeps it. A caller that wants to show the commands
+    beforehand asks for the plan and calls this afterwards — the plan is
+    then decided twice, and it is the same plan both times.
     """
-    resolved = signing.resolve_signing_key(key, env=env, project=project)
-    plan = plan_report_signing(target, key=resolved.path, env=env, imgtool=imgtool)
-    run_signing(plan, runner=runner)
-    return plan
+    plan = plan_signing(out_dir, env=env, key=key, project=project, imgtool=imgtool)
+    written = run_signing(plan)
+    signed = tuple(
+        SignedArtifact(format=form, path=path)
+        for (form, _argv, _output), path in zip(plan.commands, written, strict=True)
+    )
+    return SigningResult(
+        ok=all(artifact.path.is_file() for artifact in signed),
+        out_dir=plan.out_dir,
+        report_path=plan.report_path,
+        key=plan.key,
+        signed=signed,
+    )
 
 
 def run_signing(plan: SignPlan, *, runner: Runner | None = None) -> list[Path]:
