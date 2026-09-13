@@ -252,7 +252,9 @@ from mcuhome.workbench.contextdir import (
 )
 from mcuhome.workbench.devworkspace import WORKSPACE_LAYERS
 from mcuhome.workbench.diagnostics import (
+    SEVERITIES,
     SEVERITY_ERROR,
+    SEVERITY_WARNING,
     WARNING_KINDS,
     Diagnostic,
 )
@@ -518,6 +520,9 @@ __all__ = [
     "ResolvedPackage",
     "RunningBuild",
     "SDK_PACKAGE_NAME",
+    "SEVERITIES",
+    "SEVERITY_ERROR",
+    "SEVERITY_WARNING",
     "SESSION_VERBS",
     "SPEC_GENERATION",
     "SPEC_GENERATION_MEMBER",

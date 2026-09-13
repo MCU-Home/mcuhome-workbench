@@ -1229,7 +1229,8 @@ with file paths relative to *root* where one is given.
 A problem that did not stop the work is a `Diagnostic` rather than an
 exception: the same document, one field more.
 
-`Diagnostic` (frozen): `severity` (`error` or `warning`), `message`,
+`Diagnostic` (frozen): `severity` (one of `SEVERITIES`: `error` or
+`warning`), `message`,
 `kind`, `location: Location`, `hint`; property `key` (the location's, so
 the dotted key is not stored twice), classmethod `warning(message, *,
 kind, location=None, hint=None)`, and `to_dict(*, root=None)` — the same
@@ -1268,6 +1269,7 @@ carry findings answers them in its `diagnostics` list.
 | `SIGNING_KEY_FILE` / `PUBLIC_KEY_FILE` | `key.pem` / `key.pub` |
 | `CONFIG_SCOPES` | `("system", "user", "project")` |
 | `CONFIG_ORIGINS` | `("default", "program", "system", "user", "project", "environment", "arguments")` — ascending; `program` is a value an embedding program states for a shared key |
+| `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
 | `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry")` — the kinds a warning's `kind` may carry, append-only |
 | `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
 | `OPTIONS` | the declared option registry |
@@ -1737,7 +1739,8 @@ this package is public.
 `UPGRADE_MARKER_FILE`, `PROJECT_CONFIG_FILE`, `CONFIG_FILE`,
 `DEVICES_DIR`, `DEVICE_FILE`, `BUILD_DIR`, `BUILD_LOCK_FILE`,
 `BUILD_REPORT_FILE`, `SIGNING_KEY_FILE`, `PUBLIC_KEY_FILE`,
-`CONFIG_SCOPES`, `CONFIG_ORIGINS`, `WARNING_KINDS`, `OPTION_KINDS`, `OPTIONS`,
+`CONFIG_SCOPES`, `CONFIG_ORIGINS`, `SEVERITIES`, `SEVERITY_ERROR`,
+`SEVERITY_WARNING`, `WARNING_KINDS`, `OPTION_KINDS`, `OPTIONS`,
 `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET`,
 `BUILD_MODES`, `MODE_CONTAINER`, `MODE_SUBPROCESS`, `DEFAULT_BUILD_MODE`,
 `LOCK_OPERATIONS`, `SECRET_KINDS`, `BUILD_STEPS`, `STEP_STATUSES`,

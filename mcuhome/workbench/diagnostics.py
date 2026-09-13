@@ -33,6 +33,7 @@ from typing import Any
 from mcuhome.model.errors import Location
 
 __all__ = [
+    "SEVERITIES",
     "SEVERITY_ERROR",
     "SEVERITY_WARNING",
     "WARNING_KINDS",
@@ -44,6 +45,12 @@ SEVERITY_ERROR = "error"
 
 #: A finding about something that did not.
 SEVERITY_WARNING = "warning"
+
+#: What a finding's :attr:`Diagnostic.severity` may be, most serious
+#: first. Two values and a published tuple all the same: a client that
+#: sorts or filters a `diagnostics` list reads them off this rather than
+#: off the string literals in its own source.
+SEVERITIES: tuple[str, ...] = (SEVERITY_ERROR, SEVERITY_WARNING)
 
 #: Every kind of warning this package reports, as the value that travels
 #: in :attr:`Diagnostic.kind`. Lowercase with underscores, append-only:
@@ -85,6 +92,7 @@ class Diagnostic:
     holds the same object the result carries.
     """
 
+    #: One of :data:`SEVERITIES`.
     severity: str
     message: str
     #: One of :data:`WARNING_KINDS` for a warning, the exception's class

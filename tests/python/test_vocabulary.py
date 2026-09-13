@@ -13,11 +13,14 @@ from __future__ import annotations
 import ast
 import inspect
 import re
+from pathlib import Path
 
 import pytest
 from conftest import REPO_ROOT, package_modules
+from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import sessionclient
+from mcuhome.workbench.api import ValidationResult
 from mcuhome.workbench.buildenvsession import (
     STATUS_FAILURE,
     STATUS_SUCCESS,
@@ -26,7 +29,14 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.buildenvstore import EXTRACTION_BOUNDS
 from mcuhome.workbench.configuration import CONFIG_ORIGINS, OPTIONS, resolve_settings
-from mcuhome.workbench.diagnostics import WARNING_KINDS, Diagnostic
+from mcuhome.workbench.diagnostics import (
+    SEVERITIES,
+    SEVERITY_ERROR,
+    SEVERITY_WARNING,
+    WARNING_KINDS,
+    Diagnostic,
+)
+from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE, PACKAGE_KINDS
 
 
@@ -159,3 +169,23 @@ def test_the_reference_lists_every_warning_kind() -> None:
     table, constants = _reference_warning_kinds()
     assert table == set(WARNING_KINDS), "the Findings table and WARNING_KINDS disagree"
     assert constants == set(WARNING_KINDS), "the constants row and WARNING_KINDS disagree"
+
+
+def test_the_severities_are_the_two_a_finding_can_carry() -> None:
+    """The published tuple, against the two the code actually stamps.
+
+    A client filters a `diagnostics` list by these, so a third value
+    arriving from the package — or a member that no document ever
+    carries — would break the filter in a way only the client sees.
+    """
+    assert SEVERITIES == (SEVERITY_ERROR, SEVERITY_WARNING)
+
+    warning = Diagnostic.warning("something", kind=WARNING_KINDS[0])
+    result = ValidationResult(
+        entry=Path("/p/devices/d/main.yaml"),
+        project=Project(root=Path("/p"), discovered=True),
+        model=None,
+        errors=(ConfigError("no"),),
+        warnings=(warning,),
+    )
+    assert {finding["severity"] for finding in result.diagnostics()} == set(SEVERITIES)
