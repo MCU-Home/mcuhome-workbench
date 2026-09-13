@@ -42,8 +42,8 @@ from mcuhome.workbench.buildenvstore import (
 )
 from mcuhome.workbench.subprocessbuild import (
     Environment,
-    cache_tiers,
     environment_from_store,
+    resolve_cache_tiers,
     run_locked_build,
 )
 
@@ -570,9 +570,9 @@ def test_without_a_cache_root_the_cache_is_the_step_s_own_local_tier(tmp_path, e
 
 def test_cache_tiers_are_derived_from_a_cache_root(tmp_path) -> None:
     root = tmp_path / "ccache"
-    assert cache_tiers(ccache_dir=None) == {}
+    assert resolve_cache_tiers(cache_root=None) == {}
 
-    tiers = cache_tiers(ccache_dir=root)
+    tiers = resolve_cache_tiers(cache_root=root)
     assert tiers["local"].path == root / "cache-local"
     assert tiers["local"].writable
     # The shared half is offered only when somebody filled it: a backend
@@ -580,12 +580,12 @@ def test_cache_tiers_are_derived_from_a_cache_root(tmp_path) -> None:
     assert "shared" not in tiers
 
     (root / "cache-shared").mkdir(parents=True)
-    tiers = cache_tiers(ccache_dir=root)
+    tiers = resolve_cache_tiers(cache_root=root)
     assert tiers["shared"].path == root / "cache-shared"
     assert not tiers["shared"].writable
 
     # The two tiers an orchestrator provides per session and per project.
-    tiers = cache_tiers(ccache_dir=root, session_dir=tmp_path / "s", project_dir=tmp_path / "p")
+    tiers = resolve_cache_tiers(cache_root=root, session=tmp_path / "s", project=tmp_path / "p")
     assert tiers["session"].path == tmp_path / "s"
     assert tiers["project"].writable
 

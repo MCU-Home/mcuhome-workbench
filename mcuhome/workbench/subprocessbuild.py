@@ -102,8 +102,8 @@ from mcuhome.workbench.buildenvsession import (
     Launcher,
     Step,
     StepResult,
-    cache_tiers,
-    host_limits,
+    resolve_cache_tiers,
+    resolve_host_limits,
 )
 from mcuhome.workbench.buildenvstore import (
     TOOLS_KIND,
@@ -1150,14 +1150,14 @@ def run_locked_build(
         entry_point=environment.entry_point,
         launcher=launch,
         context_id=manifest.compute_id(),
-        tiers=tiers if tiers is not None else cache_tiers(ccache_dir=cache_root),
+        tiers=tiers if tiers is not None else resolve_cache_tiers(cache_root=cache_root),
         # The recommendation, and in this profile nothing but: there is
         # no cgroup here and this profile deliberately does not build
         # one, so what the builder is told is what it is trusted to do.
         # A machine that has to hold a build to a budget uses the
         # container profile, which enforces the same numbers from
         # outside.
-        limits=limits if limits is not None else host_limits(),
+        limits=limits if limits is not None else resolve_host_limits(),
         deadline_seconds=deadline_seconds,
         should_stop=should_stop,
     )

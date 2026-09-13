@@ -86,7 +86,7 @@ from mcuhome.workbench.buildenvsession import (
     Launcher,
     Step,
     StepResult,
-    host_limits,
+    resolve_host_limits,
 )
 from mcuhome.workbench.buildprocess import (
     Completed,
@@ -213,7 +213,7 @@ class ContainerLimits:
     hard.
 
     They are **set** in this profile. A local build gets the machine
-    it is running on (:func:`~mcuhome.workbench.buildenvsession.host_limits`)
+    it is running on (:func:`~mcuhome.workbench.buildenvsession.resolve_host_limits`)
     and a process count that no build has a use for exceeding, which
     changes nothing about how a healthy build runs and everything about
     what an unhealthy one can do to the machine around it. The one
@@ -977,7 +977,7 @@ def run_locked_build(
     into the request document as the recommendation the environment
     sizes itself from, and set on the container as the hard limits the
     runtime holds it to. ``None`` is this machine as it is
-    (:func:`~mcuhome.workbench.buildenvsession.host_limits`) — a local
+    (:func:`~mcuhome.workbench.buildenvsession.resolve_host_limits`) — a local
     build is not a tenant, and the guard exists against a build
     environment that runs amok rather than against the person who
     started it.
@@ -1039,7 +1039,7 @@ def run_locked_build(
         max_bytes=sdk_max_bytes,
     ).tree
     started: list[str] = []
-    given = limits if limits is not None else host_limits()
+    given = limits if limits is not None else resolve_host_limits()
     session = BuilderSession(
         root=work_root / "session",
         context_dir=context_dir,

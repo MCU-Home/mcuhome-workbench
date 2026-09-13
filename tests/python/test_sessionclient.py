@@ -75,8 +75,8 @@ from mcuhome.workbench import (
 )
 from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench.buildenvsession import (
-    RESULT_PREFIX,
-    RESULT_SUFFIX,
+    RESULT_FILE_PREFIX,
+    RESULT_FILE_SUFFIX,
     SPEC_GENERATION,
     StepResult,
 )
@@ -523,7 +523,7 @@ def _write_result(
         "message": message,
         "artifacts": declared,
     }
-    name = f"{RESULT_PREFIX}{request['invocation_id']}{RESULT_SUFFIX}"
+    name = f"{RESULT_FILE_PREFIX}{request['invocation_id']}{RESULT_FILE_SUFFIX}"
     (out / name).write_text(json.dumps(document), encoding="utf-8")
 
 

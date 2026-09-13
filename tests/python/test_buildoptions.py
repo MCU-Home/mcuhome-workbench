@@ -631,25 +631,25 @@ def test_the_subprocess_backend_acquires_the_sdk_under_the_configured_bound(
 
 
 def test_a_named_local_tier_beats_the_layout_under_the_cache_root(tmp_path) -> None:
-    under_root = buildenvsession.cache_tiers(ccache_dir=tmp_path / "root")
+    under_root = buildenvsession.resolve_cache_tiers(cache_root=tmp_path / "root")
     assert under_root["local"].path == tmp_path / "root" / "cache-local"
     assert under_root["local"].writable
 
-    named = buildenvsession.cache_tiers(
-        ccache_dir=tmp_path / "root", local_dir=tmp_path / "elsewhere"
+    named = buildenvsession.resolve_cache_tiers(
+        cache_root=tmp_path / "root", local=tmp_path / "elsewhere"
     )
     assert named["local"].path == tmp_path / "elsewhere"
 
 
 def test_a_local_tier_can_be_named_without_a_cache_root(tmp_path) -> None:
-    tiers = buildenvsession.cache_tiers(local_dir=tmp_path / "elsewhere")
+    tiers = buildenvsession.resolve_cache_tiers(local=tmp_path / "elsewhere")
     assert tiers["local"].path == tmp_path / "elsewhere"
     assert "shared" not in tiers
 
 
 def test_a_named_shared_tier_is_read_only(tmp_path) -> None:
     (tmp_path / "shared").mkdir()
-    tiers = buildenvsession.cache_tiers(shared_ccache_dir=tmp_path / "shared")
+    tiers = buildenvsession.resolve_cache_tiers(shared=tmp_path / "shared")
     assert tiers["shared"].path == tmp_path / "shared"
     assert not tiers["shared"].writable
 
@@ -658,20 +658,20 @@ def test_a_named_shared_tier_that_is_not_there_is_refused(tmp_path) -> None:
     """Somebody said where the shared cache is; silently building without
     it would hide a mount that never appeared."""
     with pytest.raises(ConfigError) as refusal:
-        buildenvsession.cache_tiers(shared_ccache_dir=tmp_path / "nothing")
+        buildenvsession.resolve_cache_tiers(shared=tmp_path / "nothing")
     assert str(tmp_path / "nothing") in str(refusal.value)
     assert buildenvsession.SHARED_CACHE_OPTION in (refusal.value.hint or "")
     # A file is not a directory either.
     (tmp_path / "a-file").write_text("", encoding="utf-8")
     with pytest.raises(ConfigError):
-        buildenvsession.cache_tiers(shared_ccache_dir=tmp_path / "a-file")
+        buildenvsession.resolve_cache_tiers(shared=tmp_path / "a-file")
 
 
 def test_a_derived_shared_tier_may_simply_be_absent(tmp_path) -> None:
     """The directory under the cache root is nobody's statement: a machine
     that never made one builds without a shared cache."""
-    tiers = buildenvsession.cache_tiers(ccache_dir=tmp_path / "root")
+    tiers = buildenvsession.resolve_cache_tiers(cache_root=tmp_path / "root")
     assert "shared" not in tiers
     (tmp_path / "root" / "cache-shared").mkdir(parents=True)
-    tiers = buildenvsession.cache_tiers(ccache_dir=tmp_path / "root")
+    tiers = buildenvsession.resolve_cache_tiers(cache_root=tmp_path / "root")
     assert tiers["shared"].path == tmp_path / "root" / "cache-shared"

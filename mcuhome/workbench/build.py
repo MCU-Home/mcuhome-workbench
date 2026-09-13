@@ -99,9 +99,9 @@ from mcuhome.workbench.buildenvsession import (
     BuildLimits,
     EnvironmentUnavailable,
     EnvironmentUnusable,
-    cache_tiers,
-    host_limits,
-    memory_bytes,
+    parse_memory,
+    resolve_cache_tiers,
+    resolve_host_limits,
 )
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import open_build_lock
@@ -431,7 +431,7 @@ class BuildOptions:
     def limits(self) -> BuildLimits:
         """What a build of this machine is given, as the two documents
         and the container flags all state it."""
-        return host_limits(cpus=self.cpus, memory_bytes=memory_bytes(self.memory))
+        return resolve_host_limits(cpus=self.cpus, memory_bytes=parse_memory(self.memory))
 
     def bound(self, kind: str) -> int | None:
         """The configured unpacking bound for a package *kind*, if any."""
@@ -1493,12 +1493,12 @@ def compose_container_build(
         # The same cache root and the same tiers the subprocess profile
         # is given: one cache per user, laid out once, mounted here and
         # linked there.
-        tiers=cache_tiers(
-            ccache_dir=root,
-            local_dir=options.cache_local,
-            shared_ccache_dir=options.cache_shared,
-            session_dir=options.cache_session,
-            project_dir=options.cache_project,
+        tiers=resolve_cache_tiers(
+            cache_root=root,
+            local=options.cache_local,
+            shared=options.cache_shared,
+            session=options.cache_session,
+            project=options.cache_project,
         ),
         registry=packages,
         runtime=runtime,
@@ -1711,12 +1711,12 @@ def compose_subprocess_build(
         # than a refusal. The tiers on top of it are this profile's, and
         # each of them may be moved somewhere else outright.
         cache_root=root,
-        tiers=cache_tiers(
-            ccache_dir=root,
-            local_dir=options.cache_local,
-            shared_ccache_dir=options.cache_shared,
-            session_dir=options.cache_session,
-            project_dir=options.cache_project,
+        tiers=resolve_cache_tiers(
+            cache_root=root,
+            local=options.cache_local,
+            shared=options.cache_shared,
+            session=options.cache_session,
+            project=options.cache_project,
         ),
         registry=packages,
         on_line=on_line,

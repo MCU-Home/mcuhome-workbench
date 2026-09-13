@@ -91,11 +91,11 @@ __all__ = [
     "Launcher",
     "StepResult",
     "Step",
-    "cache_tiers",
     "contained",
-    "host_limits",
-    "memory_bytes",
     "judge_step",
+    "parse_memory",
+    "resolve_cache_tiers",
+    "resolve_host_limits",
     "step_request",
     "verify_step_artifacts",
     "write_request",
@@ -210,8 +210,8 @@ CCACHE_SUBDIR = "ccache"
 
 #: The result document of one step (§6.2). ``result-*.json`` at the top
 #: of ``out`` is reserved for it.
-RESULT_PREFIX = "result-"
-RESULT_SUFFIX = ".json"
+RESULT_FILE_PREFIX = "result-"
+RESULT_FILE_SUFFIX = ".json"
 
 #: §6.2's three statuses. ``unsupported`` is the one that means *no
 #: environment of my kind can do this*, which is a fact about the
@@ -592,39 +592,45 @@ class CacheTier:
 _MEMORY_UNITS = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
 
 
-def memory_bytes(stated: str | int | None, *, option: str = "build.memory") -> int | None:
+def parse_memory(text: str | int | None, *, key: str = "build.memory") -> int | None:
     """A configured memory figure in bytes, or ``None`` for nothing stated.
 
     ``8g``, ``512m``, ``1024k`` and a plain byte count are all accepted,
     with or without a trailing ``b`` — the spellings ``docker run
     --memory`` documents. Anything else is a typed refusal naming
-    *option*, because a memory limit that was misread would either
+    *key*, because a memory limit that was misread would either
     strangle every build or bound nothing at all, and both are worse than
     being told.
     """
-    if stated is None or stated == "":
+    if text is None or text == "":
         return None
-    if isinstance(stated, int):
-        value, unit = float(stated), "b"
+    if isinstance(text, int):
+        value, unit = float(text), "b"
     else:
-        text = str(stated).strip().lower().removesuffix("ib")
-        number, unit = (text[:-1], text[-1]) if text and text[-1] in _MEMORY_UNITS else (text, "b")
+        spelled = str(text).strip().lower().removesuffix("ib")
+        number, unit = (
+            (spelled[:-1], spelled[-1])
+            if spelled and spelled[-1] in _MEMORY_UNITS
+            else (spelled, "b")
+        )
         try:
             value = float(number)
         except ValueError:
             value = 0.0
     if value <= 0:
         raise ConfigError(
-            f'"{stated}" is not an amount of memory.',
+            f'"{text}" is not an amount of memory.',
             hint=(
-                f"{option} takes a byte count or a number with a unit — 512m, 8g, "
+                f"{key} takes a byte count or a number with a unit — 512m, 8g, "
                 "2048k — the way a container runtime spells it"
             ),
         )
     return int(value * _MEMORY_UNITS[unit])
 
 
-def host_limits(*, cpus: float | None = None, memory_bytes: int | None = None) -> BuildLimits:
+def resolve_host_limits(
+    *, cpus: float | None = None, memory_bytes: int | None = None
+) -> BuildLimits:
     """What a step is given on this machine, unless somebody said otherwise.
 
     All of the CPUs and the memory that is actually available — the same
@@ -670,13 +676,13 @@ CACHE_SHARED_DIR = "cache-shared"
 SHARED_CACHE_OPTION = "build.cache_shared"
 
 
-def cache_tiers(
+def resolve_cache_tiers(
     *,
-    ccache_dir: Path | None = None,
-    local_dir: Path | None = None,
-    shared_ccache_dir: Path | None = None,
-    session_dir: Path | None = None,
-    project_dir: Path | None = None,
+    cache_root: Path | None = None,
+    local: Path | None = None,
+    shared: Path | None = None,
+    session: Path | None = None,
+    project: Path | None = None,
 ) -> dict[str, CacheTier]:
     """The cache tiers this orchestrator provides a step, from directories.
 
@@ -699,30 +705,30 @@ def cache_tiers(
     """
     tiers: dict[str, CacheTier] = {}
     # A tier named outright wins over the layout under the cache root:
-    # `ccache_dir` says where this machine keeps its caches, `local_dir`
+    # `cache_root` says where this machine keeps its caches, `local`
     # says where this one tier is, and a machine that states both meant
     # the more specific of the two.
-    local = local_dir if local_dir is not None else _under_root(ccache_dir, CACHE_LOCAL_DIR)
-    if local is not None:
-        tiers["local"] = CacheTier(path=Path(local), writable=True)
-    if session_dir is not None:
-        tiers["session"] = CacheTier(path=Path(session_dir), writable=True)
-    if project_dir is not None:
-        tiers["project"] = CacheTier(path=Path(project_dir), writable=True)
-    if shared_ccache_dir is not None:
-        shared = Path(shared_ccache_dir)
-        if not shared.is_dir():
+    local_tier = local if local is not None else _under_root(cache_root, CACHE_LOCAL_DIR)
+    if local_tier is not None:
+        tiers["local"] = CacheTier(path=Path(local_tier), writable=True)
+    if session is not None:
+        tiers["session"] = CacheTier(path=Path(session), writable=True)
+    if project is not None:
+        tiers["project"] = CacheTier(path=Path(project), writable=True)
+    if shared is not None:
+        shared_tier = Path(shared)
+        if not shared_tier.is_dir():
             raise ConfigError(
-                f"The shared compiler cache {shared} is not a directory.",
+                f"The shared compiler cache {shared_tier} is not a directory.",
                 hint=(
                     "the shared cache is read-only to a build, so MCUHome does not "
                     "create it: mount or create the directory, or unset "
                     f"{SHARED_CACHE_OPTION} to build without a shared cache"
                 ),
             )
-        tiers["shared"] = CacheTier(path=shared, writable=False)
+        tiers["shared"] = CacheTier(path=shared_tier, writable=False)
         return tiers
-    derived = _under_root(ccache_dir, CACHE_SHARED_DIR)
+    derived = _under_root(cache_root, CACHE_SHARED_DIR)
     if derived is not None and derived.is_dir():
         tiers["shared"] = CacheTier(path=derived, writable=False)
     return tiers
@@ -778,7 +784,7 @@ class Step:
     @property
     def result(self) -> Path:
         """Where this step's result document is (§6.2)."""
-        return self.out_dir / f"{RESULT_PREFIX}{self.invocation_id}{RESULT_SUFFIX}"
+        return self.out_dir / f"{RESULT_FILE_PREFIX}{self.invocation_id}{RESULT_FILE_SUFFIX}"
 
     def stop(self) -> None:
         """Ask for this step to be stopped, and never raise for asking twice.

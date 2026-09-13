@@ -44,7 +44,11 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import build, containerbuild
-from mcuhome.workbench.buildenvsession import RESULT_PREFIX, RESULT_SUFFIX, SPEC_GENERATION
+from mcuhome.workbench.buildenvsession import (
+    RESULT_FILE_PREFIX,
+    RESULT_FILE_SUFFIX,
+    SPEC_GENERATION,
+)
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
 from mcuhome.workbench.packagefetch import SDK_PACKAGE_NAME
@@ -129,7 +133,9 @@ def build_result(request: dict[str, Any], out: Path, *, status: str = "success")
         "message": "" if status == "success" else "the build failed",
         "artifacts": sorted(files) if status == "success" else [],
     }
-    (out / f"{RESULT_PREFIX}{invocation}{RESULT_SUFFIX}").write_text(json.dumps(document), "utf-8")
+    (out / f"{RESULT_FILE_PREFIX}{invocation}{RESULT_FILE_SUFFIX}").write_text(
+        json.dumps(document), "utf-8"
+    )
 
 
 class Seam:
