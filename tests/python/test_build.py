@@ -2205,6 +2205,60 @@ def test_a_refused_context_leaves_nothing_behind(model, tmp_path) -> None:
     assert [path.name for path in tmp_path.iterdir() if path.name.startswith(".mcuhome-")] == []
 
 
+def test_a_linked_out_dir_puts_the_context_where_the_link_points(model, tmp_path) -> None:
+    """A build directory somebody linked to another disk still works.
+
+    The link is a place they chose, so the context goes where it points
+    and the link stays a link — and the staging directory goes to the
+    target's own filesystem with it, where the move at the end is a
+    rename and not a copy.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    link = tmp_path / "context"
+    link.symlink_to(real, target_is_directory=True)
+
+    _context_of(model, tmp_path, out="context", source=source)
+
+    assert link.is_symlink()
+    assert (real / "context.yaml").is_file()
+    assert [path.name for path in tmp_path.iterdir() if path.name.startswith(".mcuhome-")] == []
+
+
+def test_a_target_that_reappears_while_the_context_is_written_is_refused(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The window between the check and the move belongs to the filesystem.
+
+    Somebody else can fill the directory while this one is writing, and
+    the answer has to be the same as for a directory that was occupied
+    from the start: a refusal in words, nothing of theirs touched, and no
+    half context left lying around — not a bare `OSError` out of a
+    rename.
+    """
+    source = tmp_path / "sdk"
+    make_package_source(source)
+    real = build._create_context
+
+    def racing(device_model, **kwargs):
+        answer = real(device_model, **kwargs)
+        intruder = tmp_path / "context"
+        intruder.mkdir(parents=True, exist_ok=True)
+        (intruder / "not-yours.txt").write_text("mine\n", encoding="utf-8")
+        return answer
+
+    monkeypatch.setattr(build, "_create_context", racing)
+
+    with pytest.raises(BuildError, match="could not be put in place") as refused:
+        _context_of(model, tmp_path, out="context", source=source)
+
+    assert str(tmp_path / "context") in refused.value.message
+    assert (tmp_path / "context" / "not-yours.txt").is_file()
+    assert [path.name for path in tmp_path.iterdir() if path.name.startswith(".mcuhome-")] == []
+
+
 def test_a_patches_path_that_is_a_file_is_refused(model, tmp_path) -> None:
     """The one mistake an absent folder would hide.
 

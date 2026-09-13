@@ -1160,11 +1160,17 @@ def create_context(
     holds files is refused rather than emptied: a context is written from
     scratch because its integrity list and its ID cover everything in the
     directory, and what is already in one belongs to whoever put it
-    there. **A refusal leaves nothing behind**, whether it comes before
-    anything was written or halfway through: the context is assembled in
-    a hidden directory beside *out_dir* and moved into place only once it
-    is complete, so a patch layout this format cannot express costs a
-    message and no files.
+    there. A *out_dir* that is a symbolic link is followed — the context
+    goes where the link points, which is what somebody who linked their
+    build directory to another disk meant, and the link stays a link.
+
+    **A refusal leaves nothing behind**, whether it comes before anything
+    was written, halfway through, or at the very end: the context is
+    assembled in a hidden directory beside *out_dir* and moved into place
+    only once it is complete, and that move is part of the same
+    guarantee — a directory somebody else filled while this ran is a
+    ``BuildError`` naming it, not a half-written context and not a bare
+    ``OSError``.
 
     Answers the :class:`~mcuhome.model.context.ContextRequest` that was
     written. The context is a **base** context: locking it — computing
@@ -1177,6 +1183,13 @@ def create_context(
     not a P-256 public key.
     """
     out_dir = Path(out_dir)
+    if out_dir.is_symlink():
+        # A linked build directory is a place somebody chose — another
+        # disk, usually — so the context goes where the link points and
+        # the link stays a link. Resolving it here rather than at the
+        # rename also keeps the staging directory on the target's own
+        # filesystem, where a rename is a rename and not a copy.
+        out_dir = out_dir.resolve()
     work_root = Path(work_root)
     require_empty_context_dir(out_dir)
     # Assembled beside the target and moved in at the end. The rename is
@@ -1212,17 +1225,32 @@ def create_context(
             developer=options.dev_workspace is not None,
             on_line=on_line,
         )
+        try:
+            if out_dir.exists():
+                # Empty — `require_empty_context_dir` said so — and in
+                # the way of a rename that must not land inside it.
+                out_dir.rmdir()
+            staging.rename(out_dir)
+        except OSError as error:
+            # Everything between the check and this line belongs to the
+            # filesystem, not to this call: somebody else may have filled
+            # the directory in the meantime, or taken the right to write
+            # it away. It is still a refusal in words, and the staging
+            # directory still goes — the caller gets a message and no
+            # files, exactly as for a refusal that came earlier.
+            raise BuildError(
+                f"The finished context could not be put in place at {out_dir}: {error.strerror}.",
+                hint=(
+                    "something changed the directory while the context was being "
+                    "written — check what is in it and create the context again"
+                ),
+            ) from error
     except BaseException:
         # Including a stop and a keyboard interrupt: what lies in the
         # staging directory at that moment is half a context, and half a
         # context is worth nothing to anybody.
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    if out_dir.exists():
-        # Empty — `require_empty_context_dir` said so — and in the way of
-        # a rename that must not land inside it.
-        out_dir.rmdir()
-    staging.rename(out_dir)
     return request
 
 
