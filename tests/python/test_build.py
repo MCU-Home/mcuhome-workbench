@@ -68,9 +68,9 @@ from mcuhome.workbench.contextdir import (
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, RegistrySettings
 from mcuhome.workbench.resolve_pins import (
-    BUILD_TOOLS_SOURCE,
-    BUILD_WORKSPACE_SOURCE,
-    SDK_SOURCE,
+    KIND_SDK,
+    KIND_TOOLS,
+    KIND_WORKSPACE,
 )
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
@@ -115,8 +115,7 @@ def _served_by(directory: Path) -> tuple[RegistrySettings, ...]:
             base_domain=OFFICIAL_BASE_DOMAIN,
             untrusted=True,
             mirrors={
-                source: (str(directory),)
-                for source in (SDK_SOURCE, BUILD_WORKSPACE_SOURCE, BUILD_TOOLS_SOURCE)
+                source: (str(directory),) for source in (KIND_SDK, KIND_WORKSPACE, KIND_TOOLS)
             },
         ),
     )
@@ -957,10 +956,10 @@ def test_a_remote_build_pins_the_chain_it_read_out_of_the_registry(
     # fixture's untrusted registry announces itself.
     read = [
         source
-        for source in (SDK_SOURCE, BUILD_WORKSPACE_SOURCE, BUILD_TOOLS_SOURCE)
+        for source in (KIND_SDK, KIND_WORKSPACE, KIND_TOOLS)
         if any(f"{source} is being read from {served}" in line for line in log)
     ]
-    assert read == [SDK_SOURCE, BUILD_WORKSPACE_SOURCE, BUILD_TOOLS_SOURCE]
+    assert read == [KIND_SDK, KIND_WORKSPACE, KIND_TOOLS]
 
 
 def test_a_configured_source_still_beats_the_registry_for_a_remote_build(

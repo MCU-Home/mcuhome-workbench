@@ -436,9 +436,9 @@ class BuildOptions:
     def bound(self, kind: str) -> int | None:
         """The configured unpacking bound for a package *kind*, if any."""
         return {
-            buildenvstore.SDK_KIND: self.sdk_max_bytes,
-            buildenvstore.WORKSPACE_KIND: self.workspace_max_bytes,
-            buildenvstore.TOOLS_KIND: self.tools_max_bytes,
+            buildenvstore.KIND_SDK: self.sdk_max_bytes,
+            buildenvstore.KIND_WORKSPACE: self.workspace_max_bytes,
+            buildenvstore.KIND_TOOLS: self.tools_max_bytes,
         }.get(kind)
 
 
@@ -908,7 +908,7 @@ def _package_registry(
     Which registry is the device's own statement: ``sources.sdk`` is a
     reference, and the registry is the domain in it — the official one
     where it names none. Nothing here reads a trust anchor or opens a
-    socket; :func:`~mcuhome.workbench.packageregistry.registry_factory`
+    socket; :func:`~mcuhome.workbench.packageregistry.open_package_registry`
     defers all of it to the first question actually asked, so a build
     whose packages are already in the operator's directories neither
     needs an anchor nor is stopped by a missing one.
@@ -923,13 +923,13 @@ def _package_registry(
     """
     if project_root is None:
         return None
-    from mcuhome.workbench.packageregistry import registry_factory
+    from mcuhome.workbench.packageregistry import open_package_registry
 
     # Read by the resolver's own parser rather than the image one: a
     # `sources.sdk` may carry a version *constraint* where an image
     # reference carries a tag, and `~=0.1.9` is not a tag.
     reference = package_reference(model.sources.sdk, stage=SDK_STAGE)
-    return registry_factory(
+    return open_package_registry(
         reference.base_domain,
         project_root=Path(project_root),
         settings=tuple(registries),
@@ -1672,7 +1672,7 @@ def compose_subprocess_build(
             interpreter=options.python,
             bounds={
                 kind: bound
-                for kind in (buildenvstore.WORKSPACE_KIND, buildenvstore.TOOLS_KIND)
+                for kind in (buildenvstore.KIND_WORKSPACE, buildenvstore.KIND_TOOLS)
                 if (bound := options.bound(kind)) is not None
             },
             registry=packages,

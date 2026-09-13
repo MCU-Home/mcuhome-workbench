@@ -103,14 +103,14 @@ from mcuhome.workbench.buildtarget import (
     DEFAULT_CONTAINER_REPOSITORIES,
 )
 from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
-from mcuhome.workbench.packagefetch import acquire_sdk
+from mcuhome.workbench.packagefetch import fetch_sdk_package
 from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_image import (
     ContainerImageMatch,
     parse_container_image,
     resolve_container_image,
 )
-from mcuhome.workbench.resolve_pins import concrete_package
+from mcuhome.workbench.resolve_pins import resolve_package
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     # The build options are resolved one layer up and only annotated
@@ -729,7 +729,7 @@ def image_for_context(
     architectures — while an image contains one platform's package and
     declares it by its concrete name. So the pin is resolved against the
     package index for this host first
-    (:func:`~mcuhome.workbench.resolve_pins.concrete_package`, the same
+    (:func:`~mcuhome.workbench.resolve_pins.resolve_package`, the same
     call the subprocess profile provisions from, and the pinned hash is
     checked against the family's own entry there), and what is then
     looked for is the exact set the resolution produced.
@@ -758,9 +758,9 @@ def image_for_context(
         (pin.workspace, workspace_source, workspace_sources),
         (pin.tools, tools_source, tools_sources),
     ):
-        found = concrete_package(
+        found = resolve_package(
             package,
-            source=source,
+            kind=source,
             sources=tuple(directories) or tuple(sources),
             registry=registry,
             platform=platform,
@@ -1030,7 +1030,7 @@ def run_locked_build(
             zephyr_constraint=zephyr_constraint,
         )
     seam = runtime if runtime is not None else ContainerRuntime(container_program)
-    sdk_tree = acquire_sdk(
+    sdk_tree = fetch_sdk_package(
         version=manifest.sdk.version,
         sha256=manifest.sdk.sha256,
         sources=tuple(Path(source) for source in sdk_sources),

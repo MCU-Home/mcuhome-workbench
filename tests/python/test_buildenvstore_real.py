@@ -137,7 +137,7 @@ def test_the_published_packages_provision_into_a_working_environment(work) -> No
 
     def provision_tools(**overrides) -> store.StoreEntry:
         return store.provision(
-            kind=store.TOOLS_KIND,
+            kind=store.KIND_TOOLS,
             name=TOOLS_PREFIX[:-1],
             version=tools_version,
             sha256=sha256_file(TOOLS_ARCHIVE),
@@ -151,7 +151,7 @@ def test_the_published_packages_provision_into_a_working_environment(work) -> No
     # The source world: 1.5 GB, 124 000 members, hundreds of links
     # ------------------------------------------------------------------
     workspace = store.provision(
-        kind=store.WORKSPACE_KIND,
+        kind=store.KIND_WORKSPACE,
         name=WORKSPACE_PREFIX[:-1],
         version=_version(WORKSPACE_ARCHIVE, WORKSPACE_PREFIX),
         sha256=sha256_file(WORKSPACE_ARCHIVE),

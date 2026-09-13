@@ -91,9 +91,9 @@ from mcuhome.workbench import builders as builders_module
 from mcuhome.workbench import packageregistry
 from mcuhome.workbench.buildenvstore import (
     EXTRACTION_BOUNDS,
-    SDK_KIND,
-    TOOLS_KIND,
-    WORKSPACE_KIND,
+    KIND_SDK,
+    KIND_TOOLS,
+    KIND_WORKSPACE,
 )
 from mcuhome.workbench.builders import CREDENTIALS_TOKEN_KEY, SelectedBuilder
 from mcuhome.workbench.buildtarget import (
@@ -426,21 +426,21 @@ OPTIONS: tuple[Option, ...] = (
     Option(
         "build.sdk_max_bytes",
         kind="integer",
-        default=EXTRACTION_BOUNDS[SDK_KIND],
+        default=EXTRACTION_BOUNDS[KIND_SDK],
         minimum=1,
         help="how much the SDK package may unpack to, in bytes",
     ),
     Option(
         "build.workspace_max_bytes",
         kind="integer",
-        default=EXTRACTION_BOUNDS[WORKSPACE_KIND],
+        default=EXTRACTION_BOUNDS[KIND_WORKSPACE],
         minimum=1,
         help="how much the build workspace package may unpack to, in bytes",
     ),
     Option(
         "build.tools_max_bytes",
         kind="integer",
-        default=EXTRACTION_BOUNDS[TOOLS_KIND],
+        default=EXTRACTION_BOUNDS[KIND_TOOLS],
         minimum=1,
         help="how much the build tools package may unpack to, in bytes",
     ),

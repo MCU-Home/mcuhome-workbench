@@ -57,7 +57,7 @@ from mcuhome.workbench.packageregistry import (
     opened,
     resolve_entry,
 )
-from mcuhome.workbench.resolve_pins import SDK_SOURCE
+from mcuhome.workbench.resolve_pins import KIND_SDK
 
 __all__ = [
     "SDK_MAX_BYTES",
@@ -65,7 +65,7 @@ __all__ = [
     "AcquiredPackage",
     "SdkUnavailable",
     "acquire_package",
-    "acquire_sdk",
+    "fetch_sdk_package",
 ]
 
 #: A generous bound on what the SDK archive unpacks to. Not a policy
@@ -100,7 +100,7 @@ class AcquiredPackage:
 
 def acquire_package(
     *,
-    kind: str = SDK_SOURCE,
+    kind: str = KIND_SDK,
     name: str = SDK_PACKAGE_NAME,
     version: str,
     sha256: str,
@@ -228,7 +228,7 @@ def acquire_package(
     )
 
 
-def acquire_sdk(
+def fetch_sdk_package(
     *,
     version: str,
     sha256: str,
@@ -245,7 +245,7 @@ def acquire_sdk(
     constants that never vary for it.
     """
     return acquire_package(
-        kind=SDK_SOURCE,
+        kind=KIND_SDK,
         name=SDK_PACKAGE_NAME,
         version=version,
         sha256=sha256,

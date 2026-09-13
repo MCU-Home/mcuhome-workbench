@@ -55,8 +55,8 @@ from mcuhome.workbench.packageregistry import (
     matching_version,
     merge_registries,
     meta_file_of,
+    open_package_registry,
     parse_registries,
-    registry_factory,
     registry_for,
     resolve_entry,
     trust_anchor_for,
@@ -785,7 +785,7 @@ def test_a_promised_registry_costs_nothing_until_something_asks(tmp_path: Path) 
     an anchor is for.
     """
     root = bare(tmp_path)
-    promised = registry_factory(
+    promised = open_package_registry(
         packageregistry.OFFICIAL_BASE_DOMAIN,
         project_root=root,
         into=tmp_path / "fetched",
@@ -796,7 +796,7 @@ def test_a_promised_registry_costs_nothing_until_something_asks(tmp_path: Path) 
 
 
 def test_a_promised_registry_is_built_once(tmp_path: Path) -> None:
-    promised = registry_factory(
+    promised = open_package_registry(
         packageregistry.OFFICIAL_BASE_DOMAIN,
         project_root=project(tmp_path),
         into=tmp_path / "fetched",

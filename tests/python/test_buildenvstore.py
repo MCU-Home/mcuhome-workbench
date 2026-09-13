@@ -213,7 +213,7 @@ def tools(tmp_path, env, store_dir):
         sources = tmp_path / "sources"
         sha256 = put_source(sources, TOOLS, members if members is not None else tools_members())
         arguments = {
-            "kind": store.TOOLS_KIND,
+            "kind": store.KIND_TOOLS,
             "name": TOOLS,
             "version": VERSION,
             "sha256": sha256,
@@ -234,7 +234,7 @@ def workspace(tmp_path, env, store_dir):
             sources, WORKSPACE, members if members is not None else workspace_members()
         )
         arguments = {
-            "kind": store.WORKSPACE_KIND,
+            "kind": store.KIND_WORKSPACE,
             "name": WORKSPACE,
             "version": VERSION,
             "sha256": sha256,
@@ -282,9 +282,9 @@ def test_an_entry_is_named_for_its_package_and_version(tmp_path) -> None:
 #: 0.1.10.dev1 set. The bounds are sized against these, so the numbers are
 #: written down where a change to either has to face the other.
 MEASURED = {
-    store.WORKSPACE_KIND: 1_640_427_520,
-    store.TOOLS_KIND: 997_017_600,
-    store.SDK_KIND: 1_249_280,
+    store.KIND_WORKSPACE: 1_640_427_520,
+    store.KIND_TOOLS: 997_017_600,
+    store.KIND_SDK: 1_249_280,
 }
 
 
@@ -367,7 +367,7 @@ def test_the_marker_is_written_last_and_says_what_the_tree_is(
     assert document["package"] == TOOLS
     assert document["version"] == VERSION
     assert document["sha256"] == arguments["sha256"]
-    assert document["kind"] == store.TOOLS_KIND
+    assert document["kind"] == store.KIND_TOOLS
     assert store.provisioned(entry.path) == entry
 
 
@@ -692,7 +692,7 @@ def test_a_package_with_nothing_to_finalize_is_only_unpacked_and_frozen(
     sources = tmp_path / "sources"
     sha256 = put_source(sources, "mcuhome-sdk", {"mcuhome-sdk.json": b'{"sdk": 1}'})
     entry = store.provision(
-        kind=store.SDK_KIND,
+        kind=store.KIND_SDK,
         name="mcuhome-sdk",
         version=VERSION,
         sha256=sha256,
@@ -729,7 +729,7 @@ def test_a_family_name_is_refused_rather_than_stored_under_it(
 def test_an_entry_of_another_kind_is_refused(tools, store_dir) -> None:
     store.provision(**tools())
     with pytest.raises(BuildError) as caught:
-        store.provision(**tools(kind=store.WORKSPACE_KIND))
+        store.provision(**tools(kind=store.KIND_WORKSPACE))
     assert "was unpacked as a" in caught.value.message
 
 

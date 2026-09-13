@@ -62,7 +62,7 @@ from mcuhome.model.userpaths import expand, home
 
 from mcuhome.workbench.packagefetch import SDK_MAX_BYTES, acquire_package
 from mcuhome.workbench.packageregistry import RegistrySource
-from mcuhome.workbench.resolve_pins import SDK_SOURCE
+from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE
 
 try:  # pragma: no cover - the import itself is the platform check
     import fcntl
@@ -73,14 +73,14 @@ __all__ = [
     "DEFAULT_BOUND",
     "EXTRACTION_BOUNDS",
     "GIT_CONFIG_FILE",
+    "KIND_SDK",
+    "KIND_TOOLS",
+    "KIND_WORKSPACE",
     "MARKER_FILE",
-    "SDK_KIND",
     "STORE_DIR",
-    "TOOLS_KIND",
     "TOOLS_MANIFEST",
     "VENV_DIR",
     "WHEELS_DIR",
-    "WORKSPACE_KIND",
     "WORKSPACE_MANIFEST",
     "BuildEnvironmentError",
     "PythonRequirement",
@@ -101,12 +101,6 @@ __all__ = [
 #: The store, under MCUHome's directory in the user's cache home.
 STORE_DIR = "build-environments"
 
-#: The sources a build environment is assembled from, by the name they
-#: are published under. They are the registry's source names, so the same
-#: strings select a source, a bound and a finalization.
-SDK_KIND = SDK_SOURCE
-WORKSPACE_KIND = "build-workspace"
-TOOLS_KIND = "build-tools"
 
 #: What each package says about itself, at the top of its own tree. The
 #: entry point checks for exactly these two files before it does
@@ -152,9 +146,9 @@ _GIB = 1024**3
 #: somebody else — a workspace with more modules, a tools package with
 #: several toolchains — is a legitimately much larger thing than ours.
 EXTRACTION_BOUNDS = {
-    SDK_KIND: SDK_MAX_BYTES,
-    WORKSPACE_KIND: 20 * _GIB,
-    TOOLS_KIND: 10 * _GIB,
+    KIND_SDK: SDK_MAX_BYTES,
+    KIND_WORKSPACE: 20 * _GIB,
+    KIND_TOOLS: 10 * _GIB,
 }
 
 #: What a kind nobody has bounded gets. The SDK's bound, because it is
@@ -420,7 +414,7 @@ def provision(
             # this package never gets an entry directory at all: the
             # answer is in the staged tree already, and only the venv
             # itself has to wait for the final path.
-            if kind == TOOLS_KIND:
+            if kind == KIND_TOOLS:
                 _check_interpreter(staging, name=name, interpreter=interpreter or sys.executable)
             os.rename(staging, entry)
         except BaseException:
@@ -493,11 +487,11 @@ def _finalize(
     SDK package, which a build gets delivered rather than assembled from
     — is simply unpacked and frozen.
     """
-    if kind == TOOLS_KIND:
+    if kind == KIND_TOOLS:
         require_manifest(tree, TOOLS_MANIFEST, name)
         _create_venv(tree, interpreter=interpreter, name=name, on_line=on_line)
         return
-    if kind == WORKSPACE_KIND:
+    if kind == KIND_WORKSPACE:
         workspace = _check_west_config(tree, name)
         _write_git_config(tree, workspace)
 

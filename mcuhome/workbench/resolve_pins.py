@@ -115,6 +115,10 @@ from packaging.version import InvalidVersion, Version
 __all__ = [
     "DEFAULT_SDK_CONSTRAINT",
     "INDEX_FILE",
+    "KIND_SDK",
+    "KIND_TOOLS",
+    "KIND_WORKSPACE",
+    "PACKAGE_KINDS",
     "SDK_ANY",
     "SDK_PACKAGE_NAME",
     "SDK_STAGE",
@@ -124,11 +128,11 @@ __all__ = [
     "PackageStage",
     "ResolvedPackage",
     "SdkResolution",
-    "concrete_package",
     "package_reference",
     "resolve_environment",
     "resolve_from_entries",
     "resolve_from_index",
+    "resolve_package",
     "resolve_sdk",
     "resolve_sdk_pin",
     "resolve_version",
@@ -143,9 +147,20 @@ __all__ = [
 # and are re-exported here under the names this module always offered.
 from mcuhome.model.sdkindex import DEFAULT_SDK, INDEX_FILE, SDK_PACKAGE_NAME  # noqa: E402
 
-#: The source the SDK is published under inside a registry — the first
-#: component of the reference every device carries by default.
-SDK_SOURCE = DEFAULT_SDK.split("/")[0]
+#: The three package kinds a build environment is assembled from, under
+#: the names the build-context format spells them with: they are package
+#: names, which is why this one fixed value set is not lowercase words
+#: like the others. :data:`KIND_SDK` is the first component of the
+#: reference every device carries by default.
+KIND_SDK = DEFAULT_SDK.split("/")[0]
+
+#: The other two kinds, under the names the model publishes them as, so
+#: a caller reads the whole vocabulary in one place.
+KIND_WORKSPACE = WORKSPACE_SOURCE
+KIND_TOOLS = TOOLS_SOURCE
+
+#: Every package kind, in the order a build resolves them.
+PACKAGE_KINDS = (KIND_SDK, KIND_WORKSPACE, KIND_TOOLS)
 
 from mcuhome.workbench.packageregistry import (  # noqa: E402
     OFFICIAL_BASE_DOMAIN,
@@ -207,7 +222,7 @@ class PackageStage:
 #: The three stages a build resolves, in the order the chain links them.
 #: They are the defaults a ``sources.*`` reference is completed with, and
 #: the vocabulary a refusal names the missing piece in.
-SDK_STAGE = PackageStage(what="SDK package", source=SDK_SOURCE, family=SDK_PACKAGE_NAME, key="sdk")
+SDK_STAGE = PackageStage(what="SDK package", source=KIND_SDK, family=SDK_PACKAGE_NAME, key="sdk")
 WORKSPACE_STAGE = PackageStage(
     what="build workspace package",
     source=WORKSPACE_SOURCE,
@@ -698,7 +713,7 @@ def resolve_sdk(
     constraint: str = SDK_ANY,
     prereleases: bool | None = None,
     registry: RegistrySource | None = None,
-    source_name: str = SDK_SOURCE,
+    source_name: str = KIND_SDK,
     platform: str | None = None,
 ) -> SdkResolution:
     """Resolve *constraint* to one SDK package: local sources, then *registry*.
@@ -896,7 +911,7 @@ def sdk_package_meta(
     from mcuhome.workbench.packagefetch import acquire_package
 
     acquired = acquire_package(
-        kind=SDK_SOURCE,
+        kind=KIND_SDK,
         name=SDK_PACKAGE_NAME,
         version=version,
         sha256=sha256,
@@ -1720,17 +1735,10 @@ def resolve_environment(
     return EnvironmentPin(workspace=workspace_found.pin, tools=tools_found.pin)
 
 
-#: The registry sources the two environment packages are published under,
-#: re-exported here beside :data:`SDK_SOURCE` so a caller has one place
-#: to read the vocabulary from.
-BUILD_WORKSPACE_SOURCE = WORKSPACE_SOURCE
-BUILD_TOOLS_SOURCE = TOOLS_SOURCE
-
-
-def concrete_package(
+def resolve_package(
     pin: PackagePin,
     *,
-    source: str,
+    kind: str,
     sources: Sequence[Path] = (),
     registry: RegistrySource | None = None,
     platform: str | None = None,
@@ -1763,7 +1771,7 @@ def concrete_package(
             continue
     client = opened(registry)
     if client is not None:
-        index = client.index(source)
+        index = client.index(kind)
         return _concrete_from(index.entries, pin, platform=platform, where=index.base)
     listed = ", ".join(str(directory) for directory in sources) or "none"
     raise BuildError(

@@ -77,10 +77,10 @@ def make_sdk_source(directory: Path, *, index_sha: str | None = None) -> str:
 # --------------------------------------------------------------------------
 
 
-def test_acquire_sdk_finds_verifies_and_unpacks(tmp_path) -> None:
+def test_fetch_sdk_package_finds_verifies_and_unpacks(tmp_path) -> None:
     real = make_sdk_source(tmp_path / "src")
     into = tmp_path / "sdk"
-    package = packagefetch.acquire_sdk(
+    package = packagefetch.fetch_sdk_package(
         version=SDK_VERSION, sha256=real, sources=(tmp_path / "src",), into=into
     )
     assert package.tree == into
@@ -94,7 +94,7 @@ def test_the_entry_point_keeps_its_executable_bit(tmp_path) -> None:
     where code generation should be."""
     real = make_sdk_source(tmp_path / "src")
     into = tmp_path / "sdk"
-    packagefetch.acquire_sdk(
+    packagefetch.fetch_sdk_package(
         version=SDK_VERSION, sha256=real, sources=(tmp_path / "src",), into=into
     )
     assert (into / "bin" / "generate").stat().st_mode & 0o100
@@ -106,7 +106,7 @@ def test_a_wrong_hash_is_refused_as_loudly_as_a_missing_file(tmp_path) -> None:
     make_sdk_source(tmp_path / "src", index_sha="b" * 64)
     with pytest.raises(BuildError) as caught:
         # The pin matches the index but not the archive's real bytes.
-        packagefetch.acquire_sdk(
+        packagefetch.fetch_sdk_package(
             version=SDK_VERSION, sha256="b" * 64, sources=(tmp_path / "src",), into=tmp_path / "sdk"
         )
     assert "hashes to" in caught.value.message
@@ -115,7 +115,7 @@ def test_a_wrong_hash_is_refused_as_loudly_as_a_missing_file(tmp_path) -> None:
 def test_an_index_that_disagrees_with_the_pin_is_refused(tmp_path) -> None:
     make_sdk_source(tmp_path / "src", index_sha="d" * 64)
     with pytest.raises(BuildError) as caught:
-        packagefetch.acquire_sdk(
+        packagefetch.fetch_sdk_package(
             version=SDK_VERSION, sha256="e" * 64, sources=(tmp_path / "src",), into=tmp_path / "sdk"
         )
     assert "pins" in caught.value.message
@@ -125,7 +125,7 @@ def test_no_source_holding_the_package_is_a_typed_refusal(tmp_path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(BuildError) as caught:
-        packagefetch.acquire_sdk(
+        packagefetch.fetch_sdk_package(
             version=SDK_VERSION, sha256="a" * 64, sources=(empty,), into=tmp_path / "sdk"
         )
     assert packagefetch.SDK_PACKAGE_NAME in (caught.value.message + (caught.value.hint or ""))

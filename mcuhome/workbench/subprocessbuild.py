@@ -106,8 +106,8 @@ from mcuhome.workbench.buildenvsession import (
     resolve_host_limits,
 )
 from mcuhome.workbench.buildenvstore import (
-    TOOLS_KIND,
-    WORKSPACE_KIND,
+    KIND_TOOLS,
+    KIND_WORKSPACE,
     BuildEnvironmentError,
     StoreEntry,
     entry_directory,
@@ -117,9 +117,9 @@ from mcuhome.workbench.buildenvstore import (
 )
 from mcuhome.workbench.buildprocess import LineSink, Running, spawn_process
 from mcuhome.workbench.contextdir import read_context_manifest, read_generator_chain
-from mcuhome.workbench.packagefetch import acquire_sdk
+from mcuhome.workbench.packagefetch import fetch_sdk_package
 from mcuhome.workbench.packageregistry import RegistrySource
-from mcuhome.workbench.resolve_pins import concrete_package
+from mcuhome.workbench.resolve_pins import resolve_package
 
 __all__ = [
     "DEV_WORKSPACE_OPTION",
@@ -322,8 +322,8 @@ def environment_from_store(
     was never prepared.
     """
     return Environment(
-        workspace=_entry(store, kind=WORKSPACE_KIND, name=workspace[0], version=workspace[1]),
-        tools=_entry(store, kind=TOOLS_KIND, name=tools[0], version=tools[1]),
+        workspace=_entry(store, kind=KIND_WORKSPACE, name=workspace[0], version=workspace[1]),
+        tools=_entry(store, kind=KIND_TOOLS, name=tools[0], version=tools[1]),
     )
 
 
@@ -355,7 +355,7 @@ def environment_from_workspace(workspace: Path | str) -> Environment:
     path = Path(workspace).resolve()
     checkout = devworkspace.manifest_checkout(path)
     return Environment(
-        workspace=StoreEntry(kind=WORKSPACE_KIND, name="", version="", sha256="", path=path),
+        workspace=StoreEntry(kind=KIND_WORKSPACE, name="", version="", sha256="", path=path),
         tools=None,
         sdk=checkout,
     )
@@ -419,13 +419,13 @@ def environment_from_pins(
         )
     entries = []
     for package, kind, source, directories in (
-        (pin.workspace, WORKSPACE_KIND, workspace_source, workspace_sources),
-        (pin.tools, TOOLS_KIND, tools_source, tools_sources),
+        (pin.workspace, KIND_WORKSPACE, workspace_source, workspace_sources),
+        (pin.tools, KIND_TOOLS, tools_source, tools_sources),
     ):
         searched = tuple(directories) or tuple(sources)
-        found = concrete_package(
+        found = resolve_package(
             package,
-            source=source,
+            kind=source,
             sources=searched,
             registry=registry,
             platform=platform,
@@ -474,7 +474,7 @@ def _entry(store: Path, *, kind: str, name: str, version: str) -> StoreEntry:
             hint=f"delete the entry and let MCUHome unpack it again — "
             f"chmod -R u+w {directory} && rm -rf {directory}",
         )
-    if kind == TOOLS_KIND:
+    if kind == KIND_TOOLS:
         _require_entry_point(found)
     return found
 
@@ -1134,7 +1134,7 @@ def run_locked_build(
                 read_generator_chain(context_dir / BUILD_CONTEXT_FILE)
             ),
         )
-        sdk_tree = acquire_sdk(
+        sdk_tree = fetch_sdk_package(
             version=manifest.sdk.version,
             sha256=manifest.sdk.sha256,
             sources=tuple(Path(source) for source in sdk_sources),

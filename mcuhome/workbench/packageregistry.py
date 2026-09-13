@@ -110,7 +110,7 @@ __all__ = [
     "opened",
     "pin_entry",
     "parse_registries",
-    "registry_factory",
+    "open_package_registry",
     "registry_opener",
     "registry_for",
     "resolve_entry",
@@ -1385,7 +1385,7 @@ def registry_for(
     )
 
 
-def registry_factory(
+def open_package_registry(
     base_domain: str,
     *,
     project_root: Path,
@@ -1479,7 +1479,7 @@ def opened(source: RegistrySource | None) -> PackageRegistry | None:
 
 
 #: What a caller may hand to anything that *might* need a registry: one,
-#: or a promise of one (:func:`registry_factory`). The promise is the
+#: or a promise of one (:func:`open_package_registry`). The promise is the
 #: ordinary case — see there for why a build that needs no registry must
 #: not pay for one.
 RegistrySource = PackageRegistry | Callable[[], PackageRegistry]

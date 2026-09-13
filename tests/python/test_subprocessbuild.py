@@ -33,10 +33,10 @@ from test_buildenvsession import _PREAMBLE, DELIVERS, entry_point
 from mcuhome.workbench import buildenvsession, devworkspace, subprocessbuild
 from mcuhome.workbench.buildenvstore import (
     GIT_CONFIG_FILE,
+    KIND_SDK,
+    KIND_TOOLS,
+    KIND_WORKSPACE,
     MARKER_FILE,
-    SDK_KIND,
-    TOOLS_KIND,
-    WORKSPACE_KIND,
     BuildEnvironmentError,
     StoreEntry,
 )
@@ -144,7 +144,7 @@ def environment(store: Path) -> Environment:
     """The two entries a subprocess build runs against."""
     put_entry(
         store,
-        kind=WORKSPACE_KIND,
+        kind=KIND_WORKSPACE,
         name="mcuhome-build-workspace",
         version="0.1.0",
         files={
@@ -161,7 +161,7 @@ def environment(store: Path) -> Environment:
     (tools / MARKER_FILE).write_text(
         json.dumps(
             {
-                "kind": TOOLS_KIND,
+                "kind": KIND_TOOLS,
                 "package": "mcuhome-build-tools_linux-amd64",
                 "version": "0.1.0",
                 "sha256": "c" * 64,
@@ -285,7 +285,7 @@ def make_context(directory: Path, sdk_sha256: str) -> Path:
 
 def test_the_entries_of_a_provisioned_environment_are_found(store, environment) -> None:
     assert environment.tools.name == "mcuhome-build-tools_linux-amd64"
-    assert environment.workspace.kind == WORKSPACE_KIND
+    assert environment.workspace.kind == KIND_WORKSPACE
     assert environment.entry_point.is_file()
     assert "mcuhome-build-workspace 0.1.0" in environment.described()
 
@@ -317,7 +317,7 @@ def test_each_pinned_package_is_provisioned_with_its_own_directories_and_bound(
             sha256=kwargs["sha256"],
         )
 
-    monkeypatch.setattr(subprocessbuild, "concrete_package", fake_concrete)
+    monkeypatch.setattr(subprocessbuild, "resolve_package", fake_concrete)
     monkeypatch.setattr(subprocessbuild, "provision", fake_provision)
     monkeypatch.setattr(subprocessbuild, "_require_entry_point", lambda entry: entry)
 
@@ -332,14 +332,14 @@ def test_each_pinned_package_is_provisioned_with_its_own_directories_and_bound(
         tools_sources=(tmp_path / "tools",),
         store=tmp_path / "store",
         interpreter="python3.13",
-        bounds={WORKSPACE_KIND: 22, TOOLS_KIND: 33},
+        bounds={KIND_WORKSPACE: 22, KIND_TOOLS: 33},
     )
 
     assert [call["sources"] for call in looked_up] == [
         (tmp_path / "workspaces",),
         (tmp_path / "tools",),
     ]
-    assert [call["kind"] for call in provisioned] == [WORKSPACE_KIND, TOOLS_KIND]
+    assert [call["kind"] for call in provisioned] == [KIND_WORKSPACE, KIND_TOOLS]
     assert [call["max_bytes"] for call in provisioned] == [22, 33]
     assert [call["sources"] for call in provisioned] == [
         (tmp_path / "workspaces",),
@@ -357,7 +357,7 @@ def test_without_its_own_directories_a_package_is_looked_for_where_the_sdk_is(
     provisioned: list[dict] = []
     monkeypatch.setattr(
         subprocessbuild,
-        "concrete_package",
+        "resolve_package",
         lambda pin, **kwargs: PackagePin(name=pin.name, version="1", sha256="a" * 64),
     )
 
@@ -400,7 +400,7 @@ def test_a_package_that_was_never_provisioned_is_refused(store) -> None:
 def test_an_entry_that_was_unpacked_as_another_kind_is_refused(store) -> None:
     put_entry(
         store,
-        kind=SDK_KIND,
+        kind=KIND_SDK,
         name="mcuhome-build-workspace",
         version="0.1.0",
         files={"mcuhome-sdk.json": ("{}", False)},
@@ -416,14 +416,14 @@ def test_an_entry_that_was_unpacked_as_another_kind_is_refused(store) -> None:
 def test_a_tools_entry_without_an_entry_point_is_refused(store) -> None:
     put_entry(
         store,
-        kind=WORKSPACE_KIND,
+        kind=KIND_WORKSPACE,
         name="mcuhome-build-workspace",
         version="0.1.0",
         files={"build-workspace.json": ("{}", False)},
     )
     put_entry(
         store,
-        kind=TOOLS_KIND,
+        kind=KIND_TOOLS,
         name="mcuhome-build-tools_linux-amd64",
         version="0.1.0",
         files={"build-tools.json": ("{}", False)},
@@ -442,14 +442,14 @@ def test_an_entry_point_that_cannot_be_run_is_refused_rather_than_waited_for(
     """A program that cannot start is not a process the ladder can end."""
     put_entry(
         store,
-        kind=WORKSPACE_KIND,
+        kind=KIND_WORKSPACE,
         name="mcuhome-build-workspace",
         version="0.1.0",
         files={"build-workspace.json": ("{}", False)},
     )
     put_entry(
         store,
-        kind=TOOLS_KIND,
+        kind=KIND_TOOLS,
         name="mcuhome-build-tools_linux-amd64",
         version="0.1.0",
         files={

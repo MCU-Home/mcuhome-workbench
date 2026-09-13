@@ -57,7 +57,7 @@ def test_nothing_configured_is_the_machine_that_was_never_touched() -> None:
     assert options.env_store is None
     assert options.python is None
     assert options.workspace_sources == ()
-    assert options.bound(buildenvstore.WORKSPACE_KIND) is None
+    assert options.bound(buildenvstore.KIND_WORKSPACE) is None
 
 
 def test_every_key_reaches_its_field(project: Project) -> None:
@@ -85,9 +85,9 @@ def test_every_key_reaches_its_field(project: Project) -> None:
     assert options.python == "python3.13"
     assert options.workspace_sources == (Path("/srv/workspaces"),)
     assert options.tools_sources == (Path("/srv/tools"),)
-    assert options.bound(buildenvstore.SDK_KIND) == 11
-    assert options.bound(buildenvstore.WORKSPACE_KIND) == 22
-    assert options.bound(buildenvstore.TOOLS_KIND) == 33
+    assert options.bound(buildenvstore.KIND_SDK) == 11
+    assert options.bound(buildenvstore.KIND_WORKSPACE) == 22
+    assert options.bound(buildenvstore.KIND_TOOLS) == 33
     assert options.cache_local == Path("/srv/cache/local")
     assert options.cache_shared == Path("/srv/cache/shared")
     assert options.cache_session == Path("/srv/cache/session")
@@ -97,16 +97,16 @@ def test_every_key_reaches_its_field(project: Project) -> None:
 def test_a_bound_nobody_set_is_not_a_statement(project: Project) -> None:
     """The store's own table answers, and is not restated as a decision."""
     options = configured(project, "build:\n  mode: subprocess\n")
-    assert options.bound(buildenvstore.WORKSPACE_KIND) is None
+    assert options.bound(buildenvstore.KIND_WORKSPACE) is None
     # A value equal to the default is still a statement when a layer made it.
     stated = configured(
         project,
         f"build:\n  workspace_max_bytes: "
-        f"{buildenvstore.EXTRACTION_BOUNDS[buildenvstore.WORKSPACE_KIND]}\n",
+        f"{buildenvstore.EXTRACTION_BOUNDS[buildenvstore.KIND_WORKSPACE]}\n",
     )
     assert (
-        stated.bound(buildenvstore.WORKSPACE_KIND)
-        == (buildenvstore.EXTRACTION_BOUNDS[buildenvstore.WORKSPACE_KIND])
+        stated.bound(buildenvstore.KIND_WORKSPACE)
+        == (buildenvstore.EXTRACTION_BOUNDS[buildenvstore.KIND_WORKSPACE])
     )
 
 
@@ -323,8 +323,8 @@ def test_the_options_reach_the_provisioner_and_the_backend(model, tmp_path, monk
     assert provisioned["workspace_sources"] == (tmp_path / "workspaces",)
     assert provisioned["tools_sources"] == (tmp_path / "tools",)
     assert provisioned["bounds"] == {
-        buildenvstore.WORKSPACE_KIND: 22,
-        buildenvstore.TOOLS_KIND: 33,
+        buildenvstore.KIND_WORKSPACE: 22,
+        buildenvstore.KIND_TOOLS: 33,
     }
 
     assert driven["sdk_max_bytes"] == 11
@@ -538,11 +538,11 @@ def test_the_container_backend_is_configured_with_the_sdk_bound(tmp_path, monkey
 
     seen: dict[str, object] = {}
 
-    def fake_acquire_sdk(**kwargs):
+    def fake_fetch_sdk_package(**kwargs):
         seen.update(kwargs)
         raise _Stop
 
-    monkeypatch.setattr(containerbuild, "acquire_sdk", fake_acquire_sdk)
+    monkeypatch.setattr(containerbuild, "fetch_sdk_package", fake_fetch_sdk_package)
     monkeypatch.setattr(
         containerbuild,
         "read_context_manifest",
@@ -573,11 +573,11 @@ def test_the_subprocess_backend_acquires_the_sdk_under_the_configured_bound(
     """And the last hop of the subprocess path, which unpacks it itself."""
     seen: dict[str, object] = {}
 
-    def fake_acquire_sdk(**kwargs):
+    def fake_fetch_sdk_package(**kwargs):
         seen.update(kwargs)
         raise _Stop
 
-    monkeypatch.setattr(subprocessbuild, "acquire_sdk", fake_acquire_sdk)
+    monkeypatch.setattr(subprocessbuild, "fetch_sdk_package", fake_fetch_sdk_package)
     monkeypatch.setattr(subprocessbuild, "refuse_patched_context", lambda *a, **k: None)
     monkeypatch.setattr(subprocessbuild, "check_environment", lambda *a, **k: None)
     monkeypatch.setattr(
