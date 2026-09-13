@@ -27,7 +27,11 @@ part of the framework the other MCUHome tools embed rather than reimplement.
 
 Depend on `mcuhome-workbench` and import `mcuhome.workbench.api`; every name it
 exports is the stable surface, everything else in the package can move without
-notice. Resolving a device, loading its model and building it looks like this:
+notice. [`docs/api.md`](docs/api.md) is the reference for it — every exported
+name with its signature and what it raises, the options, the environment
+variables, the files and the documents — and this section is the narrative
+introduction to the same thing. Resolving a device, loading its model and
+building it looks like this:
 
 ```python
 from mcuhome.workbench import api
