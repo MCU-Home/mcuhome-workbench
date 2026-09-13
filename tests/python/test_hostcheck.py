@@ -91,7 +91,11 @@ def _recording_seams(monkeypatch: pytest.MonkeyPatch) -> None:
     RecordingRuntime.made = []
     RecordingRegistry.made = []
     monkeypatch.setattr(hostcheck, "ContainerRuntime", RecordingRuntime)
-    monkeypatch.setattr(hostcheck, "ImageRegistry", RecordingRegistry)
+    monkeypatch.setattr(
+        hostcheck,
+        "ImageRegistry",
+        lambda: RecordingRegistry({"ghcr.io/mcu-home/build-environment": ("0.1.0-r1",)}),
+    )
     monkeypatch.setattr(hostcheck, "_run_program", lambda argv: "3 13 1")
     monkeypatch.setattr(hostcheck, "find_imgtool", lambda *, env, stated=None: ["imgtool"])
 
@@ -282,6 +286,32 @@ def test_one_repository_answering_is_enough(
     assert finding.ok
     assert "registry.example/mirror publishes 2 image(s)" in finding.detail
     assert "could not be asked" in finding.detail, "the miss is still named"
+
+
+def test_a_repository_that_is_not_a_repository_name_reads_as_one(tmp_path: Path) -> None:
+    """A value that is not an address was never a question about the network.
+
+    A build refuses on it before it reaches a registry, so the finding
+    says what is wrong with the configuration rather than reporting a
+    repository that "could not be asked" — and it says so even though
+    another repository answered, because that entry breaks every
+    container build on this machine.
+    """
+    result = check_build_host(
+        options=_options(
+            mode="container",
+            container_repositories=("ghcr.io/mcu-home/build-environment", "NOT A REPOSITORY"),
+        ),
+        env=_env(tmp_path),
+    )
+
+    finding = _finding(result, "image")
+    assert not finding.ok
+    assert "NOT A REPOSITORY is not a repository name" in finding.detail
+    assert "could not be asked" not in finding.detail
+    assert "Fix:" not in finding.detail, "the message alone, like every other finding"
+    assert "build.container_repositories" in finding.hint
+    assert "publishes 1 image(s)" in finding.detail, "what did answer is still named"
 
 
 def test_a_machine_allowed_no_repository_at_all_is_told_so(tmp_path: Path) -> None:

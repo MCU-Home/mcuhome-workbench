@@ -1208,7 +1208,10 @@ inside it are reported relative to; everything else a build reads is
 resolved into *options* already.
 
 It raises nothing: a host that cannot build is the answer, not an
-exception. What it does do is talk to this machine — it runs the
+exception — a configured path naming an account this machine has not
+got, or a `build.container_repositories` entry that is not a repository
+name, is a finding naming the key that holds it. What it does do is talk
+to this machine — it runs the
 container runtime's version command, asks the configured container
 repositories what they publish, and asks the interpreter its version —
 so it costs what those cost.

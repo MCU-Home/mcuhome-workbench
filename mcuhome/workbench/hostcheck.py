@@ -77,9 +77,10 @@ HOST_CHECKS = (
     "cache",
 )
 
-#: The two configured values a probe here expands itself, named off the
+#: The configured values a probe here reads itself, named off the
 #: registry rather than spelled a second time: what a finding says is the
 #: key a person sets, in the one spelling that exists for it.
+CONTAINER_REPOSITORIES_OPTION = option("build.container_repositories").name
 ENV_STORE_OPTION = option("build.env_store").name
 IMGTOOL_OPTION = option("signing.imgtool").name
 
@@ -219,16 +220,38 @@ def _container_image(options: BuildOptions) -> HostFinding:
     client = ImageRegistry()
     answered: list[str] = []
     unreachable: list[str] = []
+    malformed: list[str] = []
     for repository in repositories:
+        # Read before anything is asked, and kept apart from what a
+        # registry answers: a value that is not a repository name was
+        # never a question about this machine, and a build would refuse
+        # on it before reaching a network.
         try:
             reference = parse_reference(
                 repository, default_registry=DOCKER_HUB, what="build environment"
             )
+        except MCUHomeError as unreadable:
+            # The message alone, as everywhere here: the rendered form
+            # would put a second fix line inside one finding's detail.
+            malformed.append(f"{repository} is not a repository name ({_message(unreadable)})")
+            continue
+        try:
             tags = client.tags(reference)
         except (MCUHomeError, OSError) as unanswered:
             unreachable.append(f"{repository} could not be asked ({unanswered})")
             continue
         answered.append(f"{repository} publishes {len(tags)} image(s)")
+    if malformed:
+        return HostFinding(
+            check="image",
+            ok=False,
+            detail="; ".join([*malformed, *answered, *unreachable]),
+            hint=(
+                f"every entry in {CONTAINER_REPOSITORIES_OPTION} is a container "
+                "repository, written [registry/]path — correct the one above, or "
+                "remove it"
+            ),
+        )
     if not answered:
         return HostFinding(
             check="image",
@@ -482,9 +505,14 @@ def _refused(check: str, refusal: MCUHomeError) -> HostFinding:
     return HostFinding(
         check=check,
         ok=False,
-        detail=getattr(refusal, "message", None) or str(refusal),
+        detail=_message(refusal),
         hint=getattr(refusal, "hint", None) or "",
     )
+
+
+def _message(refusal: MCUHomeError) -> str:
+    """A refusal's own sentence, without the rendering around it."""
+    return getattr(refusal, "message", None) or str(refusal)
 
 
 def _unresolvable(check: str, key: str, value: object, error: Exception) -> HostFinding:
