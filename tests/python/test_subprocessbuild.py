@@ -391,7 +391,7 @@ def test_the_shelf_a_device_names_reaches_the_fetch_as_well_as_the_lookup(
         tools_source="house-tools",
     )
 
-    assert [call["kind"] for call in looked_up] == ["house-workspaces", "house-tools"]
+    assert [call["source"] for call in looked_up] == ["house-workspaces", "house-tools"]
     assert [call["source_name"] for call in provisioned] == ["house-workspaces", "house-tools"]
     assert [call["kind"] for call in provisioned] == [KIND_WORKSPACE, KIND_TOOLS]
 

@@ -1820,7 +1820,7 @@ def resolve_from_sources(
 def resolve_package(
     pin: PackagePin,
     *,
-    kind: str,
+    source: str,
     sources: Sequence[Path] = (),
     registry: RegistrySource | None = None,
     platform: str | None = None,
@@ -1836,6 +1836,12 @@ def resolve_package(
 
     Two tiers again, operator directories first, so a machine that holds
     the packages resolves without a network.
+
+    *source* is the shelf inside a registry the package is published on,
+    which is what a ``sources.*`` reference names and equals the package
+    *kind* on every ordinary build without being the same statement: the
+    kind is what a tree is and decides how it is unpacked, the shelf is
+    where it is asked for.
     """
     for directory in sources:
         entries = _entries_from_directory(Path(directory))
@@ -1853,7 +1859,7 @@ def resolve_package(
             continue
     client = opened(registry)
     if client is not None:
-        index = client.index(kind)
+        index = client.index(source)
         return _concrete_from(index.entries, pin, platform=platform, where=index.base)
     listed = ", ".join(str(directory) for directory in sources) or "none"
     raise BuildError(

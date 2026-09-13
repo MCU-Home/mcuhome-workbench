@@ -833,7 +833,7 @@ def test_a_family_pin_keeps_the_family_name_and_the_meta_hash(tmp_path) -> None:
     # And resolving that pin for this host answers with the platform's
     # own package and its own bytes.
     concrete = resolve_package(
-        pin.tools, kind="build-tools", sources=(source.path,), platform=PLATFORM
+        pin.tools, source="build-tools", sources=(source.path,), platform=PLATFORM
     )
     assert concrete.name == CONCRETE_TOOLS
     assert concrete.sha256 == source.hash_of(CONCRETE_TOOLS, "0.1.0")
@@ -987,7 +987,7 @@ def test_a_pin_the_index_disagrees_with_is_refused(tmp_path) -> None:
     with pytest.raises(BuildError) as caught:
         resolve_package(
             PackagePin(name=WORKSPACE, version="0.1.0", sha256="ff" * 32),
-            kind="build-workspace",
+            source="build-workspace",
             sources=(source.path,),
         )
     assert "pinned to" in caught.value.message
@@ -1001,7 +1001,7 @@ def test_a_source_that_publishes_other_bytes_under_the_pinned_version_is_refused
     with pytest.raises(BuildError) as caught:
         resolve_package(
             PackagePin(name=WORKSPACE, version="0.1.0", sha256="ff" * 32),
-            kind="build-workspace",
+            source="build-workspace",
             sources=(source.path, source.path),
         )
     assert "pinned to" in caught.value.message

@@ -1078,7 +1078,7 @@ def fetch_sdk_package(
     registry: RegistrySource | None = None, max_bytes: int | None = None,
 ) -> AcquiredPackage
 def resolve_package(
-    pin: PackagePin, *, kind: str, sources: Sequence[Path] = (),
+    pin: PackagePin, *, source: str, sources: Sequence[Path] = (),
     registry: RegistrySource | None = None, platform: str | None = None,
 ) -> ResolvedPackage
 def sha256_file(path: Path) -> str
@@ -1093,7 +1093,11 @@ arrive at the point of use, not here. `fetch_sdk_package` raises
 answers an `AcquiredPackage(version, source, tree, name)`.
 `resolve_package` raises `SdkUnavailable` for a constraint no published
 version satisfies and answers a `ResolvedPackage(name, version, file,
-sha256, size)`. `RegistrySource` is a type alias — a registry client or a
+sha256, size)`. Its *source* is the shelf inside a registry the package
+is published on — what a device's `sources.*` reference names — and not
+the package *kind*: the two carry the same value on every ordinary build
+and are different statements, one saying where a package is asked for and
+the other what the tree is once it is here. `RegistrySource` is a type alias — a registry client or a
 callable that builds one on first use.
 
 `RegistrySettings` (frozen): `base_domain`, `untrusted`, `mirrors`,

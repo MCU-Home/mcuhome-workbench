@@ -761,7 +761,7 @@ def image_for_context(
     ):
         found = resolve_package(
             package,
-            kind=source,
+            source=source,
             sources=tuple(directories) or tuple(sources),
             registry=registry,
             platform=platform,

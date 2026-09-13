@@ -202,7 +202,7 @@ def test_resolve_package_names_the_package_this_machine_needs(tmp_path) -> None:
     with pytest.raises(BuildError) as caught:
         resolve_package(
             PackagePin(name="mcuhome-build-tools", version="0.1.0", sha256="ab" * 32),
-            kind="build-tools",
+            source="build-tools",
             sources=(tmp_path,),
         )
     assert "mcuhome-build-tools" in caught.value.message

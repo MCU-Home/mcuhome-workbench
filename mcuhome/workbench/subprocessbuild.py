@@ -432,7 +432,7 @@ def environment_from_pins(
         searched = tuple(directories) or tuple(sources)
         found = resolve_package(
             package,
-            kind=source,
+            source=source,
             sources=searched,
             registry=registry,
             platform=platform,
