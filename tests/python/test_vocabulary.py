@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 
 import pytest
-from conftest import package_modules
+from conftest import REPO_ROOT, package_modules
 
 from mcuhome.workbench import sessionclient
 from mcuhome.workbench.buildenvsession import (
@@ -124,3 +125,37 @@ def test_the_warning_kinds_are_spelled_the_way_the_scheme_says() -> None:
     for kind in WARNING_KINDS:
         assert kind == kind.lower()
         assert kind.replace("_", "").isalnum()
+
+
+#: The reference every published value set is stated in.
+REFERENCE = REPO_ROOT / "docs" / "api.md"
+
+
+def _reference_warning_kinds() -> tuple[set[str], set[str]]:
+    """The kinds the reference lists, from its two statements of them.
+
+    The table under "Findings", which is what a client reads to find out
+    what a kind means, and the constants row, which is what a reader
+    looks up. Both, because a set stated twice can disagree with itself.
+    """
+    text = REFERENCE.read_text("utf-8")
+    findings = text.split("### Findings", 1)[1].split("\n## ", 1)[0]
+    # The rows after the header separator; the header itself names the
+    # column (`kind`) rather than a value.
+    rows = findings.split("|---|---|\n", 1)[1].split("\n")
+    table = {row.split("|")[1].strip().strip("`") for row in rows if row.startswith("| `")}
+    row = next(line for line in text.split("\n") if line.startswith("| `WARNING_KINDS` |"))
+    return table, set(re.findall(r'"([a-z_]+)"', row))
+
+
+def test_the_reference_lists_every_warning_kind() -> None:
+    """The published set is the documented set, in both places.
+
+    A kind is a value a client switches on and then looks up — one that
+    the reference does not carry is a value nobody can resolve, and one
+    the reference carries and the code does not is a promise to render
+    something that never arrives.
+    """
+    table, constants = _reference_warning_kinds()
+    assert table == set(WARNING_KINDS), "the Findings table and WARNING_KINDS disagree"
+    assert constants == set(WARNING_KINDS), "the constants row and WARNING_KINDS disagree"
