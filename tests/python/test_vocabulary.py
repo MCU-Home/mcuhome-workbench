@@ -36,6 +36,7 @@ from mcuhome.workbench.diagnostics import (
     WARNING_KINDS,
     Diagnostic,
 )
+from mcuhome.workbench.hostcheck import HOST_CHECKS
 from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE, PACKAGE_KINDS
 
@@ -169,6 +170,39 @@ def test_the_reference_lists_every_warning_kind() -> None:
     table, constants = _reference_warning_kinds()
     assert table == set(WARNING_KINDS), "the Findings table and WARNING_KINDS disagree"
     assert constants == set(WARNING_KINDS), "the constants row and WARNING_KINDS disagree"
+
+
+def _reference_host_checks() -> tuple[set[str], set[str]]:
+    """The checks the reference names, from its two statements of them.
+
+    The prose of "Checking a build host", which is where a person reads
+    what each one examines, and the constants row a reader looks up.
+    """
+    text = REFERENCE.read_text("utf-8")
+    section = text.split("\n## Checking a build host\n", 1)[1].split("\n## ", 1)[0]
+    listed = section.split("`check` is one of", 1)[1].split("— each named", 1)[0]
+    row = next(line for line in text.split("\n") if line.startswith("| `HOST_CHECKS` |"))
+    return set(re.findall(r"`([a-z_]+)`", listed)), set(re.findall(r'"([a-z_]+)"', row))
+
+
+def test_the_reference_lists_every_host_check() -> None:
+    """The published set is the documented set, in both places.
+
+    A client renders a finding by its `check`: one the reference does
+    not carry is a value nobody can look up, and one the reference
+    carries and the code never emits is a row that never appears.
+    """
+    prose, constants = _reference_host_checks()
+    assert prose == set(HOST_CHECKS), "the section and HOST_CHECKS disagree"
+    assert constants == set(HOST_CHECKS), "the constants row and HOST_CHECKS disagree"
+
+
+def test_the_host_checks_are_spelled_the_way_the_scheme_says() -> None:
+    """Lowercase with underscores, no duplicates."""
+    assert len(set(HOST_CHECKS)) == len(HOST_CHECKS)
+    for check in HOST_CHECKS:
+        assert check == check.lower()
+        assert check.replace("_", "").isalnum()
 
 
 def test_the_severities_are_the_two_a_finding_can_carry() -> None:

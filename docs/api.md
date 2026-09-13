@@ -1139,18 +1139,43 @@ that states it.
 ## Checking a build host
 ```python
 def check_build_host(
-    *, options: BuildOptions, env: Mapping[str, str], project: Project | None = None
+    *,
+    options: BuildOptions,
+    env: Mapping[str, str],
+    project: Project | None = None,
+    imgtool: str | None = None,
 ) -> HostCheckResult
 ```
 What a build on this machine would need, reported rather than raised.
-Which checks run follows `options.mode`: the container runtime and the
-image search only for `container`, the environment store and the
-interpreter only for `subprocess`. `HostCheckResult(ok, findings)` with
-`HostFinding(check, ok, detail, hint)`; `check` is one of
-`container_runtime`, `container_image`, `env_store`, `python`,
-`signing_imgtool`, `dev_workspace`, `cache_root` — each named after the
-option or the thing it examined. Both have `to_dict()`. It raises
-nothing: a host that cannot build is the answer, not an exception.
+**Which checks run follows `options.mode`**, because the two profiles
+need disjoint things of a host: the container runtime and the image
+search only for `container`; the environment store and the interpreter
+only for `subprocess`, and there only while no `build.dev_workspace` is
+configured — a development build compiles a workspace and uses neither.
+The signing tool and the compiler cache are examined either way. A
+finding is not a promise that a build will succeed: it is what could be
+established without one.
+
+`HostCheckResult` carries `findings` and the verdict `ok`, which is true
+when every finding is; `HostFinding(check, ok, detail, hint)` is one
+thing examined, with the fix where there is one. `check` is one of
+`HOST_CHECKS` — `container_runtime`, `container_image`, `env_store`,
+`python`, `dev_workspace`, `signing_imgtool`, `cache_root` — each named
+after the option or the thing it examined. Both have `to_dict()`.
+
+*imgtool* is the resolved `signing.imgtool`, taken for the same reason
+`plan_signing` takes it: nothing under this surface reads a
+configuration channel of its own, so a host whose signing program is
+configured has to be told which one, or the check reports on a program
+that build never runs. *project*, where a caller has one, is what paths
+inside it are reported relative to; everything else a build reads is
+resolved into *options* already.
+
+It raises nothing: a host that cannot build is the answer, not an
+exception. What it does do is talk to this machine — it runs the
+container runtime's version command, asks the configured container
+repositories what they publish, and asks the interpreter its version —
+so it costs what those cost.
 
 ## Upgrading a project
 ```python
@@ -1288,6 +1313,7 @@ carry findings answers them in its `diagnostics` list.
 | `CONFIG_SCOPES` | `("system", "user", "project")` |
 | `CONFIG_ORIGINS` | `("default", "program", "system", "user", "project", "environment", "arguments")` — ascending; `program` is a value an embedding program states for a shared key |
 | `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
+| `HOST_CHECKS` | `("container_runtime", "container_image", "env_store", "python", "dev_workspace", "signing_imgtool", "cache_root")` — what a `HostFinding.check` may be, append-only |
 | `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry")` — the kinds a warning's `kind` may carry, append-only |
 | `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
 | `OPTIONS` | the declared option registry |
@@ -1521,11 +1547,17 @@ and the warnings, each with its severity, so a client renders one list:
 {
   "ok": false,
   "findings": [
-    {"check": "container_runtime", "ok": false,
-     "detail": "docker is not on PATH", "hint": "install a container runtime…"}
+    {"ok": false, "check": "container_runtime",
+     "detail": "MCUHome compiles in a container and cannot find docker on your PATH.",
+     "hint": "install Docker…"}
   ]
 }
 ```
+
+`HostFinding.to_dict()`: `{ok, check, detail, hint}` — the verdict of
+one check, what was found, and the fix where there is one. `detail` and
+`hint` are the words of the refusal a build would have raised, wherever
+there is one, so the two channels do not word the same problem twice.
 
 `Settings.to_dict()` answers one entry per declared option except the
 bootstrap one, in declaration order — the key is the option's name, the
@@ -1762,7 +1794,7 @@ this package is public.
 `DEVICES_DIR`, `DEVICE_FILE`, `BUILD_DIR`, `BUILD_LOCK_FILE`,
 `BUILD_REPORT_FILE`, `SIGNING_KEY_FILE`, `PUBLIC_KEY_FILE`,
 `CONFIG_SCOPES`, `CONFIG_ORIGINS`, `SEVERITIES`, `SEVERITY_ERROR`,
-`SEVERITY_WARNING`, `WARNING_KINDS`, `OPTION_KINDS`, `OPTIONS`,
+`SEVERITY_WARNING`, `WARNING_KINDS`, `HOST_CHECKS`, `OPTION_KINDS`, `OPTIONS`,
 `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET`,
 `BUILD_MODES`, `MODE_CONTAINER`, `MODE_SUBPROCESS`, `DEFAULT_BUILD_MODE`,
 `LOCK_OPERATIONS`, `SECRET_KINDS`, `BUILD_STEPS`, `STEP_STATUSES`,

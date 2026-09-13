@@ -128,6 +128,13 @@ SAMPLES: dict[str, Callable[[], Any]] = {
     "FileMismatch": lambda: api.FileMismatch(
         path="model.json", declared_sha256="b" * 64, actual_sha256="f" * 64
     ),
+    "HostCheckResult": lambda: api.HostCheckResult(findings=(SAMPLES["HostFinding"](),)),
+    "HostFinding": lambda: api.HostFinding(
+        check="container_runtime",
+        ok=False,
+        detail="MCUHome compiles in a container and cannot find docker on your PATH.",
+        hint="install Docker…",
+    ),
     "Migration": lambda: api.plan_upgrade(0)[0],
     "NewDevice": lambda: api.NewDevice(
         project=_sample_project(),

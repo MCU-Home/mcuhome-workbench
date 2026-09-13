@@ -57,9 +57,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
     # The host check and the container-profile seams as a designed set.
-    "HostCheckResult": "host check and container seams",
-    "HostFinding": "host check and container seams",
-    "check_build_host": "host check and container seams",
     "create_launcher": "host check and container seams",
     "open_builder_session": "host check and container seams",
     # Provisioning a build environment outside a build.

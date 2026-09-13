@@ -262,6 +262,12 @@ from mcuhome.workbench.generate import (
     CompilerUnavailable,
     generate_application,
 )
+from mcuhome.workbench.hostcheck import (
+    HOST_CHECKS,
+    HostCheckResult,
+    HostFinding,
+    check_build_host,
+)
 from mcuhome.workbench.imgtool import (
     BUILD_REPORT_FILE,
     SIGNED_FIRMWARE_NAMES,
@@ -467,6 +473,9 @@ __all__ = [
     "FileMismatch",
     "GenerationError",
     "GeneratorEntry",
+    "HOST_CHECKS",
+    "HostCheckResult",
+    "HostFinding",
     "ImageRegistry",
     "ImageRegistryError",
     "ImageRegistryUnauthorized",
@@ -577,6 +586,7 @@ __all__ = [
     "WORKSPACE_LAYERS",
     "WaitedTooLong",
     "build_firmware",
+    "check_build_host",
     "context_id",
     "create_device",
     "create_pairing",
