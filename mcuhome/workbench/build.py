@@ -104,7 +104,7 @@ from mcuhome.workbench.buildenvsession import (
     memory_bytes,
 )
 from mcuhome.workbench.builders import SelectedBuilder
-from mcuhome.workbench.buildlock import build_lock
+from mcuhome.workbench.buildlock import open_build_lock
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
@@ -1234,7 +1234,7 @@ async def build_firmware(
     """
     if not isinstance(target, BuildTarget):
         target = build_target_for(target, request)
-    with build_lock(request.out_dir, device=request.model.device.name):
+    with open_build_lock(request.out_dir, device=request.model.device.name):
         if isinstance(target, LocalBuild):
             execution = target.execution
             if isinstance(execution, ContainerExecution):

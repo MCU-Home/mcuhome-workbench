@@ -69,16 +69,16 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
 __all__ = [
-    "LOCK_FILE",
+    "BUILD_LOCK_FILE",
     "OPERATIONS",
     "BuildDirectoryBusy",
-    "build_lock",
+    "open_build_lock",
     "holder_of",
     "is_busy",
 ]
 
 #: The lock file, inside the build directory it guards.
-LOCK_FILE = ".mcuhome-build.lock"
+BUILD_LOCK_FILE = ".mcuhome-build.lock"
 
 #: What an operation is called in a refusal — "<device> is being …".
 #: Append-only vocabulary: a word this version does not know is rendered
@@ -111,7 +111,7 @@ def holder_of(out_dir: Path) -> dict[str, str]:
     being refused either way, and the reason must not depend on prose.
     """
     try:
-        data = json.loads((Path(out_dir) / LOCK_FILE).read_text(encoding="utf-8"))
+        data = json.loads((Path(out_dir) / BUILD_LOCK_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
@@ -128,7 +128,7 @@ def is_busy(out_dir: Path) -> bool:
     — probing must not overwrite the holder record that makes somebody
     else's refusal readable.
     """
-    path = Path(out_dir) / LOCK_FILE
+    path = Path(out_dir) / BUILD_LOCK_FILE
     if fcntl is None or not path.is_file():  # pragma: no cover - platform branch
         return False
     try:
@@ -145,7 +145,7 @@ def is_busy(out_dir: Path) -> bool:
 
 
 @contextmanager
-def build_lock(out_dir: Path, *, device: str = "", operation: str = "build") -> Iterator[None]:
+def open_build_lock(out_dir: Path, *, device: str = "", operation: str = "build") -> Iterator[None]:
     """Hold *out_dir* for one operation — ``build``, ``sign``, ``flash``, ``clean``.
 
     Raises :class:`BuildDirectoryBusy` — a typed refusal like any
@@ -173,7 +173,7 @@ def build_lock(out_dir: Path, *, device: str = "", operation: str = "build") -> 
     if fcntl is None:  # pragma: no cover - no POSIX locks on this platform
         yield
         return
-    path = out_dir / LOCK_FILE
+    path = out_dir / BUILD_LOCK_FILE
     handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         try:

@@ -137,7 +137,7 @@ What is here, in the order a caller needs it:
     rung of the liveness ladder — the caller's grace period plus the
     fixed ones. For the caller that has to wait for a build it stopped
     instead of restating those numbers itself. A bound, not a promise.
-``build_lock`` / ``BuildDirectoryBusy``
+``open_build_lock`` / ``BuildDirectoryBusy``
     One build directory, one operation at a time. ``build_firmware``
     takes the lock itself, so an embedder gets the guard for free; a
     caller that does more to the same directory — signing after the
@@ -211,7 +211,7 @@ from mcuhome.workbench.buildenvsession import (
     StepResult,
 )
 from mcuhome.workbench.builders import Builder, SelectedBuilder
-from mcuhome.workbench.buildlock import BuildDirectoryBusy, build_lock
+from mcuhome.workbench.buildlock import BuildDirectoryBusy, open_build_lock
 from mcuhome.workbench.buildprocess import resolve_shutdown_seconds
 from mcuhome.workbench.buildtarget import (
     BuildTarget,
@@ -374,7 +374,7 @@ __all__ = [
     "ValidationResult",
     "build_firmware",
     "build_options",
-    "build_lock",
+    "open_build_lock",
     "config_json_schema",
     "error_dicts",
     "find_device",

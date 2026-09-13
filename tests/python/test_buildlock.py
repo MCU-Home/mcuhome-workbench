@@ -27,7 +27,12 @@ from pathlib import Path
 import pytest
 from conftest import REPO_ROOT
 
-from mcuhome.workbench.buildlock import LOCK_FILE, BuildDirectoryBusy, build_lock, holder_of
+from mcuhome.workbench.buildlock import (
+    BUILD_LOCK_FILE,
+    BuildDirectoryBusy,
+    holder_of,
+    open_build_lock,
+)
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="the lock is a POSIX advisory lock")
 
@@ -46,8 +51,10 @@ def _held_elsewhere(out_dir: Path, *, device: str, operation: str = "build") -> 
     code = (
         "import sys\n"
         "from pathlib import Path\n"
-        "from mcuhome.workbench.buildlock import build_lock\n"
-        f"held = build_lock(Path({str(out_dir)!r}), device={device!r}, operation={operation!r})\n"
+        "from mcuhome.workbench.buildlock import open_build_lock\n"
+        "held = open_build_lock(\n"
+        f"    Path({str(out_dir)!r}), device={device!r}, operation={operation!r}\n"
+        ")\n"
         "held.__enter__()\n"
         "print('holding', flush=True)\n"
         "sys.stdin.readline()\n"
@@ -75,7 +82,7 @@ def _refused(out_dir: Path, *, operation: str = "build") -> str:
     """Try to work in a directory somebody else holds; return the refusal."""
     with (
         pytest.raises(BuildDirectoryBusy) as caught,
-        build_lock(out_dir, device="bmp180-node", operation=operation),
+        open_build_lock(out_dir, device="bmp180-node", operation=operation),
     ):
         pytest.fail("a second run took a directory another process holds")
     return str(caught.value)
@@ -84,9 +91,9 @@ def _refused(out_dir: Path, *, operation: str = "build") -> str:
 def _a_second_process_is_still_refused(out_dir: Path) -> bool:
     code = (
         "from pathlib import Path\n"
-        "from mcuhome.workbench.buildlock import build_lock, BuildDirectoryBusy\n"
+        "from mcuhome.workbench.buildlock import open_build_lock, BuildDirectoryBusy\n"
         "try:\n"
-        f"    with build_lock(Path({str(out_dir)!r}), device='other', operation='flash'):\n"
+        f"    with open_build_lock(Path({str(out_dir)!r}), device='other', operation='flash'):\n"
         "        print('took it', flush=True)\n"
         "except BuildDirectoryBusy:\n"
         "    print('refused', flush=True)\n"
@@ -138,8 +145,8 @@ def test_one_run_holds_its_directory_through_several_steps(tmp_path) -> None:
     own — the one case that must not refuse itself — and the directory
     stays taken for everybody else until the outer hold ends.
     """
-    with build_lock(tmp_path, device="bmp180-node", operation="build"):
-        with build_lock(tmp_path, device="bmp180-node", operation="build"):
+    with open_build_lock(tmp_path, device="bmp180-node", operation="build"):
+        with open_build_lock(tmp_path, device="bmp180-node", operation="build"):
             assert holder_of(tmp_path)["operation"] == "build"
         assert _a_second_process_is_still_refused(tmp_path)
     assert not _a_second_process_is_still_refused(tmp_path)
@@ -147,23 +154,26 @@ def test_one_run_holds_its_directory_through_several_steps(tmp_path) -> None:
 
 def test_another_directory_runs_at_the_same_time(tmp_path) -> None:
     """The lock is per build directory: two devices are two runs."""
-    with _held_elsewhere(tmp_path / "one", device="a"), build_lock(tmp_path / "two", device="b"):
-        assert (tmp_path / "one" / LOCK_FILE).is_file()
-        assert (tmp_path / "two" / LOCK_FILE).is_file()
+    with (
+        _held_elsewhere(tmp_path / "one", device="a"),
+        open_build_lock(tmp_path / "two", device="b"),
+    ):
+        assert (tmp_path / "one" / BUILD_LOCK_FILE).is_file()
+        assert (tmp_path / "two" / BUILD_LOCK_FILE).is_file()
 
 
 def test_the_directory_is_free_again_afterwards(tmp_path) -> None:
     with _held_elsewhere(tmp_path, device="bmp180-node"):
         pass
-    with build_lock(tmp_path, device="bmp180-node"):
+    with open_build_lock(tmp_path, device="bmp180-node"):
         assert holder_of(tmp_path)["pid"] == str(os.getpid())
 
 
 def test_a_failed_run_releases_the_directory(tmp_path) -> None:
     """However a run ends, the next one may start — the kernel sees to it."""
-    with pytest.raises(RuntimeError), build_lock(tmp_path, device="bmp180-node"):
+    with pytest.raises(RuntimeError), open_build_lock(tmp_path, device="bmp180-node"):
         raise RuntimeError("the compile blew up")
-    with build_lock(tmp_path, device="bmp180-node"):
+    with open_build_lock(tmp_path, device="bmp180-node"):
         pass
 
 
@@ -174,7 +184,7 @@ def test_a_lock_file_without_a_holder_stops_nothing(tmp_path) -> None:
     record below names a process that is not there, and it must not be
     read as a running build.
     """
-    (tmp_path / LOCK_FILE).write_text(
+    (tmp_path / BUILD_LOCK_FILE).write_text(
         json.dumps(
             {
                 "pid": "999999",
@@ -185,13 +195,13 @@ def test_a_lock_file_without_a_holder_stops_nothing(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    with build_lock(tmp_path, device="bmp180-node"):
+    with open_build_lock(tmp_path, device="bmp180-node"):
         assert holder_of(tmp_path)["device"] == "bmp180-node"
 
 
 def test_a_garbled_record_costs_the_refusal_its_detail_not_its_correctness(tmp_path) -> None:
     with _held_elsewhere(tmp_path, device="bmp180-node"):
-        (tmp_path / LOCK_FILE).write_text("{not json", encoding="utf-8")
+        (tmp_path / BUILD_LOCK_FILE).write_text("{not json", encoding="utf-8")
         assert holder_of(tmp_path) == {}
         refusal = _refused(tmp_path)
     assert "Another MCUHome run is working" in refusal

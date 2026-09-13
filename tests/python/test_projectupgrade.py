@@ -283,8 +283,8 @@ def test_a_running_build_is_reported_so_the_caller_can_wait(tmp_path: Path) -> N
 
     code = (
         "import time\n"
-        "from mcuhome.workbench.buildlock import build_lock\n"
-        f"with build_lock({str(build_dir)!r}, device='bench-node', operation='build'):\n"
+        "from mcuhome.workbench.buildlock import open_build_lock\n"
+        f"with open_build_lock({str(build_dir)!r}, device='bench-node', operation='build'):\n"
         "    print('held', flush=True)\n"
         "    time.sleep(5)\n"
     )
