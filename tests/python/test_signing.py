@@ -402,6 +402,48 @@ def test_an_unreferenced_key_at_the_canonical_spot_is_adopted_not_overwritten(
     assert f"!file {SIGNING_KEY_FILE}" in project.firmware_secrets_file.read_text(encoding="utf-8")
 
 
+def test_a_key_under_another_name_is_refused_rather_than_doubled(project: Project) -> None:
+    """The layout moved, the key did not: two keys is the accident.
+
+    A device accepts images signed with the key its bootloader carries,
+    so a project that ends up holding two cannot say which one that is.
+    Adoption stays limited to the canonical name; anything else is a
+    refusal that names the file and the way to move it.
+    """
+    directory = project.firmware_secrets_file.parent
+    directory.mkdir(parents=True, mode=0o700)
+    write_key_file(directory / "mcuboot.pem")
+    before = snapshot(project.secrets_dir)
+
+    with pytest.raises(BuildError) as caught:
+        create_signing_key(env={}, project=project)
+
+    assert "mcuboot.pem" in caught.value.message
+    assert "mcuhome project upgrade" in (caught.value.hint or "")
+    assert SIGNING_KEY_FILE in (caught.value.hint or "")
+    assert snapshot(project.secrets_dir) == before, "no second key, no reference, nothing"
+
+
+def test_a_referenced_key_under_another_name_is_used_as_it_stands(project: Project) -> None:
+    """The same file, named in the secrets YAML: that is not ambiguous.
+
+    The refusal above is about key material nothing points at. A project
+    whose YAML names its key is answered with that key, whatever it is
+    called.
+    """
+    directory = project.firmware_secrets_file.parent
+    directory.mkdir(parents=True, mode=0o700)
+    pem = write_key_file(directory / "mcuboot.pem")
+    project.firmware_secrets_file.write_text(
+        f"{FIRMWARE_KEY}: !file mcuboot.pem\n", encoding="utf-8"
+    )
+    project.firmware_secrets_file.chmod(0o600)
+    key = create_signing_key(env={}, project=project)
+    assert not key.created
+    assert key.pem == pem
+    assert key.path == directory / "mcuboot.pem"
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
 def test_an_exposed_referenced_key_file_is_refused_outright(project: Project) -> None:
     key = create_signing_key(env={}, project=project)

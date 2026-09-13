@@ -420,6 +420,22 @@ def _refuse_no_project_key(reason: str) -> BuildError:
     )
 
 
+def _refuse_other_key_material(path: Path) -> BuildError:
+    """Key material in the signing directory under a name nothing writes."""
+    return BuildError(
+        f"{path} holds a signing key under a name MCUHome does not use, and MCUHome "
+        "will not draw a second key beside it.",
+        hint=(
+            "a device accepts images signed with the key its bootloader carries, so a "
+            "project holding two keys cannot say which one that is. Bring the project "
+            "up to date, which moves the key to where MCUHome looks for it:\n"
+            "    mcuhome project upgrade\n"
+            f"To keep using this key without that, rename it to {SIGNING_KEY_FILE} next "
+            "to its secrets file."
+        ),
+    )
+
+
 def _refuse_inline_key(file: Path) -> BuildError:
     return BuildError(
         f"The {FIRMWARE_KEY} entry in {file} must be a !file reference to the key file.",
@@ -584,6 +600,30 @@ def _referenced_key(file: Path, data: dict) -> SigningKey | None:
     return SigningKey(path=value.path, pem=str(value), in_secrets=True, created=False)
 
 
+def _other_key_material(directory: Path) -> Path | None:
+    """A key file in *directory* under a name this package never writes.
+
+    Read before anything is created, and nothing is written on the way:
+    a directory that holds key material under another name is a project
+    whose layout moved, and drawing a fresh key beside the old one would
+    leave two — with no way of telling which one a device out there was
+    bootstrapped with. The canonical name is not searched for here; it is
+    adopted below.
+    """
+    if not directory.is_dir():
+        return None
+    for entry in sorted(directory.iterdir()):
+        if entry.name == SIGNING_KEY_FILE or not entry.is_file():
+            continue
+        try:
+            text = entry.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # unreadable or binary: nothing this can judge
+        if is_p256_private_key(text):
+            return entry
+    return None
+
+
 def _create_project_key(project: Project) -> SigningKey:
     """The project's key, drawn and referenced — or the one already there."""
     file = project.firmware_secrets_file
@@ -592,6 +632,10 @@ def _create_project_key(project: Project) -> SigningKey:
         existing = _referenced_key(file, data)
         if existing is not None:
             return existing
+
+    other = _other_key_material(file.parent)
+    if other is not None:
+        raise _refuse_other_key_material(other)
 
     # The key file first, then the reference — a crash between the two
     # leaves a valid pem that the next run adopts, never a dangling
