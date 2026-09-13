@@ -72,7 +72,7 @@ from mcuhome.model.userpaths import expand
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
-    UPGRADE_FILE,
+    UPGRADE_MARKER_FILE,
     ProjectFile,
     new_project_id,
     read_project_file,
@@ -200,7 +200,7 @@ def is_project_root(path: Path) -> bool:
 
 def is_upgrading(path: Path) -> bool:
     """Whether *path* is a project whose file an upgrade has renamed."""
-    return (path / UPGRADE_FILE).is_file()
+    return (path / UPGRADE_MARKER_FILE).is_file()
 
 
 def find_project_root(start: Path) -> Path | None:

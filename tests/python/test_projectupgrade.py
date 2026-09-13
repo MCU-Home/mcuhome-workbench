@@ -25,7 +25,7 @@ from mcuhome.workbench.project import create_project, resolve_project
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
-    UPGRADE_FILE,
+    UPGRADE_MARKER_FILE,
     ProjectUpgradeRequired,
     read_project_file,
 )
@@ -115,19 +115,19 @@ def test_the_project_file_is_renamed_for_the_whole_run(tmp_path: Path) -> None:
     seen = []
     with upgrade_session(root) as session:
         assert not (root / PROJECT_MARKER_FILE).exists()
-        assert (root / UPGRADE_FILE).is_file()
+        assert (root / UPGRADE_MARKER_FILE).is_file()
         session.apply(
             on_event=lambda kind, _: seen.append((kind, (root / PROJECT_MARKER_FILE).exists()))
         )
     assert seen == [("start", False), ("done", False)]
     assert (root / PROJECT_MARKER_FILE).is_file()
-    assert not (root / UPGRADE_FILE).exists()
+    assert not (root / UPGRADE_MARKER_FILE).exists()
 
 
 def test_the_renamed_file_names_the_process_doing_it(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
     with upgrade_session(root):
-        record = read_project_file(root / UPGRADE_FILE).upgrade
+        record = read_project_file(root / UPGRADE_MARKER_FILE).upgrade
         assert record is not None
         assert record.process > 0
         assert record.started
@@ -183,7 +183,7 @@ def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Pat
         session.apply()
     assert "disk is on fire" in caught.value.message
     assert "Restore the backup" in (caught.value.hint or "")
-    assert (root / UPGRADE_FILE).is_file(), "the project stays marked as being upgraded"
+    assert (root / UPGRADE_MARKER_FILE).is_file(), "the project stays marked as being upgraded"
     assert not (root / PROJECT_MARKER_FILE).exists()
 
     # And every command now says what happened, rather than "no project".
@@ -251,7 +251,7 @@ def test_a_killed_upgrade_is_told_apart_from_a_running_one(tmp_path: Path) -> No
             break
         time.sleep(0.02)
 
-    assert (root / UPGRADE_FILE).is_file()
+    assert (root / UPGRADE_MARKER_FILE).is_file()
     with pytest.raises(UpgradeInterrupted) as caught:
         resolve_project(root, env={}, cwd=tmp_path)
     assert "interrupted" in caught.value.message

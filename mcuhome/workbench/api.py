@@ -262,7 +262,7 @@ from mcuhome.workbench.project import (
     resolve_project,
 )
 from mcuhome.workbench.projectfile import (
-    UPGRADE_FILE,
+    UPGRADE_MARKER_FILE,
     ProjectFile,
     ProjectFileError,
     ProjectUpgradeRequired,
@@ -363,7 +363,7 @@ __all__ = [
     "Settings",
     "Step",
     "StepResult",
-    "UPGRADE_FILE",
+    "UPGRADE_MARKER_FILE",
     "UnknownBuildMode",
     "UnknownBuildTarget",
     "UpgradeInProgress",

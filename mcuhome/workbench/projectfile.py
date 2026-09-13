@@ -55,7 +55,7 @@ __all__ = [
     "PROJECT_MARKER_FILE",
     "PROJECT_VERSION",
     "SHORT_ID_LENGTH",
-    "UPGRADE_FILE",
+    "UPGRADE_MARKER_FILE",
     "ProjectFile",
     "ProjectFileError",
     "ProjectUpgradeRequired",
@@ -74,7 +74,7 @@ PROJECT_MARKER_FILE = ".mcuhome-project-root"
 #: What the project file is called while an upgrade is running: the
 #: upgrade renames it, so no other command can start work on a project
 #: that is being rewritten under it (:mod:`~mcuhome.workbench.projectupgrade`).
-UPGRADE_FILE = f"{PROJECT_MARKER_FILE}.upgrade"
+UPGRADE_MARKER_FILE = f"{PROJECT_MARKER_FILE}.upgrade"
 
 #: The project layout this build of MCUHome speaks. Raised by exactly one
 #: thing: a migration that produces the new layout.
@@ -259,7 +259,7 @@ def write_project_file(path: Path, file: ProjectFile) -> None:
     """Write *file* to *path*, header and all.
 
     Plain write, no atomic replace: the only writer is an upgrade, and
-    an upgrade has renamed the file to :data:`UPGRADE_FILE` for the whole
+    an upgrade has renamed the file to :data:`UPGRADE_MARKER_FILE` for the whole
     time it works — no other command can even find the project, so there
     is no half-written state anyone else could read.
     """

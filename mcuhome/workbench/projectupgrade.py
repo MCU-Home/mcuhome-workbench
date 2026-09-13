@@ -69,7 +69,7 @@ from mcuhome.workbench.migrations import Migration, plan_for
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
-    UPGRADE_FILE,
+    UPGRADE_MARKER_FILE,
     ProjectFile,
     UpgradeRecord,
     read_project_file,
@@ -145,7 +145,7 @@ def is_upgrading(root: Path) -> bool:
     False for a leftover from an upgrade that was killed — that file has
     no owner, and the kernel is what says so.
     """
-    path = Path(root) / UPGRADE_FILE
+    path = Path(root) / UPGRADE_MARKER_FILE
     if fcntl is None or not path.is_file():  # pragma: no cover - platform branch
         return False
     try:
@@ -169,7 +169,7 @@ def in_flight_error(root: Path) -> ConfigError:
     damaged; restore the backup).
     """
     root = Path(root)
-    path = root / UPGRADE_FILE
+    path = root / UPGRADE_MARKER_FILE
     try:
         record = read_project_file(path, root=root).upgrade or UpgradeRecord()
     except MCUHomeError:
@@ -315,7 +315,7 @@ def upgrade_session(root: Path) -> Iterator[UpgradeSession]:
     """Take the project in *root* for an upgrade: rename it, lock it, yield.
 
     On the way in the project file is locked and renamed to
-    :data:`~mcuhome.workbench.projectfile.UPGRADE_FILE`; on the way out
+    :data:`~mcuhome.workbench.projectfile.UPGRADE_MARKER_FILE`; on the way out
     it is renamed back — unless a migration failed, in which case it
     deliberately stays renamed and the project stays refused (see the
     module docstring). Every other exit renames back, including a
@@ -323,7 +323,7 @@ def upgrade_session(root: Path) -> Iterator[UpgradeSession]:
     """
     root = Path(root).resolve()
     marker = root / PROJECT_MARKER_FILE
-    working = root / UPGRADE_FILE
+    working = root / UPGRADE_MARKER_FILE
 
     if working.exists() and not marker.exists():
         raise in_flight_error(root)
