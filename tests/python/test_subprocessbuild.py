@@ -847,6 +847,9 @@ def test_a_developer_build_describes_its_workspace_inside_the_session(tmp_path, 
     assert record["layers"]["zephyr"]["path"] == str(developer.layers["zephyr"])
     assert record["layers"]["chip"]["path"] == str(developer.layers["connectedhomeip"])
     assert record["layers"]["mcuboot"]["path"] == str(developer.layers["mcuboot"])
+    # The published vocabulary is what a record actually carries, so a
+    # consumer that lays out its own view off WORKSPACE_LAYERS is right.
+    assert set(record["layers"]) == set(devworkspace.WORKSPACE_LAYERS)
 
 
 def test_the_description_is_what_the_builder_actually_reads(tmp_path, developer) -> None:
