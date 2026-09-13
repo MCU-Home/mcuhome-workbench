@@ -387,9 +387,8 @@ None`. Properties `marker`, `id`, `config_file`, `devices_dir`,
 `secrets_dir`, `secrets_file`, `signing_secrets_file`. Methods
 `builder_secrets_file(name)`, `device_secrets_file(name)`,
 `device_file(name)`, `device_patches_dir(name)`, `device_names()`,
-`to_dict()` → `{root, id,
-discovered, version}`. `discovered` is false for the stand-in project a
-device file outside any project gets.
+`to_dict()` → `{root, id, discovered, version}`. `discovered` is false for
+the stand-in project a device file outside any project gets.
 
 ### ProjectFile
 Frozen dataclass. Fields `root`, `version: int`, `id: str | None`,
@@ -798,6 +797,7 @@ it rather than adding to it. An empty directory, or none, changes
 nothing. Patches are context content: they are hashed into the context ID
 like the model and the key, so a device builds something else with a
 patch than without one.
+
 Raises `SdkUnavailable`, `PackageRegistryError`, `TrustAnchorMissing`,
 `ConfigError`, and `BuildError` for a patch layout the context format
 cannot express or a *signing_pub* that is not a P-256 public key.
