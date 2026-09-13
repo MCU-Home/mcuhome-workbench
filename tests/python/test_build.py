@@ -2286,3 +2286,81 @@ def test_a_container_build_creates_its_context_with_the_same_two_answers(
 
     assert asked["patches_dir"] == tmp_path / "elsewhere"
     assert asked["project_root"] == tmp_path / "project"
+
+
+@pytest.mark.parametrize(
+    "execution",
+    [build.ContainerExecution(), build.SubprocessExecution()],
+    ids=["container", "subprocess"],
+)
+def test_a_request_hands_its_patches_directory_to_the_composition(
+    model, tmp_path, monkeypatch, execution
+) -> None:
+    """`BuildRequest.patches_dir` is an embedder's statement about this build.
+
+    It has to survive the whole way from the request to the composition —
+    on **both** local executions and on the remote one below — because a
+    caller that states a directory and is built without it gets firmware
+    that is not what it asked for, and nothing would say so.
+    """
+    seen: dict[str, object] = {}
+
+    def fake(device_model, **kwargs):
+        seen.update(kwargs)
+        return containerbuild.ContainerBuildResult(
+            outcome=StepResult(
+                action="build",
+                context_id="",
+                exit_code=0,
+                status="success",
+                out_dir=tmp_path / "out",
+            ),
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            container_image="",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    asyncio.run(
+        build.build_firmware(
+            build.BuildRequest(
+                model=model,
+                out_dir=tmp_path / "build",
+                project_root=tmp_path / "project",
+                patches_dir=tmp_path / "elsewhere",
+                options=build.BuildOptions(),
+            ),
+            target=build.LocalBuild(execution=execution),
+        )
+    )
+
+    assert seen["patches_dir"] == tmp_path / "elsewhere"
+    assert seen["project_root"] == tmp_path / "project"
+
+
+def test_a_remote_build_sends_the_patches_the_request_states(model, tmp_path, monkeypatch) -> None:
+    """The third path: the context a remote build uploads carries them too.
+
+    The client resolves and writes that context itself, so a patch that
+    reached only the local targets would mean one device is built
+    differently depending on where it is compiled.
+    """
+    asked: dict[str, object] = {}
+    monkeypatch.setattr(
+        build, "_create_context", lambda device_model, **kwargs: asked.update(kwargs)
+    )
+    monkeypatch.setattr(build, "read_context_facts", lambda directory: {"build_environment": ""})
+
+    build._remote_context(
+        build.BuildRequest(
+            model=model,
+            out_dir=tmp_path / "build",
+            project_root=tmp_path / "project",
+            patches_dir=tmp_path / "elsewhere",
+            options=build.BuildOptions(),
+        ),
+        tmp_path / "work",
+    )
+
+    assert asked["patches_dir"] == tmp_path / "elsewhere"
+    assert asked["project_root"] == tmp_path / "project"

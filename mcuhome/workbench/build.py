@@ -1067,6 +1067,13 @@ def _device_patches_dir(
     absent or empty folder changes nothing: there is then no patch
     directory in the context and the context ID is what it would have
     been.
+
+    The folder is the one named after the device, because the model is
+    all a build is given and it carries no path of its own. A device file
+    whose ``device.name`` does not match the folder it sits in therefore
+    does not find that folder's patches, while the project's per-device
+    *secrets* key on the folder instead — two rules for one identity,
+    and they have to become one. A device MCUHome created has them equal.
     """
     if patches_dir is not None:
         return Path(patches_dir)
@@ -1154,8 +1161,8 @@ def create_context(
         work_root=work_root,
         sdk_sources=tuple(Path(source) for source in options.sdk_sources),
         signing_pub=signing_pub,
-        workspace_sources=options.workspace_sources,
-        tools_sources=options.tools_sources,
+        workspace_sources=tuple(Path(source) for source in options.workspace_sources),
+        tools_sources=tuple(Path(source) for source in options.tools_sources),
         sdk_max_bytes=options.sdk_max_bytes,
         patches_dir=patches_dir,
         project_root=project_root,
