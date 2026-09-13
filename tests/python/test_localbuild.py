@@ -55,8 +55,8 @@ from mcuhome.workbench.packagefetch import SDK_PACKAGE_NAME
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 from mcuhome.workbench.signing import (
     generate_key_pem,
-    looks_like_p256_key,
-    looks_like_p256_public_key,
+    is_p256_private_key,
+    is_p256_public_key,
     public_key_pem,
 )
 
@@ -410,8 +410,8 @@ def test_the_private_key_never_appears_in_any_argv(tmp_path, model):
     assert "PRIVATE KEY" not in flat
     # What the context does carry is the public half, and only that.
     signing_pub = (result.context_dir / "keys" / "signing.pub").read_text(encoding="utf-8")
-    assert looks_like_p256_public_key(signing_pub)
-    assert not looks_like_p256_key(signing_pub)
+    assert is_p256_public_key(signing_pub)
+    assert not is_p256_private_key(signing_pub)
     # And the context is mounted read-only, so even the public key cannot
     # be written back by the container.
     assert f"{result.context_dir}:{containerbuild.CONTEXT_TARGET}:ro" in seam.volumes

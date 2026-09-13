@@ -80,8 +80,8 @@ __all__ = [
     "PUBLIC_KEY_FILE",
     "SigningKey",
     "generate_key_pem",
-    "looks_like_p256_key",
-    "looks_like_p256_public_key",
+    "is_p256_private_key",
+    "is_p256_public_key",
     "public_key_pem",
     "signing_key",
 ]
@@ -292,10 +292,10 @@ def public_key_pem(private_pem: str) -> str:
     return _pem("PUBLIC KEY", spki)
 
 
-def looks_like_p256_public_key(text: str) -> bool:
+def is_p256_public_key(text: str) -> bool:
     """Whether *text* is a PEM **public** key on the P-256 curve.
 
-    The counterpart of :func:`looks_like_p256_key`, and the check a
+    The counterpart of :func:`is_p256_private_key`, and the check a
     ``--public-key`` argument gets: handing a *private* key to a build
     server is the one mistake this feature exists to prevent, so it is
     worth catching by shape before the file is mounted anywhere.
@@ -304,7 +304,7 @@ def looks_like_p256_public_key(text: str) -> bool:
     return der is not None and _P256_OID_DER in der
 
 
-def looks_like_p256_key(text: str) -> bool:
+def is_p256_private_key(text: str) -> bool:
     """Whether *text* is a PEM private key on the P-256 curve.
 
     A shape check, not a validation: it confirms the PEM envelope and
@@ -458,7 +458,7 @@ def _plain_file_key(path: Path, *, create: bool) -> SigningKey:
             raise _refuse_unreadable(path, error.strerror or "unreadable") from error
         except UnicodeDecodeError as error:
             raise _refuse_not_a_key(path) from error
-        if not looks_like_p256_key(text):
+        if not is_p256_private_key(text):
             raise _refuse_not_a_key(path)
         return SigningKey(path=path, pem=text, in_secrets=False, created=False)
 
@@ -499,7 +499,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
             if not isinstance(value, FileRef):
                 raise _refuse_inline_key(file)
             require_secret_file(value.path, key_material=True)
-            if not looks_like_p256_key(str(value)):
+            if not is_p256_private_key(str(value)):
                 raise _refuse_not_a_key(value.path)
             return SigningKey(path=value.path, pem=str(value), in_secrets=True, created=False)
         if not create:
@@ -527,7 +527,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
         except (OSError, UnicodeDecodeError) as error:
             reason = getattr(error, "strerror", None) or "it is not a text file"
             raise _refuse_unreadable(pem_path, reason) from error
-        if not looks_like_p256_key(pem):
+        if not is_p256_private_key(pem):
             raise _refuse_not_a_key(pem_path)
     else:
         pem = generate_key_pem()

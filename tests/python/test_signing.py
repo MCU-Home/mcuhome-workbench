@@ -30,7 +30,7 @@ from mcuhome.workbench.signing import (
     FIRMWARE_KEY,
     PRIVATE_KEY_FILE,
     generate_key_pem,
-    looks_like_p256_key,
+    is_p256_private_key,
     public_key_pem,
     signing_key,
 )
@@ -96,7 +96,7 @@ def test_the_first_build_generates_the_project_key_and_says_so(project: Project)
     assert key.in_secrets
     assert key.path == project.firmware_secrets_file.parent / PRIVATE_KEY_FILE
     assert key.path.read_text(encoding="utf-8") == key.pem
-    assert looks_like_p256_key(key.pem)
+    assert is_p256_private_key(key.pem)
     assert public_key_pem(key.pem).startswith("-----BEGIN PUBLIC KEY-----")
 
 
@@ -141,7 +141,7 @@ def test_the_key_is_added_to_an_existing_secrets_file_without_disturbing_it(
     assert f"{FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}" in text
     data = read_yaml_file(file)
     assert data["other"] == "value"
-    assert looks_like_p256_key(str(data[FIRMWARE_KEY]))
+    assert is_p256_private_key(str(data[FIRMWARE_KEY]))
 
 
 def test_create_false_never_generates(project: Project) -> None:
@@ -221,7 +221,7 @@ def test_a_missing_override_file_is_created_owner_only(tmp_path: Path) -> None:
     assert key.created
     assert not key.in_secrets
     assert mode_of(path) == 0o600
-    assert looks_like_p256_key(path.read_text(encoding="utf-8"))
+    assert is_p256_private_key(path.read_text(encoding="utf-8"))
 
 
 def test_a_key_from_elsewhere_is_used_as_it_is(tmp_path: Path) -> None:

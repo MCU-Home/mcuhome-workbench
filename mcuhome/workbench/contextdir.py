@@ -65,7 +65,7 @@ from ruamel.yaml import YAML, YAMLError
 from mcuhome.workbench import __version__
 from mcuhome.workbench.packageregistry import PackageRegistry, RegistrySource
 from mcuhome.workbench.resolve_pins import resolve_environment, resolve_sdk, sdk_constraint
-from mcuhome.workbench.signing import looks_like_p256_public_key
+from mcuhome.workbench.signing import is_p256_public_key
 
 __all__ = [
     "DEVELOPER_SDK_FACT",
@@ -305,7 +305,7 @@ def create_context(
                     "everything in it — point at a new or empty directory"
                 ),
             )
-    if not looks_like_p256_public_key(signing_pub):
+    if not is_p256_public_key(signing_pub):
         raise BuildError(
             "The key given for the context is not an ECDSA P-256 public key in PEM form.",
             hint=(
