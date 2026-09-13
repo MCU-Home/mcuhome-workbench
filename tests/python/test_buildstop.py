@@ -26,6 +26,7 @@ is asserted is the relation and never a number.
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,9 @@ from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 #: A fixed public key, so nothing here draws one.
 _PUBLIC_PEM = public_key_pem(generate_key_pem(scalar=0x5709DE1))
 
-SLEEP_30S = ("/bin/sh", "-c", "sleep 30")
+#: The step that has to be stopped, spelled the way ``test_buildprocess``
+#: spells it: this interpreter, so nothing here depends on a shell.
+SLEEP_30S = (sys.executable, "-c", "import time; time.sleep(30)")
 
 
 @pytest.fixture
@@ -205,7 +208,7 @@ def test_a_predicate_that_raises_leaves_the_step_alone_and_is_not_asked_again(
         asked.calls += 1
         raise RuntimeError("the stop button is broken")
 
-    child = spawn_process(("/bin/sh", "-c", "sleep 1.5"))
+    child = spawn_process((sys.executable, "-c", "import time; time.sleep(1.5)"))
     liveness = Liveness(
         cancel=tmp_path / "cancel",
         deadline_seconds=3600,
