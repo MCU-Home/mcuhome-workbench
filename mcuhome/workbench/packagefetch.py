@@ -61,6 +61,7 @@ from mcuhome.workbench.packageregistry import (
 from mcuhome.workbench.resolve_pins import KIND_SDK
 
 __all__ = [
+    "PACKAGE_SUFFIX",
     "SDK_MAX_BYTES",
     "SDK_PACKAGE_NAME",
     "AcquiredPackage",
@@ -68,6 +69,12 @@ __all__ = [
     "acquire_package",
     "fetch_sdk_package",
 ]
+
+#: What a package file is called, after its name and version:
+#: ``<name>-<version>.tar.zst``. The conventional filename a source
+#: directory without an index is searched by, and the one a caller who
+#: names a package file has in hand.
+PACKAGE_SUFFIX = ".tar.zst"
 
 #: A generous bound on what the SDK archive unpacks to. Not a policy
 #: anyone tunes — an operator who does not trust an SDK source should not
@@ -359,7 +366,7 @@ def _local_candidate(
     # architecture is not "not here", and finding that out after half a
     # gigabyte has been fetched and unpacked helps nobody.
     check_platform(name, platform=platform)
-    named = directory / f"{name}-{version}.tar.zst"
+    named = directory / f"{name}-{version}{PACKAGE_SUFFIX}"
     return (named, name) if named.is_file() else None
 
 

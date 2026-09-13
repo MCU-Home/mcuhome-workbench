@@ -569,6 +569,31 @@ MCUHome's own packages need:
 Raise a bound for a package of your own that is legitimately larger; a package
 whose contents exceed it is refused and leaves nothing behind.
 
+**Filling it without building.** A build fills the store on its way past, and
+that is not always when you want it filled: a CI job has just produced a package
+and wants it unpacked the way a build would unpack it, a laptop is about to go
+somewhere without a network. `provision_environment` is that step on its own —
+the same acquiring, unpacking, finalizing and freezing, for one package named
+either as a file or by name:
+
+```python
+from mcuhome.workbench import api
+
+options = api.resolve_build_options(settings)
+entry = api.provision_environment("mcuhome-build-workspace", options=options, env=env)
+entry = api.provision_environment(
+    Path("mcuhome-build-tools_linux-amd64-0.2.0.tar.zst"), options=options, env=env
+)
+```
+
+A name is resolved against the directories above and the registry, narrowed with
+a constraint (`mcuhome-build-workspace:~=0.2`) where a particular one is wanted.
+A file is taken as it is and identified by the hash computed from it, because
+there is no pin to check it against — which is what makes it the form for a
+package that was built a minute ago and is published nowhere yet. Either way the
+answer is the store entry, and a package that is already there is answered
+without unpacking it a second time.
+
 ### Building against a west workspace of your own
 
 If you are working on the SDK itself — or on the sources the build environment

@@ -834,6 +834,7 @@ def provision_environment(
     options: BuildOptions,
     env: Mapping[str, str],
     sources: Sequence[Path] = (),
+    registry: RegistrySource | None = None,
     on_line: Callable[[str], None] | None = None,
 ) -> StoreEntry
 ```
@@ -842,9 +843,26 @@ the hash checked on every path), unpacks it under the bound for its kind,
 finalizes and freezes it, and writes the marker last. A package that is
 already in the store is answered without touching the network, the disk
 or the lock. *package* is a package file — identified by the hash
-computed from it — or a package name resolved against *sources* and the
-registry. Raises `BuildEnvironmentError`, `SdkUnavailable`,
-`PackageRegistryError`.
+computed from it, because there is no pin to check it against — or a
+package name resolved against *sources* and the registry. Raises
+`BuildEnvironmentError`, `SdkUnavailable`, `PackageRegistryError`.
+
+A package file is a `Path`, or a string spelled like one
+(`…/mcuhome-build-workspace-0.2.0.tar.zst`); the name and version come
+from that file name and the bytes are taken from that file alone.
+A package name is `<package>[:<constraint>][@sha256:…]` — a bare name is
+the newest version a source offers, a constraint narrows it, and a
+version with a hash decides everything and reads no index. A hash that
+the index contradicts is a refusal. Which kind of package it is comes
+from the name, since the bound it unpacks under and what is made of it
+are settled before anything is read: `mcuhome-sdk`,
+`mcuhome-build-workspace` and `mcuhome-build-tools` (with this host's
+architecture after the underscore) are the three, and any other name is
+refused. *sources* are searched before the directories `options` holds
+for that kind, and no other kind's directories are searched at all.
+*registry* is asked when no directory offers the package; a reference
+naming a registry of its own is refused rather than looked up on this
+one.
 
 `StoreEntry` (frozen): `kind`, `name`, `version`, `sha256`, `path`,
 `to_dict()`. `provision_environment` takes `should_stop` nowhere: it is

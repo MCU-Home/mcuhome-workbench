@@ -56,8 +56,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # Provisioning a build environment outside a build.
-    "provision_environment": "environment provisioning",
     # Contexts and patches: the public `create_context` is the one that
     # resolves pins; the internal function of that name becomes
     # `write_context` and stays internal.

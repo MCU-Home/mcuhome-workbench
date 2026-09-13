@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import buildenvstore as store
+from mcuhome.workbench.api import BuildOptions, provision_environment
 from mcuhome.workbench.packageregistry import host_platform
 
 VERSION = "1.2.3"
@@ -772,3 +774,267 @@ def test_something_that_is_not_an_interpreter_is_refused() -> None:
     with pytest.raises(BuildError) as caught:
         store._interpreter_version("/bin/true")
     assert "did not answer as a Python interpreter" in caught.value.message
+
+
+# --------------------------------------------------------------------------
+# Provisioning without a build
+# --------------------------------------------------------------------------
+#
+# `provision_environment` is the store's own entry point: the same
+# sequence a build runs, for a caller that has no build context — a CI
+# job that has just produced a package, a person warming a machine's
+# store. What the tests below are about is what it does *before*
+# `provision`: which package the caller named, of which kind, and where
+# its bytes are looked for.
+
+
+def put_package(directory: Path, name: str, version: str, members: dict) -> str:
+    """One package file in *directory*. Returns its sha256."""
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = directory / f"{name}-{version}.tar.zst"
+    archive.write_bytes(
+        build_package(members, executable=frozenset({"bin/build-environment-entry"}))
+    )
+    return sha256_file(archive)
+
+
+def write_index(directory: Path, *published: tuple[str, str, str]) -> None:
+    """The ``index.json`` that names *published* — ``(name, version, sha256)``."""
+    packages: dict[str, dict[str, dict]] = {}
+    for name, version, sha256 in published:
+        archive = directory / f"{name}-{version}.tar.zst"
+        packages.setdefault(name, {})[version] = {
+            "file": archive.name,
+            "sha256": sha256,
+            "size": archive.stat().st_size,
+        }
+    (directory / "index.json").write_text(json.dumps({"packages": packages}), "utf-8")
+
+
+def tree_snapshot(root: Path) -> dict[str, tuple[int, int, int]]:
+    """Every path under *root* with its mode, size and modification time."""
+    found = {".": _entry_facts(root)}
+    for path in sorted(root.rglob("*")):
+        found[str(path.relative_to(root))] = _entry_facts(path)
+    return found
+
+
+def _entry_facts(path: Path) -> tuple[int, int, int]:
+    info = path.lstat()
+    return info.st_mode, info.st_size, info.st_mtime_ns
+
+
+@pytest.fixture
+def options(store_dir) -> BuildOptions:
+    """A machine whose store is the test's own, and nothing else configured."""
+    return BuildOptions(env_store=store_dir)
+
+
+@pytest.fixture
+def published(tmp_path):
+    """A source directory holding the workspace package, with its index."""
+
+    def make(*, name: str = WORKSPACE, version: str = VERSION, members: dict | None = None):
+        directory = tmp_path / "published"
+        sha256 = put_package(
+            directory, name, version, members if members is not None else workspace_members()
+        )
+        write_index(directory, (name, version, sha256))
+        return directory, sha256
+
+    return make
+
+
+def test_a_package_file_is_provisioned_by_the_hash_computed_from_it(
+    tmp_path, options, env, store_dir
+) -> None:
+    """A caller who points at bytes gets those bytes: there is no pin to
+    check them against, so the hash is computed from the file and is what
+    the entry records."""
+    directory = tmp_path / "built"
+    sha256 = put_package(directory, WORKSPACE, VERSION, workspace_members())
+
+    entry = provision_environment(
+        directory / f"{WORKSPACE}-{VERSION}.tar.zst", options=options, env=env
+    )
+
+    assert entry == store.StoreEntry(
+        kind=store.KIND_WORKSPACE,
+        name=WORKSPACE,
+        version=VERSION,
+        sha256=sha256,
+        path=store.entry_directory(store_dir, WORKSPACE, VERSION),
+    )
+    # The whole sequence ran, not just the unpacking: finalized (the
+    # ownership exemption is written for the workspace kind), frozen, and
+    # marked as the last thing.
+    assert (entry.path / store.GIT_CONFIG_FILE).is_file()
+    assert stat.S_IMODE((entry.path / store.WORKSPACE_MANIFEST).lstat().st_mode) == 0o400
+    assert store.provisioned(entry.path) == entry
+
+
+def test_a_tools_package_file_is_finalized_like_one(tmp_path, options, env, runs) -> None:
+    """Which kind a package is comes from its name, and the kind decides
+    what is made of the tree: the tools package gets its virtual
+    environment, the workspace package does not."""
+    directory = tmp_path / "built"
+    put_package(directory, TOOLS, VERSION, tools_members())
+
+    entry = provision_environment(
+        directory / f"{TOOLS}-{VERSION}.tar.zst", options=options, env=env
+    )
+
+    assert entry.kind == store.KIND_TOOLS
+    created, _installed = runs
+    assert created[1:3] == ["-m", "venv"]
+    assert created[-1] == str(entry.path / store.VENV_DIR)
+
+
+def test_a_package_name_is_resolved_against_a_source_directory(
+    published, options, env, store_dir
+) -> None:
+    """The other half: a name, and the directories it is looked for in."""
+    directory, sha256 = published()
+
+    entry = provision_environment(WORKSPACE, options=options, env=env, sources=[directory])
+
+    assert (entry.name, entry.version, entry.sha256) == (WORKSPACE, VERSION, sha256)
+    assert entry.path == store.entry_directory(store_dir, WORKSPACE, VERSION)
+
+
+def test_a_name_takes_the_newest_version_a_constraint_admits(tmp_path, options, env) -> None:
+    """A bare name is the newest published version; a constraint narrows
+    which of them that is."""
+    directory = tmp_path / "published"
+    older = put_package(directory, WORKSPACE, "1.2.3", workspace_members())
+    newer = put_package(directory, WORKSPACE, "1.3.0", workspace_members())
+    write_index(directory, (WORKSPACE, "1.2.3", older), (WORKSPACE, "1.3.0", newer))
+
+    assert (
+        provision_environment(WORKSPACE, options=options, env=env, sources=[directory]).version
+        == "1.3.0"
+    )
+    narrowed = provision_environment(
+        f"{WORKSPACE}:~=1.2.0", options=options, env=env, sources=[directory]
+    )
+    assert narrowed.version == "1.2.3"
+
+
+def test_a_kind_is_looked_for_under_its_own_key_and_no_other(published, env, store_dir) -> None:
+    """The configured directories are the ones of that kind of package. A
+    directory holding the build workspace is not a statement about where
+    SDK packages live, and it is not searched for one either."""
+    directory, _sha256 = published()
+    elsewhere = BuildOptions(env_store=store_dir, sdk_sources=(directory,))
+
+    with pytest.raises(BuildError) as caught:
+        provision_environment(WORKSPACE, options=elsewhere, env=env)
+    assert "No package source offers" in caught.value.message
+
+    here = BuildOptions(env_store=store_dir, workspace_sources=(directory,))
+    assert provision_environment(WORKSPACE, options=here, env=env).version == VERSION
+
+
+def test_a_second_provisioning_touches_nothing(published, options, env, store_dir, monkeypatch):
+    """The entry is shared by every build that pins it, including builds
+    running right now: a second provisioning reads the marker and answers,
+    and does not so much as take the store's lock."""
+    directory, _sha256 = published()
+    first = provision_environment(WORKSPACE, options=options, env=env, sources=[directory])
+    before = tree_snapshot(first.path)
+    # What the first provisioning left behind, removed so that the second
+    # one taking the lock would be visible rather than invisible.
+    shutil.rmtree(store_dir / ".locks")
+
+    def refuse(**keywords):
+        raise AssertionError("a provisioned package was acquired a second time")
+
+    monkeypatch.setattr(store, "acquire_package", refuse)
+    again = provision_environment(WORKSPACE, options=options, env=env, sources=[directory])
+
+    assert again == first
+    assert tree_snapshot(first.path) == before
+    assert not (store_dir / ".locks").exists()
+    assert list(store_dir.glob(".staging-*")) == []
+
+
+def test_a_hash_the_bytes_do_not_have_is_refused(tmp_path, options, env, store_dir) -> None:
+    """A reference stating a version and a hash decides everything and
+    reads no index — so the file it names has to hash to what it pins."""
+    directory = tmp_path / "built"
+    put_package(directory, WORKSPACE, VERSION, workspace_members())
+
+    with pytest.raises(BuildError) as caught:
+        provision_environment(
+            f"{WORKSPACE}:{VERSION}@sha256:{'0' * 64}",
+            options=options,
+            env=env,
+            sources=[directory],
+        )
+    assert "hashes to" in caught.value.message
+    assert not store.entry_directory(store_dir, WORKSPACE, VERSION).exists()
+
+
+def test_a_hash_the_index_contradicts_is_refused(published, options, env, store_dir) -> None:
+    """The same version naming different bytes here than where the hash was
+    taken from is the one thing that is never shopped around for."""
+    directory, sha256 = published()
+
+    with pytest.raises(BuildError) as caught:
+        provision_environment(
+            f"{WORKSPACE}@sha256:{'0' * 64}", options=options, env=env, sources=[directory]
+        )
+    assert sha256 in caught.value.message
+    assert "0" * 64 in caught.value.message
+    assert not store.entry_directory(store_dir, WORKSPACE, VERSION).exists()
+
+
+def test_a_package_built_for_another_architecture_is_refused_by_its_name(
+    tmp_path, options, env
+) -> None:
+    """Said before half a gigabyte is unpacked, and said by the name."""
+    other = "mcuhome-build-tools_haiku-m68k"
+    directory = tmp_path / "built"
+    put_package(directory, other, VERSION, tools_members())
+
+    with pytest.raises(BuildError) as caught:
+        provision_environment(directory / f"{other}-{VERSION}.tar.zst", options=options, env=env)
+    assert "is built for haiku-m68k" in caught.value.message
+
+
+def test_a_name_that_is_no_build_environment_package_is_refused(options, env) -> None:
+    """Which kind a package is decides how much it may unpack to and what
+    is made of it, and only the name can say before anything is read."""
+    with pytest.raises(BuildError) as caught:
+        provision_environment("something-else", options=options, env=env)
+    assert "does not know what kind of build environment package" in caught.value.message
+    assert WORKSPACE in caught.value.hint
+
+
+def test_a_file_that_is_not_there_or_not_a_package_name_is_refused(tmp_path, options, env) -> None:
+    """A path is the caller's own statement that it named a file, so a
+    mistyped one is answered as the missing file it is."""
+    with pytest.raises(BuildError) as missing:
+        provision_environment(tmp_path / "absent.tar.zst", options=options, env=env)
+    assert "There is no package file at" in missing.value.message
+
+    odd = tmp_path / "package.tar.zst"
+    odd.write_bytes(b"")
+    with pytest.raises(BuildError) as unnamed:
+        provision_environment(odd, options=options, env=env)
+    assert "not named like a build environment package" in unnamed.value.message
+
+
+def test_a_reference_naming_a_registry_of_its_own_is_refused(options, env) -> None:
+    """Which registry is asked is the machine's, not the reference's."""
+    with pytest.raises(BuildError) as caught:
+        provision_environment(
+            f"packages.example.org/build-workspace/{WORKSPACE}", options=options, env=env
+        )
+    assert "names a registry" in caught.value.message
+
+
+def test_a_reference_that_names_no_package_is_refused(options, env) -> None:
+    with pytest.raises(BuildError) as caught:
+        provision_environment(":1.2.3", options=options, env=env)
+    assert "does not name a build environment package" in caught.value.message

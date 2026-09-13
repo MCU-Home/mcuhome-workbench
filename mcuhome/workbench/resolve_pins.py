@@ -133,6 +133,7 @@ __all__ = [
     "resolve_environment",
     "resolve_from_entries",
     "resolve_from_index",
+    "resolve_from_sources",
     "resolve_package",
     "resolve_sdk",
     "resolve_sdk_pin",
@@ -1744,6 +1745,76 @@ def resolve_environment(
         on_line=on_line,
     )
     return EnvironmentPin(workspace=workspace_found.pin, tools=tools_found.pin)
+
+
+def resolve_from_sources(
+    name: str,
+    constraint: str = "",
+    *,
+    source: str,
+    sources: Sequence[Path] = (),
+    registry: RegistrySource | None = None,
+    platform: str | None = None,
+) -> ResolvedPackage:
+    """The package *name* *constraint* selects: the directories, then the registry.
+
+    :func:`resolve_package` over a **constraint** instead of over a pin.
+    A pin already names its version and its bytes and only has to be
+    found; a constraint names a range, so what decides is the newest
+    version a shelf publishes inside it — and the answer is the package
+    that version is, hash and all.
+
+    Two tiers again, operator directories first, so a machine that holds
+    the package resolves without a network. A directory answers out of
+    its own ``index.json`` and a directory without one is not a package
+    source, because a range cannot be resolved against a filename. Only
+    when none of them offers the package is *registry* asked, and
+    *source* is the shelf inside it the package is published under.
+
+    A family published per architecture is followed to this host's
+    member, exactly as :func:`resolve_from_entries` follows one.
+    """
+    searched: list[str] = []
+    for directory in sources:
+        searched.append(str(directory))
+        entries = _entries_from_directory(Path(directory))
+        if name not in entries:
+            continue
+        try:
+            return resolve_from_entries(
+                entries,
+                name,
+                constraint,
+                prereleases=_allow(constraint, None),
+                platform=platform,
+            )
+        except BuildError:
+            # "This source has the package and no version of it inside
+            # the range" — a legitimate not-here, so the search goes on
+            # and the refusal below names every place that was asked.
+            # An index that cannot be *read* is not this: that refusal
+            # comes out of the call above and propagates, because a
+            # source the caller named on purpose is never silently
+            # demoted.
+            continue
+    client = opened(registry)
+    if client is not None:
+        index = client.index(source)
+        return resolve_from_entries(
+            index.entries,
+            name,
+            constraint,
+            prereleases=_allow(constraint, None),
+            platform=platform,
+        )
+    listed = ", ".join(searched) or "none"
+    raise BuildError(
+        f'No package source offers {name} matching "{constraint or "any version"}".',
+        hint=(
+            f"it was looked for in: {listed}. Put the package and its {INDEX_FILE} in one "
+            "of those directories, or configure a registry that publishes it."
+        ),
+    )
 
 
 def resolve_package(

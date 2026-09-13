@@ -40,6 +40,12 @@ builder's side of the same rule.
 
 Clearing the store is therefore a two-step affair, and the README says
 so: ``chmod -R u+w`` first, then ``rm -rf``.
+
+**Filling it without a build.** :func:`provision` is what a build calls,
+with a context's pin in hand. :func:`provision_environment` is the same
+sequence for a caller that has no context — a CI job that has just built
+a package, a machine being warmed before it goes offline — and takes the
+package as a file or by name instead.
 """
 
 from __future__ import annotations
@@ -51,19 +57,35 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from mcuhome.model.buildenvironment import family_of
 from mcuhome.model.errors import BuildError
+from mcuhome.model.hashes import sha256_file
 from mcuhome.model.userpaths import expand, home
+from packaging.version import InvalidVersion, Version
 
-from mcuhome.workbench.packagefetch import SDK_MAX_BYTES, acquire_package
+from mcuhome.workbench.packagefetch import PACKAGE_SUFFIX, SDK_MAX_BYTES, acquire_package
 from mcuhome.workbench.packageregistry import RegistrySource
-from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE
+from mcuhome.workbench.resolve_pins import (
+    KIND_SDK,
+    KIND_TOOLS,
+    KIND_WORKSPACE,
+    SDK_STAGE,
+    TOOLS_STAGE,
+    WORKSPACE_STAGE,
+    PackageStage,
+    package_reference,
+    resolve_from_sources,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle, typing only
+    from mcuhome.workbench.build import BuildOptions
 
 try:  # pragma: no cover - the import itself is the platform check
     import fcntl
@@ -90,6 +112,7 @@ __all__ = [
     "extraction_bound",
     "git_config_file",
     "provision",
+    "provision_environment",
     "provisioned",
     "required_python",
     "store_root",
@@ -480,6 +503,209 @@ def _check_identity(found: StoreEntry, sha256: str, kind: str) -> None:
             hint=f"delete the entry and let MCUHome unpack the pinned one — "
             f"chmod -R u+w {found.path} && rm -rf {found.path}",
         )
+
+
+# --------------------------------------------------------------------------
+# One package, named by a person instead of pinned by a context
+# --------------------------------------------------------------------------
+
+#: The three packages a build environment is assembled from, by the
+#: family name each is published under. Which of them a package is
+#: decides how much it may unpack to and what is made of it once it is
+#: unpacked, and the only thing that can say so before a byte is read is
+#: its name — the manifest inside it is readable a gigabyte too late.
+_STAGES = {stage.family: stage for stage in (SDK_STAGE, WORKSPACE_STAGE, TOOLS_STAGE)}
+
+#: The stage a reference is taken apart with while which stage it belongs
+#: to is still the question. It supplies no defaults, so the reference has
+#: to name its package outright, and the family of that name is the
+#: answer.
+_ANY_STAGE = PackageStage(what="build environment package", source="", family="", key="")
+
+
+def provision_environment(
+    package: Path | str,
+    *,
+    options: BuildOptions,
+    env: Mapping[str, str],
+    sources: Sequence[Path] = (),
+    registry: RegistrySource | None = None,
+    on_line: Callable[[str], None] | None = None,
+) -> StoreEntry:
+    """One build environment package in the store, ready to run.
+
+    :func:`provision` for a caller that has no build context: a person
+    warming a machine's store before a flight, a CI job that has just
+    produced a package and wants the real unpacking rather than a
+    three-line copy of its rule. What it does is what a build does —
+    acquire, unpack under the bound for the kind, finalize, freeze, write
+    the marker last — and a package that is already there is answered
+    without touching the network, the disk or the lock.
+
+    **A package named as a file is identified by the hash computed from
+    it.** There is no pin to check it against: the caller pointed at
+    bytes, and those bytes are what goes into the store under the name
+    and version the file carries (``<package>-<version>.tar.zst``). A
+    name instead of a file is the other half — ``mcuhome-build-workspace``,
+    narrowed with a constraint (``:~=0.2``) or pinned outright
+    (``:0.2.0@sha256:…``) — and is resolved against *sources*, the
+    directories :class:`~mcuhome.workbench.build.BuildOptions` holds for
+    that kind of package, and *registry*, in that order. A reference
+    stating a hash that the index does not is refused rather than
+    resolved past.
+
+    **Which kind a package is comes from its name**, because the bound it
+    unpacks under and what is made of it afterwards have to be settled
+    before anything is read: ``mcuhome-sdk``, ``mcuhome-build-workspace``
+    and ``mcuhome-build-tools`` are the three, the last with this host's
+    architecture after its underscore. *sources* are searched before the
+    configured directories of that kind and no other kind's are searched
+    at all — a directory holding one kind of package is not a statement
+    about where another lives.
+    """
+    file = _package_file(package)
+    if file is not None:
+        name, version = _package_named_by(file)
+        kind = _kind_of(name)
+        # The file is the package: nothing is looked up, so nothing is
+        # asked of a registry, and the directory it lies in is the one
+        # place the bytes are taken from.
+        return provision(
+            kind=kind,
+            name=name,
+            version=version,
+            sha256=sha256_file(file),
+            env=dict(env),
+            sources=(file.parent,),
+            store=options.env_store,
+            interpreter=options.python,
+            max_bytes=options.bound(kind),
+            on_line=on_line,
+        )
+
+    reference = package_reference(str(package), stage=_ANY_STAGE)
+    if not reference.name:
+        raise BuildEnvironmentError(
+            f'"{package}" does not name a build environment package.',
+            hint="name the package — mcuhome-build-workspace, narrowed with a "
+            "constraint (mcuhome-build-workspace:~=0.2) where a particular one is "
+            "wanted",
+        )
+    if reference.hosted:
+        raise BuildEnvironmentError(
+            f'"{package}" names a registry, and a build environment is provisioned from '
+            "the registry this machine is configured with.",
+            hint="name the package without a registry in front of it — "
+            "mcuhome-build-workspace:~=0.2",
+        )
+    kind = _kind_of(reference.name)
+    searched = tuple(Path(one) for one in sources) + _configured_sources(options, kind)
+    name, version, sha256 = reference.name, reference.version, reference.sha256
+    if not reference.pinned:
+        # A version and a hash together are the whole answer and read
+        # nothing — that is the offline case, and it is the one form a
+        # directory without an index can still serve. Everything else
+        # asks an index which version the constraint means.
+        found = resolve_from_sources(
+            name,
+            reference.constraint,
+            source=kind,
+            sources=searched,
+            registry=registry,
+        )
+        if sha256 and sha256 != found.sha256:
+            raise BuildEnvironmentError(
+                f"{found.name} {found.version} is published with hash {found.sha256}, and "
+                f"the package named here pins {sha256}.",
+                hint="the same version names different bytes here than where the hash was "
+                "taken from — drop the hash, or name a source that publishes those bytes",
+            )
+        name, version, sha256 = found.name, found.version, found.sha256
+    return provision(
+        kind=kind,
+        name=name,
+        version=version,
+        sha256=sha256,
+        env=dict(env),
+        sources=searched,
+        registry=registry,
+        store=options.env_store,
+        interpreter=options.python,
+        max_bytes=options.bound(kind),
+        on_line=on_line,
+    )
+
+
+def _package_file(package: Path | str) -> Path | None:
+    """The package file *package* names, or ``None`` where it names a package.
+
+    A :class:`~pathlib.Path` is a file by the caller's own choice of
+    type. A string is one when it is spelled like a package file, which
+    no package name ever is — so the two forms are told apart by what
+    was written rather than by what happens to exist on disk, and a
+    mistyped path is answered as the missing file it is instead of as a
+    package nobody publishes.
+    """
+    if isinstance(package, Path):
+        return package
+    return Path(package) if package.endswith(PACKAGE_SUFFIX) else None
+
+
+def _package_named_by(file: Path) -> tuple[str, str]:
+    """The package name and version *file* carries, or a refusal.
+
+    A package file is named ``<package>-<version>.tar.zst``, and that is
+    the whole of what says which package these bytes are: the manifest
+    inside the archive is readable only after it has been unpacked, and
+    what it may unpack to is the question being answered here.
+    """
+    if not file.is_file():
+        raise BuildEnvironmentError(
+            f"There is no package file at {file}.",
+            hint="name the file MCUHome should unpack, or name the package and let MCUHome find it",
+        )
+
+    def unusable() -> BuildEnvironmentError:
+        return BuildEnvironmentError(
+            f"{file.name} is not named like a build environment package.",
+            hint=f"a package file is named <package>-<version>{PACKAGE_SUFFIX}, as in "
+            f"mcuhome-build-workspace-0.2.0{PACKAGE_SUFFIX} — rename it, or name the "
+            "package and let MCUHome find it",
+        )
+
+    if not file.name.endswith(PACKAGE_SUFFIX):
+        raise unusable()
+    name, separator, version = file.name[: -len(PACKAGE_SUFFIX)].rpartition("-")
+    if not separator or not name:
+        raise unusable()
+    try:
+        Version(version)
+    except InvalidVersion as error:
+        raise unusable() from error
+    return name, version
+
+
+def _kind_of(name: str) -> str:
+    """Which of the three packages *name* is, or a refusal naming them."""
+    stage = _STAGES.get(family_of(name))
+    if stage is None:
+        published = ", ".join(sorted(_STAGES))
+        raise BuildEnvironmentError(
+            f"MCUHome does not know what kind of build environment package {name} is.",
+            hint=f"a build environment is assembled from {published} — which of them a "
+            "package is decides how much it may unpack to and what is made of it, so "
+            "it has to be one of them",
+        )
+    return stage.source
+
+
+def _configured_sources(options: BuildOptions, kind: str) -> tuple[Path, ...]:
+    """The directories this machine keeps packages of *kind* in, and no others."""
+    return {
+        KIND_SDK: options.sdk_sources,
+        KIND_WORKSPACE: options.workspace_sources,
+        KIND_TOOLS: options.tools_sources,
+    }.get(kind, ())
 
 
 def _finalize(

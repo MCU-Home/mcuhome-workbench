@@ -177,6 +177,7 @@ from mcuhome.workbench.buildenvsession import (
 from mcuhome.workbench.buildenvstore import (
     BuildEnvironmentError,
     StoreEntry,
+    provision_environment,
 )
 from mcuhome.workbench.builders import (
     Builder,
@@ -627,6 +628,7 @@ __all__ = [
     "parse_memory",
     "plan_signing",
     "plan_upgrade",
+    "provision_environment",
     "public_key_pem",
     "random_pairing",
     "read_build_report",
