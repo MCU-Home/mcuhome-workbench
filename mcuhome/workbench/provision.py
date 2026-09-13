@@ -48,7 +48,7 @@ from mcuhome.model import pairing
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML
 
-from mcuhome.workbench.loader import device_secrets_file, load_yaml_file
+from mcuhome.workbench.loader import device_secrets_file, read_yaml_file
 from mcuhome.workbench.validate import PAIRING_KEYS
 
 __all__ = ["CREDENTIAL_COMMENT", "PairingResult", "init_pairing", "secret_names"]
@@ -275,7 +275,7 @@ def init_pairing(
     Everything else about this function is deterministic.
     """
     text = _Text.of(entry.read_text(encoding="utf-8"))
-    data = load_yaml_file(entry)
+    data = read_yaml_file(entry)
     anchor = _find_anchor(data, text, entry)
 
     if anchor.occupied and not force:

@@ -139,9 +139,9 @@ def test_the_schema_validates_the_example_when_a_validator_is_installed() -> Non
     jsonschema = pytest.importorskip("jsonschema")
     from conftest import EXAMPLES_DIR
 
-    from mcuhome.workbench.loader import load_yaml_file
+    from mcuhome.workbench.loader import read_yaml_file
 
     document = configschema.config_json_schema()
     jsonschema.Draft202012Validator.check_schema(document)
-    data = load_yaml_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
+    data = read_yaml_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
     jsonschema.Draft202012Validator(document).validate(json.loads(json.dumps(data, default=str)))

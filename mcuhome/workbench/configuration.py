@@ -104,7 +104,7 @@ from mcuhome.workbench.buildtarget import (
     DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
 )
-from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
+from mcuhome.workbench.loader import FileRef, editing_yaml, read_yaml_file
 from mcuhome.workbench.project import BUILDER_SECRETS_DIR, Project, check_secret_file
 
 __all__ = [
@@ -850,7 +850,7 @@ def _read_layer(
 ) -> dict[str, Setting]:
     if not file.is_file():
         return {}
-    data = load_yaml_file(file)
+    data = read_yaml_file(file)
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -1090,7 +1090,7 @@ def _builder_token(
         if not file.is_file():
             continue
         check_secret_file(file, key_material=False, on_warning=on_warning)
-        data = load_yaml_file(file)
+        data = read_yaml_file(file)
         if data is None:
             return None
         if not isinstance(data, dict):

@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from mcuhome.model.errors import BuildError, ConfigError
 
-from mcuhome.workbench.loader import FileRef, load_yaml_file
+from mcuhome.workbench.loader import FileRef, read_yaml_file
 from mcuhome.workbench.project import Project, create_project
 from mcuhome.workbench.signing import (
     FIRMWARE_KEY,
@@ -114,7 +114,7 @@ def test_the_generated_yaml_references_the_key_and_never_holds_it(project: Proje
     assert text.splitlines()[0].startswith("#")  # the file explains itself
     assert f"{FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}" in text
     assert "PRIVATE KEY" not in text  # the material lives in the pem alone
-    reference = load_yaml_file(project.firmware_secrets_file)[FIRMWARE_KEY]
+    reference = read_yaml_file(project.firmware_secrets_file)[FIRMWARE_KEY]
     assert isinstance(reference, FileRef)
     assert reference.path == key.path
     assert str(reference) == key.pem
@@ -139,7 +139,7 @@ def test_the_key_is_added_to_an_existing_secrets_file_without_disturbing_it(
     text = file.read_text(encoding="utf-8")
     assert "# my notes" in text
     assert f"{FIRMWARE_KEY}: !file {PRIVATE_KEY_FILE}" in text
-    data = load_yaml_file(file)
+    data = read_yaml_file(file)
     assert data["other"] == "value"
     assert looks_like_p256_key(str(data[FIRMWARE_KEY]))
 

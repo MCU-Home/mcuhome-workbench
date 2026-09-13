@@ -51,7 +51,7 @@ __all__ = [
     "device_secrets_file",
     "editing_yaml",
     "load_config",
-    "load_yaml_file",
+    "read_yaml_file",
     "resolve_secrets",
 ]
 
@@ -180,7 +180,7 @@ def editing_yaml() -> YAML:
     return yaml
 
 
-def load_yaml_file(path: Path) -> Any:
+def read_yaml_file(path: Path) -> Any:
     """Parse one YAML file, turning parser failures into config errors."""
     try:
         text = path.read_text(encoding="utf-8")
@@ -245,7 +245,7 @@ def _read_secret_file(
     on_warning: Callable[[str], None] | None,
 ) -> dict[str, Any]:
     check_secret_file(secrets_file, key_material=False, on_warning=on_warning)
-    data = load_yaml_file(secrets_file)
+    data = read_yaml_file(secrets_file)
     if data is None:
         return {}
     if not isinstance(data, dict):
@@ -346,7 +346,7 @@ def load_config(
     on_warning: Callable[[str], None] | None = None,
 ) -> Any:
     """Stage 1: parse *entry* and resolve its secrets."""
-    data = load_yaml_file(entry)
+    data = read_yaml_file(entry)
     if data is None:
         raise ConfigError(
             "This device configuration is empty.",

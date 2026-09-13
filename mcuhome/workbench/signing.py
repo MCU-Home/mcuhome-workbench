@@ -71,7 +71,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.userpaths import expand
 from ruamel.yaml.comments import TaggedScalar
 
-from mcuhome.workbench.loader import FileRef, editing_yaml, load_yaml_file
+from mcuhome.workbench.loader import FileRef, editing_yaml, read_yaml_file
 from mcuhome.workbench.project import Project, check_secret_file, ensure_secrets_dir
 
 __all__ = [
@@ -489,7 +489,7 @@ def _project_key(project: Project, *, create: bool) -> SigningKey:
         if file.is_dir():
             raise _refuse_unreadable(file, "it is a directory")
         check_secret_file(file, key_material=True)
-        data = load_yaml_file(file)
+        data = read_yaml_file(file)
         if data is None:
             data = {}
         if not isinstance(data, dict):
