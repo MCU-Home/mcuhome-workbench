@@ -21,6 +21,7 @@ tests wrote would be the one thing capable of hiding a defect in it.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import io
 import json
 import os
@@ -45,9 +46,11 @@ from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import build, containerbuild
 from mcuhome.workbench.buildenvsession import (
+    ACTION_BUILD,
     RESULT_FILE_PREFIX,
     RESULT_FILE_SUFFIX,
     SPEC_GENERATION,
+    open_builder_session,
 )
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
@@ -337,6 +340,82 @@ def test_a_container_build_composes_a_context_and_drives_one_step(tmp_path, mode
     assert seam.step[-2:] == [f"{IMAGE}@{DIGEST}", containerbuild.ENTRY_POINT_PATH]
     assert containerbuild.ENTRY_POINT_PATH == "/mcuhome/bin/build-environment-entry"
     assert len([argv for argv in seam.calls if argv[1] == "run"]) == 1
+
+
+def _a_step(tmp_path: Path):
+    """One prepared step, the way a session hands one to a launcher."""
+    context = tmp_path / "launcher-context"
+    context.mkdir(exist_ok=True)
+    sdk = tmp_path / "launcher-sdk"
+    sdk.mkdir(exist_ok=True)
+    session = open_builder_session(
+        root=tmp_path / "launcher-session",
+        context_dir=context,
+        sdk_tree=sdk,
+        launcher=lambda step, on_line: None,
+    )
+    return session.prepare(ACTION_BUILD)
+
+
+def test_every_container_a_launcher_starts_is_reported_to_its_caller(tmp_path, model):
+    """``on_container`` is what a caller reaps a session with.
+
+    The launcher takes a callback rather than a list somebody else
+    mutates, and it is told the name *before* the container starts —
+    a process that dies in between still leaves the caller holding the
+    name of what it left behind.
+    """
+    told: list[str] = []
+    seam = Seam()
+    launcher = containerbuild.create_launcher(
+        container_image=f"{IMAGE}@{DIGEST}",
+        runtime=_runtime(seam),
+        on_container=told.append,
+    )
+    step = _a_step(tmp_path)
+
+    launcher(step, None)
+
+    assert len(told) == 1
+    argv = seam.step
+    assert told == [argv[argv.index("--name") + 1]]
+
+
+def test_a_launcher_without_a_callback_still_starts_its_step(tmp_path, model):
+    """Reporting is optional; a caller that does not reap does not have to."""
+    seam = Seam()
+    launcher = containerbuild.create_launcher(
+        container_image=f"{IMAGE}@{DIGEST}", runtime=_runtime(seam)
+    )
+
+    assert launcher(_a_step(tmp_path), None) is not None
+
+
+def test_the_launcher_takes_nothing_a_caller_has_to_hand_it_to_be_filled() -> None:
+    """No mutable argument on the surface: a callee that fills a caller's
+    list makes the caller's object part of the contract, and two callers
+    sharing one would collect each other's containers."""
+    signature = inspect.signature(containerbuild.create_launcher)
+    for name, parameter in signature.parameters.items():
+        assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, name
+        assert not isinstance(parameter.default, (list, dict, set)), name
+
+
+def test_a_container_left_behind_is_reaped_by_the_name_it_was_reported_under(
+    tmp_path, model, public_pem
+):
+    """The callback is not decoration: it is what the sweep works off.
+
+    ``--rm`` removes a container that ended on its own, so what the end
+    of a session removes is the one that did not — and it can only name
+    it because the launcher said so while starting it.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam, _result = _build(tmp_path, model, public_pem)
+
+    started = seam.step[seam.step.index("--name") + 1]
+    removed = [argv for argv in seam.calls if argv[1] == "rm"]
+    assert [argv[-1] for argv in removed] == [started]
 
 
 def test_the_composition_states_its_steps_in_order(tmp_path, model, public_pem):

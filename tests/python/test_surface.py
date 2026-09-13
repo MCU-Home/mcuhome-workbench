@@ -56,9 +56,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # The host check and the container-profile seams as a designed set.
-    "create_launcher": "host check and container seams",
-    "open_builder_session": "host check and container seams",
     # Provisioning a build environment outside a build.
     "provision_environment": "environment provisioning",
     # Contexts and patches: the public `create_context` is the one that

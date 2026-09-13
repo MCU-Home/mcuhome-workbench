@@ -94,6 +94,7 @@ __all__ = [
     "Step",
     "contained",
     "judge_step",
+    "open_builder_session",
     "parse_memory",
     "resolve_cache_tiers",
     "resolve_host_limits",
@@ -1089,6 +1090,52 @@ class BuilderSession:
             if tier.writable and writable is None:
                 writable = tier.path
         return present, writable
+
+
+def open_builder_session(
+    *,
+    root: Path,
+    context_dir: Path,
+    sdk_tree: Path,
+    launcher: Launcher,
+    entry_point: Path | None = None,
+    context_id: str = "",
+    session_id: str | None = None,
+    tiers: Mapping[str, CacheTier] | None = None,
+    limits: BuildLimits | None = None,
+    deadline_seconds: int = 5400,
+    cancel_grace_seconds: int = 0,
+    should_stop: Callable[[], bool] | None = None,
+) -> BuilderSession:
+    """Open a session against the build environment *launcher* enters.
+
+    The way in for a caller that owns its own sessions — a build server —
+    and the reason the class's constructor is not the contract: what a
+    caller has to state is *root*, the context, the SDK tree that context
+    pinned and how a step is entered; everything else is a default this
+    package owns and may extend.
+
+    *root* is this session's own directory and is laid out fresh: its
+    ``out`` is created empty, which is what makes the artifacts of one
+    session the artifacts of that session alone. *entry_point* is left
+    unstated for a profile whose delivery already carries one — an image
+    does — and a session is closed with :meth:`BuilderSession.close`, or
+    by using it as a context manager.
+    """
+    return BuilderSession(
+        root=root,
+        context_dir=context_dir,
+        sdk_tree=sdk_tree,
+        entry_point=entry_point,
+        launcher=launcher,
+        context_id=context_id,
+        session_id=session_id,
+        tiers=tiers,
+        limits=limits,
+        deadline_seconds=deadline_seconds,
+        cancel_grace_seconds=cancel_grace_seconds,
+        should_stop=should_stop,
+    )
 
 
 def _fresh(directory: Path) -> Path:

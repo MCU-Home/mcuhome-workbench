@@ -78,7 +78,6 @@ from mcuhome.workbench.buildenvsession import (
     STEP_DIR,
     STEP_OUT,
     STEP_SDK,
-    BuilderSession,
     BuildLimits,
     CacheTier,
     EnvironmentUnavailable,
@@ -86,6 +85,7 @@ from mcuhome.workbench.buildenvsession import (
     Launcher,
     Step,
     StepResult,
+    open_builder_session,
     resolve_host_limits,
 )
 from mcuhome.workbench.buildprocess import (
@@ -131,7 +131,7 @@ __all__ = [
     "default_cache_root",
     "ensure_container_image",
     "image_for_context",
-    "launcher",
+    "create_launcher",
     "prepare_environment",
     "require_container_image",
     "require_container_runtime",
@@ -626,13 +626,13 @@ class _StepContainer:
         self._child.kill()
 
 
-def launcher(
-    container_image: str,
+def create_launcher(
     *,
+    container_image: str,
     runtime: ContainerRuntime,
     user: str | None = None,
     limits: ContainerLimits | None = None,
-    started: list[str] | None = None,
+    on_container: Callable[[str], None] | None = None,
 ) -> Launcher:
     """How a step is entered in this profile: one fresh container.
 
@@ -643,10 +643,13 @@ def launcher(
     cache tiers are mounted at §4's paths, and the host tree itself is
     not the container's business.
 
-    *started* collects the names of the containers this launcher created,
-    so that the caller can sweep them at the end of a session. ``--rm``
-    removes a container that ended on its own; the sweep is for the one
-    that did not.
+    *on_container* is told the name of every container this launcher
+    starts, before it starts it, so that the caller can reap them at the
+    end of a session. ``--rm`` removes a container that ended on its own;
+    the sweep is for the one that did not — and being told *before* the
+    start is what makes it cover a container this process never saw
+    finish. It is a report and never control flow: what it answers is
+    ignored, and this call raises nothing of its own.
     """
 
     def launch(step: Step, on_line: LineSink | None) -> Running:
@@ -659,8 +662,8 @@ def launcher(
             user=user,
             limits=limits,
         )
-        if started is not None:
-            started.append(name)
+        if on_container is not None:
+            on_container(name)
         child = runtime.spawn(argv, on_line)
         if not getattr(child, "started", True):
             raise EnvironmentUnavailable(
@@ -1040,7 +1043,7 @@ def run_locked_build(
     ).tree
     started: list[str] = []
     given = limits if limits is not None else resolve_host_limits()
-    session = BuilderSession(
+    session = open_builder_session(
         root=work_root / "session",
         context_dir=context_dir,
         sdk_tree=sdk_tree,
@@ -1048,12 +1051,12 @@ def run_locked_build(
         # and linking over it would replace the environment's content
         # with this side's idea of it.
         entry_point=None,
-        launcher=launcher(
-            running,
+        launcher=create_launcher(
+            container_image=running,
             runtime=seam,
             user=user if user is not None else current_user(),
             limits=ContainerLimits.from_build_limits(given, pids=pids),
-            started=started,
+            on_container=started.append,
         ),
         context_id=manifest.compute_id(),
         tiers=tiers,

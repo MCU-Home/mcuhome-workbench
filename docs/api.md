@@ -874,7 +874,11 @@ asking for a firmware: a build server. It is handed a context somebody
 else created and locked, plus the environment that context pins, and
 drives one step of the build-environment specification at a time. What a
 local build does and what a build server does differ in who owns the
-session, not in what a build is.
+session, not in what a build is. This is the way in: `BuilderSession`'s
+own constructor is not part of this contract, so what a caller has to
+state stays the four things above while the defaults may grow. *root* is
+laid out fresh — its `out` starts empty, which is what makes the
+artifacts of one session that session's.
 
 `BuilderSession` — attributes `root`, `context_dir`, `sdk_tree`,
 `entry_point`, `launcher`, `context_id`, `session_id`, `tiers`, `limits`,
@@ -981,8 +985,10 @@ runtime that is not there at all is the same refusal
 `require_container_runtime` raises. It drives the container program
 rather than a registry client, so it raises no `ImageRegistryError`.
 `create_launcher` answers the `Launcher` a builder session starts each
-step with and raises nothing; *on_container* receives every container
-name it starts, so a caller can reap them.
+step with and raises nothing; *on_container* is told the name of every
+container it starts, before it starts it, so a caller can reap the one
+that did not end on its own — a container started by a process that then
+died is still a name its caller was given.
 
 `ContainerRuntime(program=DEFAULT_CONTAINER_PROGRAM, *, runner=None,
 spawner=None)` — the seam over the container command line; methods `run`,

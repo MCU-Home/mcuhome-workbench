@@ -96,12 +96,12 @@ from mcuhome.workbench.buildenvsession import (
     BASE_DIR_VAR,
     CCACHE_SUBDIR,
     ENTRY_POINT,
-    BuilderSession,
     BuildLimits,
     CacheTier,
     Launcher,
     Step,
     StepResult,
+    open_builder_session,
     resolve_cache_tiers,
     resolve_host_limits,
 )
@@ -1143,7 +1143,7 @@ def run_locked_build(
             max_bytes=sdk_max_bytes,
         ).tree
         launch = launcher(environment, env=env)
-    session = BuilderSession(
+    session = open_builder_session(
         root=work_root / "session",
         context_dir=context_dir,
         sdk_tree=sdk_tree,

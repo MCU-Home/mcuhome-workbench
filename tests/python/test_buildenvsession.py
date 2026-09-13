@@ -34,6 +34,7 @@ from mcuhome.workbench.buildenvsession import (
     BuilderSession,
     CacheTier,
     Step,
+    open_builder_session,
 )
 from mcuhome.workbench.buildprocess import Running, spawn_process
 
@@ -132,7 +133,11 @@ def make_session(tmp_path: Path, entry: Path, **kwargs) -> BuilderSession:
     kwargs.setdefault("launcher", launcher())
     kwargs.setdefault("context_id", "sha256:" + "a" * 64)
     kwargs.setdefault("entry_point", entry)
-    return BuilderSession(root=tmp_path / "session", context_dir=context, sdk_tree=sdk, **kwargs)
+    # Through the documented way in rather than the constructor: what a
+    # caller outside this package can build is what these tests drive.
+    return open_builder_session(
+        root=tmp_path / "session", context_dir=context, sdk_tree=sdk, **kwargs
+    )
 
 
 def recorded_request(session: BuilderSession, invocation_id: str) -> dict:
@@ -148,6 +153,46 @@ def recorded_environment(session: BuilderSession, invocation_id: str) -> dict[st
         if _:
             values[name] = value
     return values
+
+
+# --------------------------------------------------------------------------
+# The way in
+# --------------------------------------------------------------------------
+
+
+def test_a_session_is_opened_with_what_a_caller_has_and_nothing_else(tmp_path, environment) -> None:
+    """What ``open_builder_session`` asks for, and what it decides itself.
+
+    Four things a caller must state — where the session lives, the
+    context, the SDK tree that context pinned, and how a step is entered
+    — and everything else is this package's default. An entry point is
+    among the defaults on purpose: a profile whose delivery carries one
+    (an image does) states none, and linking over it would replace the
+    environment's own content.
+    """
+    context = tmp_path / "context"
+    context.mkdir()
+    sdk = tmp_path / "sdk"
+    sdk.mkdir()
+
+    session = open_builder_session(
+        root=tmp_path / "session",
+        context_dir=context,
+        sdk_tree=sdk,
+        launcher=launcher(),
+    )
+
+    assert session.entry_point is None
+    assert session.session_id, "a session names itself where nobody named it"
+    assert session.context_id == ""
+    assert session.tiers == {}
+    assert session.limits is None
+    assert session.should_stop is None
+    assert session.out_dir.is_dir() and list(session.out_dir.iterdir()) == []
+    # The two the reference states as numbers, pinned as numbers: an
+    # embedder reads them there and sizes its own timeouts by them.
+    assert (session.deadline_seconds, session.cancel_grace_seconds) == (5400, 0)
+    session.close()
 
 
 # --------------------------------------------------------------------------
