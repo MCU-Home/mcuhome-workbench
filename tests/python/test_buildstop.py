@@ -559,8 +559,14 @@ class FakeServer:
         #: stopped build sends and the one that used to wait out the
         #: whole call timeout on a peer that had stopped answering.
         self.close_takes: float = 0.0
-        #: When set, the socket dies instead of answering the verdict.
+        #: When set, the socket dies instead of answering the verdict —
+        #: what the reader does to every pending call when the
+        #: connection goes under it.
         self.drops_the_connection = False
+        #: The same, but as the stop goes out: the connection survives
+        #: until this side asks for the invocation to end, which is the
+        #: only order in which a dying socket is a *stopped* build.
+        self.drops_when_stopped = False
         self._finished: asyncio.Future | None = None
 
     def finished(self) -> asyncio.Future:
@@ -632,6 +638,13 @@ class FakeClient:
     async def cancel(self, invocation_id: str) -> dict[str, Any]:
         self.server.verbs.append("cancel")
         self.server.cancelled.append(invocation_id)
+        if self.server.drops_when_stopped and not self.server.finished().done():
+            self.server.finished().set_exception(
+                sessionclient.RemoteTransportError(
+                    "The connection to the build server failed.", hint=""
+                )
+            )
+            return {"status": "accepted"}
         await asyncio.sleep(self.server.cancel_takes)
         verdict = self.server.verdict_on_cancel
         if verdict is not None and not self.server.finished().done():
@@ -802,10 +815,13 @@ def test_a_connection_that_dies_while_stopping_is_a_stopped_build(tmp_path, monk
     """
     monkeypatch.setattr(sessionclient, "_STOP_POLL_SECONDS", 0.02)
     server = FakeServer().install(monkeypatch)
-    server.drops_the_connection = True
+    server.drops_when_stopped = True
 
-    result = _remote_build(tmp_path, server, should_stop=lambda: True)
+    # Stopped once the invocation runs, so the socket dies *after* the
+    # decision: before it, a lost connection is the only news there is.
+    result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
 
+    assert server.cancelled == [INVOCATION], "the stop went out before the socket died"
     assert result.status == sessionclient.STATUS_CANCELLED
     assert result.ok is False
 
