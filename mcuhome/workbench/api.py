@@ -251,6 +251,11 @@ from mcuhome.workbench.contextdir import (
     verify_context,
 )
 from mcuhome.workbench.devworkspace import WORKSPACE_LAYERS
+from mcuhome.workbench.diagnostics import (
+    SEVERITY_ERROR,
+    WARNING_KINDS,
+    Diagnostic,
+)
 from mcuhome.workbench.generate import (
     CompilerUnavailable,
     generate_application,
@@ -438,6 +443,7 @@ __all__ = [
     "DeveloperEnvironment",
     "DeviceModel",
     "DeviceOutline",
+    "Diagnostic",
     "ENVIRONMENT_IMAGE_REPOSITORY",
     "EndpointChoice",
     "EnvironmentPin",
@@ -542,6 +548,7 @@ __all__ = [
     "UpgradeResult",
     "UpgradeSession",
     "VERSION",
+    "WARNING_KINDS",
     "ValidationResult",
     "WORKSPACE_LAYERS",
     "WaitedTooLong",
@@ -634,7 +641,7 @@ def load_model(
     entry: Path,
     *,
     project: Project,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> DeviceModel:
     """Run stages 1-3 on one device configuration: load, validate, resolve.
 
@@ -643,7 +650,9 @@ def load_model(
     wire format of a remote build. Raises :class:`ConfigError` for a
     single problem and :class:`ConfigErrorGroup` when validation found
     several; :func:`validate_device` is the same work without the raise.
-    *on_warning* receives the non-fatal findings of the run — today the
+    *on_warning* receives the non-fatal findings of the run as
+    :class:`~mcuhome.workbench.diagnostics.Diagnostic` values — located,
+    so a client can show one where the problem is; today the
     secrets-file permission warning.
     """
     data = load_config(entry, secrets_file=project.secrets_file, on_warning=on_warning)
@@ -674,6 +683,12 @@ class ValidationResult:
     #: which are still user-facing messages and still serialize the same
     #: way.
     errors: tuple[MCUHomeError, ...]
+    #: Every non-fatal finding the run reported, in the order it
+    #: reported them. A warning does not make a configuration invalid —
+    #: :attr:`ok` says nothing about these — but it is part of the same
+    #: answer, and a caller that only listened to ``on_warning`` would
+    #: have to keep its own list to render one.
+    warnings: tuple[Diagnostic, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -682,6 +697,25 @@ class ValidationResult:
     def error_dicts(self) -> list[dict[str, Any]]:
         """The problems as dictionaries, with paths relative to the project."""
         return [error.to_dict(root=self.project.root) for error in self.errors]
+
+    def diagnostics(self) -> list[dict[str, Any]]:
+        """Errors and warnings as **one** list, each carrying its severity.
+
+        The list a client renders. Two lists would make every client
+        merge them itself — and the two are the same document apart from
+        the severity, so a merge is exactly what nobody should have to
+        write twice.
+
+        Order is the file order a person reads in: by file, line and
+        column, and findings without a place after the located ones,
+        each group in the order it was reported.
+        """
+        entries = [
+            {"severity": SEVERITY_ERROR, **error.to_dict(root=self.project.root)}
+            for error in self.errors
+        ]
+        entries += [warning.to_dict(root=self.project.root) for warning in self.warnings]
+        return sorted(entries, key=_in_file_order)
 
     def raise_errors(self) -> None:
         """Raise what :func:`validate_device` caught, for a caller that wants it.
@@ -701,9 +735,15 @@ class ValidationResult:
         return {
             "ok": self.ok,
             "file": _relative(self.entry, self.project.root),
-            "errors": self.error_dicts(),
+            "diagnostics": self.diagnostics(),
             "model": None if self.model is None else self.model.to_dict(),
         }
+
+
+def _in_file_order(finding: dict[str, Any]) -> tuple[bool, str, int, int]:
+    """Sort key for one finding document: where it is, unplaced last."""
+    file = finding["file"]
+    return (file is None, file or "", finding["line"] or 0, finding["column"] or 0)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -717,7 +757,7 @@ def validate_device(
     entry: Path,
     *,
     project: Project,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> ValidationResult:
     """Stages 1-3, reporting every problem instead of raising.
 
@@ -731,13 +771,33 @@ def validate_device(
     An error the builder raised *without* a location (a missing secrets
     file, say) is reported the same way, because to the person reading it
     the difference does not matter.
+
+    The non-fatal findings are collected as well, so the result carries
+    the whole answer: they reach *on_warning* while the run is happening
+    **and** stay in :attr:`ValidationResult.warnings` for a caller that
+    renders the result afterwards.
     """
+    findings: list[Diagnostic] = []
+
+    def collect(finding: Diagnostic) -> None:
+        findings.append(finding)
+        if on_warning is not None:
+            on_warning(finding)
+
     try:
-        model = load_model(entry, project=project, on_warning=on_warning)
+        model = load_model(entry, project=project, on_warning=collect)
     except ConfigErrorGroup as group:
         return ValidationResult(
-            entry=entry, project=project, model=None, errors=tuple(group.errors)
+            entry=entry,
+            project=project,
+            model=None,
+            errors=tuple(group.errors),
+            warnings=tuple(findings),
         )
     except MCUHomeError as error:
-        return ValidationResult(entry=entry, project=project, model=None, errors=(error,))
-    return ValidationResult(entry=entry, project=project, model=model, errors=())
+        return ValidationResult(
+            entry=entry, project=project, model=None, errors=(error,), warnings=tuple(findings)
+        )
+    return ValidationResult(
+        entry=entry, project=project, model=model, errors=(), warnings=tuple(findings)
+    )

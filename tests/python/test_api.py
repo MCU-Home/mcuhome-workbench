@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,8 +38,26 @@ EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 ERROR_FIELDS = {"message", "file", "line", "column", "key", "hint", "kind"}
 
 
+#: A configuration that reads one secret, so that loading it opens the
+#: project's secrets file — which is where the permission warning of
+#: :func:`_exposed_secret_project` comes from.
+CONFIG_WITH_A_SECRET = VALID_CONFIG.replace(
+    "  board:", "  friendly_name: !secret device_label\n  board:"
+)
+
+
 def _project(path: Path) -> api.Project:
     return api.Project(root=path.parent, discovered=False)
+
+
+def _exposed_secret_project(root: Path) -> api.Project:
+    """A project whose ``secrets/main.yaml`` everyone can read."""
+    (root / "devices" / "bench-node").mkdir(parents=True)
+    project = api.Project(root=root, discovered=True)
+    project.secrets_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    project.secrets_file.write_text("device_label: Bench Node\n", "utf-8")
+    project.secrets_file.chmod(0o644)
+    return project
 
 
 # --------------------------------------------------------------------------
@@ -384,10 +403,104 @@ def test_the_validation_result_serializes_whole(tmp_path) -> None:
     entry.write_text(VALID_CONFIG, "utf-8")
     result = api.validate_device(entry, project=api.Project(root=tmp_path, discovered=True))
     data = result.to_dict()
+    assert set(data) == {"ok", "file", "diagnostics", "model"}
+    assert list(data)[0] == "ok"
     assert data["ok"] is True
     assert data["file"] == "devices/bench-node/main.yaml"
-    assert data["errors"] == []
+    assert data["diagnostics"] == []
     assert data["model"]["device"]["name"] == "bench-node"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_the_validation_document_holds_errors_and_warnings_in_one_list(tmp_path) -> None:
+    """One list, two severities — a client renders it with one code path.
+
+    The whole reason the key is ``diagnostics`` and not ``errors``: a
+    warning that arrives beside the errors can be shown where it belongs,
+    and nobody has to merge two lists to get the picture.
+    """
+    project = _exposed_secret_project(tmp_path)
+    entry = tmp_path / "devices" / "bench-node" / "main.yaml"
+    entry.write_text(CONFIG_WITH_A_SECRET.replace("baro.temp", "no.such"), "utf-8")
+
+    data = api.validate_device(entry, project=project).to_dict()
+
+    assert data["ok"] is False
+    severities = {finding["severity"] for finding in data["diagnostics"]}
+    assert severities == {"error", "warning"}
+    for finding in data["diagnostics"]:
+        assert set(finding) == {"severity", *ERROR_FIELDS}
+    warning = next(f for f in data["diagnostics"] if f["severity"] == "warning")
+    assert warning["kind"] == "exposed_secret_file"
+    assert warning["file"] == "secrets/main.yaml"  # relative to the project, like an error
+    assert json.dumps(data)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_a_warning_reaches_the_callback_and_stays_in_the_result(tmp_path) -> None:
+    """Both halves of the answer: while it happens, and afterwards.
+
+    A caller that only listened would have to keep its own list to render
+    the result later, and a caller that only reads the result could not
+    say anything while the run is going.
+    """
+    project = _exposed_secret_project(tmp_path)
+    entry = tmp_path / "devices" / "bench-node" / "main.yaml"
+    entry.write_text(CONFIG_WITH_A_SECRET, "utf-8")
+
+    heard: list[api.Diagnostic] = []
+    result = api.validate_device(entry, project=project, on_warning=heard.append)
+
+    assert result.ok  # a warning is not a rejection
+    assert len(heard) == 1
+    assert result.warnings == tuple(heard)
+    finding = heard[0]
+    assert finding.kind in api.WARNING_KINDS
+    assert finding.location.file == project.secrets_file
+    assert result.errors == ()
+    assert result.error_dicts() == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_load_model_reports_the_same_finding(tmp_path) -> None:
+    """The raising entry point has the same warning channel."""
+    project = _exposed_secret_project(tmp_path)
+    entry = tmp_path / "devices" / "bench-node" / "main.yaml"
+    entry.write_text(CONFIG_WITH_A_SECRET, "utf-8")
+
+    heard: list[api.Diagnostic] = []
+    api.load_model(entry, project=project, on_warning=heard.append)
+
+    assert [finding.kind for finding in heard] == ["exposed_secret_file"]
+
+
+def test_the_findings_are_in_file_order(tmp_path) -> None:
+    """Located findings by file, line and column; the unplaced ones last."""
+    project = api.Project(root=tmp_path, discovered=True)
+    result = api.ValidationResult(
+        entry=tmp_path / "devices" / "bench-node" / "main.yaml",
+        project=project,
+        model=None,
+        errors=(
+            ConfigError("late", location=Location(file=tmp_path / "b.yaml", line=2, column=1)),
+            BuildError("nowhere in particular"),
+            ConfigError("early", location=Location(file=tmp_path / "b.yaml", line=1, column=1)),
+        ),
+        warnings=(
+            api.Diagnostic.warning(
+                "first file",
+                kind="exposed_secret_file",
+                location=Location(file=tmp_path / "a.yaml"),
+            ),
+        ),
+    )
+
+    assert [finding["message"] for finding in result.diagnostics()] == [
+        "first file",
+        "early",
+        "late",
+        "nowhere in particular",
+    ]
 
 
 # --------------------------------------------------------------------------

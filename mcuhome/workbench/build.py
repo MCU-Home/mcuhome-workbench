@@ -132,6 +132,7 @@ from mcuhome.workbench.contextdir import (
     read_context_request,
     read_generator_chain,
 )
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import (
@@ -895,6 +896,23 @@ def _work_root(request: BuildRequest, name: str) -> Path:
     return Path(request.work_root) if request.work_root else Path(request.out_dir) / name
 
 
+def _into_the_log(on_line: LineSink | None) -> Callable[[Diagnostic], None] | None:
+    """A warning channel that writes into the build log.
+
+    A build has no second stream for findings: what it learns while it
+    runs belongs where the person watching it is looking. The message is
+    what goes in — the rest of the finding is for a client that renders
+    documents, and the log is text.
+    """
+    if on_line is None:
+        return None
+
+    def report(finding: Diagnostic) -> None:
+        on_line(finding.message)
+
+    return report
+
+
 def _package_registry(
     model: DeviceModel,
     *,
@@ -934,7 +952,7 @@ def _package_registry(
         project_root=Path(project_root),
         settings=tuple(registries),
         into=Path(work_root) / "registry",
-        on_warning=on_line,
+        on_warning=_into_the_log(on_line),
     )
 
 
@@ -962,7 +980,7 @@ def _package_hosts(
         project_root=Path(project_root),
         settings=tuple(registries),
         into=Path(work_root) / "registry",
-        on_warning=on_line,
+        on_warning=_into_the_log(on_line),
     )
 
 

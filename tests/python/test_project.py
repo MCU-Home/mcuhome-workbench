@@ -22,6 +22,7 @@ from conftest import FIXTURE_TREE
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench.configuration import option
+from mcuhome.workbench.diagnostics import WARNING_KINDS, Diagnostic
 from mcuhome.workbench.project import (
     GITIGNORE_LINES,
     PROJECT_MARKER_FILE,
@@ -323,22 +324,34 @@ def test_an_owner_only_secrets_file_draws_no_warning(tmp_path: Path) -> None:
     path = tmp_path / "main.yaml"
     path.write_text("a: 1\n", encoding="utf-8")
     path.chmod(0o600)
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     require_secret_file(path, key_material=False, on_warning=warnings.append)
     assert warnings == []
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
 def test_an_exposed_secrets_file_draws_a_warning_with_the_fix(tmp_path: Path) -> None:
+    """The finding says what is wrong, where, and what to type.
+
+    A located document rather than a line of text: a client shows it
+    next to the file it is about, and switches on the kind rather than
+    on the wording of the message.
+    """
     path = tmp_path / "main.yaml"
     path.write_text("a: 1\n", encoding="utf-8")
     path.chmod(0o644)
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     require_secret_file(path, key_material=False, on_warning=warnings.append)
     assert len(warnings) == 1
-    assert "readable by other users" in warnings[0]
-    assert "mode 644" in warnings[0]
-    assert f"chmod 600 {path}" in warnings[0]
+    finding = warnings[0]
+    assert finding.severity == "warning"
+    assert finding.kind == "exposed_secret_file"
+    assert finding.kind in WARNING_KINDS
+    assert finding.location.file == path
+    assert "readable by other users" in finding.message
+    assert "mode 644" in finding.message
+    assert f"chmod 600 {path}" in (finding.hint or "")
+    assert finding.to_dict()["file"] == str(path)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")

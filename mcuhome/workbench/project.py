@@ -69,6 +69,7 @@ from typing import TYPE_CHECKING
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import expand
 
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
@@ -412,13 +413,16 @@ def require_secret_file(
     path: Path,
     *,
     key_material: bool,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> None:
     """The permission guard every reader of a secrets file runs.
 
     ``secrets/`` files are created mode 600, and this is the other half
     of that promise: a file that group or world can reach draws a
-    warning through *on_warning*, and when it holds **key material** —
+    warning through *on_warning* — an ``exposed_secret_file``
+    :class:`~mcuhome.workbench.diagnostics.Diagnostic` naming the file,
+    so a client can show it where the file is — and when it holds
+    **key material** —
     signing keys, future Matter/attestation keys — the read is refused
     outright, because a warning about a leaked private key is a
     notification, not a protection.
@@ -437,10 +441,6 @@ def require_secret_file(
     exposed = mode & _EXPOSED_BITS
     if not exposed:
         return
-    problem = (
-        f"{path} is readable by other users (mode {mode:03o}, expected 600). "
-        f"Fix it with: chmod 600 {path}"
-    )
     if key_material:
         raise ConfigError(
             f"MCUHome refuses to use the key material in {path}: "
@@ -453,7 +453,14 @@ def require_secret_file(
             ),
         )
     if on_warning is not None:
-        on_warning(problem)
+        on_warning(
+            Diagnostic.warning(
+                f"{path} is readable by other users (mode {mode:03o}, expected 600).",
+                kind="exposed_secret_file",
+                location=Location(file=path),
+                hint=f"restrict it to its owner:\n    chmod 600 {path}",
+            )
+        )
 
 
 def _mkdir_private(directory: Path) -> None:

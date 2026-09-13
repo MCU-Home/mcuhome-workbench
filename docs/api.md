@@ -460,9 +460,12 @@ Frozen dataclass. Fields `entry`, `project`, `model: DeviceModel | None`,
 `errors: tuple[MCUHomeError, ...]`, `warnings: tuple[Diagnostic, ...]`.
 Property `ok` (true exactly when `model` is not `None` — a warning does
 not make a configuration invalid). Methods `error_dicts()`,
-`diagnostics()` (errors and warnings as one list, in file order),
-`raise_errors()` — the bridge back to the raising style — and
-`to_dict()`.
+`diagnostics()` — errors and warnings as **one** list of finding
+documents, each with its `severity`, ordered by file, line and column
+with the unplaced ones last — `raise_errors()`, the bridge back to the
+raising style, and `to_dict()`. The findings reach *on_warning* while
+the run happens and stay in `warnings` for a caller that renders the
+result afterwards.
 
 ## Configuration
 One declared option registry, and the layers over it. Ascending — later
@@ -1218,6 +1221,29 @@ with file paths relative to *root* where one is given.
 
 `Location` (frozen, re-exported): `file`, `line`, `column`, `key`.
 
+### Findings
+A problem that did not stop the work is a `Diagnostic` rather than an
+exception: the same document, one field more.
+
+`Diagnostic` (frozen): `severity` (`error` or `warning`), `message`,
+`kind`, `location: Location`, `hint`; property `key` (the location's, so
+the dotted key is not stored twice), classmethod `warning(message, *,
+kind, location=None, hint=None)`, and `to_dict(*, root=None)` — the same
+*root* `MCUHomeError.to_dict` takes, so errors and warnings of one run
+render with one set of relative paths.
+
+A warning's `kind` is one of `WARNING_KINDS`; an error's is the
+exception's class name. The set is append-only, and a client that does
+not know a value still has the message:
+
+| `kind` | Reported when |
+|---|---|
+| `exposed_secret_file` | a secrets file is readable by other users; the read went ahead, because only key material is refused outright |
+| `unverified_registry` | a package registry is being read without checking any signature, because the project configured it as untrusted |
+
+Every function that can report one takes `on_warning`; a result that can
+carry findings answers them in its `diagnostics` list.
+
 ## Constants
 | Name | Value / meaning |
 |---|---|
@@ -1238,6 +1264,7 @@ with file paths relative to *root* where one is given.
 | `SIGNING_KEY_FILE` / `PUBLIC_KEY_FILE` | `key.pem` / `key.pub` |
 | `CONFIG_SCOPES` | `("system", "user", "project")` |
 | `CONFIG_ORIGINS` | `("default", "program", "system", "user", "project", "environment", "arguments")` — ascending; `program` is a value an embedding program states for a shared key |
+| `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry")` — the kinds a warning's `kind` may carry, append-only |
 | `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
 | `OPTIONS` | the declared option registry |
 | `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET` | where a build runs |
@@ -1665,7 +1692,7 @@ this package is public.
 `UPGRADE_MARKER_FILE`, `PROJECT_CONFIG_FILE`, `CONFIG_FILE`,
 `DEVICES_DIR`, `DEVICE_FILE`, `BUILD_DIR`, `BUILD_LOCK_FILE`,
 `BUILD_REPORT_FILE`, `SIGNING_KEY_FILE`, `PUBLIC_KEY_FILE`,
-`CONFIG_SCOPES`, `CONFIG_ORIGINS`, `OPTION_KINDS`, `OPTIONS`,
+`CONFIG_SCOPES`, `CONFIG_ORIGINS`, `WARNING_KINDS`, `OPTION_KINDS`, `OPTIONS`,
 `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET`,
 `BUILD_MODES`, `MODE_CONTAINER`, `MODE_SUBPROCESS`, `DEFAULT_BUILD_MODE`,
 `LOCK_OPERATIONS`, `SECRET_KINDS`, `BUILD_STEPS`, `STEP_STATUSES`,

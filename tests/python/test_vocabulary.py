@@ -10,7 +10,10 @@ because a client cannot tell that it has.
 
 from __future__ import annotations
 
+import ast
 import inspect
+
+from conftest import package_modules
 
 from mcuhome.workbench import sessionclient
 from mcuhome.workbench.buildenvsession import (
@@ -21,6 +24,7 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.buildenvstore import EXTRACTION_BOUNDS
 from mcuhome.workbench.configuration import CONFIG_ORIGINS, OPTIONS, resolve_settings
+from mcuhome.workbench.diagnostics import WARNING_KINDS
 from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE, PACKAGE_KINDS
 
 
@@ -58,3 +62,48 @@ def test_every_session_verb_is_one_this_client_speaks() -> None:
     assert len(set(sessionclient.SESSION_VERBS)) == 11
     for verb in sessionclient.SESSION_VERBS:
         assert f'"{verb}"' in source, verb
+
+
+def _reported_warning_kinds() -> set[str]:
+    """The *kind* every ``Diagnostic.warning`` call in the package states.
+
+    Read out of the syntax rather than by running the package: a warning
+    is reported from a branch a test has to arrange for, and the kinds
+    are a published set whether or not today's suite reaches every one
+    of those branches.
+    """
+    found: set[str] = set()
+    for path in package_modules():
+        for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            if not isinstance(callee, ast.Attribute) or callee.attr != "warning":
+                continue
+            if not isinstance(callee.value, ast.Name) or callee.value.id != "Diagnostic":
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "kind" and isinstance(keyword.value, ast.Constant):
+                    found.add(str(keyword.value.value))
+    return found
+
+
+def test_every_warning_kind_is_one_this_package_reports() -> None:
+    """The published set, against the warnings that are actually written.
+
+    Both directions: a kind nothing reports is a promise to a client that
+    nothing keeps, and a kind reported without being published would
+    arrive at a client that cannot look it up. The second direction is
+    refused at runtime as well — ``Diagnostic.warning`` checks the value
+    — but a literal in a rarely taken branch would only be caught the day
+    that branch runs.
+    """
+    assert _reported_warning_kinds() == set(WARNING_KINDS)
+
+
+def test_the_warning_kinds_are_spelled_the_way_the_scheme_says() -> None:
+    """Lowercase with underscores, and no duplicates."""
+    assert len(set(WARNING_KINDS)) == len(WARNING_KINDS)
+    for kind in WARNING_KINDS:
+        assert kind == kind.lower()
+        assert kind.replace("_", "").isalnum()

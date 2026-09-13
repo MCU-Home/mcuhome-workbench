@@ -14,6 +14,7 @@ from mcuhome.workbench.configuration import (
     resolve_builder,
     resolve_settings,
 )
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.project import Project, create_project
 
 
@@ -366,11 +367,14 @@ def test_an_exposed_credentials_file_draws_a_warning(project: Project) -> None:
     write_project(project, REMOTE_ATTIC + "build:\n  builder: attic\n")
     file = write_token(project, "attic", "token: s3cret\n")
     file.chmod(0o644)
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     settings = resolve_settings(project=project, env={})
     selected = resolve_builder(settings, project=project, env={}, on_warning=warnings.append)
     assert selected.token == "s3cret"  # a warning, not a refusal — it is not key material
-    assert len(warnings) == 1 and "readable by other users" in warnings[0]
+    assert len(warnings) == 1
+    assert warnings[0].kind == "exposed_secret_file"
+    assert warnings[0].location.file == file
+    assert "readable by other users" in warnings[0].message
 
 
 def test_a_local_builders_token_is_never_looked_up(project: Project) -> None:

@@ -104,6 +104,7 @@ from mcuhome.workbench.buildtarget import (
     DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
 )
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.loader import FileRef, editing_yaml, read_yaml_file
 from mcuhome.workbench.project import BUILDER_SECRETS_DIR, Project, require_secret_file
 
@@ -1044,7 +1045,7 @@ def resolve_builder(
     name: str | None = None,
     project: Project | None,
     env: Mapping[str, str],
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> SelectedBuilder:
     """Which builder this invocation uses, credentials included.
 
@@ -1078,7 +1079,7 @@ def _builder_token(
     *,
     project: Project | None,
     env: Mapping[str, str],
-    on_warning: Callable[[str], None] | None,
+    on_warning: Callable[[Diagnostic], None] | None,
 ) -> str | None:
     relative = Path(BUILDER_SECRETS_DIR) / f"{name}.yaml"
     candidates: list[Path] = []

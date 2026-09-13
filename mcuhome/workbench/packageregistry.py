@@ -83,6 +83,7 @@ from mcuhome.packagetool.verify import (
 )
 from packaging.version import InvalidVersion, Version
 
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.project import SECRETS_DIR, ensure_secrets_dir, require_secret_file
 
 __all__ = [
@@ -272,7 +273,7 @@ def trust_anchor_for(
     *,
     untrusted: bool = False,
     stated: Path | None = None,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> Path | None:
     """The project's trust anchor for *base_domain*, or a refusal.
 
@@ -996,7 +997,7 @@ class PackageRegistry:
         mirrors: Mapping[str, Sequence[str]] | None = None,
         untrusted: bool = False,
         opener: Callable[[str, float], IO[bytes]] | None = None,
-        on_warning: Callable[[str], None] | None = None,
+        on_warning: Callable[[Diagnostic], None] | None = None,
         now: datetime | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
@@ -1241,7 +1242,20 @@ class PackageRegistry:
         if self._warn is None:
             _LOG.warning(message)
         else:
-            self._warn(message)
+            self._warn(
+                Diagnostic.warning(
+                    message,
+                    kind="unverified_registry",
+                    location=Location(key=f"registry.{self.base_domain}.untrusted"),
+                    hint=(
+                        f"nothing below this is checked while the setting stands. "
+                        f"Drop `untrusted: true` under registry.{self.base_domain} "
+                        f"in the configuration file that sets it, and put the key "
+                        f"set the registry's operator publishes in "
+                        f"secrets/trust-anchor/ instead."
+                    ),
+                )
+            )
 
     # -- the bytes -----------------------------------------------------
 
@@ -1348,7 +1362,7 @@ def registry_for(
     settings: Sequence[RegistrySettings] = (),
     into: Path,
     opener: Callable[[str, float], IO[bytes]] | None = None,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
     now: datetime | None = None,
 ) -> PackageRegistry:
     """A registry ready to read *base_domain*, from a project and its settings.
@@ -1392,7 +1406,7 @@ def open_package_registry(
     settings: Sequence[RegistrySettings] = (),
     into: Path,
     opener: Callable[[str, float], IO[bytes]] | None = None,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
     now: datetime | None = None,
 ) -> RegistrySource:
     """:func:`registry_for`, deferred until something actually needs it.
@@ -1434,7 +1448,7 @@ def registry_opener(
     settings: Sequence[RegistrySettings] = (),
     into: Path,
     opener: Callable[[str, float], IO[bytes]] | None = None,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
     now: datetime | None = None,
 ) -> Callable[[str], PackageRegistry]:
     """:func:`registry_for` for whichever base domain is asked for, once each.

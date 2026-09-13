@@ -44,6 +44,7 @@ from mcuhome.packagetool.source import (
 )
 
 from mcuhome.workbench import packagefetch, packageregistry
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.packageregistry import (
     PackageRegistry,
     PackageRegistryError,
@@ -701,7 +702,7 @@ def test_an_untrusted_source_is_read_and_says_so_loudly(
     tmp_path: Path, source: Path, keys: dict[str, SigningKey]
 ) -> None:
     """Every guarantee traded away, and nobody gets to not notice."""
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     # Even a source signed by keys nothing trusts is read.
     served = bootstrap(Served().publish(MIRROR, source))
     client = PackageRegistry(
@@ -714,7 +715,7 @@ def test_an_untrusted_source_is_read_and_says_so_loudly(
         now=NOW,
     )
     assert not client.index(SOURCE).verified
-    assert any("NOTHING IS VERIFIED" in warning for warning in warnings)
+    assert any("NOTHING IS VERIFIED" in warning.message for warning in warnings)
 
 
 def test_an_untrusted_registry_may_serve_a_source_with_no_signatures_at_all(
@@ -726,7 +727,7 @@ def test_an_untrusted_registry_may_serve_a_source_with_no_signatures_at_all(
     signatures, nothing to check — is readable exactly when the project
     has said in writing that it accepts one, and never otherwise.
     """
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     served = bootstrap(Served())
     served.put(
         MIRROR + INDEX_FILE,
@@ -746,7 +747,7 @@ def test_an_untrusted_registry_may_serve_a_source_with_no_signatures_at_all(
     index = client.index(SOURCE)
     assert not index.verified
     assert index.versions(SDK) == (VERSION,)
-    assert any("NOTHING IS VERIFIED" in warning for warning in warnings)
+    assert any("NOTHING IS VERIFIED" in warning.message for warning in warnings)
 
 
 def test_a_source_with_no_signatures_is_refused_when_the_registry_is_trusted(
@@ -813,7 +814,7 @@ def test_an_anchor_beside_untrusted_is_ignored_and_said_so(
     path = anchor_file(root, packageregistry.OFFICIAL_BASE_DOMAIN)
     path.write_bytes(dump(anchor_document(keys, ("root-a", "root-b", "root-c"))))
 
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     served = Served().publish(MIRROR, source)
     client = registry_for(
         packageregistry.OFFICIAL_BASE_DOMAIN,
@@ -832,12 +833,12 @@ def test_an_anchor_beside_untrusted_is_ignored_and_said_so(
     )
     assert client.untrusted
     assert not client.index(SOURCE).verified
-    assert any("deliberately ignored" in warning for warning in warnings)
+    assert any("deliberately ignored" in warning.message for warning in warnings)
 
 
 def test_an_untrusted_registry_says_so_at_every_read(tmp_path: Path, source: Path) -> None:
     """Once at the top of a build would be a footnote; this is not one."""
-    warnings: list[str] = []
+    warnings: list[Diagnostic] = []
     client = PackageRegistry(
         DOMAIN,
         anchor=None,
@@ -852,6 +853,8 @@ def test_an_untrusted_registry_says_so_at_every_read(tmp_path: Path, source: Pat
     client.index(SOURCE)
     client.fetch_package(index, index.resolve(SDK, VERSION), into=tmp_path / "packages")
     assert len(warnings) == 3
+    assert {warning.kind for warning in warnings} == {"unverified_registry"}
+    assert all(warning.key == f"registry.{DOMAIN}.untrusted" for warning in warnings)
 
 
 # --------------------------------------------------------------------------

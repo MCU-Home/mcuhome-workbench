@@ -43,6 +43,7 @@ from typing import Any
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML, YAMLError
 
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.project import DEVICES_DIR, require_secret_file
 
 __all__ = [
@@ -242,7 +243,7 @@ def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
 def _read_secret_file(
     secrets_file: Path,
     ref: SecretRef,
-    on_warning: Callable[[str], None] | None,
+    on_warning: Callable[[Diagnostic], None] | None,
 ) -> dict[str, Any]:
     require_secret_file(secrets_file, key_material=False, on_warning=on_warning)
     data = read_yaml_file(secrets_file)
@@ -263,7 +264,7 @@ def _load_secrets(
     ref: SecretRef,
     file: Path,
     key: str | None,
-    on_warning: Callable[[str], None] | None,
+    on_warning: Callable[[Diagnostic], None] | None,
 ) -> dict[str, Any]:
     """Every secret this configuration may name, device values winning.
 
@@ -292,7 +293,7 @@ def resolve_secrets(
     *,
     file: Path,
     secrets_file: Path,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> Any:
     """Replace every :class:`SecretRef` in *data* with its value.
 
@@ -343,7 +344,7 @@ def load_config(
     entry: Path,
     *,
     secrets_file: Path,
-    on_warning: Callable[[str], None] | None = None,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> Any:
     """Stage 1: parse *entry* and resolve its secrets."""
     data = read_yaml_file(entry)
