@@ -1196,9 +1196,8 @@ what could be established without one.
 `HostCheckResult` carries `findings` and the verdict `ok`, which is true
 when every finding is; `HostFinding(check, ok, detail, hint)` is one
 thing examined, with the fix where there is one. `check` is one of
-`HOST_CHECKS` — `container_runtime`, `container_image`, `env_store`,
-`python`, `dev_workspace`, `signing_imgtool`, `cache_root` — each named
-after the option or the thing it examined. Both have `to_dict()`.
+`HOST_CHECKS` — `runtime`, `image`, `store`, `python`, `workspace`,
+`imgtool`, `cache` — one word each, naming the thing that was examined. Both have `to_dict()`.
 
 *imgtool* is the resolved `signing.imgtool`, taken for the same reason
 `plan_signing` takes it: nothing under this surface reads a
@@ -1350,7 +1349,7 @@ carry findings answers them in its `diagnostics` list.
 | `CONFIG_SCOPES` | `("system", "user", "project")` |
 | `CONFIG_ORIGINS` | `("default", "program", "system", "user", "project", "environment", "arguments")` — ascending; `program` is a value an embedding program states for a shared key |
 | `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
-| `HOST_CHECKS` | `("container_runtime", "container_image", "env_store", "python", "dev_workspace", "signing_imgtool", "cache_root")` — what a `HostFinding.check` may be, append-only |
+| `HOST_CHECKS` | `("runtime", "image", "store", "python", "workspace", "imgtool", "cache")` — what a `HostFinding.check` may be, append-only |
 | `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry")` — the kinds a warning's `kind` may carry, append-only |
 | `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
 | `OPTIONS` | the declared option registry |
@@ -1584,7 +1583,7 @@ and the warnings, each with its severity, so a client renders one list:
 {
   "ok": false,
   "findings": [
-    {"ok": false, "check": "container_runtime",
+    {"ok": false, "check": "runtime",
      "detail": "MCUHome compiles in a container and cannot find docker on your PATH.",
      "hint": "install Docker…"}
   ]

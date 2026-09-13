@@ -180,7 +180,7 @@ def _reference_host_checks() -> tuple[set[str], set[str]]:
     """
     text = REFERENCE.read_text("utf-8")
     section = text.split("\n## Checking a build host\n", 1)[1].split("\n## ", 1)[0]
-    listed = section.split("`check` is one of", 1)[1].split("— each named", 1)[0]
+    listed = section.split("`check` is one of", 1)[1].split("— one word each", 1)[0]
     row = next(line for line in text.split("\n") if line.startswith("| `HOST_CHECKS` |"))
     return set(re.findall(r"`([a-z_]+)`", listed)), set(re.findall(r'"([a-z_]+)"', row))
 
@@ -198,11 +198,16 @@ def test_the_reference_lists_every_host_check() -> None:
 
 
 def test_the_host_checks_are_spelled_the_way_the_scheme_says() -> None:
-    """Lowercase with underscores, no duplicates."""
+    """One lowercase word each, and no duplicates.
+
+    A member of a fixed value set is a single word: the set says what it
+    is a set of, so a member repeating that is a name carrying the same
+    thing twice — `runtime`, not `container_runtime`, inside `check`.
+    """
     assert len(set(HOST_CHECKS)) == len(HOST_CHECKS)
     for check in HOST_CHECKS:
         assert check == check.lower()
-        assert check.replace("_", "").isalnum()
+        assert check.isalpha(), f"{check} is not one word"
 
 
 def test_the_severities_are_the_two_a_finding_can_carry() -> None:

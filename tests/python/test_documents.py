@@ -158,7 +158,7 @@ SAMPLES: dict[str, Callable[[], Any]] = {
     ),
     "HostCheckResult": lambda: api.HostCheckResult(findings=(SAMPLES["HostFinding"](),)),
     "HostFinding": lambda: api.HostFinding(
-        check="container_runtime",
+        check="runtime",
         ok=False,
         detail="MCUHome compiles in a container and cannot find docker on your PATH.",
         hint="install Docker…",

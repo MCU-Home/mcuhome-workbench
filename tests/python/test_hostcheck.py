@@ -125,12 +125,7 @@ def test_the_container_mode_examines_the_runtime_and_the_image_search(tmp_path: 
     """What a container build needs, and only that."""
     result = check_build_host(options=_options(mode="container"), env=_env(tmp_path))
 
-    assert _checks(result) == [
-        "container_runtime",
-        "container_image",
-        "signing_imgtool",
-        "cache_root",
-    ]
+    assert _checks(result) == ["runtime", "image", "imgtool", "cache"]
     assert result.ok
     assert RecordingRuntime.made[0].argvs, "the runtime was never asked anything"
     assert RecordingRegistry.made[0].asked == ["ghcr.io/mcu-home/build-environment"]
@@ -144,7 +139,7 @@ def test_the_subprocess_mode_asks_a_container_runtime_nothing(tmp_path: Path) ->
     """
     result = check_build_host(options=_options(mode="subprocess"), env=_env(tmp_path))
 
-    assert _checks(result) == ["env_store", "python", "signing_imgtool", "cache_root"]
+    assert _checks(result) == ["store", "python", "imgtool", "cache"]
     assert RecordingRuntime.made == []
     assert RecordingRegistry.made == []
 
@@ -168,9 +163,9 @@ def test_a_development_workspace_replaces_the_store_and_the_interpreter(
         options=_options(mode="subprocess", dev_workspace=workspace), env=_env(tmp_path)
     )
 
-    assert _checks(result) == ["dev_workspace", "python", "signing_imgtool", "cache_root"]
+    assert _checks(result) == ["workspace", "python", "imgtool", "cache"]
     assert result.ok
-    assert str(workspace) in _finding(result, "dev_workspace").detail
+    assert str(workspace) in _finding(result, "workspace").detail
 
 
 def test_every_check_it_reports_is_one_the_surface_publishes(tmp_path: Path) -> None:
@@ -208,7 +203,7 @@ def test_a_runtime_that_is_not_there_is_a_finding_in_the_build_s_own_words(
         patch.setattr(hostcheck, "ContainerRuntime", absent)
         result = check_build_host(options=_options(mode="container"), env=_env(tmp_path))
 
-    finding = _finding(result, "container_runtime")
+    finding = _finding(result, "runtime")
     assert not finding.ok
     assert not result.ok
     assert "docker" in finding.detail
@@ -226,11 +221,11 @@ def test_a_host_without_a_home_directory_is_answered_rather_than_refused(
     result = check_build_host(options=_options(mode="subprocess"), env={"PATH": ""})
 
     assert not result.ok
-    assert not _finding(result, "env_store").ok
-    assert "HOME" in _finding(result, "env_store").detail
+    assert not _finding(result, "store").ok
+    assert "HOME" in _finding(result, "store").detail
     # A machine with nowhere to put a cache builds without one, which is
     # slow and not broken.
-    assert _finding(result, "cache_root").ok
+    assert _finding(result, "cache").ok
 
 
 # --------------------------------------------------------------------------
@@ -250,7 +245,7 @@ def test_a_repository_that_cannot_be_asked_is_named_with_its_reason(
 
     result = check_build_host(options=_options(mode="container"), env=_env(tmp_path))
 
-    finding = _finding(result, "container_image")
+    finding = _finding(result, "image")
     assert not finding.ok
     assert finding.detail.startswith("ghcr.io/mcu-home/build-environment could not be asked (")
     assert "no route" in finding.detail
@@ -283,7 +278,7 @@ def test_one_repository_answering_is_enough(
         env=_env(tmp_path),
     )
 
-    finding = _finding(result, "container_image")
+    finding = _finding(result, "image")
     assert finding.ok
     assert "registry.example/mirror publishes 2 image(s)" in finding.detail
     assert "could not be asked" in finding.detail, "the miss is still named"
@@ -295,7 +290,7 @@ def test_a_machine_allowed_no_repository_at_all_is_told_so(tmp_path: Path) -> No
         options=_options(mode="container", container_repositories=()), env=_env(tmp_path)
     )
 
-    finding = _finding(result, "container_image")
+    finding = _finding(result, "image")
     assert not finding.ok
     assert "build.container_repositories" in finding.hint
     assert RecordingRegistry.made == [], "nothing was asked, because nothing may be"
@@ -315,7 +310,7 @@ def test_a_store_that_cannot_be_created_is_not_ok(tmp_path: Path) -> None:
         options=_options(mode="subprocess", env_store=blocked / "store"), env=_env(tmp_path)
     )
 
-    finding = _finding(result, "env_store")
+    finding = _finding(result, "store")
     assert not finding.ok
     assert str(blocked) in finding.detail
     assert "build.env_store" in finding.hint
@@ -335,8 +330,8 @@ def test_the_store_says_how_many_environments_are_in_it(tmp_path: Path) -> None:
         options=_options(mode="subprocess", env_store=store), env=_env(tmp_path)
     )
 
-    assert _finding(result, "env_store").ok
-    assert "1 build environment(s) provisioned" in _finding(result, "env_store").detail
+    assert _finding(result, "store").ok
+    assert "1 build environment(s) provisioned" in _finding(result, "store").detail
 
 
 def test_an_interpreter_without_venv_says_which_package_is_missing(
@@ -395,7 +390,7 @@ def test_the_signing_tool_is_the_one_the_caller_resolved(
     )
 
     assert asked == ["/opt/imgtool"]
-    finding = _finding(result, "signing_imgtool")
+    finding = _finding(result, "imgtool")
     assert not finding.ok
     assert "signing.imgtool" in finding.hint
 
@@ -406,7 +401,7 @@ def test_a_host_with_nowhere_to_cache_is_still_a_host_that_builds(
     """No cache is slow, not broken — so the finding is ok and says why."""
     result = check_build_host(options=_options(mode="container"), env={"PATH": ""})
 
-    finding = _finding(result, "cache_root")
+    finding = _finding(result, "cache")
     assert finding.ok
     assert "compiles from scratch" in finding.detail
     assert "build.cache_root" in finding.hint
@@ -420,7 +415,7 @@ def test_a_cache_root_that_cannot_be_written_is_not_ok(tmp_path: Path) -> None:
         options=_options(mode="container", cache_root=blocked / "cache"), env=_env(tmp_path)
     )
 
-    finding = _finding(result, "cache_root")
+    finding = _finding(result, "cache")
     assert not finding.ok
     assert "build.cache_root" in finding.hint
 
@@ -437,7 +432,7 @@ def test_the_verdict_cannot_disagree_with_the_findings() -> None:
     assert not HostCheckResult(
         findings=(
             HostFinding(check="python", ok=True, detail="here"),
-            HostFinding(check="cache_root", ok=False, detail="no"),
+            HostFinding(check="cache", ok=False, detail="no"),
         )
     ).ok
 
@@ -454,7 +449,7 @@ def test_a_path_inside_the_project_is_reported_relative_to_it(tmp_path: Path) ->
         project=project,
     )
 
-    assert _finding(result, "env_store").detail.startswith(".mcuhome-store")
+    assert _finding(result, "store").detail.startswith(".mcuhome-store")
 
 
 def test_a_signing_tool_that_cannot_even_be_resolved_is_a_finding(
@@ -474,7 +469,7 @@ def test_a_signing_tool_that_cannot_even_be_resolved_is_a_finding(
         options=_options(mode="container"), env={"PATH": ""}, imgtool="~/bin/imgtool"
     )
 
-    finding = _finding(result, "signing_imgtool")
+    finding = _finding(result, "imgtool")
     assert not finding.ok
     assert "HOME" in finding.detail
     assert "set HOME" in finding.hint

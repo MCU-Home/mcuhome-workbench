@@ -67,13 +67,13 @@ __all__ = [
 #: finding's own words do. Append-only, and each name is the option or
 #: the thing that was examined.
 HOST_CHECKS = (
-    "container_runtime",
-    "container_image",
-    "env_store",
+    "runtime",
+    "image",
+    "store",
     "python",
-    "dev_workspace",
-    "signing_imgtool",
-    "cache_root",
+    "workspace",
+    "imgtool",
+    "cache",
 )
 
 #: What the interpreter is asked, in one line: the version that decides
@@ -185,8 +185,8 @@ def _container_runtime(options: BuildOptions, env: Mapping[str, str]) -> HostFin
     try:
         require_container_runtime(ContainerRuntime(program), env=env)
     except MCUHomeError as refusal:
-        return _refused("container_runtime", refusal)
-    return HostFinding(check="container_runtime", ok=True, detail=f"{program} answers")
+        return _refused("runtime", refusal)
+    return HostFinding(check="runtime", ok=True, detail=f"{program} answers")
 
 
 def _container_image(options: BuildOptions) -> HostFinding:
@@ -201,7 +201,7 @@ def _container_image(options: BuildOptions) -> HostFinding:
     repositories = tuple(options.container_repositories)
     if not repositories:
         return HostFinding(
-            check="container_image",
+            check="image",
             ok=False,
             detail="no container repository is allowed to deliver a build environment",
             hint=(
@@ -224,7 +224,7 @@ def _container_image(options: BuildOptions) -> HostFinding:
         answered.append(f"{repository} publishes {len(tags)} image(s)")
     if not answered:
         return HostFinding(
-            check="container_image",
+            check="image",
             ok=False,
             detail="; ".join(unreachable),
             hint=(
@@ -234,7 +234,7 @@ def _container_image(options: BuildOptions) -> HostFinding:
             ),
         )
     return HostFinding(
-        check="container_image",
+        check="image",
         ok=True,
         detail="; ".join([*answered, *unreachable]),
     )
@@ -252,12 +252,12 @@ def _env_store(
     try:
         root = buildenvstore.store_root(dict(env), override=options.env_store)
     except MCUHomeError as refusal:
-        return _refused("env_store", refusal)
+        return _refused("store", refusal)
     shown = _shown(root, project)
     writable, obstacle = _writable(root)
     if not writable:
         return HostFinding(
-            check="env_store",
+            check="store",
             ok=False,
             detail=f"{shown} cannot be written ({obstacle})",
             hint=(
@@ -267,7 +267,7 @@ def _env_store(
             ),
         )
     return HostFinding(
-        check="env_store",
+        check="store",
         ok=True,
         detail=f"{shown} ({_entry_count(root)} build environment(s) provisioned)",
     )
@@ -385,9 +385,9 @@ def _dev_workspace(workspace: Path, *, project: Project | None) -> HostFinding:
     try:
         checkout = devworkspace.manifest_checkout(workspace)
     except MCUHomeError as refusal:
-        return _refused("dev_workspace", refusal)
+        return _refused("workspace", refusal)
     return HostFinding(
-        check="dev_workspace",
+        check="workspace",
         ok=True,
         detail=f"{shown} is a west workspace; the SDK is {_shown(checkout, project)}",
     )
@@ -409,10 +409,10 @@ def _signing_imgtool(env: Mapping[str, str], stated: str | None) -> HostFinding:
     try:
         program = find_imgtool(env=dict(env), stated=stated)
     except MCUHomeError as refusal:
-        return _refused("signing_imgtool", refusal)
+        return _refused("imgtool", refusal)
     if program is None:
         return HostFinding(
-            check="signing_imgtool",
+            check="imgtool",
             ok=False,
             detail="imgtool is not available here",
             hint=(
@@ -422,7 +422,7 @@ def _signing_imgtool(env: Mapping[str, str], stated: str | None) -> HostFinding:
                 "or set signing.imgtool to the one you have"
             ),
         )
-    return HostFinding(check="signing_imgtool", ok=True, detail=" ".join(program))
+    return HostFinding(check="imgtool", ok=True, detail=" ".join(program))
 
 
 def _cache_root(
@@ -432,7 +432,7 @@ def _cache_root(
     root = resolve_cache_root(options=options, env=dict(env))
     if root is None:
         return HostFinding(
-            check="cache_root",
+            check="cache",
             ok=True,
             detail="no compiler cache on this host; every build compiles from scratch",
             hint="set build.cache_root to give this machine one",
@@ -441,7 +441,7 @@ def _cache_root(
     shown = _shown(root, project)
     if not writable:
         return HostFinding(
-            check="cache_root",
+            check="cache",
             ok=False,
             detail=f"{shown} cannot be written ({obstacle})",
             hint=(
@@ -449,7 +449,7 @@ def _cache_root(
                 "writable, or set build.cache_root to somewhere this account owns"
             ),
         )
-    return HostFinding(check="cache_root", ok=True, detail=str(shown))
+    return HostFinding(check="cache", ok=True, detail=str(shown))
 
 
 # --------------------------------------------------------------------------
