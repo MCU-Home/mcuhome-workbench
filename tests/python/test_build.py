@@ -2245,3 +2245,44 @@ def test_a_build_carries_the_devices_patches_into_the_context_it_creates(
     )
 
     assert (tmp_path / "work" / "context" / "patches" / "zephyr" / "0001-fix-uart.patch").is_file()
+
+
+def test_a_container_build_creates_its_context_with_the_same_two_answers(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The other execution asks the context writer the same question.
+
+    A container build resolves its image from what the context pinned, so
+    it creates that context through the same call — and a patch folder
+    that reached a subprocess build and not this one would mean one
+    device is built from different sources depending on how this machine
+    happens to compile. Recorded at the seam and then stopped, because
+    this suite has no container runtime to drive the rest through.
+    """
+
+    class Reached(Exception):
+        """Raised where the composition would go on to the environment."""
+
+    def stop(path):
+        raise Reached
+
+    asked: dict[str, object] = {}
+    monkeypatch.setattr(
+        build, "_create_context", lambda device_model, **kwargs: asked.update(kwargs)
+    )
+    monkeypatch.setattr(build, "read_context_facts", lambda directory: {})
+    monkeypatch.setattr(build, "read_context_request", stop)
+
+    with pytest.raises(Reached):
+        build.compose_container_build(
+            model,
+            sdk_sources=(tmp_path / "sdk",),
+            work_root=tmp_path / "work",
+            env={},
+            signing_pub=_PUBLIC_PEM,
+            project_root=tmp_path / "project",
+            patches_dir=tmp_path / "elsewhere",
+        )
+
+    assert asked["patches_dir"] == tmp_path / "elsewhere"
+    assert asked["project_root"] == tmp_path / "project"
