@@ -668,6 +668,29 @@ class BuildRequest:
     #: started and may never start, and a step bar claiming otherwise
     #: would be showing progress that does not exist.
     on_wait: Callable[[Any], None] | None = None
+    #: Asked while the build runs: ``True`` means stop it. The one seam
+    #: on this surface that decides control flow, because cancelling the
+    #: task awaiting :func:`build_firmware` cancels nothing — the work is
+    #: in a worker thread and a container does not care what a loop does.
+    #:
+    #: A stopped build ends the way a build that ran out of time ends:
+    #: the build environment is signalled and then killed, a container is
+    #: removed, the build directory is released, :attr:`BuildResult.out_dir`
+    #: keeps whatever had been written, and the answer is
+    #: :attr:`BuildResult.ok` false with :attr:`BuildResult.stopped`
+    #: true. At the remote target the build server is told — the session
+    #: protocol's ``cancel`` — and a server that stays silent is taken as
+    #: stopped once the ladder's bound has passed
+    #: (:func:`~mcuhome.workbench.buildprocess.resolve_shutdown_seconds`).
+    #:
+    #: **Where it is asked**: while the build environment runs, on the
+    #: supervisor's half-second tick, and at the remote target while the
+    #: build waits for a turn. What comes before that — creating the
+    #: context, fetching an environment — runs to its end; those are
+    #: bounded by what they fetch rather than by a caller's patience, and
+    #: a build stopped halfway through them would leave a half-written
+    #: environment behind that the next build would have to distrust.
+    should_stop: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -775,6 +798,48 @@ _UNSUPPORTED_HINTS = {
         "    mcuhome device build <device> --build-target local"
     ),
 }
+
+
+class _StopSwitch:
+    """The caller's stop predicate, and whether it ever said yes.
+
+    A build that ended has to say **which** kind of no it was, and the
+    only side that can say is the one that was asked: a failed compile
+    and a build somebody stopped look identical from the artifacts, and
+    a client that renders them the same way tells a person their
+    firmware is broken when they pressed the stop button.
+
+    **Latched**, so that the answer cannot change after the fact: a
+    predicate reading a flag somebody else clears would otherwise leave
+    a build that was stopped calling itself failed. Once it has said
+    stop, this says stop — a build is not un-stopped.
+
+    A caller that supplied nothing is the switch that is never on and is
+    never asked.
+    """
+
+    def __init__(self, predicate: Callable[[], bool] | None) -> None:
+        self._predicate = predicate
+        self.stopped = False
+
+    def __call__(self) -> bool:
+        if self.stopped:
+            return True
+        if self._predicate is None:
+            return False
+        self.stopped = bool(self._predicate())
+        return self.stopped
+
+    @property
+    def armed(self) -> Callable[[], bool] | None:
+        """This switch where there is a predicate behind it, else ``None``.
+
+        Handed down instead of the caller's own predicate, so that the
+        composition asks *through* the latch; ``None`` where there is
+        nothing to ask, so that nothing below has to tell an idle
+        predicate from a missing one.
+        """
+        return None if self._predicate is None else self
 
 
 def _refuse_unsupported(status: str, *, ran: str) -> None:
@@ -1139,6 +1204,14 @@ async def build_firmware(
     of them writes into the same directory and the collision does not
     care which two were running — nor whether the other one is a command
     line or a dashboard.
+
+    **Stopping is** :attr:`BuildRequest.should_stop` **and not task
+    cancellation**: the work of a local build happens in a worker thread
+    and a remote one happens on somebody else's machine, so cancelling
+    whatever awaits this coroutine leaves both of them running. A build
+    the predicate ended comes back with :attr:`BuildResult.ok` false and
+    :attr:`BuildResult.stopped` true, having released the build
+    directory on the way out like every other answer here.
     """
     if not isinstance(target, BuildTarget):
         target = build_target_for(target, request)
@@ -1179,6 +1252,7 @@ def compose_local_build(
     environment: Any = None,
     options: BuildOptions | None = None,
     stated_container_image: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ):
     """The local build, dispatched to the execution this machine uses.
 
@@ -1212,6 +1286,7 @@ def compose_local_build(
             registry=registry,
             options=options,
             stated_container_image=stated_container_image,
+            should_stop=should_stop,
         )
     return compose_container_build(
         model,
@@ -1231,6 +1306,7 @@ def compose_local_build(
         registry=registry,
         images=images,
         options=options,
+        should_stop=should_stop,
     )
 
 
@@ -1253,6 +1329,7 @@ def compose_container_build(
     registry: Any = None,
     images: Any = None,
     options: BuildOptions | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> containerbuild.ContainerBuildResult:
     """The container execution's composition: create, resolve, lock, drive.
 
@@ -1285,6 +1362,10 @@ def compose_container_build(
     replace: the container runtime, the package registry the pins are
     resolved and fetched through (``None`` derives it from the project),
     and the container registry the image labels are read from.
+
+    *should_stop* is handed to the profile, which asks it while the step
+    runs; the two steps before it — creating the context and resolving
+    the environment — run to their end.
     """
     options = options if options is not None else BuildOptions()
     limits = options.limits()
@@ -1401,6 +1482,7 @@ def compose_container_build(
         registry=packages,
         runtime=runtime,
         on_line=on_line,
+        should_stop=should_stop,
     )
 
 
@@ -1422,6 +1504,7 @@ def compose_subprocess_build(
     registry: Any = None,
     options: BuildOptions | None = None,
     stated_container_image: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> subprocessbuild.SubprocessBuildResult:
     """The subprocess execution's composition: environment, lock, drive.
 
@@ -1478,6 +1561,10 @@ def compose_subprocess_build(
     and the context writer does it with the other ``sources`` entries:
     nothing there is fetched at all — so the note is not printed there,
     because the refusal that follows says the opposite of it.
+
+    *should_stop* is handed to the profile, which asks it while the step
+    runs; the two steps before it — creating the context and provisioning
+    the environment — run to their end.
     """
     options = options if options is not None else BuildOptions()
     limits = options.limits()
@@ -1610,6 +1697,7 @@ def compose_subprocess_build(
         ),
         registry=packages,
         on_line=on_line,
+        should_stop=should_stop,
     )
 
 
@@ -1638,6 +1726,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
     drives a child process and blocks until it ends.
     """
     options = options_for(request)
+    stop = _StopSwitch(request.should_stop)
     result = await asyncio.to_thread(
         compose_local_build,
         request.model,
@@ -1655,6 +1744,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         environment=_developer_environment(execution),
         options=options,
         stated_container_image=execution.stated_container_image,
+        should_stop=stop.armed,
     )
     outcome = result.outcome
     _refuse_unsupported(outcome.status, ran=MODE_SUBPROCESS)
@@ -1670,6 +1760,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         # environment is named by its packages, which travel on the
         # composition's own result.
         container_image="",
+        stopped=stop.stopped,
         detail=result,
     )
 
@@ -1683,6 +1774,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
     replaced ``compose_local_build`` is the one that runs.
     """
     options = options_for(request)
+    stop = _StopSwitch(request.should_stop)
     result = await asyncio.to_thread(
         compose_local_build,
         request.model,
@@ -1698,6 +1790,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         on_line=request.on_line,
         on_step=request.on_step,
         options=options,
+        should_stop=stop.armed,
     )
     outcome = result.outcome
     _refuse_unsupported(outcome.status, ran=MODE_CONTAINER)
@@ -1710,6 +1803,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         out_dir=result.out_dir,
         report=BUILD_REPORT_FILE,
         container_image=result.container_image,
+        stopped=stop.stopped,
         detail=result,
     )
 
@@ -1877,6 +1971,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
 
     if request.on_step is not None:
         request.on_step("compile", server=target.server)
+    stop = _StopSwitch(request.should_stop)
     result = await sessionclient.run_remote_build(
         context_dir,
         url=url,
@@ -1887,6 +1982,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         on_wait=request.on_wait,
         wait=target.wait,
         max_wait=target.max_wait_seconds,
+        should_stop=stop.armed,
     )
     _refuse_unsupported(result.status, ran=TARGET_REMOTE)
     return BuildResult(
@@ -1902,5 +1998,11 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         # side that can say which one, so a record without this would
         # name the packages and not the bytes.
         container_image=result.container_image,
+        # Either side may have ended it: this one asked, or the server
+        # cancelled the invocation for a reason of its own — an operator,
+        # a session that was taken away. Both are a build that was
+        # stopped rather than one that failed, and the verdict is the
+        # server's own word for it.
+        stopped=stop.stopped or result.status == sessionclient.STATUS_CANCELLED,
         detail=result,
     )

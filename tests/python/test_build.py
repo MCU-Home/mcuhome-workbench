@@ -196,6 +196,7 @@ def test_the_request_carries_the_fields_the_reference_states(model, tmp_path) ->
         "on_line",
         "on_step",
         "on_wait",
+        "should_stop",
     ]
 
 
