@@ -56,10 +56,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # Result and document contracts: the two `create_*` answers that are
-    # renamed with their `to_dict()`.
-    "NewPairing": "result documents",
-    "NewProject": "result documents",
     # Signing, the build report and OTA: a read that no longer writes a
     # key, signing that answers a result, the project's key file names.
     "PUBLIC_KEY_FILE": "signing",

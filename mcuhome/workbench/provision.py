@@ -52,7 +52,7 @@ from mcuhome.workbench.loader import device_secrets_file, read_yaml_file
 from mcuhome.workbench.project import Project
 from mcuhome.workbench.validate import PAIRING_KEYS
 
-__all__ = ["CREDENTIAL_COMMENT", "PairingResult", "create_pairing", "secret_names"]
+__all__ = ["CREDENTIAL_COMMENT", "NewPairing", "create_pairing", "secret_names"]
 
 #: Written above the credentials, and recognized again when ``--force``
 #: replaces them so that repeated runs do not stack up comment blocks.
@@ -71,7 +71,7 @@ _KNOWN_COMMENT_LINES = frozenset(CREDENTIAL_COMMENT) | {
 
 
 @dataclass(frozen=True)
-class PairingResult:
+class NewPairing:
     """What ``matter-pairing --new`` wrote, and where."""
 
     entry: Path
@@ -80,6 +80,33 @@ class PairingResult:
     pairing: pairing.Pairing
     #: True when credentials were already there and ``--force`` replaced them.
     replaced: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready, every declared key present.
+
+        This is the one document of this package that carries a secret,
+        and it does so deliberately: the credentials were drawn by *this*
+        call, at the caller's explicit request, and the two codes a
+        person types into a controller are derived from them. A client
+        that had to recompute them would be assembling a document out of
+        fields it read off an object, which is what these documents
+        exist to prevent. Nothing else ever answers them — reading a
+        device's configuration masks the codes.
+        """
+        return {
+            "entry": str(self.entry),
+            "secrets_file": str(self.secrets_file),
+            "pairing": {
+                "discriminator": self.pairing.discriminator,
+                "passcode": self.pairing.passcode,
+                "salt": self.pairing.salt,
+                "iterations": self.pairing.iterations,
+                "test_credentials": self.pairing.test_credentials,
+                "manual_code": self.pairing.manual_code,
+                "qr_payload": self.pairing.qr_payload,
+            },
+            "replaced": self.replaced,
+        }
 
 
 def secret_names() -> dict[str, str]:
@@ -262,7 +289,7 @@ def create_pairing(
     project: Project,
     force: bool = False,
     draw: Callable[[], pairing.Pairing] = pairing.random_pairing,
-) -> PairingResult:
+) -> NewPairing:
     """Write fresh commissioning credentials for the configuration *entry*.
 
     The values go to the device's own secrets file beside the project's
@@ -309,7 +336,7 @@ def create_pairing(
     text.lines[after_line:after_line] = _credential_lines(anchor, names)
     entry.write_text(text.render(), encoding="utf-8")
 
-    return PairingResult(
+    return NewPairing(
         entry=entry,
         secrets_file=device_file,
         pairing=credentials,

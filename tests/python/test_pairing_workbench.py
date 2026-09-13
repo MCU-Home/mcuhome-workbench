@@ -50,7 +50,7 @@ def _project(path: Path) -> Project:
     return Project(root=path.parent, discovered=False)
 
 
-def _init(path: Path, **kwargs) -> provision.PairingResult:
+def _init(path: Path, **kwargs) -> provision.NewPairing:
     return provision.create_pairing(path, project=_project(path), draw=lambda: FIXED, **kwargs)
 
 

@@ -301,6 +301,7 @@ from mcuhome.workbench.project import (
     PROJECT_CONFIG_FILE,
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
+    NewProject,
     Project,
     create_project,
     find_project_root,
@@ -329,7 +330,7 @@ from mcuhome.workbench.projectupgrade import (
     find_running_builds,
     open_upgrade_session,
 )
-from mcuhome.workbench.provision import create_pairing
+from mcuhome.workbench.provision import NewPairing, create_pairing
 from mcuhome.workbench.resolve import resolve
 from mcuhome.workbench.resolve_image import (
     ContainerImageMatch,
@@ -476,6 +477,8 @@ __all__ = [
     "Migration",
     "MigrationFailed",
     "NewDevice",
+    "NewPairing",
+    "NewProject",
     "OFFICIAL_BASE_DOMAIN",
     "OPTIONS",
     "OPTION_KINDS",

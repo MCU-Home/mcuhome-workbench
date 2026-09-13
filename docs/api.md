@@ -1524,6 +1524,18 @@ container_image}` — `origin` is the layer that defined the entry and
 — the token is a secret and is in no document.
 `RegistrySettings.to_dict()`: `{base_domain, untrusted, anchor, mirrors}`.
 `Artifact.to_dict()`: `{root, path, role, sha256}`.
+`Project.to_dict()`: `{root, id, discovered, version}` — `version` is the
+layout version the project's file states, `null` for the stand-in
+project a device file outside any project gets.
+`NewProject.to_dict()`: `{project, created}` — every path the call
+created or changed, in creation order.
+`NewPairing.to_dict()`: `{entry, secrets_file, pairing, replaced}`, with
+`pairing` carrying `{discriminator, passcode, salt, iterations,
+test_credentials, manual_code, qr_payload}`. This is the one document
+here that carries a secret: the credentials were drawn by this call at
+the caller's explicit request, and the two codes a person types into a
+controller are derived from them — a client that recomputed them would
+be assembling a document itself. Nothing else answers them.
 
 On-disk records this package writes and reads:
 - project marker (TOML): `version`, `id`, and `[upgrade]` with `started`,

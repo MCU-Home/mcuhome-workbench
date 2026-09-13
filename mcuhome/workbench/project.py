@@ -64,7 +64,7 @@ import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import expand
@@ -95,7 +95,7 @@ __all__ = [
     "PROJECT_MARKER_FILE",
     "PROJECT_VERSION",
     "SECRETS_DIR",
-    "InitResult",
+    "NewProject",
     "Project",
     "create_project",
     "find_project_root",
@@ -192,6 +192,23 @@ class Project:
             for entry in self.devices_dir.iterdir()
             if entry.is_dir() and (entry / DEVICE_FILE).is_file()
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """The project as a document, for the results that carry one.
+
+        Four facts and no derived paths: where it is, which project it
+        is, whether a marker was actually found, and which layout
+        version its file states. Everything else a client could want is
+        computed from *root* by the same rules this class uses, and a
+        document that listed them would go stale the day one of them
+        moves.
+        """
+        return {
+            "root": str(self.root),
+            "id": self.id,
+            "discovered": self.discovered,
+            "version": None if self.file is None else self.file.version,
+        }
 
 
 def is_project_root(path: Path) -> bool:
@@ -491,7 +508,7 @@ def ensure_secrets_dir(project_root: Path, *parts: str) -> Path:
 
 
 @dataclass(frozen=True)
-class InitResult:
+class NewProject:
     """What ``mcuhome project init`` created."""
 
     project: Project
@@ -499,8 +516,21 @@ class InitResult:
     #: the command reports, so a user sees exactly what appeared.
     created: tuple[Path, ...]
 
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready, every declared key present.
 
-def create_project(root: Path, *, force: bool = False) -> InitResult:
+        The paths are absolute, as they were written: what this answers
+        is where things are on the machine that ran the call, and a
+        client that shows them relative to something knows what to make
+        them relative to.
+        """
+        return {
+            "project": self.project.to_dict(),
+            "created": [str(path) for path in self.created],
+        }
+
+
+def create_project(root: Path, *, force: bool = False) -> NewProject:
     """Create the durable part of a project in *root*.
 
     The marker, ``mcuhome.yaml``, ``devices/``, ``secrets/`` (mode 700),
@@ -604,7 +634,7 @@ def create_project(root: Path, *, force: bool = False) -> InitResult:
         gitignore.write_text("\n".join(GITIGNORE_LINES) + "\n", encoding="utf-8")
         created.append(gitignore)
 
-    return InitResult(
+    return NewProject(
         project=Project(root=root, discovered=True, file=read_project_file(marker, root=root)),
         created=tuple(created),
     )
