@@ -61,7 +61,6 @@ from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import (
-    create_build_context,
     read_context_manifest,
     read_context_request,
 )
@@ -519,13 +518,15 @@ def test_a_subprocess_build_of_a_context_it_was_given_needs_no_image(
             return "mcuhome-build-workspace 0.1.0"
 
     make_package_source(tmp_path / "sdk")
-    create_build_context(
+    build.create_context(
         model,
         out_dir=tmp_path / "context",
         work_root=tmp_path / "made",
-        sdk_sources=(tmp_path / "sdk",),
-        workspace_sources=(tmp_path / "sdk",),
-        tools_sources=(tmp_path / "sdk",),
+        options=build.BuildOptions(
+            sdk_sources=(tmp_path / "sdk",),
+            workspace_sources=(tmp_path / "sdk",),
+            tools_sources=(tmp_path / "sdk",),
+        ),
         signing_pub=_PUBLIC_PEM,
     )
     steps: list[tuple] = []
@@ -593,13 +594,15 @@ def test_the_environment_is_checked_before_the_context_is_locked(
             return "mcuhome-build-workspace 0.1.0"
 
     make_package_source(tmp_path / "sdk")
-    create_build_context(
+    build.create_context(
         model,
         out_dir=tmp_path / "context",
         work_root=tmp_path / "made",
-        sdk_sources=(tmp_path / "sdk",),
-        workspace_sources=(tmp_path / "sdk",),
-        tools_sources=(tmp_path / "sdk",),
+        options=build.BuildOptions(
+            sdk_sources=(tmp_path / "sdk",),
+            workspace_sources=(tmp_path / "sdk",),
+            tools_sources=(tmp_path / "sdk",),
+        ),
         signing_pub=_PUBLIC_PEM,
     )
     build.compose_subprocess_build(
@@ -1315,13 +1318,12 @@ def test_a_development_build_writes_a_context_that_names_no_environment(model, t
     it. No index is read and no archive is fetched to write it, which is
     why no source directory is given here.
     """
-    create_build_context(
+    build.create_context(
         model,
         out_dir=tmp_path / "context",
         work_root=tmp_path / "made",
-        sdk_sources=(),
+        options=build.BuildOptions(dev_workspace=tmp_path / "west-workspace"),
         signing_pub=_PUBLIC_PEM,
-        developer=True,
     )
     written = (tmp_path / "context" / "context.yaml").read_text(encoding="utf-8")
     assert "build_environment: developer" in written
@@ -1379,13 +1381,15 @@ def test_a_pinned_context_is_not_built_against_a_workspace(model, tmp_path, monk
     """
     context = tmp_path / "context"
     make_package_source(tmp_path / "sdk")
-    create_build_context(
+    build.create_context(
         model,
         out_dir=context,
         work_root=tmp_path / "made",
-        sdk_sources=(tmp_path / "sdk",),
-        workspace_sources=(tmp_path / "sdk",),
-        tools_sources=(tmp_path / "sdk",),
+        options=build.BuildOptions(
+            sdk_sources=(tmp_path / "sdk",),
+            workspace_sources=(tmp_path / "sdk",),
+            tools_sources=(tmp_path / "sdk",),
+        ),
         signing_pub=_PUBLIC_PEM,
     )
     workspace = west_workspace(tmp_path / "west-workspace")
@@ -1429,13 +1433,12 @@ def test_a_device_that_pins_a_package_is_refused_in_a_development_build(
     """
     pinned = replace(model, sources=replace(model.sources, **{key: reference}))
     with pytest.raises(BuildError, match=f"sources.{key}") as refused:
-        create_build_context(
+        build.create_context(
             pinned,
             out_dir=tmp_path / "context",
             work_root=tmp_path / "made",
-            sdk_sources=(),
+            options=build.BuildOptions(dev_workspace=tmp_path / "west-workspace"),
             signing_pub=_PUBLIC_PEM,
-            developer=True,
         )
     assert "build.dev_workspace" in refused.value.hint
     assert not (tmp_path / "context").exists()
@@ -1449,13 +1452,12 @@ def test_a_development_context_is_not_sent_to_a_build_server(model, tmp_path) ->
     it after a gigabyte had crossed the network.
     """
     context = tmp_path / "context"
-    create_build_context(
+    build.create_context(
         model,
         out_dir=context,
         work_root=tmp_path / "made",
-        sdk_sources=(),
+        options=build.BuildOptions(dev_workspace=tmp_path / "west-workspace"),
         signing_pub=_PUBLIC_PEM,
-        developer=True,
     )
     with pytest.raises(build.RemoteNotConfigured, match="development build") as refused:
         asyncio.run(
@@ -1476,13 +1478,15 @@ def test_a_package_pinned_context_is_sent_as_before(model, tmp_path, monkeypatch
     """The other side of that refusal: an ordinary context still travels."""
     context = tmp_path / "context"
     make_package_source(tmp_path / "sdk")
-    create_build_context(
+    build.create_context(
         model,
         out_dir=context,
         work_root=tmp_path / "made",
-        sdk_sources=(tmp_path / "sdk",),
-        workspace_sources=(tmp_path / "sdk",),
-        tools_sources=(tmp_path / "sdk",),
+        options=build.BuildOptions(
+            sdk_sources=(tmp_path / "sdk",),
+            workspace_sources=(tmp_path / "sdk",),
+            tools_sources=(tmp_path / "sdk",),
+        ),
         signing_pub=_PUBLIC_PEM,
     )
     # Reached: the refusal is about the form of the context and about

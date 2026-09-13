@@ -1,17 +1,23 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The build context on disk: creating one, reading it back, verifying it.
+"""The build context on disk: writing one, reading it back, verifying it.
 
 The other half of :mod:`mcuhome.model.context`. That module is the context
 *format* — the manifest as data, and the normative ID rule every party
 computes the same value with. This one is everything that touches a
-filesystem: creating a base context (writing the generator declaration
-``build-context.json``, the request ``context.yaml``, the model, the
-public signing key and the patches), locking it (hashing
+filesystem: writing a base context (``write_context`` — the generator
+declaration ``build-context.json``, the request ``context.yaml``, the
+model, the public signing key and the patches), locking it (hashing
 what is in it and writing the result ``manifest.yaml``), reading either
 document back, and the server-side integrity check. The two documents are
 the ``lock-context`` split: the client writes the request, the locking
 party writes the result.
+
+The pins a context states arrive here **already resolved**. Deciding them
+is :func:`mcuhome.workbench.build.create_context`, which is the public act
+of creating a context and lives with the build layer because it needs what
+that layer owns: this machine's build options and the package registries a
+build resolves through. Nothing in this module opens a registry.
 
 The two live in different packages, and the ID rule is the reason. A
 build server recomputes a context ID from bytes it received off a socket
@@ -27,13 +33,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from mcuhome.model.buildenvironment import DEFAULT_BUILD_TOOLS, DEFAULT_BUILD_WORKSPACE
 from mcuhome.model.context import (
     BACKEND_DIR,
     BUILD_CONTEXT_FILE,
@@ -59,12 +63,9 @@ from mcuhome.model.context import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.model import DeviceModel
-from mcuhome.model.sdkindex import DEFAULT_SDK
 from ruamel.yaml import YAML, YAMLError
 
 from mcuhome.workbench import __version__
-from mcuhome.workbench.packageregistry import PackageRegistry, RegistrySource
-from mcuhome.workbench.resolve_pins import resolve_environment, resolve_sdk, sdk_constraint
 from mcuhome.workbench.signing import is_p256_public_key
 
 __all__ = [
@@ -73,7 +74,6 @@ __all__ = [
     "ContextFormatVersionError",
     "ContextVerification",
     "FileMismatch",
-    "create_build_context",
     "generator_chain",
     "lock_context",
     "read_context_facts",
@@ -337,195 +337,6 @@ def write_context(
     )
     write_context_request(request, out_dir=out_dir)
     return request
-
-
-def create_build_context(
-    model: DeviceModel,
-    *,
-    out_dir: Path,
-    work_root: Path,
-    sdk_sources: Sequence[Path],
-    signing_pub: str,
-    workspace_sources: Sequence[Path] = (),
-    tools_sources: Sequence[Path] = (),
-    sdk_max_bytes: int | None = None,
-    created: datetime | None = None,
-    constraint: str | None = None,
-    registry: RegistrySource | None = None,
-    hosts: Callable[[str], PackageRegistry] | None = None,
-    platform: str | None = None,
-    developer: bool = False,
-    on_line: Callable[[str], None] | None = None,
-) -> ContextRequest:
-    """Resolve every pin and write a fresh base context at *out_dir*.
-
-    The seam **every** build creates a context through. They
-    differ in everything after this point — one starts a container and
-    locks the context itself, one sends the directory to a build server
-    that locks it, one runs an entry point from a store — and in what a
-    context *is* they do not differ at all: the resolved pins, the
-    canonical model, the public signing key, the patches. Two callers
-    assembling that by hand is two places for the pins and the layout to
-    drift apart, under an identity that claims they cannot have.
-
-    **Every pin is resolved here, and each one follows the last.** The
-    SDK constraint resolves to one release; that release's own meta file
-    states which range of build workspaces it was built and tested with,
-    the newest published one inside that range wins, and its meta file
-    states the range of build tools
-    (:func:`~mcuhome.workbench.resolve_pins.resolve_environment`). A
-    device that says nothing therefore gets an SDK and an environment
-    that were declared to belong together, and one that pins either
-    (``sources.build_workspace``, ``sources.build_tools``) overrides that
-    package alone — outside the declared range too, with a note on
-    *on_line* rather than a refusal.
-
-    *work_root* is a directory this function may use as scratch; the SDK
-    package is unpacked there to read its meta file out of bytes that
-    were verified against the pin — under *sdk_max_bytes*, the operator's
-    bound on that unpacking, which is the store's own default when nobody
-    moved it.
-
-    *hosts* opens a registry for a base domain other than the SDK's, for
-    a device that points one package at another package host; *registry*
-    is the client for the SDK's own.
-
-    *workspace_sources* and *tools_sources* are the operator directories
-    the two environment packages are looked up in, and *sdk_sources* the
-    SDK's. **One kind, one set of directories**: no kind is ever looked
-    for under another's, so empty means there is no operator directory
-    for that package and it is resolved through the registry. A machine
-    that keeps the gigabyte-sized environment packages somewhere else
-    names that place; one that keeps all three together names it three
-    times, which is the statement it is actually making.
-
-    *out_dir* is **removed if it exists**, because :func:`write_context`
-    requires an empty directory and a build's context directory is
-    its own scratch area, rebuilt every run. Callers pass a path they own
-    (``<work root>/context``), never a directory a user named.
-
-    *created* defaults to now. It is the one field two creations of the
-    same inputs may differ in and it is outside the identity, so a caller
-    that wants byte-identical output states it.
-
-    *constraint* left unstated is not "any version": it is what the
-    device itself says, through
-    :func:`~mcuhome.workbench.resolve_pins.sdk_constraint` over its
-    ``sources.sdk`` reference — the version it named, or the SDK minor
-    this workbench was released alongside when it named none. A device is
-    therefore neither frozen onto whatever was current the day it was
-    created nor carried forward onto an SDK this workbench has never
-    seen. That function decides the pre-release rule with it, because the
-    two are one decision: the default names MCUHome's own line, whose
-    releases are all pre-releases today, while a version the device
-    states is held to the ordinary rule. *registry* is the second tier
-    the resolution may fall through to; without one, only the operator's
-    directories are searched.
-
-    The two never-hashed fields of the pin — the intent and the location
-    hint — are rendered by :class:`~mcuhome.workbench.resolve_pins.SdkResolution`
-    rather than here, and both are legitimately empty for a locally
-    resolved package: an empty ``mcuhome.constraint`` is PEP 440's own
-    any-version specifier, and a ``file://`` hint would carry this
-    machine's filesystem layout into a document uploaded to a build
-    server. The server accepts both empty; absence, not emptiness, is
-    what a reader refuses as malformed.
-    """
-    if developer:
-        # Nothing to resolve and nothing to fetch: this build compiles a
-        # checkout, and the format says so in the one way it can — the
-        # word, and the empty SDK hash that travels with it. Refusing an
-        # override here rather than ignoring it, because `sources.sdk`
-        # names a package to fetch and there is no package in this build.
-        # Every `sources.*` entry names a package to fetch, and a
-        # development build fetches nothing: the SDK is the workspace's
-        # manifest repository and the environment is the workspace and
-        # the person's own PATH. Honouring one would fetch a package
-        # nothing then builds; ignoring it would build something other
-        # than what the device says.
-        if model.sources.container_image:
-            # Not a package, and refused for the same reason: a
-            # development build starts no container, so the image the
-            # device pins would name nothing this build uses. A pin that
-            # is quietly dropped is worse than one that is refused —
-            # the firmware would look exactly like the pinned build.
-            raise BuildError(
-                f"This device states sources.container_image: "
-                f'"{model.sources.container_image}", and this build compiles a '
-                f"workspace you maintain.",
-                hint=(
-                    "a development build runs on this machine with your own tools "
-                    "and starts no container, so no image can name it — remove "
-                    "sources.container_image from the device, or unset "
-                    "build.dev_workspace to build in the environment it pins"
-                ),
-            )
-        for key, stated, default in (
-            ("sdk", model.sources.sdk, DEFAULT_SDK),
-            ("build_workspace", model.sources.build_workspace, DEFAULT_BUILD_WORKSPACE),
-            ("build_tools", model.sources.build_tools, DEFAULT_BUILD_TOOLS),
-        ):
-            if stated != default:
-                raise BuildError(
-                    f'This device states sources.{key}: "{stated}", and this build '
-                    f"compiles a workspace you maintain.",
-                    hint=(
-                        "a development build compiles that workspace and the SDK "
-                        "checkout in it, and no package reference can name either — "
-                        f"remove sources.{key} from the device, or unset "
-                        "build.dev_workspace to build against the packages it names"
-                    ),
-                )
-        out_dir = Path(out_dir)
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.parent.mkdir(parents=True, exist_ok=True)
-        return write_context(
-            model,
-            out_dir=out_dir,
-            build_environment=DeveloperEnvironment(),
-            sdk=SdkPin(constraint="", version="", url="", sha256=""),
-            signing_pub=signing_pub,
-            created=created or datetime.now(UTC),
-        )
-    prereleases = None
-    if constraint is None:
-        constraint, prereleases = sdk_constraint(model.sources.sdk)
-    found = resolve_sdk(
-        sdk_sources, constraint=constraint, prereleases=prereleases, registry=registry
-    )
-    build_environment = resolve_environment(
-        workspace=model.sources.build_workspace,
-        tools=model.sources.build_tools,
-        sdk_source=model.sources.sdk,
-        sdk=found,
-        sources=sdk_sources,
-        workspace_sources=workspace_sources,
-        tools_sources=tools_sources,
-        max_bytes=sdk_max_bytes,
-        work_root=Path(work_root),
-        registry=registry,
-        hosts=hosts,
-        platform=platform,
-        on_line=on_line,
-    )
-    out_dir = Path(out_dir)
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.parent.mkdir(parents=True, exist_ok=True)
-    return write_context(
-        model,
-        out_dir=out_dir,
-        build_environment=build_environment,
-        sdk=SdkPin(
-            constraint=found.intent,
-            version=found.package.version,
-            url=found.url,
-            sha256=found.package.sha256,
-        ),
-        signing_pub=signing_pub,
-        created=created or datetime.now(UTC),
-    )
 
 
 def lock_context(out_dir: Path) -> ContextManifest:

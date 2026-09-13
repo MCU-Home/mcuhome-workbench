@@ -56,10 +56,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # Contexts and patches: the public `create_context` is the one that
-    # resolves pins; the internal function of that name becomes
-    # `write_context` and stays internal.
-    "create_context": "contexts and patches",
     # Reading a finished build, its pairing, and the step vocabulary.
     "BUILD_STEPS": "reading a build, pairing, steps",
     "BuildRecord": "reading a build, pairing, steps",

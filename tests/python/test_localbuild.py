@@ -26,7 +26,6 @@ import io
 import json
 import os
 import tarfile
-from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -53,7 +52,7 @@ from mcuhome.workbench.buildenvsession import (
     open_builder_session,
 )
 from mcuhome.workbench.buildprocess import Completed
-from mcuhome.workbench.contextdir import create_build_context, read_context_manifest
+from mcuhome.workbench.contextdir import read_context_manifest
 from mcuhome.workbench.packagefetch import SDK_PACKAGE_NAME
 from mcuhome.workbench.resolve_pins import SDK_ANY, resolve_sdk_pin
 from mcuhome.workbench.signing import (
@@ -751,17 +750,23 @@ def test_creating_a_context_twice_in_one_work_root_is_the_same_context(tmp_path,
     context rather than with a refusal or with something else.
     """
     make_sdk_source(tmp_path / "src")
-    created = datetime(2026, 8, 10, 9, 0, 0, tzinfo=UTC)
     requests = [
-        create_build_context(
-            model,
-            out_dir=tmp_path / "work" / "context",
-            work_root=tmp_path / "work",
-            sdk_sources=(tmp_path / "src",),
-            workspace_sources=(tmp_path / "src",),
-            tools_sources=(tmp_path / "src",),
-            signing_pub=public_pem,
-            created=created,
+        # `created` is the one field two creations of the same inputs may
+        # differ in — it is the wall clock, and it is outside the context
+        # identity — so the comparison drops it rather than freezing it.
+        dataclasses.replace(
+            build.create_context(
+                model,
+                out_dir=tmp_path / "work" / "context",
+                work_root=tmp_path / "work",
+                options=build.BuildOptions(
+                    sdk_sources=(tmp_path / "src",),
+                    workspace_sources=(tmp_path / "src",),
+                    tools_sources=(tmp_path / "src",),
+                ),
+                signing_pub=public_pem,
+            ),
+            created="",
         )
         for _ in range(3)
     ]
@@ -780,13 +785,15 @@ def test_a_supplied_context_is_built_as_it_is(tmp_path, model, public_pem):
     """
     make_sdk_source(tmp_path / "src")
     context = tmp_path / "held"
-    create_build_context(
+    build.create_context(
         model,
         out_dir=context,
         work_root=tmp_path / "held-wr",
-        sdk_sources=(tmp_path / "src",),
-        workspace_sources=(tmp_path / "src",),
-        tools_sources=(tmp_path / "src",),
+        options=build.BuildOptions(
+            sdk_sources=(tmp_path / "src",),
+            workspace_sources=(tmp_path / "src",),
+            tools_sources=(tmp_path / "src",),
+        ),
         signing_pub=public_pem,
     )
     before = sorted(path.name for path in context.iterdir())

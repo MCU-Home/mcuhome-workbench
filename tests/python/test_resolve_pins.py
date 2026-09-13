@@ -1015,7 +1015,7 @@ def test_a_source_that_publishes_other_bytes_under_the_pinned_version_is_refused
 def _pins_of(model, source: Source, work_root: Path):
     """The two pins a device model resolves to, through the production path.
 
-    The same three model fields ``create_build_context`` hands over, in
+    The same three model fields ``create_context`` hands over, in
     the same order, so what this asserts is what a build would get.
     """
     constraint, prereleases = sdk_constraint(model.sources.sdk)

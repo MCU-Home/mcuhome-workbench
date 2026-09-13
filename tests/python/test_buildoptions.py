@@ -360,7 +360,7 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
 
     monkeypatch.setattr(
         build,
-        "create_build_context",
+        "_create_context",
         lambda device_model, **kwargs: created.update(kwargs),
     )
     monkeypatch.setattr(build, "lock_context", lambda directory: None)
@@ -418,7 +418,7 @@ def test_the_configured_container_program_reaches_both_container_calls(
 
     monkeypatch.setattr(
         build,
-        "create_build_context",
+        "_create_context",
         lambda device_model, **kwargs: None,
     )
     monkeypatch.setattr(build, "lock_context", lambda directory: None)
@@ -506,7 +506,7 @@ def test_the_remote_context_carries_the_same_values(model, tmp_path, monkeypatch
     created: dict[str, object] = {}
     monkeypatch.setattr(
         build,
-        "create_build_context",
+        "_create_context",
         lambda device_model, **kwargs: created.update(kwargs),
     )
     monkeypatch.setattr(build, "read_context_facts", lambda directory: {"build_environment": ""})
