@@ -559,6 +559,11 @@ class FakeServer:
         #: stopped build sends and the one that used to wait out the
         #: whole call timeout on a peer that had stopped answering.
         self.close_takes: float = 0.0
+        #: How long the peer leaves the socket's closing handshake
+        #: unanswered. A real client waits aiohttp's own ten seconds for
+        #: that frame unless it is told otherwise, which is the last
+        #: place a stopped build can lose time it promised away.
+        self.handshake_takes: float = 0.0
         #: When set, the socket dies instead of answering the verdict —
         #: what the reader does to every pending call when the
         #: connection goes under it.
@@ -589,6 +594,8 @@ class FakeClient:
         #: Every artifact download this client was asked for — empty is
         #: what a stopped build has to leave behind.
         self.fetched: list[str] = []
+        #: What the caller allowed the closing handshake, if anything.
+        self.close_timeout: float | None = None
         server.clients.append(self)
 
     async def connect(self) -> None:
@@ -661,7 +668,12 @@ class FakeClient:
         self.session_closed = True
         return {}
 
-    async def close(self) -> None:
+    async def close(self, *, timeout: float | None = None) -> None:
+        # What a real client does with this number: it bounds the wait
+        # for the peer's answering close frame and nothing else.
+        self.close_timeout = timeout
+        stalled = self.server.handshake_takes
+        await asyncio.sleep(stalled if timeout is None else min(stalled, timeout))
         self.closed = True
 
 
@@ -790,18 +802,22 @@ def test_the_whole_tail_of_a_stopped_build_is_inside_the_bound(tmp_path, monkeyp
     server = FakeServer().install(monkeypatch)
     server.cancel_takes = 30.0
     server.close_takes = 30.0
+    server.handshake_takes = 30.0
     bound = resolve_shutdown_seconds(cancel_grace_seconds=0)
 
     started = time.monotonic()
     result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
     elapsed = time.monotonic() - started
 
+    client = server.clients[0]
     assert result.status == sessionclient.STATUS_CANCELLED
     assert "close-session" in server.verbs, "it was tried"
-    assert not server.clients[0].session_closed, "and abandoned when it did not answer"
-    assert server.clients[0].closed, "the transport is what ends the conversation then"
+    assert not client.session_closed, "and abandoned when it did not answer"
+    assert client.close_timeout is not None, (
+        "the socket's closing handshake is bounded too, not left to aiohttp's ten seconds"
+    )
     assert elapsed < bound * 10, (
-        "the stop's bound covers the cancel, the verdict and the close together"
+        "the stop's bound covers the cancel, the verdict, the close and the handshake"
     )
 
 
@@ -859,34 +875,49 @@ def test_a_cancelled_verdict_delivers_nothing_of_what_it_declares(tmp_path, monk
     assert server.clients[0].fetched == [], "nothing was downloaded"
 
 
+@pytest.mark.parametrize("execution", ["container", "subprocess"])
 def test_a_build_that_finished_while_the_stop_arrived_is_not_a_stopped_build(
-    model, tmp_path, monkeypatch
+    model, tmp_path, monkeypatch, execution
 ) -> None:
     """The race, and the rule it settles: a firmware that exists is the answer.
 
     The predicate turns true while the last step is already succeeding.
     Telling the caller its build was stopped would throw away what it
-    asked for and what is on disk.
+    asked for and what is on disk. Both local executions answer it, and
+    each reads the verdict in its own function.
     """
     asked = Asked()
+    finished = StepResult(
+        action="build",
+        context_id="sha256:" + "f" * 64,
+        exit_code=0,
+        status="success",
+    )
 
     def fake(model_, **kwargs):
         kwargs["should_stop"]()
+        if execution == "subprocess":
+            return build.subprocessbuild.SubprocessBuildResult(
+                outcome=finished,
+                out_dir=tmp_path / "out",
+                context_dir=tmp_path / "context",
+                environment=None,
+            )
         return containerbuild.ContainerBuildResult(
-            outcome=StepResult(
-                action="build",
-                context_id="sha256:" + "f" * 64,
-                exit_code=0,
-                status="success",
-            ),
+            outcome=finished,
             out_dir=tmp_path / "out",
             context_dir=tmp_path / "context",
             container_image="",
         )
 
     monkeypatch.setattr(build, "compose_local_build", fake)
+    target = build.LocalBuild(
+        execution=build.ContainerExecution()
+        if execution == "container"
+        else build.SubprocessExecution()
+    )
     result = asyncio.run(
-        build.build_firmware(_build_request(model, tmp_path, should_stop=asked), target="local")
+        build.build_firmware(_build_request(model, tmp_path, should_stop=asked), target=target)
     )
 
     assert asked.calls == 1
