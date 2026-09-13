@@ -676,8 +676,8 @@ class BuildRequest:
     #: one it names that does not exist is refused rather than built
     #: without.
     #:
-    #: Left ``None`` — the ordinary case — the device's own
-    #: ``devices/<name>/patches/`` under :attr:`project_root` is picked
+    #: Left ``None`` — the ordinary case — the device folder's own
+    #: ``devices/<device>/patches/`` under :attr:`project_root` is picked
     #: up when it is there. Either way the patches are context content:
     #: they are hashed into the context ID, so the same device builds
     #: something else with a patch than without one.
@@ -1059,8 +1059,8 @@ def _device_patches_dir(
     patches somewhere of its own, and a directory it names that does not
     exist is a refusal rather than a silent build without them. A caller
     that names none gets the project convention:
-    ``devices/<name>/patches/<layer>/NNNN-name.patch``, the device's own
-    folder, picked up because it is there.
+    ``devices/<device>/patches/<layer>/NNNN-name.patch``, the device's
+    own folder, picked up because it is there.
 
     **Nobody asks for the convention and nothing switches it on.** A
     device whose folder carries patches is a device whose firmware is
@@ -1145,8 +1145,8 @@ def create_context(
     declared range too, with a note on *on_line* rather than a refusal.
 
     **The patches are the device's own unless stated.** Without a
-    *patches_dir* the device's own ``devices/<name>/patches/`` under
-    *project_root* is picked up when it is there, and *patches_dir*
+    *patches_dir* the device's own folder ``devices/<device>/patches/``
+    under *project_root* is picked up when it is there, and *patches_dir*
     replaces it (:func:`_device_patches_dir`). Either way the patches are
     context content: every patch is copied into the context and hashed
     into the context ID like the model and the key, so a build with a
@@ -1326,7 +1326,7 @@ def _create_context(
 
     *patches_dir* and *project_root* are the two ways patches reach the
     context, settled by :func:`_device_patches_dir`: the stated
-    directory, else the device's own ``devices/<name>/patches/``.
+    directory, else the device's own folder ``devices/<device>/patches/``.
 
     *out_dir* is **removed if it exists**, because
     :func:`~mcuhome.workbench.contextdir.write_context` requires an empty

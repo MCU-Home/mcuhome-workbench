@@ -673,7 +673,7 @@ does not use is ignored rather than refused.
 | `project_root: Path \| None` | `None` | where the trust anchors are; `None` builds from the configured sources alone |
 | `registries: Sequence[RegistrySettings]` | `()` | mirror overrides and trust per base domain |
 | `signing_pub: str` | `""` | PEM of the public signing key; becomes `keys/signing.pub` in the context |
-| `patches_dir: Path \| None` | `None` | patches to carry into the context, laid out as `<layer>/NNNN-name.patch`; `None` takes the device's own `devices/<name>/patches/` under `project_root` |
+| `patches_dir: Path \| None` | `None` | patches to carry into the context, laid out as `<layer>/NNNN-name.patch`; `None` takes the device folder's own `devices/<device>/patches/` under `project_root` |
 | `context_dir: Path \| None` | `None` | a base context to build instead of creating one |
 | `work_root: Path \| None` | `None` | scratch area; defaults to a hidden directory under `out_dir` |
 | `wait_for_turn: bool` | `True` | wait when a build server has no room |

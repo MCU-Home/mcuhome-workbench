@@ -186,7 +186,7 @@ class Project:
         return self.devices_dir / name / DEVICE_FILE
 
     def device_patches_dir(self, name: str) -> Path:
-        """``devices/<name>/patches/`` — the source patches of one device.
+        """``devices/<device>/patches/`` — the source patches of one device.
 
         Laid out as ``<layer>/NNNN-name.patch`` — the build context
         format's own layout, so the folder is carried into a context as
