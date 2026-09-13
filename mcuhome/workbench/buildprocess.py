@@ -159,12 +159,16 @@ _KILL_AFTER_SECONDS = 10.0
 #: tearing it down is what actually stops the build.
 _GIVE_UP_AFTER_SECONDS = 30.0
 
+#: How long the log pump is given to deliver the last lines of a build
+#: before its status is answered, in ticks. One number for the two places
+#: that need it — the join itself and the ladder's bound — because a join
+#: that outgrew the bound would make the bound a guess.
+_PUMP_TICKS = 4
+
 #: How many ticks the ladder can lose to its own clock. Four of them are
 #: the rungs: the decision to stop is noticed on a tick, and so is each
-#: of the three that follow it. Four more are the log pump, which is
-#: joined for that long when the step is finally reaped — the last lines
-#: of a build are delivered before its status is, stopped or not.
-_LADDER_TICKS = 8
+#: of the three that follow it. The rest is the pump join at the end.
+_LADDER_TICKS = 4 + _PUMP_TICKS
 
 
 def resolve_shutdown_seconds(*, cancel_grace_seconds: float) -> float:
@@ -262,7 +266,7 @@ class _Child:
         # Joined so that the last lines of a build are delivered before
         # its status is: a caller that renders the log and then the
         # verdict must not get them the other way round.
-        self._pump.join(timeout=_POLL_SECONDS * 4)
+        self._pump.join(timeout=_POLL_SECONDS * _PUMP_TICKS)
         return status
 
     def terminate(self) -> None:
