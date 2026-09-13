@@ -98,6 +98,7 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         source=str(ROOT / "mcuhome.yaml"),
         server="10.0.0.5:8291",
     ),
+    "BuildOptions": lambda: api.resolve_build_options(SETTINGS),
     "BuildResult": lambda: api.BuildResult(
         ok=True,
         target="local",
@@ -342,6 +343,32 @@ def test_a_verdict_is_the_first_key(name: str) -> None:
     document = SAMPLES[name]().to_dict()
     if "ok" in document:
         assert next(iter(document)) == "ok", f"{name}: ok is not the first key"
+
+
+def test_the_pairing_sub_document_carries_what_the_reference_declares() -> None:
+    """The one nested shape the reference spells out key by key.
+
+    :func:`_top_level_keys` reads the outermost braces, which is right
+    for every other document here — the nested ones are documents of
+    their own and checked as such. ``NewPairing`` is the exception: the
+    credentials it carries come from a value that has no ``to_dict()``
+    of its own (the model package's ``Pairing``), so the keys are
+    written out in this package and would otherwise be checked by
+    nothing.
+    """
+    section = _documents_section(REFERENCE.read_text("utf-8"))
+    paragraph = section.split("`NewPairing.to_dict()`", 1)[1]
+    shapes = re.findall(r"`(\{.*?\})`", paragraph, re.DOTALL)
+    # The first shape is the document itself, the second the `pairing`
+    # value inside it.
+    declared = _top_level_keys(shapes[1].replace("\n", " "))
+
+    document = SAMPLES["NewPairing"]().to_dict()["pairing"]
+    assert sorted(document) == sorted(declared), (
+        f"the reference declares {sorted(declared)} inside `pairing`, "
+        f"the code answers {sorted(document)}"
+    )
+    assert json.dumps(document)
 
 
 def test_the_settings_document_has_one_entry_per_declared_option() -> None:

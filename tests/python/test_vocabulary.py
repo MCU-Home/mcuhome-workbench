@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import inspect
 
+import pytest
 from conftest import package_modules
 
 from mcuhome.workbench import sessionclient
@@ -24,7 +25,7 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.buildenvstore import EXTRACTION_BOUNDS
 from mcuhome.workbench.configuration import CONFIG_ORIGINS, OPTIONS, resolve_settings
-from mcuhome.workbench.diagnostics import WARNING_KINDS
+from mcuhome.workbench.diagnostics import WARNING_KINDS, Diagnostic
 from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE, PACKAGE_KINDS
 
 
@@ -99,6 +100,22 @@ def test_every_warning_kind_is_one_this_package_reports() -> None:
     that branch runs.
     """
     assert _reported_warning_kinds() == set(WARNING_KINDS)
+
+
+def test_a_kind_nobody_published_is_refused_where_it_is_written() -> None:
+    """The guard that keeps the set worth switching on.
+
+    A client looks a kind up. One that never appeared in the reference
+    would arrive as a value it cannot resolve — so the mistake is
+    refused where it is made, in this package, rather than delivered.
+    It is a ``ValueError`` and not a user-facing refusal: nobody outside
+    this package writes a warning.
+    """
+    with pytest.raises(ValueError, match="WARNING_KINDS") as caught:
+        Diagnostic.warning("something", kind="unlisted_kind")
+    assert "unlisted_kind" in str(caught.value)
+    for kind in WARNING_KINDS:
+        assert Diagnostic.warning("something", kind=kind).severity == "warning"
 
 
 def test_the_warning_kinds_are_spelled_the_way_the_scheme_says() -> None:

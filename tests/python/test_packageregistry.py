@@ -1506,6 +1506,57 @@ def test_a_configured_local_mirror_reaches_the_composition(tmp_path: Path, keys)
     assert lines == []
 
 
+def test_an_unverified_read_reaches_the_build_log_with_its_fix(
+    tmp_path: Path, source: Path
+) -> None:
+    """A build has no findings channel of its own — the log is it.
+
+    The warning is a document now, and the composition renders it where
+    the person watching the build is looking. Both halves go in: what is
+    wrong, and what to do about it. A build log that said "NOTHING IS
+    VERIFIED" and left out how to turn verification back on would have
+    lost the part the reader can act on.
+    """
+    from mcuhome.workbench import build
+
+    root = project(tmp_path)
+    file = root / "mcuhome.yaml"
+    file.write_text("", encoding="utf-8")
+    settings = parse_registries(
+        {
+            packageregistry.OFFICIAL_BASE_DOMAIN: {
+                "untrusted": True,
+                "mirrors": {SOURCE: [str(source)]},
+            }
+        },
+        file=file,
+        origin="project",
+        env={},
+    )
+
+    lines: list[str] = []
+    promised = build._package_registry(  # noqa: SLF001 - the seam under test
+        _model_with_default_sdk(),
+        project_root=root,
+        registries=settings,
+        work_root=tmp_path / "wr",
+        on_line=lines.append,
+    )
+    assert promised is not None
+    packagefetch.acquire_package(
+        name=SDK,
+        version=VERSION,
+        sha256=packagefetch.sha256_file(source / f"{SDK}-{VERSION}.tar.zst"),
+        sources=(),
+        into=tmp_path / "tree",
+        registry=promised,
+    )
+
+    assert any("NOTHING IS VERIFIED" in line for line in lines)
+    assert any("untrusted: true" in line for line in lines), "the log lost the fix"
+    assert all("\n" not in line for line in lines), "a line sink is given lines"
+
+
 def test_a_build_without_a_project_has_no_registry(tmp_path: Path) -> None:
     """An embedder driving a bare model builds from its own directories."""
     from mcuhome.workbench import build

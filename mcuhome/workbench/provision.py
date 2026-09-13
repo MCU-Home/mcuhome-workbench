@@ -84,14 +84,15 @@ class NewPairing:
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready, every declared key present.
 
-        This is the one document of this package that carries a secret,
-        and it does so deliberately: the credentials were drawn by *this*
-        call, at the caller's explicit request, and the two codes a
-        person types into a controller are derived from them. A client
-        that had to recompute them would be assembling a document out of
-        fields it read off an object, which is what these documents
-        exist to prevent. Nothing else ever answers them — reading a
-        device's configuration masks the codes.
+        It carries the credentials deliberately: they were drawn by
+        *this* call, at the caller's explicit request, and the two codes
+        a person types into a controller are derived from them — a
+        client that had to recompute those would be assembling a
+        document out of fields it read off an object, which is what
+        these documents exist to prevent. The resolved model carries the
+        same four values under ``network.pairing``, because they are
+        part of the device's configuration; showing them or masking them
+        is the client's decision, not this document's.
         """
         return {
             "entry": str(self.entry),

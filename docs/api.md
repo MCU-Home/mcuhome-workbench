@@ -104,7 +104,10 @@ host path.
 **Callbacks.** `on_*` parameters are keyword-only, default to `None`
 ("nothing to report"), and their return value is ignored — they are never
 control flow. The vocabulary is fixed and append-only: `on_line(str)` for
-log output, `on_warning(Diagnostic)` for a located, non-fatal finding,
+log output, `on_warning(Diagnostic)` for a located, non-fatal finding
+(a build takes none: what it finds on the way goes into the build log
+through `on_line`, message and fix hint, because that is where the
+person watching a build is looking),
 `on_step(key, **facts)` for progress, `on_wait(SeatWait)` for a build
 waiting for a turn, `on_container(str)` for a container a call started,
 so the caller can reap it. A seam that decides control flow is a
@@ -1541,6 +1544,13 @@ container_image}` — `origin` is the layer that defined the entry and
 — the token is a secret and is in no document.
 `RegistrySettings.to_dict()`: `{base_domain, untrusted, anchor, mirrors}`.
 `Artifact.to_dict()`: `{root, path, role, sha256}`.
+`BuildOptions.to_dict()`: `{target, mode, builder,
+container_repositories, container_program, cpus, memory, env_store,
+dev_workspace, python, sdk_sources, workspace_sources, tools_sources,
+sdk_max_bytes, workspace_max_bytes, tools_max_bytes, cache_root,
+cache_local, cache_shared, cache_session, cache_project, sources}` —
+every key of the section, `null` where nobody configured one, and
+`sources` saying where each value came from by the key's leaf name.
 `Project.to_dict()`: `{root, id, discovered, version}` — `version` is the
 layout version the project's file states, `null` for the stand-in
 project a device file outside any project gets.
@@ -1548,11 +1558,15 @@ project a device file outside any project gets.
 created or changed, in creation order.
 `NewPairing.to_dict()`: `{entry, secrets_file, pairing, replaced}`, with
 `pairing` carrying `{discriminator, passcode, salt, iterations,
-test_credentials, manual_code, qr_payload}`. This is the one document
-here that carries a secret: the credentials were drawn by this call at
-the caller's explicit request, and the two codes a person types into a
-controller are derived from them — a client that recomputed them would
-be assembling a document itself. Nothing else answers them.
+test_credentials, manual_code, qr_payload}` — the credentials this call
+drew, and the two codes a person types into a controller. They are in
+the document because the call is the explicit ask for them and because a
+client that recomputed the codes from the values would be assembling a
+document itself. The resolved model carries the same four values under
+`network.pairing`, so `ValidationResult.to_dict()["model"]` carries them
+too: they are part of the device's configuration, and a build compiles
+them into the firmware. Where a client shows them and where it masks
+them is the client's decision — these documents do not decide it.
 
 On-disk records this package writes and reads:
 - project marker (TOML): `version`, `id`, and `[upgrade]` with `started`,

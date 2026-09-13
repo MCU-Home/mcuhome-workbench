@@ -442,6 +442,47 @@ class BuildOptions:
             buildenvstore.KIND_TOOLS: self.tools_max_bytes,
         }.get(kind)
 
+    def to_dict(self) -> dict[str, Any]:
+        """This machine's build section as a document, JSON-ready.
+
+        Every key of the section, whether it was set or not: ``null`` is
+        the answer "nobody configured this one", which is a different
+        statement from a key that is simply missing. :attr:`sources`
+        comes with them, so a client that shows the section can show who
+        chose each value in the same breath — which is the question a
+        person asks the moment a build does something they did not
+        expect.
+        """
+        return {
+            "target": self.target,
+            "mode": self.mode,
+            "builder": self.builder,
+            "container_repositories": list(self.container_repositories),
+            "container_program": self.container_program,
+            "cpus": self.cpus,
+            "memory": self.memory,
+            "env_store": _as_text(self.env_store),
+            "dev_workspace": _as_text(self.dev_workspace),
+            "python": self.python,
+            "sdk_sources": [str(path) for path in self.sdk_sources],
+            "workspace_sources": [str(path) for path in self.workspace_sources],
+            "tools_sources": [str(path) for path in self.tools_sources],
+            "sdk_max_bytes": self.sdk_max_bytes,
+            "workspace_max_bytes": self.workspace_max_bytes,
+            "tools_max_bytes": self.tools_max_bytes,
+            "cache_root": _as_text(self.cache_root),
+            "cache_local": _as_text(self.cache_local),
+            "cache_shared": _as_text(self.cache_shared),
+            "cache_session": _as_text(self.cache_session),
+            "cache_project": _as_text(self.cache_project),
+            "sources": dict(self.sources),
+        }
+
+
+def _as_text(path: Path | None) -> str | None:
+    """One optional path as a document carries it."""
+    return None if path is None else str(path)
+
 
 def resolve_build_options(settings: Settings) -> BuildOptions:
     """The ``build`` section of a resolved configuration, as one object.
@@ -900,15 +941,20 @@ def _into_the_log(on_line: LineSink | None) -> Callable[[Diagnostic], None] | No
     """A warning channel that writes into the build log.
 
     A build has no second stream for findings: what it learns while it
-    runs belongs where the person watching it is looking. The message is
-    what goes in — the rest of the finding is for a client that renders
-    documents, and the log is text.
+    runs belongs where the person watching it is looking. The message
+    goes in and the fix hint with it, line by line — a warning that says
+    what is wrong and not what to do about it costs the reader the one
+    thing the finding carried for them. The rest of the document (the
+    location, the kind) is for a client that renders documents; a log is
+    text.
     """
     if on_line is None:
         return None
 
     def report(finding: Diagnostic) -> None:
         on_line(finding.message)
+        for line in (finding.hint or "").splitlines():
+            on_line(line)
 
     return report
 
