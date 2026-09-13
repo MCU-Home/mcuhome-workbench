@@ -24,12 +24,12 @@ from mcuhome.model.errors import ConfigError
 from mcuhome.workbench.configuration import option
 from mcuhome.workbench.project import (
     GITIGNORE_LINES,
-    MARKER_FILE,
+    PROJECT_MARKER_FILE,
     Project,
     check_secret_file,
+    create_project,
     ensure_secrets_dir,
     find_project_root,
-    init_project,
     is_project_root,
     resolve_device,
     resolve_project,
@@ -46,7 +46,7 @@ from mcuhome.workbench.projectfile import (
 def make_project(root: Path, *, devices: tuple[str, ...] = ()) -> Project:
     root.mkdir(parents=True, exist_ok=True)
     write_project_file(
-        root / MARKER_FILE,
+        root / PROJECT_MARKER_FILE,
         ProjectFile(root=root, version=PROJECT_VERSION, id=new_project_id()),
     )
     for name in devices:
@@ -106,7 +106,7 @@ def test_no_project_anywhere_is_a_refusal_naming_the_ways_out(tmp_path: Path) ->
         resolve_project(env={}, cwd=tmp_path)
     assert caught.value.message == "No MCUHome project found here."
     hint = caught.value.hint or ""
-    assert MARKER_FILE in hint
+    assert PROJECT_MARKER_FILE in hint
     assert "--project-dir" in hint
     assert "mcuhome project init" in hint
 
@@ -124,7 +124,7 @@ def test_an_explicit_project_dir_without_marker_is_an_error(tmp_path: Path) -> N
     plain.mkdir()
     with pytest.raises(ConfigError) as caught:
         resolve_project(plain, env={}, cwd=tmp_path)
-    assert f"has no {MARKER_FILE}" in caught.value.message
+    assert f"has no {PROJECT_MARKER_FILE}" in caught.value.message
     assert "--project-dir" in (caught.value.hint or "")
     assert "mcuhome project init" in (caught.value.hint or "")
 
@@ -155,7 +155,7 @@ def test_the_environment_variable_without_marker_names_itself(tmp_path: Path) ->
     plain.mkdir()
     with pytest.raises(ConfigError) as caught:
         resolve_project(env={PROJECT_DIR_VAR: str(plain)}, cwd=tmp_path)
-    assert f"has no {MARKER_FILE}" in caught.value.message
+    assert f"has no {PROJECT_MARKER_FILE}" in caught.value.message
     assert PROJECT_DIR_VAR in (caught.value.hint or "")
 
 
@@ -247,9 +247,9 @@ def test_missing_path_is_reported(tmp_path: Path) -> None:
 
 def test_init_creates_the_durable_layout(tmp_path: Path) -> None:
     target = tmp_path / "fresh"
-    result = init_project(target)
+    result = create_project(target)
     assert is_project_root(target)
-    written = read_project_file(target / MARKER_FILE)
+    written = read_project_file(target / PROJECT_MARKER_FILE)
     assert written.version == PROJECT_VERSION
     assert written.id is not None
     assert (target / "mcuhome.yaml").is_file()
@@ -266,7 +266,7 @@ def test_init_creates_the_durable_layout(tmp_path: Path) -> None:
     assert mode_of(anchor) == 0o600
     names = [path.name for path in result.created]
     assert names == [
-        MARKER_FILE,
+        PROJECT_MARKER_FILE,
         "mcuhome.yaml",
         "devices",
         "secrets",
@@ -278,7 +278,7 @@ def test_init_creates_the_durable_layout(tmp_path: Path) -> None:
 def test_init_refuses_a_non_empty_directory_listing_what_is_there(tmp_path: Path) -> None:
     (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
     with pytest.raises(ConfigError) as caught:
-        init_project(tmp_path)
+        create_project(tmp_path)
     assert "is not empty" in caught.value.message
     assert "notes.txt" in caught.value.message
     assert "--force" in (caught.value.hint or "")
@@ -287,14 +287,14 @@ def test_init_refuses_a_non_empty_directory_listing_what_is_there(tmp_path: Path
 def test_init_force_proceeds_but_keeps_the_users_configuration(tmp_path: Path) -> None:
     (tmp_path / "mcuhome.yaml").write_text("jobs: 4\n", encoding="utf-8")
     (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
-    init_project(tmp_path, force=True)
+    create_project(tmp_path, force=True)
     assert is_project_root(tmp_path)
     assert (tmp_path / "mcuhome.yaml").read_text(encoding="utf-8") == "jobs: 4\n"
 
 
 def test_init_force_completes_an_existing_gitignore(tmp_path: Path) -> None:
     (tmp_path / ".gitignore").write_text("*.pyc\nsecrets/\n", encoding="utf-8")
-    init_project(tmp_path, force=True)
+    create_project(tmp_path, force=True)
     text = (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert text == "*.pyc\nsecrets/\nbuild/\n"
     for line in GITIGNORE_LINES:
@@ -305,13 +305,13 @@ def test_init_refuses_a_file_target(tmp_path: Path) -> None:
     target = tmp_path / "file"
     target.write_text("x", encoding="utf-8")
     with pytest.raises(ConfigError) as caught:
-        init_project(target)
+        create_project(target)
     assert "is not a directory" in caught.value.message
 
 
 def test_init_twice_with_force_changes_nothing_more(tmp_path: Path) -> None:
-    init_project(tmp_path)
-    result = init_project(tmp_path, force=True)
+    create_project(tmp_path)
+    result = create_project(tmp_path, force=True)
     assert result.created == ()
 
 

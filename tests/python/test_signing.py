@@ -25,7 +25,7 @@ import pytest
 from mcuhome.model.errors import BuildError, ConfigError
 
 from mcuhome.workbench.loader import FileRef, load_yaml_file
-from mcuhome.workbench.project import Project, init_project
+from mcuhome.workbench.project import Project, create_project
 from mcuhome.workbench.signing import (
     FIRMWARE_KEY,
     PRIVATE_KEY_FILE,
@@ -38,7 +38,7 @@ from mcuhome.workbench.signing import (
 
 @pytest.fixture
 def project(tmp_path: Path) -> Project:
-    return init_project(tmp_path / "project").project
+    return create_project(tmp_path / "project").project
 
 
 def mode_of(path: Path) -> int:

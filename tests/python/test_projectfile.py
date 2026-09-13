@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome.workbench.project import init_project
+from mcuhome.workbench.project import create_project
 from mcuhome.workbench.projectfile import (
-    MARKER_FILE,
+    PROJECT_MARKER_FILE,
     PROJECT_VERSION,
     ProjectFile,
     ProjectFileError,
@@ -80,14 +80,14 @@ def test_a_project_without_an_id_is_named_by_its_directory(tmp_path: Path) -> No
 
 
 def test_written_files_read_back_the_same(tmp_path: Path) -> None:
-    path = tmp_path / MARKER_FILE
+    path = tmp_path / PROJECT_MARKER_FILE
     written = ProjectFile(root=tmp_path, version=PROJECT_VERSION, id=new_project_id())
     write_project_file(path, written)
     assert read_project_file(path) == written
 
 
 def test_the_written_file_says_it_must_not_be_edited(tmp_path: Path) -> None:
-    path = tmp_path / MARKER_FILE
+    path = tmp_path / PROJECT_MARKER_FILE
     write_project_file(path, ProjectFile(root=tmp_path, version=1, id=new_project_id()))
     text = path.read_text(encoding="utf-8")
     assert text.startswith("#")
@@ -98,7 +98,7 @@ def test_the_written_file_says_it_must_not_be_edited(tmp_path: Path) -> None:
 
 def test_a_marker_without_a_version_is_version_zero(tmp_path: Path) -> None:
     """What every project created before the file had content looks like."""
-    path = tmp_path / MARKER_FILE
+    path = tmp_path / PROJECT_MARKER_FILE
     path.write_text("# This file marks the root of an MCUHome project.\n", encoding="utf-8")
     file = read_project_file(path)
     assert file.version == 0
@@ -117,7 +117,7 @@ def test_a_marker_without_a_version_is_version_zero(tmp_path: Path) -> None:
     ],
 )
 def test_a_broken_project_file_is_refused_not_guessed(tmp_path: Path, content: str) -> None:
-    path = tmp_path / MARKER_FILE
+    path = tmp_path / PROJECT_MARKER_FILE
     path.write_text(content, encoding="utf-8")
     with pytest.raises(ProjectFileError) as caught:
         read_project_file(path)
@@ -127,7 +127,7 @@ def test_a_broken_project_file_is_refused_not_guessed(tmp_path: Path, content: s
 
 def test_an_unreadable_project_file_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ProjectFileError):
-        read_project_file(tmp_path / MARKER_FILE)
+        read_project_file(tmp_path / PROJECT_MARKER_FILE)
 
 
 # --- the version gate -------------------------------------------------
@@ -159,7 +159,7 @@ def test_a_newer_project_asks_for_a_newer_mcuhome(tmp_path: Path) -> None:
 
 
 def test_init_writes_the_current_version_and_an_id(tmp_path: Path) -> None:
-    result = init_project(tmp_path / "fresh")
+    result = create_project(tmp_path / "fresh")
     file = result.project.file
     assert file is not None
     assert file.version == PROJECT_VERSION
@@ -167,13 +167,13 @@ def test_init_writes_the_current_version_and_an_id(tmp_path: Path) -> None:
 
 
 def test_two_projects_get_two_ids(tmp_path: Path) -> None:
-    first = init_project(tmp_path / "a").project
-    second = init_project(tmp_path / "b").project
+    first = create_project(tmp_path / "a").project
+    second = create_project(tmp_path / "b").project
     assert first.id != second.id
 
 
 def test_init_leaves_an_existing_marker_alone(tmp_path: Path) -> None:
     """Making an old project current is the upgrade's job, not --force's."""
-    (tmp_path / MARKER_FILE).write_text("# old marker\n", encoding="utf-8")
-    init_project(tmp_path, force=True)
-    assert read_project_file(tmp_path / MARKER_FILE).version == 0
+    (tmp_path / PROJECT_MARKER_FILE).write_text("# old marker\n", encoding="utf-8")
+    create_project(tmp_path, force=True)
+    assert read_project_file(tmp_path / PROJECT_MARKER_FILE).version == 0

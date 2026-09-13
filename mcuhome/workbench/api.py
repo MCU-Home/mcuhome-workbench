@@ -22,7 +22,7 @@ builder never learns that a dashboard exists.
 
 What is here, in the order a caller needs it:
 
-``resolve_project`` / ``init_project`` / ``find_device``
+``resolve_project`` / ``create_project`` / ``find_device``
     Where the user's work lives (the ``.mcuhome-project-root`` marker
     and its bootstrap ladder), how a project comes into
     being, and which file is a given device's. Resolution also enforces
@@ -246,18 +246,18 @@ from mcuhome.workbench.migrations import plan_for as upgrade_plan
 from mcuhome.workbench.packagefetch import SdkUnavailable
 from mcuhome.workbench.project import (
     BUILD_DIR,
-    DEVICE_ENTRY,
+    DEVICE_FILE,
     DEVICES_DIR,
-    MARKER_FILE,
     PROJECT_CONFIG_FILE,
+    PROJECT_MARKER_FILE,
     PROJECT_VERSION,
     InitResult,
     Project,
+    create_project,
     find_project_root,
-    init_project,
     is_project_root,
     is_upgrading,
-    project_at,
+    read_project,
     resolve_device,
     resolve_project,
 )
@@ -319,7 +319,7 @@ __all__ = [
     "DEFAULT_BUILD_MODE",
     "DEFAULT_BUILD_TARGET",
     "DEVICES_DIR",
-    "DEVICE_ENTRY",
+    "DEVICE_FILE",
     "DeviceModel",
     "DeviceOutline",
     "EndpointChoice",
@@ -330,7 +330,7 @@ __all__ = [
     "InitResult",
     "LocalBuild",
     "Location",
-    "MARKER_FILE",
+    "PROJECT_MARKER_FILE",
     "MCUHomeError",
     "MODE_CONTAINER",
     "MODE_SUBPROCESS",
@@ -381,13 +381,13 @@ __all__ = [
     "find_project_root",
     "generate_tree",
     "init_pairing",
-    "init_project",
+    "create_project",
     "is_project_root",
     "is_upgrading",
     "load_model",
     "new_device",
     "option",
-    "project_at",
+    "read_project",
     "read_model",
     "registry_data",
     "render_starter",

@@ -61,7 +61,7 @@ from mcuhome.workbench.packageregistry import (
     resolve_entry,
     trust_anchor_for,
 )
-from mcuhome.workbench.project import init_project
+from mcuhome.workbench.project import create_project
 from mcuhome.workbench.resolve_pins import (
     DEFAULT_SDK_CONSTRAINT,
     SDK_ANY,
@@ -629,7 +629,7 @@ def test_the_host_platform_is_the_name_packages_are_published_under() -> None:
 
 def project(tmp_path: Path) -> Path:
     """A project created the way a user creates one."""
-    return init_project(tmp_path / "project").project.root
+    return create_project(tmp_path / "project").project.root
 
 
 def bare(tmp_path: Path) -> Path:
@@ -641,7 +641,7 @@ def bare(tmp_path: Path) -> Path:
 
 def test_creating_a_project_writes_the_anchors_that_ship(tmp_path: Path) -> None:
     """The one moment a trust root is installed: when the project is made."""
-    result = init_project(tmp_path / "project")
+    result = create_project(tmp_path / "project")
     path = anchor_file(result.project.root, packageregistry.OFFICIAL_BASE_DOMAIN)
     assert path in result.created
     assert (

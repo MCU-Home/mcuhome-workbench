@@ -28,7 +28,7 @@ from mcuhome.model.errors import ConfigError
 from mcuhome.workbench import build, buildenvsession, buildenvstore, subprocessbuild
 from mcuhome.workbench.build import BuildOptions, BuildRequest, build_options, options_for
 from mcuhome.workbench.configuration import resolve_settings
-from mcuhome.workbench.project import Project, init_project
+from mcuhome.workbench.project import Project, create_project
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def model():
 
 @pytest.fixture
 def project(tmp_path: Path) -> Project:
-    return init_project(tmp_path / "project").project
+    return create_project(tmp_path / "project").project
 
 
 def configured(project: Project, text: str) -> BuildOptions:

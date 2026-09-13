@@ -67,7 +67,7 @@ from mcuhome.model.errors import ConfigError, MCUHomeError
 from mcuhome.workbench.buildlock import holder_of, is_busy
 from mcuhome.workbench.migrations import Migration, plan_for
 from mcuhome.workbench.projectfile import (
-    MARKER_FILE,
+    PROJECT_MARKER_FILE,
     PROJECT_VERSION,
     UPGRADE_FILE,
     ProjectFile,
@@ -322,7 +322,7 @@ def upgrade_session(root: Path) -> Iterator[UpgradeSession]:
     caller that declines, aborts or raises before applying anything.
     """
     root = Path(root).resolve()
-    marker = root / MARKER_FILE
+    marker = root / PROJECT_MARKER_FILE
     working = root / UPGRADE_FILE
 
     if working.exists() and not marker.exists():
@@ -331,7 +331,7 @@ def upgrade_session(root: Path) -> Iterator[UpgradeSession]:
         handle = os.open(marker, os.O_RDWR)
     except FileNotFoundError:
         raise ConfigError(
-            f'"{root}" is not an MCUHome project directory: it has no {MARKER_FILE}.',
+            f'"{root}" is not an MCUHome project directory: it has no {PROJECT_MARKER_FILE}.',
             hint="create a project there first with:\n    mcuhome project init",
         ) from None
     except OSError as error:

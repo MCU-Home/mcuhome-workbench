@@ -421,10 +421,10 @@ def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
     same durable path — the one a caller prints to a user after the
     fact, and the one that is still there when they look.
     """
-    from mcuhome.workbench.project import init_project
+    from mcuhome.workbench.project import create_project
 
     out = _report_dir(tmp_path)
-    project = init_project(tmp_path / "project").project
+    project = create_project(tmp_path / "project").project
     generated = signing.signing_key(env={}, project=project)
     used_keys: list[Path] = []
 

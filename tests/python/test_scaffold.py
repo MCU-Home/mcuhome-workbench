@@ -15,7 +15,7 @@ from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import provision, scaffold
 from mcuhome.workbench.api import load_model, validate_device
-from mcuhome.workbench.project import DEVICE_ENTRY, DEVICES_DIR, init_project
+from mcuhome.workbench.project import DEVICE_FILE, DEVICES_DIR, create_project
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 
@@ -26,9 +26,9 @@ BOARD = "nrf7002dk/nrf5340/cpuapp"
 
 
 def test_it_creates_the_device_folder(tmp_path) -> None:
-    init_project(tmp_path)
+    create_project(tmp_path)
     created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
-    assert created.entry == tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY
+    assert created.entry == tmp_path / DEVICES_DIR / "bench-node" / DEVICE_FILE
     assert created.entry.is_file()
     assert created.project.root == tmp_path
 
@@ -42,7 +42,7 @@ def test_without_a_project_it_refuses(tmp_path) -> None:
 
 
 def test_it_finds_the_project_above_the_working_directory(tmp_path) -> None:
-    init_project(tmp_path)
+    create_project(tmp_path)
     deeper = tmp_path / DEVICES_DIR / "other"
     deeper.mkdir()
     created = scaffold.new_device("bench-node", board=BOARD, cwd=deeper, env={})
@@ -55,20 +55,20 @@ def test_it_finds_the_project_above_the_working_directory(tmp_path) -> None:
 
 
 def test_it_never_overwrites_a_device(tmp_path) -> None:
-    init_project(tmp_path)
+    create_project(tmp_path)
     scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
-    before = (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY).read_text("utf-8")
+    before = (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_FILE).read_text("utf-8")
     with pytest.raises(ConfigError) as caught:
         scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
     assert "already a device" in caught.value.message
-    assert (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_ENTRY).read_text("utf-8") == before
+    assert (tmp_path / DEVICES_DIR / "bench-node" / DEVICE_FILE).read_text("utf-8") == before
 
 
 @pytest.mark.parametrize(
     "name", ["Bench Node", "bench_node", "bench-", "-bench", "x" * 40, "1234", "1-2"]
 )
 def test_a_name_that_cannot_be_a_hostname_is_refused(tmp_path, name: str) -> None:
-    init_project(tmp_path)
+    create_project(tmp_path)
     with pytest.raises(ConfigError) as caught:
         scaffold.new_device(name, board=BOARD, cwd=tmp_path, env={})
     assert "usable device name" in caught.value.message
@@ -76,20 +76,20 @@ def test_a_name_that_cannot_be_a_hostname_is_refused(tmp_path, name: str) -> Non
 
 def test_a_single_letter_name_is_allowed(tmp_path) -> None:
     """The floor is non-empty plus one letter — no length minimum (PO 2026-08-15)."""
-    init_project(tmp_path)
+    create_project(tmp_path)
     scaffold.new_device("a", board=BOARD, cwd=tmp_path, env={})
-    assert (tmp_path / DEVICES_DIR / "a" / DEVICE_ENTRY).is_file()
+    assert (tmp_path / DEVICES_DIR / "a" / DEVICE_FILE).is_file()
 
 
 def test_an_unknown_board_lists_the_ones_that_exist(tmp_path) -> None:
-    init_project(tmp_path)
+    create_project(tmp_path)
     with pytest.raises(ConfigError) as caught:
         scaffold.new_device("bench-node", board="nrf99dk", cwd=tmp_path, env={})
     assert BOARD in caught.value.hint
 
 
 def test_a_planned_board_says_why_it_is_not_there_yet(tmp_path) -> None:
-    init_project(tmp_path)
+    create_project(tmp_path)
     planned = next(iter(registry.PLANNED_BOARDS))
     with pytest.raises(ConfigError) as caught:
         scaffold.new_device("bench-node", board=planned, cwd=tmp_path, env={})
@@ -134,7 +134,7 @@ def test_the_starter_pins_no_package_version(tmp_path) -> None:
     the day somebody ran ``device new``. Asserted on the written file and
     not only on the rendered text, because the file is what a user keeps.
     """
-    init_project(tmp_path)
+    create_project(tmp_path)
     created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
     assert "sources" not in created.entry.read_text(encoding="utf-8")
 
@@ -159,7 +159,7 @@ def test_the_scaffold_is_deterministic() -> None:
 
 def test_new_then_init_pairing_then_validate(tmp_path) -> None:
     """The three commands the scaffold's own header names, in that order."""
-    init_project(tmp_path)
+    create_project(tmp_path)
     created = scaffold.new_device("bench-node", board=BOARD, cwd=tmp_path, env={})
     project = created.project
 
@@ -187,7 +187,7 @@ def test_the_starter_takes_a_friendly_name_and_quotes_it() -> None:
 
 
 def test_new_device_writes_the_friendly_name_through(tmp_path) -> None:
-    project = init_project(tmp_path / "p").project
+    project = create_project(tmp_path / "p").project
     created = scaffold.new_device(
         "bench-node",
         board=BOARD,
@@ -259,7 +259,7 @@ def test_a_device_scaffolded_from_an_outline_validates(tmp_path) -> None:
     nobody, so this walks the whole way: pick, scaffold, draw
     credentials, resolve. Nothing is edited in between.
     """
-    init_project(tmp_path)
+    create_project(tmp_path)
     created = scaffold.new_device(
         "bench-node", board=BOARD, cwd=tmp_path, env={}, outline=_outline()
     )
@@ -329,7 +329,7 @@ def test_a_planned_driver_says_why_it_is_not_there_yet() -> None:
 
 def test_a_source_pointing_at_nothing_is_refused_before_a_file_exists(tmp_path) -> None:
     """The check runs before the folder is touched, so a refusal leaves nothing."""
-    init_project(tmp_path)
+    create_project(tmp_path)
     driver = next(iter(registry.DRIVERS.values()))
     cluster = next(iter(registry.CLUSTERS.values()))
     device_type = next(

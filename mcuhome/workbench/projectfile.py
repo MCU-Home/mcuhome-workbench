@@ -52,7 +52,7 @@ import tomli_w
 from mcuhome.model.errors import ConfigError
 
 __all__ = [
-    "MARKER_FILE",
+    "PROJECT_MARKER_FILE",
     "PROJECT_VERSION",
     "SHORT_ID_LENGTH",
     "UPGRADE_FILE",
@@ -69,12 +69,12 @@ __all__ = [
 
 #: The project file. Its presence — not its content — makes a directory
 #: a project; the content says which version that project speaks.
-MARKER_FILE = ".mcuhome-project-root"
+PROJECT_MARKER_FILE = ".mcuhome-project-root"
 
 #: What the project file is called while an upgrade is running: the
 #: upgrade renames it, so no other command can start work on a project
 #: that is being rewritten under it (:mod:`~mcuhome.workbench.projectupgrade`).
-UPGRADE_FILE = f"{MARKER_FILE}.upgrade"
+UPGRADE_FILE = f"{PROJECT_MARKER_FILE}.upgrade"
 
 #: The project layout this build of MCUHome speaks. Raised by exactly one
 #: thing: a migration that produces the new layout.

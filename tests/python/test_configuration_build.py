@@ -44,7 +44,7 @@ from mcuhome.workbench.configuration import (
     set_config_value,
     unset_config_value,
 )
-from mcuhome.workbench.project import Project, init_project
+from mcuhome.workbench.project import Project, create_project
 
 #: Every key of the section, with the environment variable the naming
 #: scheme gives it. Spelled out rather than derived, because a table that
@@ -77,7 +77,7 @@ KEYS = {
 
 @pytest.fixture
 def project(tmp_path: Path) -> Project:
-    return init_project(tmp_path / "project").project
+    return create_project(tmp_path / "project").project
 
 
 def user_env(tmp_path: Path) -> dict[str, str]:

@@ -30,12 +30,12 @@ from mcuhome.workbench.configuration import (
     system_config_dir,
     user_config_dir,
 )
-from mcuhome.workbench.project import Project, init_project
+from mcuhome.workbench.project import Project, create_project
 
 
 @pytest.fixture
 def project(tmp_path: Path) -> Project:
-    return init_project(tmp_path / "project").project
+    return create_project(tmp_path / "project").project
 
 
 def user_env(tmp_path: Path) -> dict[str, str]:

@@ -50,7 +50,7 @@ stands" is the caller's to state, and a server handling two requests
 from two projects stands in neither.
 
 This module also owns the two duties that come with the layout:
-``mcuhome project init`` (:func:`init_project` — the durable part of the layout,
+``mcuhome project init`` (:func:`create_project` — the durable part of the layout,
 created once, refusing a non-empty directory) and the secrets hygiene
 (:func:`check_secret_file` — ``secrets/`` is created mode
 700 and its files 600; every reader checks, insecure permissions draw a
@@ -70,7 +70,7 @@ from mcuhome.model.errors import ConfigError, Location
 from mcuhome.model.userpaths import expand
 
 from mcuhome.workbench.projectfile import (
-    MARKER_FILE,
+    PROJECT_MARKER_FILE,
     PROJECT_VERSION,
     UPGRADE_FILE,
     ProjectFile,
@@ -87,10 +87,10 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle, typing only
 __all__ = [
     "BUILD_DIR",
     "DEVICES_DIR",
-    "DEVICE_ENTRY",
+    "DEVICE_FILE",
     "GITIGNORE_LINES",
     "BUILDER_SECRETS_DIR",
-    "MARKER_FILE",
+    "PROJECT_MARKER_FILE",
     "PROJECT_CONFIG_FILE",
     "PROJECT_VERSION",
     "SECRETS_DIR",
@@ -98,7 +98,7 @@ __all__ = [
     "Project",
     "check_secret_file",
     "find_project_root",
-    "init_project",
+    "create_project",
     "is_project_root",
     "is_upgrading",
     "resolve_device",
@@ -112,7 +112,7 @@ PROJECT_CONFIG_FILE = "mcuhome.yaml"
 #: The home of every device folder.
 DEVICES_DIR = "devices"
 #: Entry point inside a device folder.
-DEVICE_ENTRY = "main.yaml"
+DEVICE_FILE = "main.yaml"
 #: ALL secrets live under this directory, no exceptions.
 SECRETS_DIR = "secrets"
 #: Project-wide secrets inside ``secrets/`` — what ``!secret`` reads.
@@ -142,7 +142,7 @@ class Project:
 
     @property
     def marker(self) -> Path:
-        return self.root / MARKER_FILE
+        return self.root / PROJECT_MARKER_FILE
 
     @property
     def id(self) -> str | None:
@@ -181,7 +181,7 @@ class Project:
         return self.secrets_dir / DEVICES_DIR / f"{name}.yaml"
 
     def device_entry(self, name: str) -> Path:
-        return self.devices_dir / name / DEVICE_ENTRY
+        return self.devices_dir / name / DEVICE_FILE
 
     def device_names(self) -> list[str]:
         if not self.devices_dir.is_dir():
@@ -189,13 +189,13 @@ class Project:
         return sorted(
             entry.name
             for entry in self.devices_dir.iterdir()
-            if entry.is_dir() and (entry / DEVICE_ENTRY).is_file()
+            if entry.is_dir() and (entry / DEVICE_FILE).is_file()
         )
 
 
 def is_project_root(path: Path) -> bool:
     """Whether *path* carries the project marker."""
-    return (path / MARKER_FILE).is_file()
+    return (path / PROJECT_MARKER_FILE).is_file()
 
 
 def is_upgrading(path: Path) -> bool:
@@ -222,13 +222,13 @@ def find_project_root(start: Path) -> Path | None:
     return None
 
 
-def project_at(root: Path, *, require_version: bool = True) -> Project:
+def read_project(root: Path, *, require_version: bool = True) -> Project:
     """The project in *root*, its file read and — by default — checked.
 
     *require_version* is False for exactly one caller: the upgrade
     itself, which exists to make an outdated project current again.
     """
-    file = read_project_file(root / MARKER_FILE, root=root)
+    file = read_project_file(root / PROJECT_MARKER_FILE, root=root)
     if require_version:
         require_current(file)
     return Project(root=root, discovered=True, file=file)
@@ -250,9 +250,9 @@ def _project_dir_option() -> Option:
 
 def _refuse_no_marker(directory: Path, *, named_by: str) -> ConfigError:
     return ConfigError(
-        f'"{directory}" is not an MCUHome project directory: it has no {MARKER_FILE}.',
+        f'"{directory}" is not an MCUHome project directory: it has no {PROJECT_MARKER_FILE}.',
         hint=(
-            f"{named_by} must name the directory that carries the {MARKER_FILE} "
+            f"{named_by} must name the directory that carries the {PROJECT_MARKER_FILE} "
             "marker. Check the path, or create a project there first with:\n"
             "    mcuhome project init"
         ),
@@ -302,20 +302,20 @@ def resolve_project(
             if is_upgrading(directory):
                 raise in_flight_error(directory)
             raise _refuse_no_marker(directory, named_by=named_by)
-        return project_at(directory.resolve(), require_version=require_version)
+        return read_project(directory.resolve(), require_version=require_version)
 
     found = find_project_root(cwd)
     if found is None:
         raise ConfigError(
             "No MCUHome project found here.",
             hint=(
-                f"a project directory carries a {MARKER_FILE} marker, and none was "
+                f"a project directory carries a {PROJECT_MARKER_FILE} marker, and none was "
                 f"found from {cwd.resolve()} upward. Run this inside a project, pass "
                 "--project-dir /path/to/project, or create one here with:\n"
                 "    mcuhome project init"
             ),
         )
-    return project_at(found, require_version=require_version)
+    return read_project(found, require_version=require_version)
 
 
 def _looks_like_path(spec: str) -> bool:
@@ -324,13 +324,13 @@ def _looks_like_path(spec: str) -> bool:
 
 def _entry_for_path(path: Path, spec: str) -> Path:
     if path.is_dir():
-        entry = path / DEVICE_ENTRY
+        entry = path / DEVICE_FILE
         if not entry.is_file():
             raise ConfigError(
-                f'The device folder "{spec}" has no {DEVICE_ENTRY}.',
+                f'The device folder "{spec}" has no {DEVICE_FILE}.',
                 hint=(
-                    f"every device is a folder with a {DEVICE_ENTRY} entry point; "
-                    f"create {spec}/{DEVICE_ENTRY}"
+                    f"every device is a folder with a {DEVICE_FILE} entry point; "
+                    f"create {spec}/{DEVICE_FILE}"
                 ),
             )
         return entry
@@ -396,7 +396,7 @@ def resolve_device(
         # stands in for one, which is what makes secrets/main.yaml next
         # to the file work.
         return Project(root=entry.parent, discovered=False), entry
-    return project_at(root), entry
+    return read_project(root), entry
 
 
 # --------------------------------------------------------------------------
@@ -493,7 +493,7 @@ class InitResult:
     created: tuple[Path, ...]
 
 
-def init_project(target: Path, *, force: bool = False) -> InitResult:
+def create_project(target: Path, *, force: bool = False) -> InitResult:
     """Create the durable part of a project in *target*.
 
     The marker, ``mcuhome.yaml``, ``devices/``, ``secrets/`` (mode 700),
@@ -546,7 +546,7 @@ def init_project(target: Path, *, force: bool = False) -> InitResult:
     created: list[Path] = []
     target.mkdir(parents=True, exist_ok=True)
 
-    marker = target / MARKER_FILE
+    marker = target / PROJECT_MARKER_FILE
     if not marker.is_file():
         write_project_file(
             marker,

@@ -21,9 +21,9 @@ import pytest
 from mcuhome.model.errors import ConfigError, MCUHomeError
 
 from mcuhome.workbench.migrations import MIGRATIONS, Migration, plan_for
-from mcuhome.workbench.project import init_project, resolve_project
+from mcuhome.workbench.project import create_project, resolve_project
 from mcuhome.workbench.projectfile import (
-    MARKER_FILE,
+    PROJECT_MARKER_FILE,
     PROJECT_VERSION,
     UPGRADE_FILE,
     ProjectUpgradeRequired,
@@ -42,7 +42,7 @@ from mcuhome.workbench.projectupgrade import (
 def legacy_project(root: Path) -> Path:
     """A project as it looked before the file had any content: version 0."""
     root.mkdir(parents=True, exist_ok=True)
-    (root / MARKER_FILE).write_text(
+    (root / PROJECT_MARKER_FILE).write_text(
         "# This file marks the root of an MCUHome project.\n", encoding="utf-8"
     )
     (root / "devices").mkdir(exist_ok=True)
@@ -114,11 +114,13 @@ def test_the_project_file_is_renamed_for_the_whole_run(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
     seen = []
     with upgrade_session(root) as session:
-        assert not (root / MARKER_FILE).exists()
+        assert not (root / PROJECT_MARKER_FILE).exists()
         assert (root / UPGRADE_FILE).is_file()
-        session.apply(on_event=lambda kind, _: seen.append((kind, (root / MARKER_FILE).exists())))
+        session.apply(
+            on_event=lambda kind, _: seen.append((kind, (root / PROJECT_MARKER_FILE).exists()))
+        )
     assert seen == [("start", False), ("done", False)]
-    assert (root / MARKER_FILE).is_file()
+    assert (root / PROJECT_MARKER_FILE).is_file()
     assert not (root / UPGRADE_FILE).exists()
 
 
@@ -129,7 +131,7 @@ def test_the_renamed_file_names_the_process_doing_it(tmp_path: Path) -> None:
         assert record is not None
         assert record.process > 0
         assert record.started
-    assert read_project_file(root / MARKER_FILE).upgrade is None, "the record is not kept"
+    assert read_project_file(root / PROJECT_MARKER_FILE).upgrade is None, "the record is not kept"
 
 
 def test_a_declined_upgrade_puts_the_project_back(tmp_path: Path) -> None:
@@ -137,16 +139,16 @@ def test_a_declined_upgrade_puts_the_project_back(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
     with upgrade_session(root) as session:
         assert session.plan
-    assert (root / MARKER_FILE).is_file()
-    assert read_project_file(root / MARKER_FILE).version == 0
+    assert (root / PROJECT_MARKER_FILE).is_file()
+    assert read_project_file(root / PROJECT_MARKER_FILE).version == 0
 
 
 def test_an_abort_before_the_migrations_puts_the_project_back(tmp_path: Path) -> None:
     root = legacy_project(tmp_path / "old")
     with pytest.raises(KeyboardInterrupt), upgrade_session(root):
         raise KeyboardInterrupt
-    assert (root / MARKER_FILE).is_file()
-    assert read_project_file(root / MARKER_FILE).version == 0
+    assert (root / PROJECT_MARKER_FILE).is_file()
+    assert read_project_file(root / PROJECT_MARKER_FILE).version == 0
 
 
 def test_a_stop_between_migrations_ends_cleanly_at_the_version_reached(tmp_path: Path) -> None:
@@ -157,7 +159,7 @@ def test_a_stop_between_migrations_ends_cleanly_at_the_version_reached(tmp_path:
     assert result.stopped
     assert result.applied == ()
     assert result.to_version == 0
-    assert (root / MARKER_FILE).is_file()
+    assert (root / PROJECT_MARKER_FILE).is_file()
     assert plan_for(result.to_version) == MIGRATIONS
 
 
@@ -182,7 +184,7 @@ def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Pat
     assert "disk is on fire" in caught.value.message
     assert "Restore the backup" in (caught.value.hint or "")
     assert (root / UPGRADE_FILE).is_file(), "the project stays marked as being upgraded"
-    assert not (root / MARKER_FILE).exists()
+    assert not (root / PROJECT_MARKER_FILE).exists()
 
     # And every command now says what happened, rather than "no project".
     with pytest.raises(UpgradeInterrupted) as refusal:
@@ -192,7 +194,7 @@ def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Pat
 
 
 def test_an_upgrade_of_a_current_project_has_nothing_to_do(tmp_path: Path) -> None:
-    root = init_project(tmp_path / "fresh").project.root
+    root = create_project(tmp_path / "fresh").project.root
     with upgrade_session(root) as session:
         assert session.plan == ()
         result = session.apply()
@@ -205,7 +207,7 @@ def test_upgrading_something_that_is_not_a_project_refuses(tmp_path: Path) -> No
     plain.mkdir()
     with pytest.raises(ConfigError) as caught, upgrade_session(plain):
         pass
-    assert MARKER_FILE in caught.value.message
+    assert PROJECT_MARKER_FILE in caught.value.message
     assert "mcuhome project init" in (caught.value.hint or "")
 
 
@@ -274,7 +276,7 @@ def test_the_upward_search_stops_at_a_project_being_upgraded(tmp_path: Path) -> 
 
 
 def test_a_running_build_is_reported_so_the_caller_can_wait(tmp_path: Path) -> None:
-    root = init_project(tmp_path / "fresh").project.root
+    root = create_project(tmp_path / "fresh").project.root
     build_dir = root / "build" / "bench-node"
     build_dir.mkdir(parents=True)
     assert running_builds(root) == ()
