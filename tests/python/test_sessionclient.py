@@ -706,10 +706,10 @@ KEY_SCALAR = 0x1F2E3D4C5B6A79889796A5B4C3D2E1F00F1E2D3C4B5A69788796A5B4C3D2E1F0
 
 
 def make_context(root: Path, *, sdk_sha256: str, patches: dict[str, bytes] | None = None) -> str:
-    """A base context directory, as ``create_context`` lays one out.
+    """A base context directory, as ``write_context`` lays one out.
 
     Written by hand rather than through
-    :func:`mcuhome.workbench.contextdir.create_context` for one reason:
+    :func:`mcuhome.workbench.contextdir.write_context` for one reason:
     that function needs a resolved :class:`DeviceModel`, and nothing on
     either side of this protocol parses the model — the server carries no
     build logic at all. The parts that *are* protocol are produced by the

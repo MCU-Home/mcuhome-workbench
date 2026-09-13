@@ -74,7 +74,6 @@ __all__ = [
     "ContextVerification",
     "FileMismatch",
     "create_build_context",
-    "create_context",
     "generator_chain",
     "lock_context",
     "read_context_facts",
@@ -83,6 +82,7 @@ __all__ = [
     "read_generator_chain",
     "verify_context",
     "write_build_context",
+    "write_context",
     "write_context_manifest",
     "write_context_request",
 ]
@@ -247,7 +247,7 @@ def _format_created(created: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def create_context(
+def write_context(
     model: DeviceModel,
     *,
     out_dir: Path,
@@ -399,7 +399,7 @@ def create_build_context(
     names that place; one that keeps all three together names it three
     times, which is the statement it is actually making.
 
-    *out_dir* is **removed if it exists**, because :func:`create_context`
+    *out_dir* is **removed if it exists**, because :func:`write_context`
     requires an empty directory and a build's context directory is
     its own scratch area, rebuilt every run. Callers pass a path they own
     (``<work root>/context``), never a directory a user named.
@@ -480,7 +480,7 @@ def create_build_context(
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.parent.mkdir(parents=True, exist_ok=True)
-        return create_context(
+        return write_context(
             model,
             out_dir=out_dir,
             build_environment=DeveloperEnvironment(),
@@ -513,7 +513,7 @@ def create_build_context(
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    return create_context(
+    return write_context(
         model,
         out_dir=out_dir,
         build_environment=build_environment,
@@ -531,7 +531,7 @@ def create_build_context(
 def lock_context(out_dir: Path) -> ContextManifest:
     """Freeze a created context: hash its files and write ``manifest.yaml``.
 
-    The write-side counterpart of :func:`create_context`. Creating writes
+    The write-side counterpart of :func:`write_context`. Creating writes
     the request (``context.yaml``); locking turns that request and the
     now-final file set into the integrity *record* — the ``files`` list
     and the context ``id``. It reads the request back out of

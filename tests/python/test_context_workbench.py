@@ -4,7 +4,7 @@
 
 The workbench half of the subject. ``mcuhome-sdk``'s ``test_context.py``
 pins the format and the normative ID rule (:mod:`mcuhome.model.context`);
-this file pins the directory the rule is applied to — what ``create_context``
+this file pins the directory the rule is applied to — what ``write_context``
 writes, what ``lock_context`` freezes, and what ``verify_context`` makes
 of a directory that has since been edited. The two are deliberately in
 different packages: a build server recomputes the ID from
@@ -45,13 +45,13 @@ from mcuhome.workbench import __version__ as workbench_version
 from mcuhome.workbench.contextdir import (
     DEVELOPER_SDK_FACT,
     GENERATOR_PRODUCT,
-    create_context,
     lock_context,
     read_context_facts,
     read_context_manifest,
     read_context_request,
     read_generator_chain,
     verify_context,
+    write_context,
     write_context_manifest,
 )
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
@@ -96,7 +96,7 @@ CREATED = datetime(2026, 8, 10, 9, 0, 0, tzinfo=UTC)
 
 #: A fixed key pair so the public half is a constant — the context bytes
 #: have to be reproducible, which a fresh random key would break. The
-#: private half is kept around only to prove create_context refuses it.
+#: private half is kept around only to prove write_context refuses it.
 _PRIVATE_PEM = generate_key_pem(scalar=0x1234ABCD)
 SIGNING_PUB = public_key_pem(_PRIVATE_PEM)
 
@@ -114,13 +114,13 @@ def _create(model: DeviceModel, out_dir: Path, **overrides) -> ContextRequest:
         "created": CREATED,
     }
     arguments.update(overrides)
-    return create_context(model, out_dir=out_dir, **arguments)
+    return write_context(model, out_dir=out_dir, **arguments)
 
 
 def _lock(model: DeviceModel, out_dir: Path, **overrides) -> ContextManifest:
     """Create a base context and freeze it — what a local build target does.
 
-    ``create_context`` writes only the request; the ``files`` list and the
+    ``write_context`` writes only the request; the ``files`` list and the
     ID exist only once the context is locked, so every test that needs a
     ``manifest.yaml`` goes through here rather than through create alone.
     """
@@ -375,7 +375,7 @@ def test_the_request_carries_pins_and_created_but_no_files_or_id(model, tmp_path
 
 
 def test_the_request_round_trips_through_a_yaml_load(model, tmp_path: Path) -> None:
-    """read_context_request reads back exactly the request create_context wrote."""
+    """read_context_request reads back exactly the request write_context wrote."""
     out_dir = tmp_path / "context"
     request = _create(model, out_dir)
     assert read_context_request(out_dir / CONTEXT_FILE) == request
