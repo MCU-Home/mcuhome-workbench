@@ -286,7 +286,7 @@ from mcuhome.workbench.ociregistry import (
     ImageRegistryUnauthorized,
     ImageRegistryUnreachable,
 )
-from mcuhome.workbench.otafile import ota_file_name
+from mcuhome.workbench.otafile import ota_file_name, write_ota_image
 from mcuhome.workbench.packagefetch import (
     AcquiredPackage,
     SdkUnavailable,
@@ -648,6 +648,7 @@ __all__ = [
     "unset_config_value",
     "validate_device",
     "verify_context",
+    "write_ota_image",
 ]
 
 #: The workbench's own version, for a consumer that declares a supported

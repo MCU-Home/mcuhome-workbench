@@ -56,9 +56,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # Signing, the build report and OTA: a read that no longer writes a
-    # key, signing that answers a result, the project's key file names.
-    "write_ota_image": "signing",
     # The host check and the container-profile seams as a designed set.
     "HostCheckResult": "host check and container seams",
     "HostFinding": "host check and container seams",

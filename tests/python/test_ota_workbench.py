@@ -14,16 +14,21 @@ docstring explains why MCUHome writes it itself).
 
 from __future__ import annotations
 
+import dataclasses
 import struct
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model import ota, pairing
 from mcuhome.model.errors import BuildError
+from mcuhome.model.model import DeviceModel
 
 from mcuhome.workbench import otafile
+
+EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
 #: CHIP's own OTA image tool, when this checkout sits in a west workspace
 #: that has the Matter SDK. Absent on a machine that only installed the
@@ -43,6 +48,16 @@ CHIP_OTA_TOOL = (
 )
 
 
+@pytest.fixture(scope="module")
+def model() -> DeviceModel:
+    return resolve_file(EXAMPLE)
+
+
+def _at_version(model: DeviceModel, version: str) -> DeviceModel:
+    """The same device, versioned differently — what the header carries."""
+    return dataclasses.replace(model, device=dataclasses.replace(model.device, version=version))
+
+
 def _payload(tmp_path: Path, size: int = 4096) -> Path:
     path = tmp_path / "zephyr.signed.bin"
     path.write_bytes(bytes(range(256)) * (size // 256))
@@ -54,15 +69,46 @@ def test_the_file_name_carries_the_version(tmp_path: Path) -> None:
     assert otafile.ota_file_name("bedroom-climate", "1.4.0") == "bedroom-climate-1.4.0.ota"
 
 
-def test_the_image_is_the_header_plus_the_payload_verbatim(tmp_path: Path) -> None:
-    payload = _payload(tmp_path)
-    result = otafile.write_ota_image(
-        payload=payload,
-        output=tmp_path / "out.ota",
-        vendor_id=0xFFF1,
-        product_id=0x8000,
-        version="1.2.3",
+def test_the_file_is_named_and_identified_from_the_device(
+    tmp_path: Path, model: DeviceModel
+) -> None:
+    """What the caller no longer has to know: the name and the identity.
+
+    Both come out of the device — the version in the file name is the one
+    in the header, and neither is a parameter a client could get wrong.
+    """
+    identity = ota.ota_parameters(model)
+    result = otafile.write_ota_image(model, payload=_payload(tmp_path), out_dir=tmp_path / "out")
+    assert result is not None
+    assert result.path == tmp_path / "out" / f"{model.device.name}-{model.device.version}.ota"
+    assert result.version == model.device.version
+    assert (result.vendor_id, result.product_id) == (identity.vendor_id, identity.product_id)
+    assert result.software_version == identity.software_version
+
+
+def test_a_device_that_cannot_take_an_update_gets_no_file(
+    tmp_path: Path, model: DeviceModel
+) -> None:
+    """A device without a Matter stack has nothing to receive an image with.
+
+    ``None`` rather than a refusal: this is a normal device, and a
+    caller that wraps whatever a build produced asks the question for
+    every device it signs.
+    """
+    without_matter = dataclasses.replace(
+        model, network=dataclasses.replace(model.network, matter_enabled=False)
     )
+    out = tmp_path / "out"
+    assert otafile.write_ota_image(without_matter, payload=_payload(tmp_path), out_dir=out) is None
+    assert not out.exists(), "nothing is written for a device that takes no update"
+
+
+def test_the_image_is_the_header_plus_the_payload_verbatim(
+    tmp_path: Path, model: DeviceModel
+) -> None:
+    payload = _payload(tmp_path)
+    result = otafile.write_ota_image(_at_version(model, "1.2.3"), payload=payload, out_dir=tmp_path)
+    assert result is not None
     raw = result.path.read_bytes()
     magic, total, header_size = struct.unpack("<IQI", raw[:16])
 
@@ -108,7 +154,9 @@ def _decode_header_tlv(tlv: bytes) -> list[tuple[int, object]]:
     return out
 
 
-def test_the_header_is_the_shape_the_firmware_parser_expects(tmp_path: Path) -> None:
+def test_the_header_is_the_shape_the_firmware_parser_expects(
+    tmp_path: Path, model: DeviceModel
+) -> None:
     """The two halves of the format agree.
 
     The device-side parser lives in C
@@ -119,13 +167,8 @@ def test_the_header_is_the_shape_the_firmware_parser_expects(tmp_path: Path) -> 
     in the ascending order CHIP's own TLV writer produces.
     """
     payload = _payload(tmp_path)
-    result = otafile.write_ota_image(
-        payload=payload,
-        output=tmp_path / "out.ota",
-        vendor_id=0xFFF1,
-        product_id=0x8000,
-        version="0.1.0",
-    )
+    result = otafile.write_ota_image(_at_version(model, "0.1.0"), payload=payload, out_dir=tmp_path)
+    assert result is not None
     raw = result.path.read_bytes()
     _, _, header_size = struct.unpack("<IQI", raw[:16])
     fields = _decode_header_tlv(raw[16 : 16 + header_size])
@@ -133,8 +176,8 @@ def test_the_header_is_the_shape_the_firmware_parser_expects(tmp_path: Path) -> 
     tags = [tag for tag, _ in fields]
     assert tags == sorted(tags), "CHIP's TLVWriter sorts a structure by tag"
     values = dict(fields)
-    assert values[0] == 0xFFF1  # vendor
-    assert values[1] == 0x8000  # product
+    assert values[0] == pairing.VENDOR_ID  # vendor
+    assert values[1] == pairing.PRODUCT_ID  # product
     assert values[2] == 0x00010000  # software version
     assert values[3] == "0.1.0"  # version string
     assert values[4] == payload.stat().st_size  # payload size
@@ -142,49 +185,34 @@ def test_the_header_is_the_shape_the_firmware_parser_expects(tmp_path: Path) -> 
     assert len(values[9]) == 32  # digest
 
 
-def test_an_empty_image_is_refused(tmp_path: Path) -> None:
+def test_an_empty_image_is_refused(tmp_path: Path, model: DeviceModel) -> None:
     payload = tmp_path / "zephyr.signed.bin"
     payload.write_bytes(b"")
     with pytest.raises(BuildError, match="nothing to update to"):
-        otafile.write_ota_image(
-            payload=payload,
-            output=tmp_path / "out.ota",
-            vendor_id=1,
-            product_id=1,
-            version="0.1.0",
-        )
+        otafile.write_ota_image(model, payload=payload, out_dir=tmp_path)
 
 
-def test_a_missing_image_says_to_sign_first(tmp_path: Path) -> None:
+def test_a_missing_image_says_to_sign_first(tmp_path: Path, model: DeviceModel) -> None:
     with pytest.raises(BuildError) as error:
-        otafile.write_ota_image(
-            payload=tmp_path / "nothing.bin",
-            output=tmp_path / "out.ota",
-            vendor_id=1,
-            product_id=1,
-            version="0.1.0",
-        )
+        otafile.write_ota_image(model, payload=tmp_path / "nothing.bin", out_dir=tmp_path)
     assert "mcuhome device sign-firmware" in str(error.value.hint)
 
 
-def test_writing_the_same_image_twice_gives_the_same_bytes(tmp_path: Path) -> None:
+def test_writing_the_same_image_twice_gives_the_same_bytes(
+    tmp_path: Path, model: DeviceModel
+) -> None:
     """Determinism, like every other artifact the builder produces."""
     payload = _payload(tmp_path)
-    arguments = {
-        "payload": payload,
-        "vendor_id": pairing.VENDOR_ID,
-        "product_id": pairing.PRODUCT_ID,
-        "version": "0.1.0",
-    }
-    first = otafile.write_ota_image(output=tmp_path / "a.ota", **arguments)
-    second = otafile.write_ota_image(output=tmp_path / "b.ota", **arguments)
+    first = otafile.write_ota_image(model, payload=payload, out_dir=tmp_path / "a")
+    second = otafile.write_ota_image(model, payload=payload, out_dir=tmp_path / "b")
+    assert first is not None and second is not None
     assert first.path.read_bytes() == second.path.read_bytes()
 
 
 @pytest.mark.skipif(not CHIP_OTA_TOOL.is_file(), reason="no Matter SDK in this workspace")
 @pytest.mark.parametrize("version", ["0.1.0", "1.2.3", "255.255.255"])
 def test_the_file_is_byte_identical_to_the_one_chips_tool_writes(
-    tmp_path: Path, version: str
+    tmp_path: Path, version: str, model: DeviceModel
 ) -> None:
     """The check that keeps the reimplementation honest.
 
@@ -195,13 +223,8 @@ def test_the_file_is_byte_identical_to_the_one_chips_tool_writes(
     a contributor's workspace, CI — this compares the bytes.
     """
     payload = _payload(tmp_path)
-    mine = otafile.write_ota_image(
-        payload=payload,
-        output=tmp_path / "mine.ota",
-        vendor_id=pairing.VENDOR_ID,
-        product_id=pairing.PRODUCT_ID,
-        version=version,
-    )
+    mine = otafile.write_ota_image(_at_version(model, version), payload=payload, out_dir=tmp_path)
+    assert mine is not None
     theirs = tmp_path / "theirs.ota"
     subprocess.run(  # noqa: S603 - fixed argv, no shell
         [

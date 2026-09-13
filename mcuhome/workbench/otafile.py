@@ -33,7 +33,8 @@ import struct
 from pathlib import Path
 
 from mcuhome.model.errors import BuildError
-from mcuhome.model.ota import OtaImage, software_version
+from mcuhome.model.model import DeviceModel
+from mcuhome.model.ota import OtaImage, ota_parameters, software_version
 
 __all__ = [
     "DIGEST_TYPE_SHA256",
@@ -141,7 +142,41 @@ def header_tlv(
     return bytes([_ANONYMOUS_STRUCT]) + body + bytes([_END_OF_CONTAINER])
 
 
-def write_ota_image(
+def write_ota_image(model: DeviceModel, *, payload: Path, out_dir: Path) -> OtaImage | None:
+    """Wrap a signed application image in the OTA file *model* names.
+
+    Everything the header carries is the device's own — the identity, the
+    version, and the file name that keeps two versions of one device side
+    by side in a provider directory — so a caller states the device and
+    the image and never re-derives any of it. ``None`` for a device that
+    cannot take an OTA at all: a board whose update scheme has nowhere to
+    stage an image, or a device without a Matter stack to receive one.
+    Neither can be updated over the air, and an .ota for one would be a
+    file nothing can deliver.
+
+    *payload* has to be the **signed** binary. An unsigned one produces a
+    perfectly valid .ota that the device downloads, stages, reboots into
+    and then rejects at the bootloader — the digest in the header proves
+    nothing about origin, and CHIP does not check it on any platform
+    anyway. MCUboot's signature is the only trust anchor in this path, so
+    the wrapper's job is to carry it, not to replace it. A payload that
+    is not there is a refusal, never a quiet ``None``: the difference
+    between "this device takes no updates" and "the image you meant to
+    wrap is missing" is the whole message.
+    """
+    identity = ota_parameters(model)
+    if identity is None:
+        return None
+    return _write_image(
+        payload=payload,
+        output=out_dir / ota_file_name(model.device.name, identity.version),
+        vendor_id=identity.vendor_id,
+        product_id=identity.product_id,
+        version=identity.version,
+    )
+
+
+def _write_image(
     *,
     payload: Path,
     output: Path,
@@ -149,16 +184,7 @@ def write_ota_image(
     product_id: int,
     version: str,
 ) -> OtaImage:
-    """Wrap a signed application image in a Matter OTA file.
-
-    *payload* has to be the **signed** binary. An unsigned one produces a
-    perfectly valid .ota that the device downloads, stages, reboots into
-    and then rejects at the bootloader — the digest in the header proves
-    nothing about origin, and CHIP does not check it on any platform
-    anyway. MCUboot's signature is the only trust
-    anchor in this path, so the wrapper's job is to carry it, not to
-    replace it.
-    """
+    """The file itself: fixed header, header TLV, payload verbatim."""
     number = software_version(version)
     digest = hashlib.sha256()
     size = 0
