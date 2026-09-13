@@ -936,17 +936,23 @@ def create_launcher(
 ```
 An image is chosen by the package set its labels declare, never by its
 name: `resolve_container_image` answers a `ContainerImageMatch(reference,
-declaration, found_under)` or raises `EnvironmentUnavailable`, and
-`ImageRegistryUnreachable` where a registry could not be asked.
+declaration, found_under)` or raises `EnvironmentUnavailable`. A
+repository that could not be asked is one candidate fewer and not a
+failure of the search — the refusal lists it among the ones it tried,
+with the reason.
 `require_container_image` refuses an image whose declaration does not
 match this generation, generator constraint or Zephyr release
 (`EnvironmentUnusable`). `require_container_runtime` refuses with the one
 thing that is wrong — no program, or no daemon — and takes `env` because
 that is what it probes. `ensure_container_image` pulls what is not
-present and answers whether it had to, raising `ImageRegistryError` and
-its two subclasses. `create_launcher` answers the `Launcher` a builder
-session starts each step with and raises nothing; *on_container* receives
-every container name it starts, so a caller can reap them.
+present and answers whether it had to; a pull the runtime refused is a
+`BuildError` naming the image and the registry to log in to, and a
+runtime that is not there at all is the same refusal
+`require_container_runtime` raises. It drives the container program
+rather than a registry client, so it raises no `ImageRegistryError`.
+`create_launcher` answers the `Launcher` a builder session starts each
+step with and raises nothing; *on_container* receives every container
+name it starts, so a caller can reap them.
 
 `ContainerRuntime(program=DEFAULT_CONTAINER_PROGRAM, *, runner=None,
 spawner=None)` — the seam over the container command line; methods `run`,
@@ -956,8 +962,8 @@ spawner=None)` — the seam over the container command line; methods `run`,
 `to_arguments()`.
 `ImageRegistry` is the container-registry client
 `resolve_container_image` may be handed; `ContainerImagePin(repository,
-tag, digest)` with `stated()`, `canonical()`, `described()` is what
-`parse_container_image` answers.
+tag, digest)` with the properties `stated` and `canonical` and the
+method `described()` is what `parse_container_image` answers.
 `Launcher` is `Callable[[Step, LineSink | None], Running]` — a type
 alias, so a caller may supply its own.
 
