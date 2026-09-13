@@ -102,8 +102,8 @@ def test_creating_a_device_is_part_of_the_surface() -> None:
     from mcuhome.workbench import provision, scaffold
 
     for name in (
-        "new_device",
-        "render_starter",
+        "create_device",
+        "render_device_file",
         "NewDevice",
         "DeviceOutline",
         "BusChoice",
@@ -114,7 +114,7 @@ def test_creating_a_device_is_part_of_the_surface() -> None:
         assert name in api.__all__, name
         assert getattr(api, name) is getattr(scaffold, name), name
 
-    for name in ("init_pairing", "PairingResult"):
+    for name in ("create_pairing", "PairingResult"):
         assert name in api.__all__, name
         assert getattr(api, name) is getattr(provision, name), name
 
@@ -140,11 +140,11 @@ def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
     assert model.model_version == api.MODEL_VERSION
 
 
-def test_find_device_resolves_a_name_against_the_project(tmp_path) -> None:
+def test_resolve_device_resolves_a_name_against_the_project(tmp_path) -> None:
     api.create_project(tmp_path, force=True)
     (tmp_path / "devices" / "bench-node").mkdir(parents=True)
     (tmp_path / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
-    project, entry = api.find_device("bench-node", cwd=tmp_path, env={})
+    project, entry = api.resolve_device("bench-node", cwd=tmp_path, env={})
     assert project.root == tmp_path
     assert entry == tmp_path / "devices" / "bench-node" / "main.yaml"
 
@@ -295,7 +295,7 @@ def test_registry_data_and_schema_are_reachable_from_the_api() -> None:
 
 
 def test_the_example_still_resolves_through_the_api() -> None:
-    project, entry = api.find_device(str(EXAMPLE), cwd=EXAMPLES_DIR, env={})
+    project, entry = api.resolve_device(str(EXAMPLE), cwd=EXAMPLES_DIR, env={})
     assert api.load_model(entry, project=project).device.name == "bmp180-node"
 
 
@@ -306,7 +306,7 @@ def test_the_example_still_resolves_through_the_api() -> None:
 
 def test_read_model_round_trips_a_resolved_model(tmp_path) -> None:
     """The model is the wire format, so it has to survive the trip."""
-    project, entry = api.find_device("bench-node", cwd=FIXTURE_TREE, env={})
+    project, entry = api.resolve_device("bench-node", cwd=FIXTURE_TREE, env={})
     original = api.load_model(entry, project=project)
     path = tmp_path / "device-model.json"
     path.write_text(original.to_json(), encoding="utf-8")

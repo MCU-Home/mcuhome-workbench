@@ -32,7 +32,7 @@ notice. Resolving a device, loading its model and building it looks like this:
 ```python
 from mcuhome.workbench import api
 
-project, entry = api.find_device("kitchen", env=env, cwd=cwd)
+project, entry = api.resolve_device("kitchen", env=env, cwd=cwd)
 model = api.load_model(entry, project=project)
 request = api.BuildRequest(model=model, out_dir=out)
 result = await api.build_firmware(request, target="local")

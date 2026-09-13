@@ -31,7 +31,7 @@ from pathlib import Path
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
 
-__all__ = ["CompilerUnavailable", "generate_tree"]
+__all__ = ["CompilerUnavailable", "generate_application"]
 
 
 class CompilerUnavailable(BuildError):
@@ -80,16 +80,16 @@ def _compiler(module: str):
         ) from error
 
 
-def generate_tree(model: DeviceModel, *, out_dir: Path, config_name: str) -> list[Path]:
+def generate_application(model: DeviceModel, *, out_dir: Path) -> tuple[Path, ...]:
     """Write *model*'s standalone Zephyr application into *out_dir*.
 
     Answers with every file written, in the order they were written.
 
-    *config_name* is the configuration file's name as the generated
-    headers state it, and it comes out of the model rather than out of a
-    path the caller was given: stage 4 has to be a function of the model
-    alone, or a build from an exported model could not reproduce a direct
-    one byte for byte.
+    The configuration file's name the generated headers state comes out
+    of the model (``model.device.source``) rather than out of a path the
+    caller was given: this stage has to be a function of the model alone,
+    or a build from an exported model could not reproduce a direct one
+    byte for byte.
     """
     generate = _compiler("generate")
-    return list(generate.write_tree(model, out_dir=Path(out_dir), config_name=config_name))
+    return tuple(generate.write_tree(model, out_dir=Path(out_dir), config_name=model.device.source))

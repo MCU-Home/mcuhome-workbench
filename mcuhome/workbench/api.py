@@ -22,7 +22,7 @@ builder never learns that a dashboard exists.
 
 What is here, in the order a caller needs it:
 
-``resolve_project`` / ``create_project`` / ``find_device``
+``resolve_project`` / ``create_project`` / ``resolve_device``
     Where the user's work lives (the ``.mcuhome-project-root`` marker
     and its bootstrap ladder), how a project comes into
     being, and which file is a given device's. Resolution also enforces
@@ -162,7 +162,7 @@ with ``asyncio.to_thread`` when it must.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -240,7 +240,7 @@ from mcuhome.workbench.configuration import (
     set_config_value,
     unset_config_value,
 )
-from mcuhome.workbench.generate import CompilerUnavailable, generate_tree
+from mcuhome.workbench.generate import CompilerUnavailable, generate_application
 from mcuhome.workbench.loader import load_config
 from mcuhome.workbench.migrations import Migration, plan_upgrade
 from mcuhome.workbench.packagefetch import SdkUnavailable
@@ -278,7 +278,7 @@ from mcuhome.workbench.projectupgrade import (
     find_running_builds,
     open_upgrade_session,
 )
-from mcuhome.workbench.provision import PairingResult, init_pairing
+from mcuhome.workbench.provision import PairingResult, create_pairing
 from mcuhome.workbench.resolve import resolve
 from mcuhome.workbench.scaffold import (
     BusChoice,
@@ -287,8 +287,8 @@ from mcuhome.workbench.scaffold import (
     EndpointChoice,
     NewDevice,
     PeripheralChoice,
-    new_device,
-    render_starter,
+    create_device,
+    render_device_file,
 )
 from mcuhome.workbench.schema import parse_config
 from mcuhome.workbench.validate import validate
@@ -356,7 +356,6 @@ __all__ = [
     "ProjectVersionUnsupported",
     "RemoteBuild",
     "RemoteNotConfigured",
-    "SubprocessExecution",
     "RunningBuild",
     "SdkUnavailable",
     "SelectedBuilder",
@@ -364,6 +363,7 @@ __all__ = [
     "Settings",
     "Step",
     "StepResult",
+    "SubprocessExecution",
     "UPGRADE_MARKER_FILE",
     "UnknownBuildMode",
     "UnknownBuildTarget",
@@ -374,36 +374,36 @@ __all__ = [
     "VERSION",
     "ValidationResult",
     "build_firmware",
-    "resolve_build_options",
-    "open_build_lock",
+    "create_device",
+    "create_pairing",
+    "create_project",
     "device_schema",
     "error_dicts",
-    "find_device",
     "find_project_root",
-    "generate_tree",
-    "init_pairing",
-    "create_project",
+    "find_running_builds",
+    "generate_application",
     "is_project_root",
     "is_upgrading",
     "load_model",
-    "new_device",
+    "open_build_lock",
+    "open_upgrade_session",
     "option",
-    "read_project",
+    "plan_upgrade",
     "read_model",
+    "read_project",
     "registry_data",
-    "render_starter",
-    "resolve_builder",
+    "render_device_file",
     "resolve_build_mode",
+    "resolve_build_options",
     "resolve_build_target",
+    "resolve_builder",
+    "resolve_config_file",
+    "resolve_device",
     "resolve_project",
     "resolve_settings",
     "resolve_shutdown_seconds",
-    "find_running_builds",
-    "resolve_config_file",
     "set_config_value",
     "unset_config_value",
-    "plan_upgrade",
-    "open_upgrade_session",
     "validate_device",
 ]
 
@@ -411,25 +411,6 @@ __all__ = [
 #: range — deliberately not the model's, which versions with the SDK
 #: repository.
 VERSION = __version__
-
-
-def find_device(
-    spec: str,
-    *,
-    env: Mapping[str, str],
-    cwd: Path,
-    project_dir: Path | None = None,
-) -> tuple[Project, Path]:
-    """Resolve a device name or path to its project and its entry file.
-
-    The same resolution the CLI's ``<device>`` argument gets: a folder
-    name under the project's ``devices/``, or an explicit path to a
-    device folder or a YAML file. The project itself comes from the
-    bootstrap ladder — *project_dir* first,
-    ``MCUHOME_PROJECT_DIR`` in *env* second, the upward marker search
-    from *cwd* last.
-    """
-    return resolve_device(spec, env=env, cwd=cwd, project_dir=project_dir)
 
 
 def load_model(

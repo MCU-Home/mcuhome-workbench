@@ -49,9 +49,10 @@ from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML
 
 from mcuhome.workbench.loader import device_secrets_file, read_yaml_file
+from mcuhome.workbench.project import Project
 from mcuhome.workbench.validate import PAIRING_KEYS
 
-__all__ = ["CREDENTIAL_COMMENT", "PairingResult", "init_pairing", "secret_names"]
+__all__ = ["CREDENTIAL_COMMENT", "PairingResult", "create_pairing", "secret_names"]
 
 #: Written above the credentials, and recognized again when ``--force``
 #: replaces them so that repeated runs do not stack up comment blocks.
@@ -255,25 +256,26 @@ def _lines_to_drop(text: _Text, occupied: dict[str, int]) -> set[int]:
 # --------------------------------------------------------------------------
 
 
-def init_pairing(
+def create_pairing(
     entry: Path,
     *,
-    secrets_file: Path,
+    project: Project,
     force: bool = False,
     draw: Callable[[], pairing.Pairing] = pairing.random_pairing,
 ) -> PairingResult:
     """Write fresh commissioning credentials for the configuration *entry*.
 
-    *secrets_file* is the project's **main** secrets file; the values
-    themselves go to the device's own file next to it
-    (:func:`~mcuhome.workbench.loader.device_secrets_file`), and the
-    configuration gets ``!secret`` references — the values are
-    security-relevant and never land in the committable file (PO
-    2026-08-15).
+    The values go to the device's own secrets file beside the project's
+    shared one (:func:`~mcuhome.workbench.loader.device_secrets_file`),
+    and the configuration gets ``!secret`` references — the values are
+    security-relevant and never land in the committable file. *project*
+    is what says where both of those are: the file this package owns is
+    picked here rather than named by the caller.
 
     *draw* is the source of randomness, injected so the tests can pin it.
     Everything else about this function is deterministic.
     """
+    secrets_file = project.secrets_file
     text = _Text.of(entry.read_text(encoding="utf-8"))
     data = read_yaml_file(entry)
     anchor = _find_anchor(data, text, entry)

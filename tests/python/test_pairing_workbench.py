@@ -28,6 +28,7 @@ from mcuhome.model.errors import ConfigError
 from mcuhome.model.model import PairingModel
 
 from mcuhome.workbench import provision
+from mcuhome.workbench.project import Project
 
 FIXED = pairing.Pairing(
     discriminator=2314,
@@ -39,10 +40,18 @@ FIXED = pairing.Pairing(
 WITHOUT_CREDENTIALS = VALID_CONFIG.replace("    use_test_pairing: true\n", "")
 
 
+def _project(path: Path) -> Project:
+    """The device file's own directory standing in for a project.
+
+    The same stand-in ``resolve_device`` answers for a file outside any
+    project, which is what makes the ``secrets/`` directory next to the
+    file the one these credentials are written into.
+    """
+    return Project(root=path.parent, discovered=False)
+
+
 def _init(path: Path, **kwargs) -> provision.PairingResult:
-    return provision.init_pairing(
-        path, secrets_file=path.parent / "secrets" / "main.yaml", draw=lambda: FIXED, **kwargs
-    )
+    return provision.create_pairing(path, project=_project(path), draw=lambda: FIXED, **kwargs)
 
 
 def test_init_pairing_writes_credentials_the_builder_then_accepts(write_config) -> None:
@@ -105,9 +114,7 @@ def test_force_replaces_the_credentials_without_stacking_up_comments(write_confi
     other = pairing.Pairing(
         discriminator=17, passcode=11223344, salt=FIXED.salt, iterations=FIXED.iterations
     )
-    result = provision.init_pairing(
-        path, secrets_file=path.parent / "secrets" / "main.yaml", force=True, draw=lambda: other
-    )
+    result = provision.create_pairing(path, project=_project(path), force=True, draw=lambda: other)
     twice = path.read_text(encoding="utf-8")
 
     assert result.replaced
@@ -121,9 +128,7 @@ def test_force_replaces_the_credentials_without_stacking_up_comments(write_confi
 
 def test_force_also_clears_a_test_pairing_opt_in(write_config) -> None:
     path = write_config(VALID_CONFIG)
-    provision.init_pairing(
-        path, secrets_file=path.parent / "secrets" / "main.yaml", force=True, draw=lambda: FIXED
-    )
+    provision.create_pairing(path, project=_project(path), force=True, draw=lambda: FIXED)
     text = path.read_text(encoding="utf-8")
     assert "use_test_pairing" not in text
     assert resolve_file(path).network.pairing == PairingModel(

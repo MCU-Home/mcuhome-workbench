@@ -5,7 +5,7 @@
 No build takes this path — a build environment generates from the model
 its build context carries — so what is asserted here is the seam itself:
 the one caller that wants the tree for its own sake reaches the compiler
-through :func:`~mcuhome.workbench.generate.generate_tree`, and where that
+through :func:`~mcuhome.workbench.generate.generate_application`, and where that
 distribution is absent it gets a sentence naming the install rather than
 a traceback.
 
@@ -42,7 +42,7 @@ def _failing_import(monkeypatch, error: ImportError) -> None:
 
 
 def test_the_generated_tree_is_written_and_every_file_named(model, tmp_path) -> None:
-    written = generate.generate_tree(model, out_dir=tmp_path, config_name=model.device.source)
+    written = generate.generate_application(model, out_dir=tmp_path)
     assert written
     assert all(path.is_file() for path in written)
     assert all(path.is_relative_to(tmp_path) for path in written)
@@ -55,7 +55,7 @@ def test_a_missing_compiler_distribution_is_the_named_refusal(model, tmp_path, m
         ModuleNotFoundError("No module named 'mcuhome.compiler'", name="mcuhome.compiler"),
     )
     with pytest.raises(generate.CompilerUnavailable) as refusal:
-        generate.generate_tree(model, out_dir=tmp_path, config_name="main.yaml")
+        generate.generate_application(model, out_dir=tmp_path)
     assert "pip install mcuhome-compiler" in str(refusal.value.hint)
 
 
@@ -72,6 +72,6 @@ def test_a_broken_dependency_inside_an_installed_compiler_surfaces_unchanged(
     broken = ImportError("libzstd.so.1: cannot open shared object file", name="zstandard")
     _failing_import(monkeypatch, broken)
     with pytest.raises(ImportError) as raised:
-        generate.generate_tree(model, out_dir=tmp_path, config_name="main.yaml")
+        generate.generate_application(model, out_dir=tmp_path)
     assert raised.value is broken
     assert not isinstance(raised.value, generate.CompilerUnavailable)

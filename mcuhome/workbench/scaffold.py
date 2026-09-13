@@ -56,7 +56,7 @@ from mcuhome.model import ota, registry
 from mcuhome.model.errors import ConfigError, Location
 
 from mcuhome.workbench import schema
-from mcuhome.workbench.project import Project, resolve_project
+from mcuhome.workbench.project import Project
 
 __all__ = [
     "BusChoice",
@@ -65,8 +65,8 @@ __all__ = [
     "EndpointChoice",
     "NewDevice",
     "PeripheralChoice",
-    "new_device",
-    "render_starter",
+    "create_device",
+    "render_device_file",
 ]
 
 
@@ -378,7 +378,7 @@ def _outline_lines(outline: DeviceOutline) -> list[str]:
     return lines
 
 
-def render_starter(
+def render_device_file(
     name: str,
     *,
     board: str,
@@ -442,41 +442,32 @@ def render_starter(
     return "\n".join(lines)
 
 
-def new_device(
+def create_device(
     name: str,
     *,
+    project: Project,
     board: str,
-    env: Mapping[str, str],
-    cwd: Path,
-    project_dir: Path | None = None,
     friendly_name: str | None = None,
     outline: DeviceOutline | None = None,
 ) -> NewDevice:
     """Create ``devices/<name>/main.yaml``, or refuse and change nothing.
 
-    Refusals come first and cover the five ways this goes wrong: no
-    project to create the device in, a name that cannot become a folder
-    and a hostname, a board nobody has brought up, an *outline* naming
-    something that is not there, and a device that already exists — the
-    last one loudly, because overwriting somebody's
-    configuration is not a scaffold's business. The project is resolved
-    *first* (PO 2026-08-15): "where am I working" is answered before
-    the work itself is judged, so a user outside any project hears that
-    once, not after every corrected argument.
+    Refusals come first and cover the four ways this goes wrong: a name
+    that cannot become a folder and a hostname, a board nobody has
+    brought up, an *outline* naming something that is not there, and a
+    device that already exists — the last one loudly, because overwriting
+    somebody's configuration is not a scaffold's business.
 
-    The project comes from :func:`mcuhome.workbench.project.resolve_project`'s
-    ladder, and outside any project that resolver's refusal already
-    points at ``mcuhome project init``: creating a *project* is init's
-    job, a device scaffold only ever fills one in. The ``devices/``
-    directory itself is created when missing — it is part of the layout
-    the marker promises, not a decision.
-
-    *cwd* and *env* are stated rather than read from the process, for
-    the reason :func:`mcuhome.workbench.project.resolve_project` gives —
-    doubly so here, because this function creates directories.
+    *project* is the project the device is created in, resolved by the
+    caller: "where am I working" is answered before the work itself is
+    judged, so a user outside any project hears that once rather than
+    after every corrected argument, and the answer comes from the one
+    place that gives it (:func:`~mcuhome.workbench.project.resolve_project`).
+    Creating a *project* is that side's job as well; a device scaffold
+    only ever fills one in. The ``devices/`` directory itself is created
+    when missing — it is part of the layout the marker promises, not a
+    decision.
     """
-    project = resolve_project(project_dir, env=env, cwd=cwd)
-
     if not schema.DEVICE_NAME_RE.match(name) or name.endswith("-"):
         raise _refuse_bad_name(name)
     if len(name) > schema.DEVICE_NAME_MAX:
@@ -503,7 +494,7 @@ def new_device(
     try:
         entry.parent.mkdir(parents=True, exist_ok=True)
         entry.write_text(
-            render_starter(name, board=board, friendly_name=friendly_name, outline=outline),
+            render_device_file(name, board=board, friendly_name=friendly_name, outline=outline),
             encoding="utf-8",
         )
     except OSError as error:
