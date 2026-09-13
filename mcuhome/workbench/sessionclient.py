@@ -2455,14 +2455,23 @@ async def _follow_invocation(
             except TimeoutError:
                 pass
             if give_up_at is None and should_stop():
-                # Best effort: a cancel that is refused — a session the
-                # server already took away, an invocation it no longer
-                # knows — changes nothing about the build being over for
-                # this side, and a refusal here would replace the
-                # caller's answer with one about the stop.
-                with contextlib.suppress(Exception):
-                    await client.cancel(invocation_id)
+                # The clock starts with the decision, not with the
+                # server's answer to it: a command frame waits up to
+                # `DEFAULT_CALL_TIMEOUT` for a reply, so a server that is
+                # connected and silent would otherwise hold this side for
+                # five minutes against a bound of forty-four seconds.
                 give_up_at = time.monotonic() + resolve_shutdown_seconds(cancel_grace_seconds=0)
+                # Best effort, and bounded by that same clock: a cancel
+                # that is refused — a session the server already took
+                # away, an invocation it no longer knows — changes
+                # nothing about the build being over for this side, and a
+                # refusal here would replace the caller's answer with one
+                # about the stop.
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        client.cancel(invocation_id),
+                        max(0.0, give_up_at - time.monotonic()),
+                    )
             if give_up_at is not None and time.monotonic() >= give_up_at:
                 return None
     finally:
@@ -2470,6 +2479,11 @@ async def _follow_invocation(
             waiter.cancel()
             with contextlib.suppress(BaseException):
                 await waiter
+        elif not waiter.cancelled():
+            # Asked for, so that a failure that arrived in the same
+            # breath as the give-up is not logged by asyncio at
+            # collection time as one nobody ever looked at.
+            waiter.exception()
 
 
 async def _wait_for_admission(

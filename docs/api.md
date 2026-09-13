@@ -136,8 +136,10 @@ because they are bounded by what they fetch rather than by a caller's
 patience. At the remote target the server is told: the session
 protocol's `cancel`, because a closed socket is not a stop signal, and a
 server that answers nothing within `resolve_shutdown_seconds` counts as
-stopped anyway. A verdict of `cancelled` is a stopped build as well,
-whichever side ended it.
+stopped anyway — and that bound covers the `cancel` itself, not only the
+wait after it. A verdict of `cancelled` is a stopped build as well,
+whichever side ended it. A stopped remote build answers `out_dir` `None`:
+what it produced is on the machine that ran it and is not fetched.
 
 Value objects on this surface are frozen and safe to share between
 threads: `Project`, `Settings`, `BuildOptions`, every `*Result`. Handles
