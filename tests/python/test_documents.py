@@ -73,6 +73,20 @@ def _sample_project() -> api.Project:
     return api.Project(root=ROOT, discovered=True)
 
 
+def _sample_declaration() -> api.Declaration:
+    """What an image says it is made of, with one package member in it."""
+    return api.Declaration(
+        spec_generation=str(api.SPEC_GENERATION),
+        zephyr_version="4.4.0",
+        generator_constraint="~=4.4",
+        packages={
+            "mcuhome-build-tools_linux-amd64": api.PackageMember(
+                name="mcuhome-build-tools_linux-amd64", version="0.1.0", sha256="e" * 64
+            )
+        },
+    )
+
+
 def _sample_artifact() -> Artifact:
     return Artifact(root="out", path="firmware.bin", role="firmware", sha256="a" * 64)
 
@@ -91,6 +105,12 @@ def _sample_manifest() -> ContextManifest:
 #: it declares — a sample whose optional fields were all left out would
 #: prove nothing about a document that must carry them anyway.
 SAMPLES: dict[str, Callable[[], Any]] = {
+    "AcquiredPackage": lambda: api.AcquiredPackage(
+        version="0.1.0",
+        sha256="a" * 64,
+        source=ROOT / "packages" / "mcuhome-sdk-0.1.0.tar.zst",
+        tree=ROOT / ".cache" / "sdk",
+    ),
     "Artifact": _sample_artifact,
     "Builder": lambda: api.Builder(
         name="attic",
@@ -110,6 +130,14 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         report="build-report.json",
         container_image="ghcr.io/mcu-home/build-environment@sha256:" + "d" * 64,
         detail=object(),
+    ),
+    "ContainerImageMatch": lambda: api.ContainerImageMatch(
+        reference=api.parse_container_reference(
+            f"ghcr.io/mcu-home/build-environment:0.1.0-r1@sha256:{'d' * 64}",
+            default_registry=api.DOCKER_HUB,
+        ),
+        declaration=_sample_declaration(),
+        found_under="0.1.0-r1",
     ),
     "ContextVerification": lambda: api.ContextVerification(
         root=ROOT / "build" / "thermostat" / "context",
@@ -152,6 +180,13 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         project=_sample_project(), created=(ROOT / ".mcuhome-project-root",)
     ),
     "Project": _sample_project,
+    "ResolvedPackage": lambda: api.ResolvedPackage(
+        name="mcuhome-build-tools_linux-amd64",
+        version="0.1.0",
+        file="mcuhome-build-tools_linux-amd64-0.1.0.tar.zst",
+        sha256="c" * 64,
+        size=110592,
+    ),
     "RegistrySettings": lambda: api.RegistrySettings(
         base_domain="packages.mcuhome.org",
         untrusted=False,
@@ -411,6 +446,30 @@ def test_the_pairing_sub_document_carries_what_the_reference_declares() -> None:
         f"the code answers {sorted(document)}"
     )
     assert json.dumps(document)
+
+
+def test_the_declaration_sub_document_carries_what_the_reference_declares() -> None:
+    """The second nested shape written out by hand in this package.
+
+    Like the pairing credentials: the value comes from a type of the
+    device-model package that states no document of its own, so the keys
+    are this package's to keep and would otherwise be checked by
+    nothing. The package members keep the specification's own spelling,
+    which is what makes them comparable to what an image declares.
+    """
+    section = _documents_section(REFERENCE.read_text("utf-8"))
+    paragraph = section.split("`ContainerImageMatch.to_dict()`", 1)[1]
+    shapes = re.findall(r"`(\{.*?\})`", paragraph, re.DOTALL)
+    declared = _top_level_keys(shapes[1].replace("\n", " "))
+
+    document = SAMPLES["ContainerImageMatch"]().to_dict()["declaration"]
+    assert sorted(document) == sorted(declared), (
+        f"the reference declares {sorted(declared)} inside `declaration`, "
+        f"the code answers {sorted(document)}"
+    )
+    assert json.dumps(document)
+    members = document["packages"]
+    assert members == {"mcuhome-build-tools_linux-amd64": f"0.1.0@sha256:{'e' * 64}"}
 
 
 def test_the_settings_document_has_one_entry_per_declared_option() -> None:

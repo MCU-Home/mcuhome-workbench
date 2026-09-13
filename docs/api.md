@@ -1601,6 +1601,19 @@ mismatches}` — `context_id` is the identity the manifest declares and
 `actual_id` what the bytes present hash to.
 `FileMismatch.to_dict()`: `{path, declared_sha256, actual_sha256}`.
 `StoreEntry.to_dict()`: `{kind, name, version, sha256, path}`.
+`AcquiredPackage.to_dict()`: `{name, version, sha256, source, tree}` —
+the package that was fetched, where its archive came from and where it
+was unpacked.
+`ResolvedPackage.to_dict()`: `{name, version, file, sha256, size}` — one
+entry of a package index, which is what a pin resolves to.
+`ContainerImageMatch.to_dict()`: `{reference, declaration, found_under}`
+— `reference` is the full explicit address including the digest that
+ran, `found_under` the tag it was reached through, and `declaration` the
+image's own self-description: `{spec_generation, zephyr_version,
+generator_constraint, generator_constraint_mode, packages}`, with
+`packages` mapping each package name to the member value the image
+declares, in the build-environment specification's own spelling
+(`<version>@sha256:<hash>`).
 `NewDevice.to_dict()`: `{project, entry, name, board}`.
 `Migration.to_dict()`: `{from_version, to_version, name, description,
 details}` — `run` is the callable that does the work and is in no

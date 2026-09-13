@@ -51,6 +51,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Any
 
 from mcuhome.model.buildenvironment import (
     ENVIRONMENT_IMAGE_REPOSITORY,
@@ -99,6 +100,30 @@ class ContainerImageMatch:
     reference: Reference
     declaration: Declaration
     found_under: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """The image that answered, and what it says it is made of.
+
+        The declaration is written out here because the type that holds
+        it is the device-model package's and states no document of its
+        own; the package members keep the one spelling the
+        build-environment specification defines for them, so what a
+        client renders is what the image declares.
+        """
+        declaration = self.declaration
+        return {
+            "reference": str(self.reference),
+            "declaration": {
+                "spec_generation": declaration.spec_generation,
+                "zephyr_version": declaration.zephyr_version,
+                "generator_constraint": declaration.generator_constraint,
+                "generator_constraint_mode": declaration.generator_constraint_mode,
+                "packages": {
+                    name: member.value() for name, member in sorted(declaration.packages.items())
+                },
+            },
+            "found_under": self.found_under,
+        }
 
 
 @dataclass(frozen=True)

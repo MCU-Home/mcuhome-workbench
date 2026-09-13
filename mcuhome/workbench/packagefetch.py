@@ -37,6 +37,7 @@ import tarfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import zstandard
 from mcuhome.model.errors import BuildError
@@ -96,6 +97,16 @@ class AcquiredPackage:
     #: published per architecture was already resolved to this host's
     #: member before anything was fetched.
     name: str = SDK_PACKAGE_NAME
+
+    def to_dict(self) -> dict[str, Any]:
+        """The package that was fetched, where it came from, where it lies."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "sha256": self.sha256,
+            "source": str(self.source),
+            "tree": str(self.tree),
+        }
 
 
 def acquire_package(

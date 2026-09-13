@@ -94,6 +94,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.buildenvironment import (
     ARCH_SEPARATOR,
@@ -562,6 +563,16 @@ class ResolvedPackage:
     file: str
     sha256: str
     size: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """The package index entry this pin resolved to."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "file": self.file,
+            "sha256": self.sha256,
+            "size": self.size,
+        }
 
 
 def resolve_from_index(
