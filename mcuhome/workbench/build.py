@@ -184,6 +184,7 @@ __all__ = [
     "UnknownBuildMode",
     "UnknownBuildTarget",
     "build_firmware",
+    "create_context",
     "resolve_build_options",
     "compose_container_build",
     "compose_subprocess_build",
