@@ -357,7 +357,7 @@ def _local_candidate(
                     sha256,
                     list(searched),
                     f"{index_path} lists {resolved.file} with sha256 {resolved.sha256}, "
-                    f"and the context pins {sha256}",
+                    f"and {sha256} is what was asked for",
                 )
             candidate = directory / resolved.file
             if candidate.is_file():
@@ -622,13 +622,13 @@ def _package_unavailable(
     """
     listed = ", ".join(searched) or "none"
     return SdkUnavailable(
-        f"MCUHome cannot supply the package this context pins ({problem}).",
+        f"MCUHome cannot supply {name} {version} ({problem}).",
         version=version,
         sha256=sha256,
         searched=tuple(searched),
         hint=(
             f"the bytes are taken from configured source directories and from the "
-            f"package registry, never from the url in the context — add {name} "
-            f"{version} (sha256 {sha256}) to one of: {listed}"
+            f"package registry, and never from a url recorded beside a pin — add "
+            f"{name} {version} (sha256 {sha256}) to one of: {listed}"
         ),
     )

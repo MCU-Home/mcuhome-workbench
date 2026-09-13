@@ -118,7 +118,9 @@ def test_an_index_that_disagrees_with_the_pin_is_refused(tmp_path) -> None:
         packagefetch.fetch_sdk_package(
             version=SDK_VERSION, sha256="e" * 64, sources=(tmp_path / "src",), into=tmp_path / "sdk"
         )
-    assert "pins" in caught.value.message
+    # Both hashes, so the refusal says which two values disagree.
+    assert "d" * 64 in caught.value.message
+    assert "e" * 64 in caught.value.message
 
 
 def test_no_source_holding_the_package_is_a_typed_refusal(tmp_path) -> None:
