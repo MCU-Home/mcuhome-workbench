@@ -686,10 +686,23 @@ class BuildRequest:
     #: **Where it is asked**: while the build environment runs, on the
     #: supervisor's half-second tick, and at the remote target while the
     #: build waits for a turn. What comes before that — creating the
-    #: context, fetching an environment — runs to its end; those are
-    #: bounded by what they fetch rather than by a caller's patience, and
-    #: a build stopped halfway through them would leave a half-written
-    #: environment behind that the next build would have to distrust.
+    #: context, fetching an environment, uploading it to a build server —
+    #: runs to its end; those are bounded by what they move rather than
+    #: by a caller's patience, and a build stopped halfway through them
+    #: would leave a half-written environment behind that the next build
+    #: would have to distrust.
+    #:
+    #: **On which thread**: for a local build in the worker thread the
+    #: build runs in (``asyncio.to_thread``), so a predicate that touches
+    #: a caller's own state has to be safe to call from there and must
+    #: not assume an event loop; for the remote target on the thread
+    #: running :func:`build_firmware` itself. It is asked about twice a
+    #: second, so it answers rather than computes.
+    #:
+    #: **A build that finished is not a stopped build.** A stop that
+    #: arrives while the last step is already succeeding answers
+    #: ``ok=True, stopped=False``: the firmware exists, and telling a
+    #: caller its build was stopped would throw away what it asked for.
     should_stop: Callable[[], bool] | None = None
 
 
@@ -739,10 +752,13 @@ class BuildResult:
     #: image at all — the subprocess profile — and for a server that
     #: named none.
     container_image: str = ""
-    #: Whether this build was stopped rather than finished. A stopped
-    #: build is not a failed one, and a caller that renders the two the
-    #: same way tells a person their firmware is broken when they
-    #: pressed the stop button.
+    #: Whether this build was stopped rather than finished: it did not
+    #: produce what it was asked for **because** somebody ended it. A
+    #: stopped build is not a failed one, and a caller that renders the
+    #: two the same way tells a person their firmware is broken when they
+    #: pressed the stop button. Never true beside :attr:`ok`: a build
+    #: whose last step succeeded while the stop was arriving produced the
+    #: firmware, and that is the answer its caller wanted.
     stopped: bool = False
     #: The composition's own result object, untouched. Useful for
     #: logging and never part of a document: what is in it depends on
@@ -1211,7 +1227,10 @@ async def build_firmware(
     whatever awaits this coroutine leaves both of them running. A build
     the predicate ended comes back with :attr:`BuildResult.ok` false and
     :attr:`BuildResult.stopped` true, having released the build
-    directory on the way out like every other answer here.
+    directory on the way out like every other answer here — and within a
+    bound, wherever it ran
+    (:func:`~mcuhome.workbench.buildprocess.resolve_shutdown_seconds`),
+    because the directory stays held until it comes back.
     """
     if not isinstance(target, BuildTarget):
         target = build_target_for(target, request)
@@ -1760,7 +1779,10 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         # environment is named by its packages, which travel on the
         # composition's own result.
         container_image="",
-        stopped=stop.stopped,
+        # Stopped means the build did not get there because it was
+        # stopped. A predicate that turned true while the last step was
+        # already succeeding stopped nothing.
+        stopped=stop.stopped and not outcome.ok,
         detail=result,
     )
 
@@ -1803,7 +1825,9 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         out_dir=result.out_dir,
         report=BUILD_REPORT_FILE,
         container_image=result.container_image,
-        stopped=stop.stopped,
+        # See the subprocess execution above: a build that produced its
+        # artifacts was not stopped, whenever the predicate turned.
+        stopped=stop.stopped and not outcome.ok,
         detail=result,
     )
 
@@ -1985,6 +2009,12 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         should_stop=stop.armed,
     )
     _refuse_unsupported(result.status, ran=TARGET_REMOTE)
+    # Either side may have ended it: this one asked, or the server
+    # cancelled the invocation for a reason of its own — an operator, a
+    # session that was taken away. Both are a build that was stopped
+    # rather than one that failed, and the verdict is the server's own
+    # word for it.
+    ended = stop.stopped or result.status == sessionclient.STATUS_CANCELLED
     return BuildResult(
         ok=result.ok,
         target=TARGET_REMOTE,
@@ -1998,11 +2028,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         # side that can say which one, so a record without this would
         # name the packages and not the bytes.
         container_image=result.container_image,
-        # Either side may have ended it: this one asked, or the server
-        # cancelled the invocation for a reason of its own — an operator,
-        # a session that was taken away. Both are a build that was
-        # stopped rather than one that failed, and the verdict is the
-        # server's own word for it.
-        stopped=stop.stopped or result.status == sessionclient.STATUS_CANCELLED,
+        # A verdict of success is neither, however late the stop came.
+        stopped=ended and not result.ok,
         detail=result,
     )
