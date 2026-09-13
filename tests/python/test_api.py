@@ -107,6 +107,7 @@ MODEL_RE_EXPORTS = (
     ("context_id", "mcuhome.model.context"),
     ("CONTEXT_FILE", "mcuhome.model.context"),
     ("LABEL_PREFIX", "mcuhome.model.buildenvironment"),
+    ("SPEC_GENERATION", "mcuhome.model.buildenvironment"),
     ("Location", "mcuhome.model.errors"),
     ("error_dicts", "mcuhome.model.errors"),
 )

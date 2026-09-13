@@ -48,9 +48,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.buildenvironment import (
-    SPEC_GENERATION as DECLARED_SPEC_GENERATION,
-)
-from mcuhome.model.buildenvironment import (
+    SPEC_GENERATION,
     TOOLS_SOURCE,
     WORKSPACE_SOURCE,
     Declaration,
@@ -805,11 +803,11 @@ def require_container_image(
     Each is optional in the sense that a caller may hold only some of
     them; what is given is checked, what is not is not invented.
     """
-    if declaration.spec_generation != DECLARED_SPEC_GENERATION:
+    if declaration.spec_generation != SPEC_GENERATION:
         raise EnvironmentUnusable(
             f"The build environment {container_image} implements build-environment "
             f"specification generation {declaration.spec_generation}, and this MCUHome "
-            f"speaks generation {DECLARED_SPEC_GENERATION}.",
+            f"speaks generation {SPEC_GENERATION}.",
             hint=(
                 "use a build environment released with this MCUHome, or update "
                 "MCUHome to one that speaks the environment's generation"

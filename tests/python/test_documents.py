@@ -76,7 +76,7 @@ def _sample_project() -> api.Project:
 def _sample_declaration() -> api.Declaration:
     """What an image says it is made of, with one package member in it."""
     return api.Declaration(
-        spec_generation=str(api.SPEC_GENERATION),
+        spec_generation=api.SPEC_GENERATION,
         zephyr_version="4.4.0",
         generator_constraint="~=4.4",
         packages={

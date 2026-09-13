@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Any
 
 from mcuhome.model.artifacts import Artifact
+from mcuhome.model.buildenvironment import SPEC_GENERATION
 from mcuhome.model.errors import BuildError, ConfigError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.jobs import BuildLimits, available_ram_bytes
@@ -77,7 +78,6 @@ __all__ = [
     "CCACHE_SUBDIR",
     "ENTRY_POINT",
     "REQUEST_FILE",
-    "SPEC_GENERATION",
     "STATUS_FAILURE",
     "STATUS_SUCCESS",
     "STATUS_UNSUPPORTED",
@@ -192,10 +192,14 @@ class StepResult:
 # The frozen names of the specification, from the orchestrator's side
 # --------------------------------------------------------------------------
 
-#: The generation this orchestrator speaks. It goes into every request
-#: document, and an environment that implements another one answers
-#: ``unsupported`` rather than guessing (§12).
-SPEC_GENERATION = 3
+#: The generation this orchestrator speaks, as the **number** a request
+#: and a result document carry (§6.1, §6.2). It is not a second
+#: generation beside :data:`~mcuhome.model.buildenvironment.SPEC_GENERATION`
+#: and must not become one: the specification states one generation, an
+#: image label spells it as a string because a label is a string, and a
+#: JSON document spells it as a number. Derived rather than written out,
+#: so the two spellings cannot drift into two generations.
+_SPEC_GENERATION_NUMBER = int(SPEC_GENERATION)
 
 #: The one environment variable the specification defines (§4). Every
 #: path of a step is resolved against it, by both sides, and none of them
@@ -320,7 +324,7 @@ def step_request(
     enforce its own from outside, and in the container profile it does.
     """
     document: dict[str, Any] = {
-        "spec_generation": SPEC_GENERATION,
+        "spec_generation": _SPEC_GENERATION_NUMBER,
         "session_id": session_id,
         "invocation_id": invocation_id,
         "action": action,
@@ -414,10 +418,10 @@ def judge_step(
     status = data.get("status")
 
     generation = data.get("spec_generation")
-    if generation != SPEC_GENERATION:
+    if generation != _SPEC_GENERATION_NUMBER:
         problems.append(
             f"the result document states specification generation {generation!r} and this "
-            f"orchestrator speaks {SPEC_GENERATION}"
+            f"orchestrator speaks {_SPEC_GENERATION_NUMBER}"
         )
     if data.get("invocation_id") != invocation_id:
         problems.append(

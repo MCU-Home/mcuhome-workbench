@@ -77,7 +77,6 @@ from mcuhome.workbench import sessionclient as sc
 from mcuhome.workbench.buildenvsession import (
     RESULT_FILE_PREFIX,
     RESULT_FILE_SUFFIX,
-    SPEC_GENERATION,
     StepResult,
 )
 from mcuhome.workbench.builders import SelectedBuilder
@@ -517,7 +516,8 @@ def _write_result(
         declared.append(name)
     relay("-- build finished")
     document = {
-        "spec_generation": SPEC_GENERATION,
+        # The document's own spelling of the generation: a number.
+        "spec_generation": int(buildenvironment.SPEC_GENERATION),
         "invocation_id": request["invocation_id"],
         "status": status,
         "message": message,

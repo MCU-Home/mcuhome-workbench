@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 import pytest
+from mcuhome.model.buildenvironment import SPEC_GENERATION
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import buildenvsession as session_module
@@ -233,6 +234,24 @@ def test_the_request_document_states_the_five_fields(tmp_path, environment) -> N
         "parameters": {"x": 1},
     }
     assert step.request.name == "invocation-request.json"
+
+
+def test_the_generation_is_one_value_in_two_spellings(tmp_path, environment) -> None:
+    """The document says 3 and a label says "3", and both are one generation.
+
+    A second constant beside the specification's would be a second
+    generation the day one of them is raised, so the number in the
+    document is derived from the one the specification states rather than
+    written out here.
+    """
+    entry = entry_point(environment, DELIVERS)
+    session = make_session(tmp_path, entry, session_id="s1")
+    step = session.prepare(ACTION_BUILD)
+
+    document = json.loads(step.request.read_text(encoding="utf-8"))
+    assert document["spec_generation"] == int(SPEC_GENERATION)
+    assert isinstance(document["spec_generation"], int)
+    assert SPEC_GENERATION == "3"
 
 
 def test_the_entry_point_reads_the_request_it_was_given(tmp_path, environment) -> None:

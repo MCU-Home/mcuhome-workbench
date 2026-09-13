@@ -1318,7 +1318,7 @@ carry findings answers them in its `diagnostics` list.
 | `MODEL_VERSION` | the canonical model's format version |
 | `MODEL_PACKAGE_VERSION` | the device-model package's release version |
 | `PROJECT_VERSION` | the project layout version this package writes and requires |
-| `SPEC_GENERATION` | the build-environment specification generation this package speaks |
+| `SPEC_GENERATION` | the build-environment specification generation this package speaks, spelled as the specification spells it (`"3"`); a request or result document carries the same generation as a JSON number |
 | `PROJECT_MARKER_FILE` | `.mcuhome-project-root` |
 | `UPGRADE_MARKER_FILE` | `.mcuhome-project-root.upgrade` |
 | `PROJECT_CONFIG_FILE` | `mcuhome.yaml` |
@@ -1688,7 +1688,8 @@ follows the same rule. Nothing else is wrapped.
 `ota_parameters`, `BOARDS`, `PLANNED_BOARDS`, `CLUSTERS`, `BoardDef`,
 `ClusterDef`, `PartitionDef`, `UpdateSchemeDef`, `sha256_file`,
 `SDK_PACKAGE_NAME`, `DOCKER_HUB`, `Reference`, `parse_container_reference`,
-`Declaration`, `PackageMember`, `LABEL_PREFIX`, `SPEC_GENERATION_MEMBER`,
+`Declaration`, `PackageMember`, `LABEL_PREFIX`, `SPEC_GENERATION`,
+`SPEC_GENERATION_MEMBER`,
 `ENVIRONMENT_IMAGE_REPOSITORY`, `BUILD_CONTEXT_FILE`, `CONTEXT_FILE`,
 `MANIFEST_FILE`, `MODEL_FILE`, `KEYS_DIR`, `PATCHES_DIR`,
 `DEVELOPER_ENVIRONMENT`, `ContextFile`, `ContextManifest`,

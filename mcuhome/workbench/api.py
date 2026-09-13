@@ -71,6 +71,7 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.buildenvironment import (
     ENVIRONMENT_IMAGE_REPOSITORY,
     LABEL_PREFIX,
+    SPEC_GENERATION,
     SPEC_GENERATION_MEMBER,
     Declaration,
     PackageMember,
@@ -157,7 +158,6 @@ from mcuhome.workbench.buildenvsession import (
     RESULT_FILE_PREFIX,
     RESULT_FILE_SUFFIX,
     ROOT_OUT,
-    SPEC_GENERATION,
     STATUS_FAILURE,
     STATUS_SUCCESS,
     STATUS_UNSUPPORTED,

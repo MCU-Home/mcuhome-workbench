@@ -41,6 +41,7 @@ from conftest import (
     sdk_members,
     write_environment_packages,
 )
+from mcuhome.model.buildenvironment import SPEC_GENERATION
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
@@ -49,7 +50,6 @@ from mcuhome.workbench.buildenvsession import (
     ACTION_BUILD,
     RESULT_FILE_PREFIX,
     RESULT_FILE_SUFFIX,
-    SPEC_GENERATION,
     open_builder_session,
 )
 from mcuhome.workbench.buildprocess import Completed
@@ -130,7 +130,9 @@ def build_result(request: dict[str, Any], out: Path, *, status: str = "success")
         (out / name).write_bytes(data)
     invocation = request["invocation_id"]
     document = {
-        "spec_generation": SPEC_GENERATION,
+        # A number, the way a result document spells the generation an
+        # image label spells as a string.
+        "spec_generation": int(SPEC_GENERATION),
         "invocation_id": invocation,
         "status": status,
         "message": "" if status == "success" else "the build failed",
@@ -569,7 +571,7 @@ def test_the_request_document_is_the_fields_of_the_specification(tmp_path, model
         "parameters",
         "limits",
     }
-    assert seam.request["spec_generation"] == SPEC_GENERATION
+    assert seam.request["spec_generation"] == int(SPEC_GENERATION)
     assert seam.request["action"] == "build"
     assert seam.request["parameters"] == {}
 
