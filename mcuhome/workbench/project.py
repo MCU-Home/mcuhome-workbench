@@ -260,7 +260,7 @@ def _refuse_no_marker(directory: Path, *, named_by: str) -> ConfigError:
 
 
 def resolve_project(
-    explicit: Path | str | None = None,
+    project_dir: Path | str | None = None,
     *,
     env: Mapping[str, str],
     cwd: Path,
@@ -268,7 +268,7 @@ def resolve_project(
 ) -> Project:
     """Resolve the project directory: the bootstrap ladder.
 
-    ``--project-dir`` (*explicit*) first, ``MCUHOME_PROJECT_DIR`` as its
+    ``--project-dir`` (*project_dir*) first, ``MCUHOME_PROJECT_DIR`` as its
     fallback; either disables the search and is an error when the named
     directory carries no marker. With neither set, the search walks
     *cwd* upward and takes the first directory carrying the marker.
@@ -283,7 +283,7 @@ def resolve_project(
     """
     declared = _project_dir_option()
     for value, named_by in (
-        (explicit, declared.flag),
+        (project_dir, declared.flag),
         (env.get(declared.env_var), declared.env_var),
     ):
         if not value:
