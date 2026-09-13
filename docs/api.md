@@ -1179,11 +1179,14 @@ What a build on this machine would need, reported rather than raised.
 **Which checks run follows `options.mode`**, because the two profiles
 need disjoint things of a host: the container runtime and the image
 search only for `container`; the environment store and the interpreter
-only for `subprocess`, and there only while no `build.dev_workspace` is
-configured — a development build compiles a workspace and uses neither.
-The signing tool and the compiler cache are examined either way. A
-finding is not a promise that a build will succeed: it is what could be
-established without one.
+only for `subprocess`. Within `subprocess` a configured
+`build.dev_workspace` changes what is examined again — a development
+build unpacks nothing, so the store check gives way to the workspace, and
+the interpreter examined is the `python3` on the `PATH` the build was
+started from rather than `build.python`, because that is the one that
+runs the builder. The signing tool and the compiler cache are examined
+either way. A finding is not a promise that a build will succeed: it is
+what could be established without one.
 
 `HostCheckResult` carries `findings` and the verdict `ok`, which is true
 when every finding is; `HostFinding(check, ok, detail, hint)` is one

@@ -52,6 +52,7 @@ from mcuhome.workbench.containerbuild import (
 from mcuhome.workbench.imgtool import find_imgtool
 from mcuhome.workbench.ociregistry import ImageRegistry
 from mcuhome.workbench.project import Project
+from mcuhome.workbench.subprocessbuild import BUILDER_INTERPRETER, DEV_WORKSPACE_OPTION
 
 __all__ = [
     "HOST_CHECKS",
@@ -159,6 +160,7 @@ def check_build_host(
         findings.append(_container_image(options))
     elif (workspace := options.dev_workspace) is not None:
         findings.append(_dev_workspace(workspace, project=project))
+        findings.append(_developer_python(env))
     else:
         findings.append(_env_store(options, env, project=project))
         findings.append(_python(options, env))
@@ -301,17 +303,15 @@ def _python(options: BuildOptions, env: Mapping[str, str]) -> HostFinding:
                 "interpreter — install it, or set build.python to one that is here"
             ),
         )
-    answer = _run_program([found, "-c", _PYTHON_FACTS])
-    fields = answer.split()
-    expected_fields = 3
-    if len(fields) != expected_fields or not all(field.isdigit() for field in fields):
+    facts = _interpreter_facts(found)
+    if facts is None:
         return HostFinding(
             check="python",
             ok=False,
             detail=f"{found} did not answer as a Python interpreter",
             hint="set build.python to a Python that runs on this machine",
         )
-    major, minor, venv = (int(field) for field in fields)
+    major, minor, venv = facts
     if not venv:
         return HostFinding(
             check="python",
@@ -325,6 +325,58 @@ def _python(options: BuildOptions, env: Mapping[str, str]) -> HostFinding:
             ),
         )
     return HostFinding(check="python", ok=True, detail=f"{found} is Python {major}.{minor}")
+
+
+def _developer_python(env: Mapping[str, str]) -> HostFinding:
+    """The interpreter a **development** build runs the builder with.
+
+    A different question from the one above and asked of a different
+    program: a development build unpacks nothing and creates no virtual
+    environment, it runs the builder out of the workspace with the
+    ``python3`` on the ``PATH`` the build was started from — the same
+    lookup :func:`~mcuhome.workbench.subprocessbuild.developer_launcher`
+    makes, so a machine without one hears it here instead of when the
+    first step tries to start.
+    """
+    found = _on_path(BUILDER_INTERPRETER, env)
+    if found is None:
+        return HostFinding(
+            check="python",
+            ok=False,
+            detail=f"there is no {BUILDER_INTERPRETER} on this PATH",
+            hint=(
+                "a development build runs MCUHome's builder with your own Python, the "
+                "way west does — start the build from the shell you develop in, or "
+                f"unset {DEV_WORKSPACE_OPTION} to build against the build environment "
+                "MCUHome unpacks itself"
+            ),
+        )
+    facts = _interpreter_facts(found)
+    if facts is None:
+        return HostFinding(
+            check="python",
+            ok=False,
+            detail=f"{found} did not answer as a Python interpreter",
+            hint=f"check it with {BUILDER_INTERPRETER} -V, or repair your PATH",
+        )
+    major, minor, _venv = facts
+    # No ``venv`` here on purpose: a development build installs nothing,
+    # so an interpreter without it builds perfectly well.
+    return HostFinding(check="python", ok=True, detail=f"{found} is Python {major}.{minor}")
+
+
+def _interpreter_facts(interpreter: str) -> tuple[int, int, bool] | None:
+    """*interpreter*'s version and whether it carries ``venv``, or ``None``.
+
+    ``None`` for a program that did not run or did not answer as a Python
+    — the same thing to a caller, and neither is this check's to explain.
+    """
+    fields = _run_program([interpreter, "-c", _PYTHON_FACTS]).split()
+    expected_fields = 3
+    if len(fields) != expected_fields or not all(field.isdigit() for field in fields):
+        return None
+    major, minor, venv = (int(field) for field in fields)
+    return major, minor, bool(venv)
 
 
 def _dev_workspace(workspace: Path, *, project: Project | None) -> HostFinding:

@@ -168,7 +168,7 @@ def test_a_development_workspace_replaces_the_store_and_the_interpreter(
         options=_options(mode="subprocess", dev_workspace=workspace), env=_env(tmp_path)
     )
 
-    assert _checks(result) == ["dev_workspace", "signing_imgtool", "cache_root"]
+    assert _checks(result) == ["dev_workspace", "python", "signing_imgtool", "cache_root"]
     assert result.ok
     assert str(workspace) in _finding(result, "dev_workspace").detail
 
@@ -478,3 +478,54 @@ def test_a_signing_tool_that_cannot_even_be_resolved_is_a_finding(
     assert not finding.ok
     assert "HOME" in finding.detail
     assert "set HOME" in finding.hint
+
+
+def test_a_development_build_needs_the_python_on_its_own_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interpreter a development build actually runs, and only that.
+
+    It runs the builder with the ``python3`` on the PATH the build was
+    started from — never `build.python` and never this process's own
+    interpreter — so the check looks it up the way the launcher does and
+    says the same thing when it is not there.
+    """
+    workspace = _a_workspace(tmp_path)
+    looked_up: list[tuple[str, str | None]] = []
+
+    def which(program: str, path: str | None = None) -> str | None:
+        looked_up.append((program, path))
+        return None
+
+    monkeypatch.setattr(hostcheck.shutil, "which", which)
+
+    result = check_build_host(
+        options=_options(mode="subprocess", dev_workspace=workspace, python="python3.13"),
+        env={"PATH": "/opt/bin"},
+    )
+
+    assert looked_up == [("python3", "/opt/bin")], "the build's PATH, not this process's"
+    finding = _finding(result, "python")
+    assert not finding.ok
+    assert "no python3 on this PATH" in finding.detail
+    assert "build.dev_workspace" in finding.hint
+
+
+def test_a_development_build_does_not_need_a_venv_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It installs nothing, so an interpreter without ``venv`` is fine.
+
+    The store branch refuses the same interpreter, which is what makes
+    the two checks two checks.
+    """
+    monkeypatch.setattr(hostcheck, "_run_program", lambda argv: "3 13 0")
+    workspace = _a_workspace(tmp_path)
+
+    developing = check_build_host(
+        options=_options(mode="subprocess", dev_workspace=workspace), env=_env(tmp_path)
+    )
+    provisioning = check_build_host(options=_options(mode="subprocess"), env=_env(tmp_path))
+
+    assert _finding(developing, "python").ok
+    assert not _finding(provisioning, "python").ok
