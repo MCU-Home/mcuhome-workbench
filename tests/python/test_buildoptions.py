@@ -373,7 +373,7 @@ def test_the_container_composition_carries_the_same_values(model, tmp_path, monk
         "prepare_environment",
         lambda pin, **kwargs: resolved.update(kwargs) or _Resolved(),
     )
-    monkeypatch.setattr(build.containerbuild, "check_image", lambda *a, **k: None)
+    monkeypatch.setattr(build.containerbuild, "require_container_image", lambda *a, **k: None)
     monkeypatch.setattr(
         build.containerbuild,
         "run_locked_build",
@@ -431,7 +431,7 @@ def test_the_configured_container_program_reaches_both_container_calls(
         "prepare_environment",
         lambda pin, **kwargs: resolved.update(kwargs) or _Resolved(),
     )
-    monkeypatch.setattr(build.containerbuild, "check_image", lambda *a, **k: None)
+    monkeypatch.setattr(build.containerbuild, "require_container_image", lambda *a, **k: None)
     monkeypatch.setattr(
         build.containerbuild,
         "run_locked_build",
@@ -466,7 +466,7 @@ def test_the_container_profile_starts_the_program_it_was_given(tmp_path, monkeyp
             started.append(program)
             raise _Stop
 
-    monkeypatch.setattr(containerbuild, "Runtime", _Recorder)
+    monkeypatch.setattr(containerbuild, "ContainerRuntime", _Recorder)
     monkeypatch.setattr(
         containerbuild,
         "read_context_manifest",
@@ -486,7 +486,7 @@ def test_the_container_profile_starts_the_program_it_was_given(tmp_path, monkeyp
     with pytest.raises(_Stop):
         containerbuild.run_locked_build(
             tmp_path / "context",
-            image="ghcr.io/mcu-home/x@sha256:" + "1" * 64,
+            container_image="ghcr.io/mcu-home/x@sha256:" + "1" * 64,
             sdk_sources=(),
             work_root=tmp_path / "work",
             env={},
@@ -558,7 +558,7 @@ def test_the_container_backend_is_configured_with_the_sdk_bound(tmp_path, monkey
     with pytest.raises(_Stop):
         containerbuild.run_locked_build(
             tmp_path / "context",
-            image="ghcr.io/mcu-home/x@sha256:" + "1" * 64,
+            container_image="ghcr.io/mcu-home/x@sha256:" + "1" * 64,
             sdk_sources=(),
             work_root=tmp_path / "work",
             env={},

@@ -4,7 +4,7 @@
 
 **No container ever runs here.** The one impure operation is the runtime
 seam: a scripted stand-in dispatches on the argv
-:class:`~mcuhome.workbench.containerbuild.Runtime` composed and writes
+:class:`~mcuhome.workbench.containerbuild.ContainerRuntime` composed and writes
 the result document a real container would (build-environment
 specification §6.2). What is asserted is the composition above the
 profile — :func:`mcuhome.workbench.build.compose_container_build`:
@@ -135,7 +135,7 @@ def build_result(request: dict[str, Any], out: Path, *, status: str = "success")
 class Seam:
     """A scripted stand-in for the container runtime, recording every argv.
 
-    Dispatches on the argv :class:`~mcuhome.workbench.containerbuild.Runtime`
+    Dispatches on the argv :class:`~mcuhome.workbench.containerbuild.ContainerRuntime`
     composed, so the tests exercise the true composition and can then
     assert it. The step itself is played by reading the request document
     through the mounts the ``run`` was given — a path no ``--volume``
@@ -252,14 +252,16 @@ def public_pem() -> str:
     return public_key_pem(generate_key_pem(TEST_SCALAR))
 
 
-def _runtime(seam) -> containerbuild.Runtime:
+def _runtime(seam) -> containerbuild.ContainerRuntime:
     """A runtime driven by *seam* in both of its roles.
 
     Short commands go through the runner and the step through the
     spawner, which is the split the real one has: a step is neither short
     nor bounded, and something has to watch the clock while it runs.
     """
-    return containerbuild.Runtime(runner=seam, spawner=getattr(seam, "spawn", _never_spawned))
+    return containerbuild.ContainerRuntime(
+        runner=seam, spawner=getattr(seam, "spawn", _never_spawned)
+    )
 
 
 def _never_spawned(argv, on_line=None):
@@ -504,7 +506,7 @@ def test_the_recommended_limits_are_the_ones_the_container_is_held_to(tmp_path, 
     argv = seam.step
     assert argv[argv.index("--cpus") + 1] == "2"
     assert argv[argv.index("--memory") + 1] == str(4 * 1024**3)
-    assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_PIDS)
+    assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_CONTAINER_PIDS)
 
 
 def test_a_build_nobody_bounded_is_given_this_machine(tmp_path, model, public_pem):
@@ -862,7 +864,7 @@ def test_a_stopped_step_has_its_container_removed_by_name(tmp_path, model, publi
     assert name.startswith("mcuhome-")
 
     removed: list[str] = []
-    runtime = containerbuild.Runtime(
+    runtime = containerbuild.ContainerRuntime(
         runner=lambda argv, on_line=None: removed.append(argv[-1]) or Completed(0, ""),
         spawner=lambda argv, on_line=None: _Finished(None),
     )
@@ -895,6 +897,6 @@ def test_a_machine_whose_memory_cannot_be_measured_states_no_memory_limit(
     argv = seam.step
     assert "--memory" not in argv
     assert "--cpus" in argv, "what the machine does know is still stated"
-    assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_PIDS)
+    assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_CONTAINER_PIDS)
     assert "memory_bytes" not in seam.request["limits"]
     assert seam.request["limits"]["cpus"] == float(os.cpu_count() or 1)

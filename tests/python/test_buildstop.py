@@ -310,7 +310,7 @@ def test_a_stopped_container_build_removes_the_container_and_keeps_what_was_writ
         work_root=tmp_path / "wr",
         env={},
         images=ScriptedRegistry(),
-        runtime=containerbuild.Runtime(runner=seam, spawner=seam.spawn),
+        runtime=containerbuild.ContainerRuntime(runner=seam, spawner=seam.spawn),
         options=build.BuildOptions(
             workspace_sources=(tmp_path / "src",), tools_sources=(tmp_path / "src",)
         ),

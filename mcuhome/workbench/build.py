@@ -78,7 +78,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -966,7 +966,7 @@ def _package_hosts(
     )
 
 
-def _refuse_image_without_container(image: str, *, source: str) -> ConfigError:
+def _refuse_image_without_container(container_image: str, *, source: str) -> ConfigError:
     """A build container was named for a build that does not start one.
 
     The two statements contradict each other and neither can be
@@ -978,7 +978,7 @@ def _refuse_image_without_container(image: str, *, source: str) -> ConfigError:
     from a file the person is not looking at.
     """
     return ConfigError(
-        f"This build was given the container image {image}, and it is set to "
+        f"This build was given the container image {container_image}, and it is set to "
         f"build without a container.",
         hint=(
             f"the build mode is {MODE_SUBPROCESS} (from {source}). "
@@ -1044,7 +1044,7 @@ def _note_image_without_container(
     Two statements can name one and neither is wrong: the device's
     ``sources.container_image`` travels with the device and is about the
     delivery it gets on a machine that builds in a container, and a
-    configured builder's ``image:`` is about that machine rather than
+    configured builder's ``container_image:`` is about that machine rather than
     about this build. A build without a container has no image for
     either of them to name. So this is neither a refusal nor silence:
     the build log carries one line, where the person watching the build
@@ -1449,7 +1449,7 @@ def compose_container_build(
         tools_sources=options.tools_sources,
         registry=packages,
         images=images,
-        container_program=options.container_program,
+        container_program=containerbuild.resolve_container_program(options=options),
         runtime=runtime,
         on_line=on_line,
     )
@@ -1460,9 +1460,9 @@ def compose_container_build(
     # that a refusal costs no lock in a directory the user keeps, and
     # again in `run_locked_build`, which is the entry point an embedder
     # and a build server reach directly.
-    containerbuild.check_image(
+    containerbuild.require_container_image(
         resolved.declaration,
-        reference=resolved.reference,
+        container_image=resolved.reference,
         generator=format_generator_chain(read_generator_chain(context_dir / BUILD_CONTEXT_FILE)),
         zephyr_constraint=model.toolchain.zephyr_constraint,
     )
@@ -1477,17 +1477,19 @@ def compose_container_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", container_image=resolved.reference, **_reported(limits))
-    root = containerbuild.cache_root(env, cache_root or options.cache_root)
+    root = containerbuild.resolve_cache_root(
+        options=replace(options, cache_root=cache_root or options.cache_root), env=env
+    )
     return containerbuild.run_locked_build(
         context_dir,
-        image=resolved,
+        container_image=resolved,
         sdk_sources=sources,
         work_root=work_root / "backend",
         env=dict(env),
         limits=limits,
         sdk_max_bytes=options.sdk_max_bytes,
         zephyr_constraint=model.toolchain.zephyr_constraint,
-        container_program=options.container_program,
+        container_program=containerbuild.resolve_container_program(options=options),
         # The same cache root and the same tiers the subprocess profile
         # is given: one cache per user, laid out once, mounted here and
         # linked there.
@@ -1691,7 +1693,9 @@ def compose_subprocess_build(
     lock_context(context_dir)
     if on_step is not None:
         on_step("compile", container_image="", **_reported(limits))
-    root = containerbuild.cache_root(dict(env), cache_root or options.cache_root)
+    root = containerbuild.resolve_cache_root(
+        options=replace(options, cache_root=cache_root or options.cache_root), env=dict(env)
+    )
     return subprocessbuild.run_locked_build(
         context_dir,
         environment=environment,

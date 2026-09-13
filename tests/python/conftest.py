@@ -197,7 +197,7 @@ def _no_docker(monkeypatch):
     container, so a test that forgets to stub the runtime would otherwise
     quietly start a real Matter build on the machine running pytest —
     minutes of CPU and gigabytes of build directory, from a suite whose
-    whole promise is one second. Tests that want a working preflight
+    whole promise is one second. Tests that want a working require_container_runtime
     replace this with their own runner, which wins because their
     monkeypatch is applied later.
     """
@@ -210,7 +210,7 @@ def _no_docker(monkeypatch):
         )
 
     # Both halves of the container runtime seam: the short commands — the
-    # preflight, the image lookup, the fetch — and the one that starts a
+    # require_container_runtime, the image lookup, the fetch — and the one that starts a
     # step. A test that stubbed one and not the other would run a real
     # container out of its own assertion.
     monkeypatch.setattr(containerbuild, "run_command", refuse_argv)

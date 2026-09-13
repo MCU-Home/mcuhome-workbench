@@ -45,7 +45,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.buildenvironment import (
     SPEC_GENERATION as DECLARED_SPEC_GENERATION,
@@ -64,7 +64,6 @@ from mcuhome.model.context import (
     format_generator_chain,
 )
 from mcuhome.model.errors import BuildError, ConfigError
-from mcuhome.model.imageref import Reference
 from mcuhome.model.userpaths import expand, home
 
 from mcuhome.workbench.buildenvsession import (
@@ -113,23 +112,31 @@ from mcuhome.workbench.resolve_image import (
 )
 from mcuhome.workbench.resolve_pins import concrete_package
 
+if TYPE_CHECKING:  # pragma: no cover - types only
+    # The build options are resolved one layer up and only annotated
+    # here; importing them at run time would make this profile depend on
+    # the module that composes it.
+    from mcuhome.workbench.build import BuildOptions
+
+
 __all__ = [
     "CONTAINER_REPOSITORIES_OPTION",
-    "DEFAULT_PIDS",
+    "DEFAULT_CONTAINER_PIDS",
     "ENTRY_POINT_PATH",
     "ContainerBuildResult",
+    "ContainerLimits",
+    "ContainerRuntime",
     "Mount",
     "ResolvedImage",
-    "ResourceLimits",
-    "Runtime",
-    "cache_root",
-    "check_image",
     "default_cache_root",
-    "ensure_image",
+    "ensure_container_image",
     "image_for_context",
     "launcher",
-    "preflight",
     "prepare_environment",
+    "require_container_image",
+    "require_container_runtime",
+    "resolve_cache_root",
+    "resolve_container_program",
     "run_locked_build",
     "step_command",
 ]
@@ -161,7 +168,7 @@ CACHE_TARGET = f"{_TREE}/{STEP_CACHE}"
 #: a build spawns compilers, and a build that has spawned four thousand
 #: of them is not compiling. It is the bound between "many jobs" and "a
 #: fork bomb", and nothing that builds firmware comes near it.
-DEFAULT_PIDS = 4096
+DEFAULT_CONTAINER_PIDS = 4096
 
 #: What every container this profile starts is called: the step's own
 #: invocation id, which §6.1 promises is safe in a file name and which
@@ -194,7 +201,7 @@ class Mount:
 
 
 @dataclass(frozen=True)
-class ResourceLimits:
+class ContainerLimits:
     """What one step's container may consume, as ``run`` flags.
 
     **The hard half of the two.** The request document tells the
@@ -219,7 +226,9 @@ class ResourceLimits:
     pids: int | None = None
 
     @staticmethod
-    def of(limits: BuildLimits, *, pids: int = DEFAULT_PIDS) -> ResourceLimits:
+    def from_build_limits(
+        limits: BuildLimits, *, pids: int = DEFAULT_CONTAINER_PIDS
+    ) -> ContainerLimits:
         """The runtime flags for the limits a step was given.
 
         A figure that was not stated becomes no flag. It is not written
@@ -227,7 +236,7 @@ class ResourceLimits:
         limit* — a machine whose memory could not be measured would then
         get the flag and none of the bound.
         """
-        return ResourceLimits(
+        return ContainerLimits(
             memory=_positive(limits.memory_bytes),
             cpus=None if limits.cpus is None or limits.cpus <= 0 else f"{limits.cpus:g}",
             pids=pids,
@@ -265,7 +274,7 @@ def _stated(value: str | None) -> bool:
         return True
 
 
-class Runtime:
+class ContainerRuntime:
     """The container runtime, as this profile uses it.
 
     Holds the program name and the two impure operations, resolved at
@@ -316,13 +325,13 @@ class Runtime:
         self.run([self.program, "rm", "--force", "--volumes", container])
 
 
-def preflight(runtime: Runtime, *, env: Mapping[str, str]) -> None:
+def require_container_runtime(runtime: ContainerRuntime, *, env: Mapping[str, str]) -> None:
     """Refuse before the build starts, naming the one thing that is wrong.
 
     Two failures with two different fixes — no runtime, no daemon — and a
     build that dies ten seconds in with somebody else's error text does
     not tell them apart. A missing *image* is no longer one of them: it
-    is fetched (:func:`ensure_image`) rather than complained about.
+    is fetched (:func:`ensure_container_image`) rather than complained about.
     """
     del env  # the program name was resolved from it before the seam was built
     completed = runtime.run([runtime.program, "version", "--format", "{{.Server.Version}}"])
@@ -359,9 +368,9 @@ def _refuse_no_daemon(program: str) -> BuildError:
     )
 
 
-def ensure_image(
-    runtime: Runtime,
-    reference: Reference,
+def ensure_container_image(
+    runtime: ContainerRuntime,
+    container_image: str,
     *,
     on_line: LineSink | None = None,
 ) -> bool:
@@ -369,29 +378,32 @@ def ensure_image(
 
     Answers whether it had to fetch, so a caller can say that out loud —
     a gigabyte-scale download deserves a line of its own rather than a
-    silence in the middle of a build. The reference is pinned to a digest
-    by the time anything reaches here, which is what makes fetching safe:
-    there is exactly one set of bytes that answers to it, and either they
-    arrive or the pull fails.
+    silence in the middle of a build. *container_image* is the address
+    the runtime is handed, pinned to a digest by the time anything
+    reaches here, which is what makes fetching safe: there is exactly one
+    set of bytes that answers to it, and either they arrive or the pull
+    fails.
 
     The pull's own output is the progress report — the runtime writes
     layer counts and percentages, and forwarding them beats inventing a
     spinner over a five-minute silence.
     """
-    address = reference.runnable()
-    if runtime.present(address):
+    if runtime.present(container_image):
         return False
-    completed = runtime.pull(address, on_line)
+    completed = runtime.pull(container_image, on_line)
     if completed.status is None:
         raise _refuse_no_runtime(runtime.program)
     if completed.status != 0:
+        # An address a runtime can be handed always begins with the
+        # registry it lives in, so the login command can name it.
+        registry = container_image.split("/", 1)[0]
         raise BuildError(
-            f"MCUHome could not fetch the build environment {address}.",
+            f"MCUHome could not fetch the build environment {container_image}.",
             hint=(
                 "the pull is above this message with the reason. The usual ones are "
                 "no network, a registry that needs a login, and a private "
                 f"repository:\n    {runtime.program} login "
-                f"{reference.registry}\n"
+                f"{registry}\n"
                 "mcuhome device build --help shows how to build in another mode."
             ),
         )
@@ -435,26 +447,37 @@ def default_cache_root(env: Mapping[str, str]) -> Path:
     return base / "mcuhome" / "ccache"
 
 
-def cache_root(env: Mapping[str, str], stated: Path | None) -> Path | None:
+def resolve_cache_root(*, options: BuildOptions, env: Mapping[str, str]) -> Path | None:
     """Where this machine keeps its compiler cache, or ``None`` for nowhere.
 
     The compiler cache belongs to the person building rather than to the
     build directory: it holds the same objects for every device and every
     project, and the working area it used to live in is wiped before each
-    build. A caller that resolved ``build.cache_root`` through the
-    configuration layers states it; otherwise the user's cache directory
-    answers — nothing here reads a variable of its own.
+    build. ``build.cache_root`` states it; unset, the user's cache
+    directory answers — *env* is read for that fallback alone and for no
+    option.
 
     **A home directory nobody named is not a refusal here.** A cache is
     an optimization, and a caller with no ``HOME`` — a service, a
     container, a test — is entitled to a build that simply has no cache.
     """
-    if stated:
-        return Path(stated)
+    if options.cache_root:
+        return Path(options.cache_root)
     try:
         return default_cache_root(env)
     except ConfigError:
         return None
+
+
+def resolve_container_program(*, options: BuildOptions) -> str:
+    """The program this machine runs containers with.
+
+    ``build.container_program``, which declares ``docker`` as its
+    default — a caller that wants to know what a container build would
+    drive, before it drives one, asks here rather than reading the field
+    and guessing what an unset one means.
+    """
+    return options.container_program or DEFAULT_CONTAINER_PROGRAM
 
 
 # --------------------------------------------------------------------------
@@ -505,11 +528,11 @@ def step_mounts(step: Step) -> list[Mount]:
 def step_command(
     *,
     program: str,
-    image: str,
+    container_image: str,
     step: Step,
     name: str,
     user: str | None = None,
-    limits: ResourceLimits | None = None,
+    limits: ContainerLimits | None = None,
 ) -> list[str]:
     """The ``run`` that is one step of the session.
 
@@ -546,10 +569,10 @@ def step_command(
     if user is not None:
         argv += ["--user", user]
     argv += ["--env", f"{BASE_DIR_VAR}={BASE_DIR}"]
-    argv += (limits or ResourceLimits()).to_arguments()
+    argv += (limits or ContainerLimits()).to_arguments()
     for mount in _ordered(step_mounts(step)):
         argv += ["--volume", mount.to_argument()]
-    argv += [image, ENTRY_POINT_PATH]
+    argv += [container_image, ENTRY_POINT_PATH]
     return argv
 
 
@@ -575,7 +598,7 @@ class _StepContainer:
     step actually stop.
     """
 
-    def __init__(self, child: Running, *, runtime: Runtime, name: str) -> None:
+    def __init__(self, child: Running, *, runtime: ContainerRuntime, name: str) -> None:
         self._child = child
         self._runtime = runtime
         self._name = name
@@ -604,11 +627,11 @@ class _StepContainer:
 
 
 def launcher(
-    image: str,
+    container_image: str,
     *,
-    runtime: Runtime,
+    runtime: ContainerRuntime,
     user: str | None = None,
-    limits: ResourceLimits | None = None,
+    limits: ContainerLimits | None = None,
     started: list[str] | None = None,
 ) -> Launcher:
     """How a step is entered in this profile: one fresh container.
@@ -630,7 +653,7 @@ def launcher(
         name = f"{CONTAINER_PREFIX}{step.invocation_id}"
         argv = step_command(
             program=runtime.program,
-            image=image,
+            container_image=container_image,
             step=step,
             name=name,
             user=user,
@@ -754,10 +777,10 @@ def image_for_context(
     )
 
 
-def check_image(
+def require_container_image(
     declaration: Declaration,
     *,
-    reference: str,
+    container_image: str,
     generator: str = "",
     zephyr_constraint: str = "",
 ) -> None:
@@ -781,7 +804,7 @@ def check_image(
     """
     if declaration.spec_generation != DECLARED_SPEC_GENERATION:
         raise EnvironmentUnusable(
-            f"The build environment {reference} implements build-environment "
+            f"The build environment {container_image} implements build-environment "
             f"specification generation {declaration.spec_generation}, and this MCUHome "
             f"speaks generation {DECLARED_SPEC_GENERATION}.",
             hint=(
@@ -790,12 +813,12 @@ def check_image(
             ),
         )
     if zephyr_constraint:
-        _check_zephyr(declaration, zephyr_constraint, reference)
+        _check_zephyr(declaration, zephyr_constraint, container_image)
     if generator:
-        _check_generator(declaration, generator, reference)
+        _check_generator(declaration, generator, container_image)
 
 
-def _check_zephyr(declaration: Declaration, constraint: str, reference: str) -> None:
+def _check_zephyr(declaration: Declaration, constraint: str, container_image: str) -> None:
     from packaging.specifiers import InvalidSpecifier, SpecifierSet
     from packaging.version import InvalidVersion, Version
 
@@ -815,8 +838,8 @@ def _check_zephyr(declaration: Declaration, constraint: str, reference: str) -> 
         version = Version(declaration.zephyr_version)
     except InvalidVersion as broken:
         raise EnvironmentUnusable(
-            f'The build environment {reference} states Zephyr "{declaration.zephyr_version}", '
-            "which is not a version.",
+            f"The build environment {container_image} states Zephyr "
+            f'"{declaration.zephyr_version}", which is not a version.',
             hint="the image's labels are damaged — build against another image",
         ) from broken
     if not specifier.contains(version, prereleases=True):
@@ -830,7 +853,7 @@ def _check_zephyr(declaration: Declaration, constraint: str, reference: str) -> 
         )
 
 
-def _check_generator(declaration: Declaration, generator: str, reference: str) -> None:
+def _check_generator(declaration: Declaration, generator: str, container_image: str) -> None:
     from mcuhome.workbench.generatorconstraint import accepts
 
     if accepts(
@@ -840,7 +863,7 @@ def _check_generator(declaration: Declaration, generator: str, reference: str) -
     ):
         return
     raise EnvironmentUnusable(
-        f"The build environment {reference} does not accept build contexts from {generator}.",
+        f"The build environment {container_image} does not accept build contexts from {generator}.",
         hint=(
             f"it accepts {declaration.generator_constraint or 'nothing'}. Use a build "
             "environment released with this MCUHome, or recreate the context with a "
@@ -863,7 +886,7 @@ def prepare_environment(
     registry: RegistrySource | None = None,
     images: Any = None,
     container_program: str = DEFAULT_CONTAINER_PROGRAM,
-    runtime: Runtime | None = None,
+    runtime: ContainerRuntime | None = None,
     on_line: LineSink | None = None,
 ) -> ResolvedImage:
     """From "these packages" to "these bytes, here" — before anything is built.
@@ -874,8 +897,8 @@ def prepare_environment(
     registry question, answered without pulling anything). And finally:
     is it on this machine, or does it have to be fetched.
     """
-    seam = runtime if runtime is not None else Runtime(container_program)
-    preflight(seam, env=env)
+    seam = runtime if runtime is not None else ContainerRuntime(container_program)
+    require_container_runtime(seam, env=env)
     match = image_for_context(
         pin,
         repositories=repositories,
@@ -888,7 +911,7 @@ def prepare_environment(
         registry=registry,
         images=images,
     )
-    fetched = ensure_image(seam, match.reference, on_line=on_line)
+    fetched = ensure_container_image(seam, match.reference.runnable(), on_line=on_line)
     return ResolvedImage(match=match, fetched=fetched)
 
 
@@ -915,7 +938,7 @@ class ContainerBuildResult:
 def run_locked_build(
     context_dir: Path,
     *,
-    image: ResolvedImage | str,
+    container_image: ResolvedImage | str,
     sdk_sources: Sequence[Path],
     work_root: Path,
     env: Mapping[str, str],
@@ -924,11 +947,11 @@ def run_locked_build(
     registry: RegistrySource | None = None,
     deadline_seconds: int = 5400,
     limits: BuildLimits | None = None,
-    pids: int = DEFAULT_PIDS,
+    pids: int = DEFAULT_CONTAINER_PIDS,
     user: str | None = None,
     zephyr_constraint: str = "",
     container_program: str = DEFAULT_CONTAINER_PROGRAM,
-    runtime: Runtime | None = None,
+    runtime: ContainerRuntime | None = None,
     on_line: LineSink | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> ContainerBuildResult:
@@ -940,7 +963,7 @@ def run_locked_build(
     it falls through to, and *work_root* is this backend's own scratch
     area — the session's directories and the SDK it unpacked.
 
-    *image* is what runs, pinned to a digest and already resolved by
+    *container_image* is what runs, pinned to a digest and already resolved by
     whoever composed the build (:func:`prepare_environment`). It is a
     parameter rather than something read back out of the context,
     because a context pins the environment's **packages** and an image is
@@ -960,7 +983,7 @@ def run_locked_build(
     started it.
 
     **What the image declares is checked here as well**
-    (:func:`check_image`), for the reason every entry point that a caller
+    (:func:`require_container_image`), for the reason every entry point that a caller
     can reach directly checks: this is where an embedder and a build
     server enter, and a rule a caller can go around by calling one
     function lower is not a rule. Everything the context can answer on
@@ -991,18 +1014,22 @@ def run_locked_build(
     work_root = Path(work_root).resolve()
     work_root.mkdir(parents=True, exist_ok=True)
     manifest = read_context_manifest(context_dir / MANIFEST_FILE)
-    running = image.runnable if isinstance(image, ResolvedImage) else image
-    recorded = image.reference if isinstance(image, ResolvedImage) else image
-    if isinstance(image, ResolvedImage):
-        check_image(
-            image.declaration,
-            reference=recorded,
+    running = (
+        container_image.runnable if isinstance(container_image, ResolvedImage) else container_image
+    )
+    recorded = (
+        container_image.reference if isinstance(container_image, ResolvedImage) else container_image
+    )
+    if isinstance(container_image, ResolvedImage):
+        require_container_image(
+            container_image.declaration,
+            container_image=recorded,
             generator=format_generator_chain(
                 read_generator_chain(context_dir / BUILD_CONTEXT_FILE)
             ),
             zephyr_constraint=zephyr_constraint,
         )
-    seam = runtime if runtime is not None else Runtime(container_program)
+    seam = runtime if runtime is not None else ContainerRuntime(container_program)
     sdk_tree = acquire_sdk(
         version=manifest.sdk.version,
         sha256=manifest.sdk.sha256,
@@ -1025,7 +1052,7 @@ def run_locked_build(
             running,
             runtime=seam,
             user=user if user is not None else current_user(),
-            limits=ResourceLimits.of(given, pids=pids),
+            limits=ContainerLimits.from_build_limits(given, pids=pids),
             started=started,
         ),
         context_id=manifest.compute_id(),

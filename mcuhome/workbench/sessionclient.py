@@ -2289,8 +2289,8 @@ class RemoteBuildResult:
 
     Two fields are this target's own and have no local counterpart:
     :attr:`error`, the refusal envelope out of the verdict, and
-    :attr:`invocation_id`. :attr:`image` is the one that *does* have a
-    local counterpart and could only come from the far side: which
+    :attr:`invocation_id`. :attr:`container_image` is the one that *does*
+    have a local counterpart and could only come from the far side: which
     delivery of the pinned package set actually ran is the server's
     choice, and it answers it at ``send-context``. Four of
     ``StepResult``'s have no remote
