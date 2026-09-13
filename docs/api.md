@@ -888,14 +888,17 @@ def resolve_cache_tiers(
     session: Path | None = None,
     project: Path | None = None,
 ) -> dict[str, CacheTier]
-def resolve_cache_root(*, options: BuildOptions, env: Mapping[str, str]) -> Path
+def resolve_cache_root(*, options: BuildOptions, env: Mapping[str, str]) -> Path | None
 def resolve_host_limits(*, cpus: float | None = None, memory_bytes: int | None = None) -> BuildLimits
 def parse_memory(text: str | int | None, *, key: str = "build.memory") -> int | None
 def resolve_shutdown_seconds(*, cancel_grace_seconds: float) -> float
 def current_user() -> str | None
 ```
 `parse_memory` accepts a byte count or a `k`/`m`/`g` suffix and raises
-`ConfigError` naming *key* for anything else. `resolve_shutdown_seconds`
+`ConfigError` naming *key* for anything else. `resolve_cache_root`
+answers `None` where there is nowhere to put a cache — a compiler cache
+is an optimization, and a caller with no home directory (a service, a
+container, a test) is entitled to a build that simply has none. `resolve_shutdown_seconds`
 answers the whole liveness ladder from the cancel sentinel to the last
 rung — the caller's grace period plus the fixed rungs. It is a bound, not
 a promise. `current_user` answers `uid:gid` on POSIX and `None`

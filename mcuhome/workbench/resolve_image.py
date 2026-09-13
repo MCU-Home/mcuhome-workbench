@@ -62,6 +62,7 @@ from mcuhome.model.buildenvironment import (
 from mcuhome.model.errors import BuildError
 from mcuhome.model.imageref import DOCKER_HUB, Reference, parse_reference
 
+from mcuhome.workbench.buildtarget import DEFAULT_CONTAINER_REPOSITORIES
 from mcuhome.workbench.ociregistry import ImageFacts, ImageRegistry, ImageRegistryError
 
 __all__ = [
@@ -252,7 +253,7 @@ def resolve_container_image(
     packages: Mapping[str, PackageMember],
     *,
     registry: ImageRegistry | None = None,
-    repositories: Sequence[str] = (ENVIRONMENT_IMAGE_REPOSITORY,),
+    repositories: Sequence[str] = DEFAULT_CONTAINER_REPOSITORIES,
     pin: ContainerImagePin | None = None,
     platform: str | None = None,
 ) -> ContainerImageMatch:
