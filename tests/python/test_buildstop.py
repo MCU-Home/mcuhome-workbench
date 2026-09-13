@@ -1,0 +1,791 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+"""Stopping a build that is already running (``BuildRequest.should_stop``).
+
+The one seam on this surface that decides control flow, so it is tested
+where it decides: the supervisor that asks it, the two local profiles
+whose step it ends, the remote target that has to tell a build server
+about it, and the entry point that turns all of it into one answer —
+``ok=False, stopped=True``, with the build directory released.
+
+**No container and no build server here.** The container profile is
+driven through ``test_localbuild``'s scripted runtime, with a step that
+keeps running until the ladder reaches it; the subprocess profile runs a
+real child process that sleeps until it is signalled; the remote target
+talks to a client of this module's own making. What is asserted is what
+each of them leaves behind: the container removed, the process gone, the
+half-written output still there, and a verdict that says the build was
+stopped rather than broken.
+
+The ladder's own timings are the module's constants, and the tests that
+walk it to the last rung scale them down rather than wait forty seconds —
+the bound they check against is computed from the same constants, so what
+is asserted is the relation and never a number.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+from conftest import EXAMPLES_DIR, ScriptedRegistry, resolve_file
+from test_buildenvsession import entry_point
+from test_localbuild import Seam, make_sdk_source
+from test_subprocessbuild import (  # noqa: F401 - the store fixtures of the profile's own suite
+    environment,
+    freeze,
+    run_one_step,
+    store,
+    thaw,
+)
+
+from mcuhome.workbench import api, build, buildlock, buildprocess, containerbuild, sessionclient
+from mcuhome.workbench.buildenvsession import StepResult
+from mcuhome.workbench.builders import SelectedBuilder
+from mcuhome.workbench.buildprocess import Liveness, resolve_shutdown_seconds, spawn_process
+from mcuhome.workbench.signing import generate_key_pem, public_key_pem
+
+#: A fixed public key, so nothing here draws one.
+_PUBLIC_PEM = public_key_pem(generate_key_pem(scalar=0x5709DE1))
+
+SLEEP_30S = ("/bin/sh", "-c", "sleep 30")
+
+
+@pytest.fixture
+def model():
+    return resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
+
+
+class Asked:
+    """A stop predicate, and what it was asked.
+
+    Records every call so a test can tell "nobody asked" from "asked and
+    said no" — the two failures that look identical in a result.
+    """
+
+    def __init__(self, answer: bool = True) -> None:
+        self.answer = answer
+        self.calls = 0
+
+    def __call__(self) -> bool:
+        self.calls += 1
+        return self.answer
+
+
+class Immortal:
+    """A step that ignores every signal, so the whole ladder is walked."""
+
+    started = True
+    output = ""
+
+    def __init__(self) -> None:
+        self.signals: list[str] = []
+
+    def poll(self) -> int | None:
+        return None
+
+    def wait(self) -> int | None:  # pragma: no cover - never reached: it never ends
+        return None
+
+    def terminate(self) -> None:
+        self.signals.append("terminate")
+
+    def kill(self) -> None:
+        self.signals.append("kill")
+
+
+def _scaled_ladder(monkeypatch, *, poll: float = 0.1, rung: float = 0.3) -> None:
+    """The ladder in tenths of a second instead of tens of them.
+
+    Every test that walks it to the end patches these, and every bound
+    those tests assert is :func:`resolve_shutdown_seconds` of the patched
+    values — so the numbers here decide how long the suite takes and
+    nothing else.
+    """
+    monkeypatch.setattr(buildprocess, "_POLL_SECONDS", poll)
+    monkeypatch.setattr(buildprocess, "_KILL_AFTER_SECONDS", rung)
+    monkeypatch.setattr(buildprocess, "_GIVE_UP_AFTER_SECONDS", rung)
+
+
+# --------------------------------------------------------------------------
+# The ladder and its bound
+# --------------------------------------------------------------------------
+
+
+def test_the_bound_is_the_ladder_the_supervisor_walks(tmp_path, monkeypatch) -> None:
+    """Not a number: the rungs, walked, fit inside what the function answers.
+
+    The constants are scaled down so the test costs a second instead of
+    forty; the bound is computed from the same constants, so what is
+    asserted is that the ladder fits in it — which is the promise a build
+    server and a waiting client rely on.
+    """
+    _scaled_ladder(monkeypatch)
+    grace = 0.1
+    cancel = tmp_path / "cancel"
+    child = Immortal()
+    liveness = Liveness(
+        cancel=cancel,
+        deadline_seconds=3600,
+        cancel_grace_seconds=grace,
+        should_stop=lambda: True,
+    )
+
+    started = time.monotonic()
+    status = liveness.supervise(child)
+    elapsed = time.monotonic() - started
+
+    # The last rung: nobody knows what a process that survived SIGKILL
+    # did, and a number would be an invention.
+    assert status is None
+    # Signalled first, killed afterwards — and killed again on every tick
+    # it survives, which is what "the supervisor gave up" means.
+    assert child.signals[0] == "terminate"
+    assert "kill" in child.signals[1:]
+    # The stop wrote the sentinel, so the step's own directory says why
+    # it was torn down.
+    assert cancel.exists()
+    assert elapsed <= resolve_shutdown_seconds(cancel_grace_seconds=grace)
+
+
+def test_the_bound_counts_the_caller_s_grace_period_and_the_fixed_rungs() -> None:
+    """Two grace periods apart, the bound is two grace periods apart."""
+    first = resolve_shutdown_seconds(cancel_grace_seconds=0)
+    assert resolve_shutdown_seconds(cancel_grace_seconds=30) == first + 30
+    # The fixed part is the ladder's own: signal to kill, kill to giving
+    # up, and the slack the half-second tick costs on every rung.
+    assert first > buildprocess._KILL_AFTER_SECONDS + buildprocess._GIVE_UP_AFTER_SECONDS
+
+
+def test_the_bound_is_on_the_public_surface() -> None:
+    """A build server that has to wait for a stopped step asks for it here."""
+    assert api.resolve_shutdown_seconds is resolve_shutdown_seconds
+    assert "resolve_shutdown_seconds" in api.__all__
+
+
+def test_the_predicate_ends_a_step_that_would_otherwise_run_for_half_a_minute(
+    tmp_path,
+) -> None:
+    """A real child, a predicate that turns true on the second tick."""
+    cancel = tmp_path / "cancel"
+    asked = Asked(answer=False)
+    child = spawn_process(SLEEP_30S)
+
+    def should_stop() -> bool:
+        asked.calls += 1
+        return asked.calls > 1
+
+    liveness = Liveness(
+        cancel=cancel, deadline_seconds=3600, cancel_grace_seconds=0, should_stop=should_stop
+    )
+    started = time.monotonic()
+    status = liveness.supervise(child)
+    elapsed = time.monotonic() - started
+
+    assert status is not None, "the process ended rather than being waited out"
+    assert elapsed < 20  # well short of the thirty seconds it was going to sleep
+    assert cancel.exists()
+
+
+def test_a_predicate_that_raises_leaves_the_step_alone_and_is_not_asked_again(
+    tmp_path, caplog
+) -> None:
+    """A caller's bug must not end a build that was going to finish.
+
+    The step here ends on its own; what is asserted is that it was
+    allowed to, that the predicate was asked exactly once, and that the
+    program which supplied it is told.
+    """
+    asked = Asked()
+
+    def raising() -> bool:
+        asked.calls += 1
+        raise RuntimeError("the stop button is broken")
+
+    child = spawn_process(("/bin/sh", "-c", "sleep 1.5"))
+    liveness = Liveness(
+        cancel=tmp_path / "cancel",
+        deadline_seconds=3600,
+        cancel_grace_seconds=0,
+        should_stop=raising,
+    )
+    status = liveness.supervise(child)
+
+    assert status == 0, "the step ran to its own end"
+    assert asked.calls == 1
+    assert not (tmp_path / "cancel").exists()
+    assert "stop predicate" in caplog.text
+
+
+# --------------------------------------------------------------------------
+# The container profile: the container is what has to go
+# --------------------------------------------------------------------------
+
+
+class LongStep:
+    """A spawned step that keeps running until it is signalled."""
+
+    started = True
+    output = "compiling..."
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+        self.signals: list[str] = []
+
+    def poll(self) -> int | None:
+        return self.status
+
+    def wait(self) -> int | None:
+        return self.status
+
+    def terminate(self) -> None:
+        self.signals.append("terminate")
+        self.status = -15
+
+    def kill(self) -> None:  # pragma: no cover - the client goes on the first signal
+        self.signals.append("kill")
+        self.status = -9
+
+
+class StopSeam(Seam):
+    """``test_localbuild``'s scripted runtime, with a step that does not end.
+
+    The build it plays writes a piece of a firmware and then keeps
+    running, which is what a stop has to happen *during*: a step that had
+    already finished would be stopped by nothing and would prove nothing.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(build=_half_a_firmware)
+        self.running_step = LongStep()
+
+    def spawn(self, argv, on_line=None):
+        # The parent parses the mounts and plays the scripted build
+        # through them; only the handle is this class's own.
+        super().spawn(argv, on_line)
+        return self.running_step
+
+
+def _half_a_firmware(request: dict[str, Any], out: Path) -> None:
+    """What a build that is interrupted leaves behind: a piece of a file."""
+    (out / "firmware.bin.part").write_bytes(b"half a firmware")
+
+
+def test_a_stopped_container_build_removes_the_container_and_keeps_what_was_written(
+    tmp_path, model
+) -> None:
+    """The real composition, down to the runtime's ``rm``.
+
+    Signalling the client this process started is not what ends a
+    containerized build — the build is inside the container — so the stop
+    has to reach the container itself. The predicate turns true the
+    moment the step has written something, which is the state a person
+    pressing stop is actually in.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam = StopSeam()
+    partial = tmp_path / "wr" / "backend" / "session" / "out" / "firmware.bin.part"
+
+    result = build.compose_container_build(
+        model,
+        signing_pub=_PUBLIC_PEM,
+        sdk_sources=(tmp_path / "src",),
+        work_root=tmp_path / "wr",
+        env={},
+        images=ScriptedRegistry(),
+        runtime=containerbuild.Runtime(runner=seam, spawner=seam.spawn),
+        options=build.BuildOptions(
+            workspace_sources=(tmp_path / "src",), tools_sources=(tmp_path / "src",)
+        ),
+        should_stop=partial.is_file,
+    )
+
+    # A stopped step wrote no result document, which is what a stopped
+    # step is: the specification has no cancelled status.
+    assert result.outcome.ok is False
+    assert any("no readable result document" in problem for problem in result.outcome.problems)
+    # The container was removed by name, and only then was the client
+    # this process started signalled.
+    name = seam.step[seam.step.index("--name") + 1]
+    assert ["rm" in argv and name in argv for argv in seam.calls].count(True) >= 1
+    assert seam.running_step.signals == ["terminate"]
+    # What the build had produced is still on disk, in the directory the
+    # result names.
+    assert (result.out_dir / "firmware.bin.part").read_bytes() == b"half a firmware"
+
+
+# --------------------------------------------------------------------------
+# The subprocess profile: the builder itself is what has to go
+# --------------------------------------------------------------------------
+
+
+def test_a_stopped_subprocess_build_ends_the_builder_and_keeps_what_was_written(
+    tmp_path,
+    store,  # noqa: F811 - the fixture is imported, and a fixture is asked for by name
+    environment,  # noqa: F811 - same
+) -> None:
+    """A real child process, stopped while it is sleeping through a build.
+
+    ``exec`` on purpose: what the ladder signals is the process this side
+    started, so the entry point *becomes* the sleeping program instead of
+    waiting for one.
+    """
+    thaw(environment.tools.path)
+    entry_point(
+        environment.tools.path,
+        'printf HALF > "$mc/out/firmware.bin.part"\nexec sleep 30\n',
+    )
+    freeze(environment.tools.path)
+    partial = tmp_path / "work" / "session" / "out" / "firmware.bin.part"
+
+    started = time.monotonic()
+    result = run_one_step(tmp_path, environment, should_stop=partial.is_file)
+    elapsed = time.monotonic() - started
+
+    assert result.outcome.ok is False
+    assert elapsed < 20  # well short of the thirty seconds the step asked for
+    assert (result.out_dir / "firmware.bin.part").read_bytes() == b"HALF"
+
+
+# --------------------------------------------------------------------------
+# One answer, whichever target ran: ok=False, stopped=True
+# --------------------------------------------------------------------------
+
+
+def _stopped_step(out_dir: Path) -> StepResult:
+    """What a profile answers after the ladder ended its step."""
+    return StepResult(
+        action="build",
+        context_id="sha256:" + "c" * 64,
+        exit_code=-15,
+        problems=("the build environment wrote no readable result document",),
+        out_dir=out_dir,
+    )
+
+
+def _build_request(model, tmp_path, **overrides) -> build.BuildRequest:
+    return build.BuildRequest(
+        model=model,
+        out_dir=tmp_path / "build",
+        options=build.BuildOptions(),
+        **overrides,
+    )
+
+
+@pytest.mark.parametrize("execution", ["container", "subprocess"])
+def test_a_stopped_local_build_answers_stopped_and_releases_the_build_directory(
+    model, tmp_path, monkeypatch, execution
+) -> None:
+    """Both local executions, at the entry point a caller actually uses.
+
+    The composition is stubbed here — the two profiles are driven for
+    real above — and the stub does what a supervisor does: it asks the
+    predicate it was handed, and comes back with the step the ladder
+    ended. What is asserted is the layer above: that the predicate
+    arrived, that the answer says *stopped* rather than merely *failed*,
+    and that the build directory is free again afterwards.
+    """
+    out_dir = tmp_path / "build"
+    asked = Asked()
+    seen: dict[str, Any] = {}
+
+    def fake(model_, **kwargs):
+        assert buildlock.is_busy(out_dir), "the build directory is held while a build runs"
+        seen["asked"] = kwargs["should_stop"]()
+        outcome = _stopped_step(tmp_path / "out")
+        if execution == "subprocess":
+            return build.subprocessbuild.SubprocessBuildResult(
+                outcome=outcome,
+                out_dir=tmp_path / "out",
+                context_dir=tmp_path / "context",
+                environment=None,
+            )
+        return containerbuild.ContainerBuildResult(
+            outcome=outcome,
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            container_image="ghcr.io/mcu-home/build-environment@sha256:" + "d" * 64,
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    target = build.LocalBuild(
+        execution=build.ContainerExecution()
+        if execution == "container"
+        else build.SubprocessExecution()
+    )
+    result = asyncio.run(
+        build.build_firmware(_build_request(model, tmp_path, should_stop=asked), target=target)
+    )
+
+    assert seen["asked"] is True, "the predicate reached the composition"
+    assert result.ok is False
+    assert result.stopped is True
+    assert result.to_dict()["stopped"] is True
+    assert result.out_dir == tmp_path / "out"
+    assert buildlock.is_busy(out_dir) is False
+
+
+def test_a_build_that_failed_without_being_stopped_says_so(model, tmp_path, monkeypatch) -> None:
+    """The other half of the verdict, and the one a stuck flag would break.
+
+    A failed compile and a stopped build produce the same empty output
+    directory; ``stopped`` is the only thing that tells them apart, so a
+    build nobody stopped has to answer ``False`` — including one whose
+    caller supplied a predicate that kept saying no.
+    """
+    asked = Asked(answer=False)
+
+    def fake(model_, **kwargs):
+        kwargs["should_stop"]()
+        return containerbuild.ContainerBuildResult(
+            outcome=_stopped_step(tmp_path / "out"),
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            container_image="",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    result = asyncio.run(
+        build.build_firmware(_build_request(model, tmp_path, should_stop=asked), target="local")
+    )
+
+    assert asked.calls == 1
+    assert result.ok is False
+    assert result.stopped is False
+
+
+def test_a_build_without_a_predicate_hands_none_down(model, tmp_path, monkeypatch) -> None:
+    """Nothing to ask is nothing below has to know about."""
+    seen: dict[str, Any] = {}
+
+    def fake(model_, **kwargs):
+        seen["should_stop"] = kwargs["should_stop"]
+        return containerbuild.ContainerBuildResult(
+            outcome=StepResult(action="build", context_id="", exit_code=0, status="success"),
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            container_image="",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    result = asyncio.run(build.build_firmware(_build_request(model, tmp_path), target="local"))
+
+    assert seen["should_stop"] is None
+    assert result.stopped is False
+
+
+def test_the_verdict_stays_stopped_after_the_predicate_changes_its_mind(
+    model, tmp_path, monkeypatch
+) -> None:
+    """Latched: a build is not un-stopped by whoever cleared the flag.
+
+    A session asks once per step, so a predicate reading a flag somebody
+    else clears can say yes to the step that was stopped and no to the
+    question afterwards. The verdict follows the first yes.
+    """
+    answers = iter([True, False, False])
+
+    def fake(model_, **kwargs):
+        assert kwargs["should_stop"]() is True
+        assert kwargs["should_stop"]() is True, "asked again, and still stopped"
+        return containerbuild.ContainerBuildResult(
+            outcome=_stopped_step(tmp_path / "out"),
+            out_dir=tmp_path / "out",
+            context_dir=tmp_path / "context",
+            container_image="",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    result = asyncio.run(
+        build.build_firmware(
+            _build_request(model, tmp_path, should_stop=lambda: next(answers)), target="local"
+        )
+    )
+
+    assert result.stopped is True
+
+
+# --------------------------------------------------------------------------
+# The remote target: the server has to be told
+# --------------------------------------------------------------------------
+
+IDENTITY = "sha256:" + "e" * 64
+INVOCATION = "inv-42"
+
+
+class FakeServer:
+    """What the fake clients of one test share: the far side.
+
+    It is not a build server — it is the four verbs a remote build sends
+    and the one answer it waits for, so that the client's *own* behaviour
+    around a stop is observable: which verbs went out, on how many
+    connections, and whether each of them was closed.
+    """
+
+    def __init__(self, *, busy: bool = False, retry_after: float = 0.4) -> None:
+        self.busy = busy
+        self.retry_after = retry_after
+        self.verbs: list[str] = []
+        self.clients: list[FakeClient] = []
+        self.cancelled: list[str] = []
+        #: The verdict to answer with when the invocation is cancelled;
+        #: ``None`` is the server that says nothing at all.
+        self.verdict_on_cancel: dict[str, Any] | None = None
+        self._finished: asyncio.Future | None = None
+
+    def finished(self) -> asyncio.Future:
+        if self._finished is None:
+            self._finished = asyncio.get_running_loop().create_future()
+        return self._finished
+
+    def install(self, monkeypatch) -> FakeServer:
+        monkeypatch.setattr(sessionclient, "SessionClient", lambda url, **kwargs: FakeClient(self))
+        return self
+
+
+class FakeClient:
+    """One connection to a :class:`FakeServer`, in the shape a build drives."""
+
+    def __init__(self, server: FakeServer) -> None:
+        self.server = server
+        self.closed = False
+        self.session_closed = False
+        server.clients.append(self)
+
+    async def connect(self) -> None:
+        self.server.verbs.append("connect")
+
+    async def capabilities(self) -> dict[str, Any]:
+        self.server.verbs.append("capabilities")
+        return {}
+
+    async def open_session(self, *, profile: str = "oneshot", seat: str | None = None):
+        self.server.verbs.append("open-session")
+        if self.server.busy:
+            raise sessionclient.ServerRefusal(
+                {
+                    "code": "session.no-room",
+                    "message": "every seat is taken",
+                    "details": {
+                        "seat": "seat-1",
+                        "retry_after_seconds": self.server.retry_after,
+                    },
+                },
+                verb="open-session",
+            )
+        return {"session": {"id": "session-1"}}
+
+    async def send_context(self, context_dir, *, image=None) -> dict[str, Any]:
+        self.server.verbs.append("send-context")
+        return {}
+
+    async def lock_context(self) -> str:
+        self.server.verbs.append("lock-context")
+        return IDENTITY
+
+    async def build(self, *, mode: str = "clean") -> str:
+        self.server.verbs.append("build")
+        return INVOCATION
+
+    async def wait_finished(self, invocation_id: str, *, timeout: float | None = None):
+        return await self.server.finished()
+
+    async def cancel(self, invocation_id: str) -> dict[str, Any]:
+        self.server.verbs.append("cancel")
+        self.server.cancelled.append(invocation_id)
+        verdict = self.server.verdict_on_cancel
+        if verdict is not None and not self.server.finished().done():
+            self.server.finished().set_result(verdict)
+        return {"status": "accepted"}
+
+    async def close_session(self) -> dict[str, Any]:
+        self.session_closed = True
+        return {}
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _remote_build(tmp_path, server: FakeServer, **kwargs):
+    return asyncio.run(
+        sessionclient.run_remote_build(
+            tmp_path / "context",
+            url="ws://build.example/session",
+            work_root=tmp_path / "work",
+            **kwargs,
+        )
+    )
+
+
+def test_a_build_waiting_for_a_turn_stops_without_opening_a_session(tmp_path, monkeypatch) -> None:
+    """The wait is spent in ticks, and a stop ends it between two of them.
+
+    Nothing has to be told: no session was opened, and the turn this
+    client was holding is one the server reclaims when nobody comes back
+    for it.
+    """
+    server = FakeServer(busy=True).install(monkeypatch)
+    waits: list[Any] = []
+
+    result = _remote_build(
+        tmp_path,
+        server,
+        on_wait=waits.append,
+        should_stop=lambda: bool(waits),
+        wait=True,
+        max_wait=0,
+    )
+
+    assert len(waits) == 1, "refused once, then stopped instead of waiting again"
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert result.ok is False
+    assert result.out_dir is None
+    assert "send-context" not in server.verbs
+    assert all(client.closed for client in server.clients)
+
+
+def test_stopping_a_running_invocation_sends_the_cancel_verb(tmp_path, monkeypatch) -> None:
+    """A closed socket is not a stop signal, so the verb goes out.
+
+    The server answers the cancelled verdict, which is the ordinary
+    course: the invocation ended and said so, and that word is what the
+    result carries.
+    """
+    server = FakeServer().install(monkeypatch)
+    server.verdict_on_cancel = {"status": "cancelled", "artifacts": []}
+
+    # Stopped once the invocation is running, which is the state this
+    # test is about: before that, a stop needs no verb at all.
+    result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
+
+    assert server.cancelled == [INVOCATION]
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert result.ok is False
+    assert result.artifacts == ()
+    assert result.context_id == IDENTITY
+    assert server.clients[0].session_closed, "the session is closed like any other"
+    assert server.clients[0].closed
+
+
+def test_a_server_that_says_nothing_counts_as_stopped_after_the_ladder_s_bound(
+    tmp_path, monkeypatch
+) -> None:
+    """The far side may answer nothing at all, and a person is still waiting.
+
+    The bound is the liveness ladder's, scaled down here the way every
+    other ladder test scales it; what is asserted is that the wait ends
+    at all, and with the invocation id a person can take to the operator
+    of that machine.
+    """
+    _scaled_ladder(monkeypatch, poll=0.02, rung=0.05)
+    monkeypatch.setattr(sessionclient, "_STOP_POLL_SECONDS", 0.02)
+    server = FakeServer().install(monkeypatch)
+
+    started = time.monotonic()
+    result = _remote_build(tmp_path, server, should_stop=lambda: "build" in server.verbs)
+    elapsed = time.monotonic() - started
+
+    assert server.cancelled == [INVOCATION]
+    assert result.status == sessionclient.STATUS_CANCELLED
+    assert result.invocation_id == INVOCATION
+    assert elapsed < 5, "the wait ended on the bound, not on the verdict that never came"
+
+
+def test_a_remote_build_that_was_not_stopped_waits_for_its_verdict(tmp_path, monkeypatch) -> None:
+    """The predicate is asked, says no, and nothing is cancelled."""
+    server = FakeServer().install(monkeypatch)
+    asked = Asked(answer=False)
+
+    async def answer_later() -> None:
+        await asyncio.sleep(0.05)
+        server.finished().set_result({"status": "success", "artifacts": []})
+
+    async def scenario():
+        task = asyncio.ensure_future(answer_later())
+        try:
+            return await sessionclient.run_remote_build(
+                tmp_path / "context",
+                url="ws://build.example/session",
+                work_root=tmp_path / "work",
+                should_stop=asked,
+            )
+        finally:
+            await task
+
+    result = asyncio.run(scenario())
+
+    assert asked.calls >= 1
+    assert server.cancelled == []
+    assert result.status == "success"
+
+
+def test_a_stopped_remote_build_answers_stopped_at_the_entry_point(
+    model, tmp_path, monkeypatch
+) -> None:
+    """``build_firmware`` over the remote target, with the client stubbed.
+
+    Two ways in and both are a stopped build: this side asked and was
+    told to stop, or the server ended the invocation itself and said
+    ``cancelled`` in the verdict.
+    """
+    (tmp_path / "ctx").mkdir()
+    asked = Asked()
+    seen: dict[str, Any] = {}
+
+    async def fake(context_dir, **kwargs):
+        seen["asked"] = kwargs["should_stop"]()
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id=IDENTITY,
+            status="failure",
+            artifacts=(),
+            out_dir=None,
+            invocation_id=INVOCATION,
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake)
+    request = _build_request(
+        model,
+        tmp_path,
+        context_dir=tmp_path / "ctx",
+        builder=SelectedBuilder(target=build.TARGET_REMOTE, server="ws://build.example/session"),
+        should_stop=asked,
+    )
+    result = asyncio.run(build.build_firmware(request, target=build.TARGET_REMOTE))
+
+    assert seen["asked"] is True
+    assert result.ok is False
+    assert result.stopped is True
+    assert buildlock.is_busy(tmp_path / "build") is False
+
+
+def test_a_cancelled_verdict_is_a_stopped_build_whoever_ended_it(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The operator of the build server can stop an invocation too."""
+    (tmp_path / "ctx").mkdir()
+
+    async def fake(context_dir, **kwargs):
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id=IDENTITY,
+            status=sessionclient.STATUS_CANCELLED,
+            artifacts=(),
+            out_dir=None,
+            invocation_id=INVOCATION,
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake)
+    request = _build_request(
+        model,
+        tmp_path,
+        context_dir=tmp_path / "ctx",
+        builder=SelectedBuilder(target=build.TARGET_REMOTE, server="ws://build.example/session"),
+    )
+    result = asyncio.run(build.build_firmware(request, target=build.TARGET_REMOTE))
+
+    assert result.ok is False
+    assert result.stopped is True
