@@ -154,7 +154,9 @@ the verdict, and closing the session — and it is
 those would otherwise wait out the client's call timeout on a peer that
 has stopped answering, while the caller's build directory stays held. A
 server that says nothing within it counts as stopped; a session close
-that is not answered within it is abandoned and the transport dropped; a
+that is not answered within it is abandoned, and so is the closing
+handshake of the socket underneath — the transport is dropped either
+way, and nothing a peer can stall is left outside the bound; a
 connection that dies while stopping is a stopped build rather than a
 transport failure. A verdict of `cancelled` is a stopped build as well,
 whichever side ended it. A stopped remote build answers `out_dir` `None`

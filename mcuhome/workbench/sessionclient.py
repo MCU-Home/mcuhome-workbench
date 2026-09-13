@@ -1370,8 +1370,20 @@ class SessionClient:
         if self._reader is None or self._reader.done():
             self._reader = asyncio.create_task(self._read_loop(), name="mcuhome-session-reader")
 
-    async def close(self) -> None:
-        """Drop the transport. The *session* is closed by ``close-session``."""
+    async def close(self, *, timeout: float | None = None) -> None:
+        """Drop the transport. The *session* is closed by ``close-session``.
+
+        *timeout* bounds the closing **handshake** — the part that waits
+        for the peer's answering close frame, and the one thing here that
+        a peer can hold up. Left ``None`` it is aiohttp's own ten
+        seconds, which is right for an ordinary end; a stopped build
+        states what is left of the bound it promised instead, because ten
+        seconds waiting for the politeness of a server that has already
+        stopped answering is ten seconds of somebody's stop.
+
+        What follows the handshake is local either way: dropping the
+        connector closes the socket whether the peer joined in or not.
+        """
         if self._reader is not None:
             self._reader.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1379,7 +1391,10 @@ class SessionClient:
             self._reader = None
         if self._ws is not None:
             with contextlib.suppress(Exception):
-                await self._ws.close()
+                if timeout is None:
+                    await self._ws.close()
+                else:
+                    await asyncio.wait_for(self._ws.close(), timeout)
             self._ws = None
         if self._session is not None:
             with contextlib.suppress(Exception):
@@ -2790,4 +2805,9 @@ async def run_remote_build(
                 else:
                     await client.close_session()
     finally:
-        await client.close()
+        # The transport drop is inside the bound as well, where there is
+        # one: waiting for the closing frame of a peer that has stopped
+        # answering is the last place a stopped build could lose time it
+        # has already promised — and the caller's build directory stays
+        # held until this returns.
+        await client.close(timeout=clock.remaining() if clock.started else None)
