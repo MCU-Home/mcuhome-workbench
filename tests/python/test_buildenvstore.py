@@ -19,6 +19,7 @@ can find them.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -811,6 +812,33 @@ def write_index(directory: Path, *published: tuple[str, str, str]) -> None:
     (directory / "index.json").write_text(json.dumps({"packages": packages}), "utf-8")
 
 
+def write_family_index(
+    directory: Path, family: str, member: str, version: str, sha256: str
+) -> None:
+    """An index in which *family* stands for *member* on this host.
+
+    What a real registry publishes for the build tools: one concrete
+    package per architecture and one meta entry naming them, whose own
+    hash is computed over the members it points at. Spelled out here
+    rather than imported from the packaging side, so the index under test
+    is one a second implementation wrote.
+    """
+    from mcuhome.packagetool.verify import canonical_json
+
+    archive = directory / f"{member}-{version}.tar.zst"
+    packages = {
+        member: {version: {"file": archive.name, "sha256": sha256, "size": archive.stat().st_size}}
+    }
+    expanded = {"arch": {host_platform(): {"name": member, "sha256": sha256}}}
+    packages[family] = {
+        version: {
+            "meta": {"arch": {host_platform(): member}},
+            "sha256": hashlib.sha256(canonical_json(expanded)).hexdigest(),
+        }
+    }
+    (directory / "index.json").write_text(json.dumps({"packages": packages}), "utf-8")
+
+
 def tree_snapshot(root: Path) -> dict[str, tuple[int, int, int]]:
     """Every path under *root* with its mode, size and modification time."""
     found = {".": _entry_facts(root)}
@@ -1046,6 +1074,41 @@ def test_a_reference_naming_a_shelf_is_refused(published, options, env) -> None:
             provision_environment(named, options=options, env=env, sources=[directory])
         assert "names the shelf" in caught.value.message
         assert "<package>[:<constraint>][@sha256:" in caught.value.hint
+
+
+def test_a_family_is_resolved_per_platform_and_never_stored_as_one(
+    tmp_path, options, env, store_dir
+) -> None:
+    """The build tools are published per architecture, and the family name
+    is what lets one build context build on hosts of two of them. A store
+    entry is one package, so the family is answered by this host's member
+    where an index can resolve it — and refused where nothing did: a file
+    carries the name it is named, and a reference pinning its own bytes
+    asks no index at all."""
+    directory = tmp_path / "published"
+    sha256 = put_package(directory, TOOLS, VERSION, tools_members())
+    write_family_index(directory, "mcuhome-build-tools", TOOLS, VERSION, sha256)
+
+    entry = provision_environment(
+        "mcuhome-build-tools", options=options, env=env, sources=[directory]
+    )
+    assert entry.name == TOOLS
+    assert entry.path == store.entry_directory(store_dir, TOOLS, VERSION)
+
+    # A directory with no index — a package that was built a minute ago
+    # and is published nowhere. Nothing there can say what a family name
+    # stands for, which is exactly why a family name may not arrive as
+    # one: unpacked under it, the entry would be the wrong package on the
+    # next host to read the store.
+    unpublished = tmp_path / "built"
+    put_package(unpublished, "mcuhome-build-tools", VERSION, tools_members())
+    hand_named = unpublished / f"mcuhome-build-tools-{VERSION}.tar.zst"
+    for stated in (hand_named, f"mcuhome-build-tools:{VERSION}@sha256:{sha256_file(hand_named)}"):
+        with pytest.raises(BuildError) as caught:
+            provision_environment(stated, options=options, env=env, sources=[unpublished])
+        assert "a store entry holds one of them" in caught.value.message
+        assert "name the family without a file" in caught.value.hint
+    assert not store.entry_directory(store_dir, "mcuhome-build-tools", VERSION).exists()
 
 
 def test_a_reference_that_names_no_package_is_refused(options, env) -> None:

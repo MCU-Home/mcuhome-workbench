@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mcuhome.model.buildenvironment import family_of
+from mcuhome.model.buildenvironment import ARCH_SEPARATOR, family_of
 from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 from mcuhome.model.userpaths import expand, home
@@ -580,7 +580,10 @@ def provision_environment(
     unpacks under and what is made of it afterwards have to be settled
     before anything is read: ``mcuhome-sdk``, ``mcuhome-build-workspace``
     and ``mcuhome-build-tools`` are the three, the last with this host's
-    architecture after its underscore. *sources* are searched before the
+    architecture after its underscore — a file or a reference pinning its
+    own bytes names the package the architecture suffix says it is, while
+    the bare family is resolved per platform through an index. *sources*
+    are searched before the
     configured directories of that kind and no other kind's are searched
     at all — a directory holding one kind of package is not a statement
     about where another lives.
@@ -589,6 +592,7 @@ def provision_environment(
     if file is not None:
         name, version = _package_named_by(file)
         kind = _kind_of(name)
+        _require_concrete(name, kind)
         # The file is the package: nothing is looked up, so nothing is
         # asked of a registry, and the directory it lies in is the one
         # place the bytes are taken from.
@@ -632,11 +636,13 @@ def provision_environment(
     kind = _kind_of(reference.name)
     searched = tuple(Path(one) for one in sources) + _configured_sources(options, kind)
     name, version, sha256 = reference.name, reference.version, reference.sha256
-    if not reference.pinned:
-        # A version and a hash together are the whole answer and read
-        # nothing — that is the offline case, and it is the one form a
-        # directory without an index can still serve. Everything else
-        # asks an index which version the constraint means.
+    if reference.pinned:
+        # A version and a hash together are the whole answer and ask no
+        # index which version is meant — that is the offline case, and it
+        # is the one form a directory without an index can still serve.
+        # Nothing resolved this name, so it has to be a package already.
+        _require_concrete(name, kind)
+    else:
         found = resolve_from_sources(
             name,
             reference.constraint,
@@ -714,6 +720,28 @@ def _package_named_by(file: Path) -> tuple[str, str]:
     except InvalidVersion as error:
         raise unusable() from error
     return name, version
+
+
+def _require_concrete(name: str, kind: str) -> None:
+    """A name the caller stated has to be a package and not a family.
+
+    The build tools are published per architecture: one *family* name
+    standing for a set of packages, which is what lets one build context
+    build the same firmware on hosts of two architectures. A store entry
+    is one package, and the path it lies at is computed from the name
+    before anything is fetched — so a family name only ever becomes a
+    store entry by being resolved through an index first, and a name that
+    came off a file or out of a reference that pins its own bytes was
+    resolved by nobody.
+    """
+    if kind == KIND_TOOLS and ARCH_SEPARATOR not in name:
+        raise BuildEnvironmentError(
+            f"{name} is the name of a set of packages, one per platform, and a store "
+            "entry holds one of them.",
+            hint=f"name this host's package — {name}{ARCH_SEPARATOR}linux-amd64 or "
+            f"{name}{ARCH_SEPARATOR}linux-arm64 — or name the family without a file and "
+            "without a hash, and MCUHome resolves it through the package index",
+        )
 
 
 def _kind_of(name: str) -> str:
