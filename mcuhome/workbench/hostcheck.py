@@ -347,8 +347,17 @@ def _dev_workspace(workspace: Path, *, project: Project | None) -> HostFinding:
 
 
 def _signing_imgtool(env: Mapping[str, str], stated: str | None) -> HostFinding:
-    """The program that signs what a build produced."""
-    program = find_imgtool(env=dict(env), stated=stated)
+    """The program that signs what a build produced.
+
+    A stated one is a path like any other and is expanded against the
+    environment this check was handed, so a ``~`` without a home
+    directory is a refusal — which here is a finding like every other,
+    because this call raises nothing.
+    """
+    try:
+        program = find_imgtool(env=dict(env), stated=stated)
+    except MCUHomeError as refusal:
+        return _refused("signing_imgtool", refusal)
     if program is None:
         return HostFinding(
             check="signing_imgtool",
@@ -401,10 +410,16 @@ def _refused(check: str, refusal: MCUHomeError) -> HostFinding:
 
     The words are the refusal's own: a person who runs this check and a
     person whose build stopped are looking at the same problem, and two
-    wordings of it would be two problems to them.
+    wordings of it would be two problems to them. The message and the fix
+    are taken apart the way the error document takes them apart —
+    ``str()`` of a refusal is the *rendered* form, which would put the
+    hint into ``detail`` and then again into ``hint``.
     """
     return HostFinding(
-        check=check, ok=False, detail=str(refusal), hint=getattr(refusal, "hint", None) or ""
+        check=check,
+        ok=False,
+        detail=getattr(refusal, "message", None) or str(refusal),
+        hint=getattr(refusal, "hint", None) or "",
     )
 
 

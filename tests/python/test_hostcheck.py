@@ -35,6 +35,7 @@ from mcuhome.workbench.api import (
     check_build_host,
 )
 from mcuhome.workbench.buildprocess import Completed
+from mcuhome.workbench.imgtool import find_imgtool
 
 
 class RecordingRuntime:
@@ -148,14 +149,20 @@ def test_the_subprocess_mode_asks_a_container_runtime_nothing(tmp_path: Path) ->
     assert RecordingRegistry.made == []
 
 
-def test_a_development_workspace_replaces_the_store_and_the_interpreter(
-    tmp_path: Path,
-) -> None:
-    """A development build compiles a workspace and provisions nothing."""
+def _a_workspace(tmp_path: Path) -> Path:
+    """A directory west would recognise, with its manifest repository."""
     workspace = tmp_path / "zephyrproject"
     (workspace / ".west").mkdir(parents=True)
     (workspace / ".west" / "config").write_text("[manifest]\npath = mcuhome-sdk\n")
     (workspace / "mcuhome-sdk").mkdir()
+    return workspace
+
+
+def test_a_development_workspace_replaces_the_store_and_the_interpreter(
+    tmp_path: Path,
+) -> None:
+    """A development build compiles a workspace and provisions nothing."""
+    workspace = _a_workspace(tmp_path)
 
     result = check_build_host(
         options=_options(mode="subprocess", dev_workspace=workspace), env=_env(tmp_path)
@@ -206,6 +213,10 @@ def test_a_runtime_that_is_not_there_is_a_finding_in_the_build_s_own_words(
     assert not result.ok
     assert "docker" in finding.detail
     assert "install Docker" in finding.hint
+    # The message alone in `detail`: `str()` of a refusal is the rendered
+    # three-line form, which would carry the fix twice.
+    assert "Fix:" not in finding.detail
+    assert finding.hint not in finding.detail
 
 
 def test_a_host_without_a_home_directory_is_answered_rather_than_refused(
@@ -444,3 +455,26 @@ def test_a_path_inside_the_project_is_reported_relative_to_it(tmp_path: Path) ->
     )
 
     assert _finding(result, "env_store").detail.startswith(".mcuhome-store")
+
+
+def test_a_signing_tool_that_cannot_even_be_resolved_is_a_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stated `signing.imgtool` is a path, and paths can refuse.
+
+    ``~/bin/imgtool`` without a home directory is a refusal from the path
+    expansion, and this call promises to raise nothing — so it is read
+    out like every other refusal. The autouse double is removed for this
+    one on purpose: it is the real lookup that raises, and a test against
+    the double would prove nothing about it.
+    """
+    monkeypatch.setattr(hostcheck, "find_imgtool", find_imgtool)
+
+    result = check_build_host(
+        options=_options(mode="container"), env={"PATH": ""}, imgtool="~/bin/imgtool"
+    )
+
+    finding = _finding(result, "signing_imgtool")
+    assert not finding.ok
+    assert "HOME" in finding.detail
+    assert "set HOME" in finding.hint
