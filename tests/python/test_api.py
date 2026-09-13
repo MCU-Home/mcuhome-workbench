@@ -103,6 +103,7 @@ MODEL_RE_EXPORTS = (
     ("sha256_file", "mcuhome.model.hashes"),
     ("SDK_PACKAGE_NAME", "mcuhome.model.sdkindex"),
     ("DOCKER_HUB", "mcuhome.model.imageref"),
+    ("Reference", "mcuhome.model.imageref"),
     ("context_id", "mcuhome.model.context"),
     ("CONTEXT_FILE", "mcuhome.model.context"),
     ("LABEL_PREFIX", "mcuhome.model.buildenvironment"),
@@ -158,6 +159,33 @@ def test_the_four_renamed_model_names_are_the_same_objects() -> None:
     assert api.device_registry is registry_data
     assert api.parse_container_reference is parse_reference
     assert model.__version__ == api.MODEL_PACKAGE_VERSION
+
+
+def test_the_container_address_type_this_surface_answers_is_one_it_exports() -> None:
+    """A value a caller receives is never a type it cannot name.
+
+    ``parse_container_reference`` answers one and
+    ``ContainerImageMatch.reference`` carries one, so `Reference` is on
+    the surface — the same object the device-model package defines, not
+    a copy: a caller that pins the model package beside this one has one
+    type for one thing.
+    """
+    reference = api.parse_container_reference(
+        "ghcr.io/mcu-home/build-environment:0.1.0", default_registry=api.DOCKER_HUB
+    )
+    assert isinstance(reference, api.Reference)
+
+    match = api.ContainerImageMatch(
+        reference=reference,
+        declaration=api.Declaration(
+            spec_generation=api.SPEC_GENERATION,
+            zephyr_version="4.4.0",
+            generator_constraint="",
+            packages={},
+        ),
+        found_under="0.1.0",
+    )
+    assert isinstance(match.reference, api.Reference)
 
 
 def test_expand_user_path_takes_its_environment_by_keyword() -> None:

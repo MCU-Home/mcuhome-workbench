@@ -107,7 +107,7 @@ from mcuhome.model.errors import (
 from mcuhome.model.export import registry_data as device_registry
 from mcuhome.model.export import to_json
 from mcuhome.model.hashes import sha256_file
-from mcuhome.model.imageref import DOCKER_HUB
+from mcuhome.model.imageref import DOCKER_HUB, Reference
 from mcuhome.model.imageref import parse_reference as parse_container_reference
 from mcuhome.model.jobs import BuildLimits
 from mcuhome.model.model import (
@@ -533,6 +533,7 @@ __all__ = [
     "RESULT_FILE_PREFIX",
     "RESULT_FILE_SUFFIX",
     "ROOT_OUT",
+    "Reference",
     "RegistrySettings",
     "RegistrySource",
     "RemoteBuild",

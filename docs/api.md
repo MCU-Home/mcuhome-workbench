@@ -1012,8 +1012,14 @@ alias, so a caller may supply its own.
 `parse_container_reference` is the device-model package's own parser for
 `[registry/]path[:tag][@digest]`, re-exported for the caller that has to
 split an address itself; *default_registry* is the host an absent one
-means and *what* names the thing in a refusal. It answers the same
-`Reference` object `ContainerImageMatch.reference` carries.
+means and *what* names the thing in a refusal. It answers a `Reference`,
+and so does `ContainerImageMatch.reference`: the device-model package's
+`Reference(registry, path, tag, digest)`, with the properties
+`repository` and `pinned`, the method `with_digest(digest, *, tag=None)`
+and `runnable()` — how the bytes are run, by digest where there is one.
+`str()` of one is the full explicit form, which is what a build report
+records. It is re-exported unchanged, like every other model name here:
+a value this surface answers is never a type a caller cannot name.
 
 ## Packages and registries
 ```python
@@ -1668,7 +1674,7 @@ follows the same rule. Nothing else is wrapped.
 `random_pairing`, `PairingModel`, `OtaImage`, `OtaIdentity`,
 `ota_parameters`, `BOARDS`, `PLANNED_BOARDS`, `CLUSTERS`, `BoardDef`,
 `ClusterDef`, `PartitionDef`, `UpdateSchemeDef`, `sha256_file`,
-`SDK_PACKAGE_NAME`, `DOCKER_HUB`, `parse_container_reference`,
+`SDK_PACKAGE_NAME`, `DOCKER_HUB`, `Reference`, `parse_container_reference`,
 `Declaration`, `PackageMember`, `LABEL_PREFIX`, `SPEC_GENERATION_MEMBER`,
 `ENVIRONMENT_IMAGE_REPOSITORY`, `BUILD_CONTEXT_FILE`, `CONTEXT_FILE`,
 `MANIFEST_FILE`, `MODEL_FILE`, `KEYS_DIR`, `PATCHES_DIR`,
@@ -1766,7 +1772,7 @@ this package is public.
 `parse_memory`, `resolve_shutdown_seconds`, `current_user`,
 `BuilderSession`, `Step`, `StepResult`, `CacheTier`, `Liveness`,
 `Launcher`, `StoreEntry`, `ContainerRuntime`, `ContainerLimits`,
-`ContainerImagePin`, `ContainerImageMatch`, `ImageRegistry`,
+`ContainerImagePin`, `ContainerImageMatch`, `ImageRegistry`, `Reference`,
 `Declaration`, `PackageMember`.
 
 **Packages and registries** — `open_package_registry`,
