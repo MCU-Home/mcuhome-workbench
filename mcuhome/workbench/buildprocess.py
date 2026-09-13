@@ -379,6 +379,12 @@ class Liveness:
     #: rather than delivered, because this loop is the one place that
     #: knows the step is still running. The first ``True`` writes the
     #: sentinel and starts the ladder; nothing asks it again afterwards.
+    #:
+    #: Asked on **the thread that called** :meth:`supervise`, which for a
+    #: build driven through :func:`~mcuhome.workbench.build.build_firmware`
+    #: is the worker thread the synchronous build was offloaded to. A
+    #: predicate that reads a caller's own state has to be safe to call
+    #: from there, and one that touches an event loop has none here.
     should_stop: Callable[[], bool] | None = None
 
     def supervise(self, child: Running, *, on_poll: Callable[[], None] | None = None) -> int | None:

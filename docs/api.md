@@ -131,15 +131,35 @@ predicate.
 
 It is asked while the build environment runs, and at the remote target
 also while the build waits for a turn; the phases before that — creating
-the context, fetching or provisioning an environment — run to their end,
-because they are bounded by what they fetch rather than by a caller's
-patience. At the remote target the server is told: the session
-protocol's `cancel`, because a closed socket is not a stop signal, and a
-server that answers nothing within `resolve_shutdown_seconds` counts as
-stopped anyway — and that bound covers the `cancel` itself, not only the
-wait after it. A verdict of `cancelled` is a stopped build as well,
-whichever side ended it. A stopped remote build answers `out_dir` `None`:
-what it produced is on the machine that ran it and is not fetched.
+the context, fetching or provisioning an environment, uploading it to a
+build server — run to their end, because they are bounded by what they
+move rather than by a caller's patience. **The thread it is asked on is
+the one the work is on**: for a local build the worker thread
+`build_firmware` offloaded the build to, for the remote target the
+thread running `build_firmware` itself. A predicate is asked about twice
+a second, from either, so it answers rather than computes, and it must
+be safe to call without an event loop.
+
+**A build that finished was not stopped.** `stopped` means the build did
+not produce what it was asked for *because* somebody ended it, so a stop
+that arrives while the last step is already succeeding answers
+`ok=True, stopped=False`: the firmware exists, and that is the answer the
+caller wanted. `stopped` is never true beside `ok`.
+
+At the remote target the server is told: the session protocol's `cancel`,
+because a closed socket is not a stop signal. **One bound covers the
+whole tail** of a stopped remote build — the acknowledgement of the stop,
+the verdict, and closing the session — and it is
+`resolve_shutdown_seconds` measured from the decision, because each of
+those would otherwise wait out the client's call timeout on a peer that
+has stopped answering, while the caller's build directory stays held. A
+server that says nothing within it counts as stopped; a session close
+that is not answered within it is abandoned and the transport dropped; a
+connection that dies while stopping is a stopped build rather than a
+transport failure. A verdict of `cancelled` is a stopped build as well,
+whichever side ended it. A stopped remote build answers `out_dir` `None`
+and no artifacts, whatever the verdict declared: what it produced is on
+the machine that ran it and is not fetched.
 
 Value objects on this surface are frozen and safe to share between
 threads: `Project`, `Settings`, `BuildOptions`, every `*Result`. Handles
@@ -852,9 +872,10 @@ sentinel whose existence means stop is known before the call that blocks.
 `Liveness` (frozen) — what `BuilderSession.liveness(step)` answers: the
 supervision policy of one step, `cancel` (the sentinel whose existence
 means stop), `deadline_seconds`, `cancel_grace_seconds` and
-`should_stop`. The predicate is asked on the supervisor's own tick, and
-the first yes writes the sentinel and starts the same ladder a deadline
-starts. One that raises is asked once and then no more, and counts as no.
+`should_stop`. The predicate is asked on the supervisor's own tick — on
+whichever thread called `supervise` — and the first yes writes the
+sentinel and starts the same ladder a deadline starts. One that raises is
+asked once and then no more, and counts as no.
 
 ```python
 def resolve_cache_tiers(
