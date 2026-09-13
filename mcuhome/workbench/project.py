@@ -493,8 +493,8 @@ class InitResult:
     created: tuple[Path, ...]
 
 
-def create_project(target: Path, *, force: bool = False) -> InitResult:
-    """Create the durable part of a project in *target*.
+def create_project(root: Path, *, force: bool = False) -> InitResult:
+    """Create the durable part of a project in *root*.
 
     The marker, ``mcuhome.yaml``, ``devices/``, ``secrets/`` (mode 700),
     the trust anchors of the package registries this workbench ships one
@@ -522,20 +522,20 @@ def create_project(target: Path, *, force: bool = False) -> InitResult:
     that already exists is left alone, on a first run and on a
     ``--force`` re-run alike.
     """
-    target = target.resolve()
-    if target.exists() and not target.is_dir():
+    root = root.resolve()
+    if root.exists() and not root.is_dir():
         raise ConfigError(
-            f'"{target}" is not a directory.',
+            f'"{root}" is not a directory.',
             hint="mcuhome project init creates a project in a directory; point it at one",
         )
-    if target.is_dir() and is_upgrading(target):
-        raise in_flight_error(target)
-    if target.is_dir() and not force:
-        entries = sorted(entry.name for entry in target.iterdir())
+    if root.is_dir() and is_upgrading(root):
+        raise in_flight_error(root)
+    if root.is_dir() and not force:
+        entries = sorted(entry.name for entry in root.iterdir())
         if entries:
             listing = ", ".join(entries[:8]) + (", …" if len(entries) > 8 else "")
             raise ConfigError(
-                f'The directory "{target}" is not empty ({listing}).',
+                f'The directory "{root}" is not empty ({listing}).',
                 hint=(
                     "mcuhome project init expects an empty directory so it cannot damage "
                     "existing work. Re-run with --force to create the project here "
@@ -544,17 +544,17 @@ def create_project(target: Path, *, force: bool = False) -> InitResult:
             )
 
     created: list[Path] = []
-    target.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
 
-    marker = target / PROJECT_MARKER_FILE
+    marker = root / PROJECT_MARKER_FILE
     if not marker.is_file():
         write_project_file(
             marker,
-            ProjectFile(root=target, version=PROJECT_VERSION, id=new_project_id()),
+            ProjectFile(root=root, version=PROJECT_VERSION, id=new_project_id()),
         )
         created.append(marker)
 
-    config = target / PROJECT_CONFIG_FILE
+    config = root / PROJECT_CONFIG_FILE
     if not config.is_file():
         config.write_text(
             "# MCUHome project configuration.\n"
@@ -565,12 +565,12 @@ def create_project(target: Path, *, force: bool = False) -> InitResult:
         )
         created.append(config)
 
-    devices = target / DEVICES_DIR
+    devices = root / DEVICES_DIR
     if not devices.is_dir():
         devices.mkdir()
         created.append(devices)
 
-    secrets = target / SECRETS_DIR
+    secrets = root / SECRETS_DIR
     existed = secrets.is_dir()
     _mkdir_private(secrets)
     if not existed:
@@ -581,9 +581,9 @@ def create_project(target: Path, *, force: bool = False) -> InitResult:
     # module level pointing back would be a cycle.
     from mcuhome.workbench.packageregistry import install_trust_anchors
 
-    created.extend(install_trust_anchors(target))
+    created.extend(install_trust_anchors(root))
 
-    gitignore = target / ".gitignore"
+    gitignore = root / ".gitignore"
     if gitignore.is_file():
         lines = gitignore.read_text(encoding="utf-8").splitlines()
         missing = [line for line in GITIGNORE_LINES if line not in lines]
@@ -598,6 +598,6 @@ def create_project(target: Path, *, force: bool = False) -> InitResult:
         created.append(gitignore)
 
     return InitResult(
-        project=Project(root=target, discovered=True, file=read_project_file(marker, root=target)),
+        project=Project(root=root, discovered=True, file=read_project_file(marker, root=root)),
         created=tuple(created),
     )
