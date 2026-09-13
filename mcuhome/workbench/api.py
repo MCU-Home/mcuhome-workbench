@@ -49,15 +49,16 @@ What is here, in the order a caller needs it:
     the configured ``build.builder``, or the built-in ``local``
     fallback — credentials from ``secrets/builder/<name>.yaml``
     included.
-``new_device`` / ``render_starter`` / ``DeviceOutline``
-    A device's first ``main.yaml``. ``render_starter`` is pure — it
+``create_device`` / ``render_device_file`` / ``DeviceOutline``
+    A device's first ``main.yaml``. ``render_device_file`` is pure — it
     returns the text — so a caller can show it before anything is
-    written; ``new_device`` writes it, refusing rather than overwriting.
+    written; ``create_device`` writes it into the project it is given,
+    refusing rather than overwriting.
     Given a ``DeviceOutline`` (buses, peripherals, endpoints) both write
     those as real sections instead of the commented example, which is
     what a form that walked somebody through ``registry_data`` has to
     offer.
-``init_pairing`` / ``PairingResult``
+``create_pairing`` / ``PairingResult``
     Draw a device's commissioning credentials, once: ``!secret``
     references into ``main.yaml``, the values into the device's own
     secrets file. The one place randomness enters a configuration, and
@@ -80,7 +81,7 @@ What is here, in the order a caller needs it:
 ``registry_data`` / ``device_schema``
     What the builder knows about hardware and Matter, and the shape of
     ``main.yaml``, as data an editor or a picker can consume.
-``generate_tree`` / ``CompilerUnavailable``
+``generate_application`` / ``CompilerUnavailable``
     Stage 4 on this machine: the Zephyr application a device model
     describes, written out and nothing more. A build does not take this
     path — a build environment generates from the model its context

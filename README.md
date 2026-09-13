@@ -388,11 +388,11 @@ it is a repository.
 Three places state a pin, and the more specific one wins. A device carries one
 from build to build in `sources.container_image` — optional, written into a
 device only by whoever wants it there; a configured builder carries one for the
-machine it describes (`image:`); and a single build overrides both (the command
-line's `--container-image`). All of them mean the same thing at either target:
-a local container build resolves the pin against the repository list above, and
-a remote build hands it to the server, which resolves it against what its
-operator allows.
+machine it describes (`container_image:`); and a single build overrides both
+(the command line's `--container-image`). All of them mean the same thing at
+either target: a local container build resolves the pin against the repository
+list above, and a remote build hands it to the server, which resolves it
+against what its operator allows.
 
 A build that starts no container has no image for any of them to name, and the
 three are not answered alike, because they are not the same kind of statement:
@@ -400,11 +400,12 @@ three are not answered alike, because they are not the same kind of statement:
 - `--container-image` on a build in `subprocess` mode is **refused**. It is a
   statement about *this* build and cannot be quietly dropped; the refusal says
   to drop the image or to set `build.mode` back to `container`.
-- a builder's `image:` and a device's `sources.container_image` are statements
-  about a machine and about a delivery, so they produce **one line in the build
-  log** — "the image has no effect here" — and the build carries on. Refusing
-  the first would refuse every build on that machine, and refusing the second
-  would refuse a device that builds correctly here and in a container elsewhere.
+- a builder's `container_image:` and a device's `sources.container_image` are
+  statements about a machine and about a delivery, so they produce **one line in
+  the build log** — "the image has no effect here" — and the build carries on.
+  Refusing the first would refuse every build on that machine, and refusing the
+  second would refuse a device that builds correctly here and in a container
+  elsewhere.
 - a development build against a west workspace of your own is refused over the
   device's pin together with every other `sources.*` entry that differs from
   its default: that build fetches no packages at all.
