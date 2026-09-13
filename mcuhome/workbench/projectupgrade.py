@@ -245,6 +245,23 @@ def find_running_builds(root: Path) -> tuple[RunningBuild, ...]:
     return tuple(busy)
 
 
+def _report(on_step: Callable[..., None] | None, key: str, migration: Migration) -> None:
+    """One step of an upgrade, in the facts a client can render.
+
+    The migration's own name and the two versions it moves between —
+    enough to say "renaming the project identity, 1 to 2" without the
+    client knowing what a migration is.
+    """
+    if on_step is None:
+        return
+    on_step(
+        key,
+        name=migration.name,
+        from_version=migration.from_version,
+        to_version=migration.to_version,
+    )
+
+
 class UpgradeSession:
     """One upgrade, from the moment the project file is renamed.
 
@@ -275,15 +292,23 @@ class UpgradeSession:
     def apply(
         self,
         *,
-        on_event: Callable[[str, Migration], None] | None = None,
+        on_step: Callable[..., None] | None = None,
         should_stop: Callable[[], bool] | None = None,
     ) -> UpgradeResult:
         """Run the plan. *should_stop* is asked **between** migrations only.
 
         A stop request never cuts a migration in half: the one that is
         running finishes, its version is written, and the upgrade ends
-        there cleanly. *on_event* is called with ``"start"`` and
-        ``"done"`` and the migration each refers to.
+        there cleanly.
+
+        *on_step* is the progress channel every long operation of this
+        package uses — a key and, as keyword facts, what the step is
+        about. Here the keys are ``migration_started`` and
+        ``migration_done``, each with the facts ``name``,
+        ``from_version`` and ``to_version``. One callback vocabulary
+        rather than one per operation: a client that renders a build's
+        progress renders this with the same code, and facts it does not
+        know it ignores.
         """
         applied: list[Migration] = []
         stopped = False
@@ -292,8 +317,7 @@ class UpgradeSession:
                 stopped = True
                 break
             self._write(replace(self.file, upgrade=self._record(migration.name)))
-            if on_event is not None:
-                on_event("start", migration)
+            _report(on_step, "migration_started", migration)
             try:
                 produced = migration.run(self.root, self.file)
             except MCUHomeError as error:
@@ -305,8 +329,7 @@ class UpgradeSession:
             self.file = replace(produced, version=migration.to_version)
             self._write(replace(self.file, upgrade=self._record("")))
             applied.append(migration)
-            if on_event is not None:
-                on_event("done", migration)
+            _report(on_step, "migration_done", migration)
         return UpgradeResult(
             from_version=self.from_version,
             to_version=self.file.version,

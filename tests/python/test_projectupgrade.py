@@ -117,11 +117,34 @@ def test_the_project_file_is_renamed_for_the_whole_run(tmp_path: Path) -> None:
         assert not (root / PROJECT_MARKER_FILE).exists()
         assert (root / UPGRADE_MARKER_FILE).is_file()
         session.apply(
-            on_event=lambda kind, _: seen.append((kind, (root / PROJECT_MARKER_FILE).exists()))
+            on_step=lambda key, **_: seen.append((key, (root / PROJECT_MARKER_FILE).exists()))
         )
-    assert seen == [("start", False), ("done", False)]
+    assert seen == [("migration_started", False), ("migration_done", False)]
     assert (root / PROJECT_MARKER_FILE).is_file()
     assert not (root / UPGRADE_MARKER_FILE).exists()
+
+
+def test_a_migration_reports_itself_as_a_step(tmp_path: Path) -> None:
+    """The progress vocabulary, with the facts a client renders.
+
+    The same shape a build reports with — a key and keyword facts — so a
+    client that shows one shows the other, and the name and the two
+    versions are what "renaming the project identity, 1 to 2" is made
+    of.
+    """
+    root = legacy_project(tmp_path / "old")
+    steps: list[tuple[str, dict[str, object]]] = []
+    with open_upgrade_session(root) as session:
+        session.apply(on_step=lambda key, **facts: steps.append((key, facts)))
+
+    first = MIGRATIONS[0]
+    assert [key for key, _ in steps] == ["migration_started", "migration_done"]
+    for _, facts in steps:
+        assert facts == {
+            "name": first.name,
+            "from_version": first.from_version,
+            "to_version": first.to_version,
+        }
 
 
 def test_the_renamed_file_names_the_process_doing_it(tmp_path: Path) -> None:
