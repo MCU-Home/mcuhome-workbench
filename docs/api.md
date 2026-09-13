@@ -860,9 +860,11 @@ are settled before anything is read: `mcuhome-sdk`,
 architecture after the underscore) are the three, and any other name is
 refused. *sources* are searched before the directories `options` holds
 for that kind, and no other kind's directories are searched at all.
-*registry* is asked when no directory offers the package; a reference
-naming a registry of its own is refused rather than looked up on this
-one.
+*registry* is asked when no directory offers the package; the shelf it is
+asked for is the one that kind of package is published on, and a
+reference that names a shelf or a registry of its own — the spelling a
+device file uses, `build-workspace/mcuhome-build-workspace` — is refused
+rather than resolved somewhere else.
 
 `StoreEntry` (frozen): `kind`, `name`, `version`, `sha256`, `path`,
 `to_dict()`. `provision_environment` takes `should_stop` nowhere: it is

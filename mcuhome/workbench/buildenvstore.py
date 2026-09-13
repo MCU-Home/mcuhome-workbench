@@ -611,6 +611,15 @@ def provision_environment(
             hint="name the package without a registry in front of it — "
             "mcuhome-build-workspace:~=0.2",
         )
+    if reference.source:
+        raise BuildEnvironmentError(
+            f'"{package}" names the shelf a registry publishes the package on, and a '
+            "package is named here without one.",
+            hint="name the package alone — <package>[:<constraint>][@sha256:…], as in "
+            "mcuhome-build-workspace:~=0.2. A device file spells the shelf in front of "
+            "the package (build-workspace/mcuhome-build-workspace) and this call does "
+            "not: the shelf is the one that kind of package is published on",
+        )
     kind = _kind_of(reference.name)
     searched = tuple(Path(one) for one in sources) + _configured_sources(options, kind)
     name, version, sha256 = reference.name, reference.version, reference.sha256

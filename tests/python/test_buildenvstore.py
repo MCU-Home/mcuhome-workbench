@@ -1034,6 +1034,20 @@ def test_a_reference_naming_a_registry_of_its_own_is_refused(options, env) -> No
     assert "names a registry" in caught.value.message
 
 
+def test_a_reference_naming_a_shelf_is_refused(published, options, env) -> None:
+    """A device file spells the shelf in front of the package, and that is
+    the value somebody copies. Reading it here and then asking the kind's
+    own shelf anyway would resolve the package somewhere other than where
+    it was told to, and silently — so the form is refused, and the refusal
+    names the grammar this call does take."""
+    directory, _sha256 = published()
+    for named in (f"build-workspace/{WORKSPACE}", f"house-workspaces/{WORKSPACE}:~=1.2"):
+        with pytest.raises(BuildError) as caught:
+            provision_environment(named, options=options, env=env, sources=[directory])
+        assert "names the shelf" in caught.value.message
+        assert "<package>[:<constraint>][@sha256:" in caught.value.hint
+
+
 def test_a_reference_that_names_no_package_is_refused(options, env) -> None:
     with pytest.raises(BuildError) as caught:
         provision_environment(":1.2.3", options=options, env=env)
