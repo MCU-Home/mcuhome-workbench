@@ -1458,9 +1458,11 @@ and the warnings, each with its severity, so a client renders one list:
 {
   "ok": true, "file": "devices/thermostat/main.yaml",
   "diagnostics": [
-    {"severity": "warning", "message": "secrets/main.yaml is readable by other users",
+    {"severity": "warning",
+     "message": "/…/secrets/main.yaml is readable by other users (mode 644, expected 600).",
      "file": "secrets/main.yaml", "line": null, "column": null, "key": null,
-     "hint": "chmod 600 secrets/main.yaml", "kind": "exposed_secret_file"}
+     "hint": "restrict it to its owner:\n    chmod 600 /…/secrets/main.yaml",
+     "kind": "exposed_secret_file"}
   ],
   "model": {}
 }

@@ -251,6 +251,14 @@ def _declared_documents(text: str) -> dict[str, list[str]]:
     return documents
 
 
+def _example(text: str, name: str) -> Any:
+    """The example document the reference shows for *name*."""
+    rest = _documents_section(text).split(f"`{name}.to_dict()`", 1)[1]
+    block = re.search(r"```json\n(.*?)\n```", rest, re.DOTALL)
+    assert block is not None, f"{name}: no example document"
+    return json.loads(block.group(1))
+
+
 DOCUMENTS = _declared_documents(REFERENCE.read_text("utf-8"))
 
 #: ``Settings`` is keyed by option name rather than by a fixed key set,
@@ -444,3 +452,15 @@ def test_a_warning_is_a_located_document_of_a_published_kind(tmp_path: Path) -> 
     assert sorted(document) == sorted(DOCUMENTS["Diagnostic"])
     assert document["file"] == "secrets/main.yaml"
     assert document["hint"]
+
+    # And it is the finding the reference shows, word for word — the
+    # example in a document's section is read by whoever writes the
+    # client that renders it.
+    shown = _example(REFERENCE.read_text("utf-8"), "ValidationResult")["diagnostics"][0]
+    written = {
+        key: value.replace(str(secrets), "/…/secrets/main.yaml")
+        if isinstance(value, str)
+        else value
+        for key, value in document.items()
+    }
+    assert written == shown | {"file": "secrets/main.yaml"}
