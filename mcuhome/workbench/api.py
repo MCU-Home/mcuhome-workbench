@@ -1,173 +1,100 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The supported programmatic surface of the MCUHome builder.
+"""The supported programmatic surface of the MCUHome workbench.
 
 **This module is the API. Everything else is an implementation detail.**
-Names exported here are covered by the project's SemVer promise: they
-do not change shape within a major version, and a breaking
-change to one of them is a breaking change to the builder. Names anywhere
-else in the package may move between releases without notice, and a
-caller that imports them is on its own. The ``mcuhome`` command line is
-such a caller too: it lives in its own repository
-(github.com/mcu-home/mcuhome-cli) as a thin shell over this package, and it is
-version-locked to the builder rather than the other way around.
+A consumer imports from ``mcuhome.workbench.api`` and from nothing else
+under ``mcuhome.workbench``: names anywhere else in the package may move
+between releases without notice, and a program that imports them is on
+its own. That includes the ``mcuhome`` command line, which lives in its
+own repository (github.com/mcu-home/mcuhome-cli) as a thin shell over
+this package and is version-locked to it rather than the other way
+around.
 
-The intended consumer is a program that embeds the builder rather than
+``docs/api.md`` in this repository is the reference: every exported name
+with its signature, what it raises, the options, the environment
+variables, the files it reads and writes, and the documents it answers.
+It is the contract rather than a summary — this module's ``__all__`` is
+built from its index of exported names and asserted against it, so the
+two cannot drift apart.
+
+What is here, in the order a caller needs it: find the project and the
+device (``resolve_project``, ``resolve_device``), resolve the
+configuration that applies to them (``resolve_settings``,
+``resolve_build_options``, ``resolve_builder``), turn a device file into
+the canonical model (``load_model``, or ``validate_device`` for every
+problem at once instead of the first), build it (``build_firmware``),
+and read or sign what the build produced. Upgrading a project, creating
+devices and their commissioning credentials, the build-context and
+build-environment seams a build server needs, and the package and
+container registries a build resolves against are all reachable from
+here as well.
+
+The intended consumer is a program that embeds the workbench rather than
 running it: the MCUHome dashboard imports it in-process so that a
-configuration error arrives in an editor's
-gutter as a marker with a fix hint rather than in a log pane as a line of
-text. The dependency has exactly one direction — the dashboard declares
-the builder versions it supports and follows the builder's releases; the
-builder never learns that a dashboard exists.
+configuration error arrives in an editor's gutter as a located marker
+with a fix hint instead of in a log pane as a line of text. The
+dependency has exactly one direction — the dashboard declares the
+workbench versions it supports and follows its releases; the workbench
+never learns that a dashboard exists.
 
-What is here, in the order a caller needs it:
+Names of ``mcuhome.model`` that a caller needs are re-exported here
+unchanged, so one import is enough. Four of them are renamed because the
+bare name would say nothing in a flat namespace —
+``device_registry``, ``parse_container_reference``,
+``MODEL_PACKAGE_VERSION`` and ``expand_user_path``, the last a thin
+wrapper so that its ``env`` is keyword-only like every other parameter
+here. That package versions with the SDK rather than with this one, and
+``MODEL_PACKAGE_VERSION`` answers which release is installed while
+``MODEL_VERSION`` answers the model format it writes.
 
-``resolve_project`` / ``create_project`` / ``resolve_device``
-    Where the user's work lives (the ``.mcuhome-project-root`` marker
-    and its bootstrap ladder), how a project comes into
-    being, and which file is a given device's. Resolution also enforces
-    the project's **layout version**: a project older than
-    ``PROJECT_VERSION`` is refused with ``ProjectUpgradeRequired``, a
-    newer one with ``ProjectVersionUnsupported``, and one whose file an
-    upgrade has renamed with ``UpgradeInProgress`` or
-    ``UpgradeInterrupted`` — the four states a caller renders
-    differently. ``resolve_project(..., require_version=False)`` is for
-    the one caller that exists to fix the first of them.
-``open_upgrade_session`` / ``UpgradeResult`` / ``Migration``
-    Upgrading a project to the current layout. The session renames the
-    project file for the whole run — so nothing else can start work on a
-    project being rewritten — answers which build directories are still
-    busy (``find_running_builds``), and applies the migrations of
-    ``mcuhome.workbench.migrations`` in order. A caller drives the three
-    apart on purpose: take the project, wait for what is still running,
-    *then* ask the user, then apply.
-``resolve_settings``
-    The five-layer configuration model over the declared option
-    registry (``OPTIONS``), each value with the layer it came from.
-``resolve_builder``
-    Which builder this invocation uses: an explicit name,
-    the configured ``build.builder``, or the built-in ``local``
-    fallback — credentials from ``secrets/builder/<name>.yaml``
-    included.
-``create_device`` / ``render_device_file`` / ``DeviceOutline``
-    A device's first ``main.yaml``. ``render_device_file`` is pure — it
-    returns the text — so a caller can show it before anything is
-    written; ``create_device`` writes it into the project it is given,
-    refusing rather than overwriting.
-    Given a ``DeviceOutline`` (buses, peripherals, endpoints) both write
-    those as real sections instead of the commented example, which is
-    what a form that walked somebody through ``registry_data`` has to
-    offer.
-``create_pairing`` / ``PairingResult``
-    Draw a device's commissioning credentials, once: ``!secret``
-    references into ``main.yaml``, the values into the device's own
-    secrets file. The one place randomness enters a configuration, and
-    the reason a build is reproducible — so it is a command a user
-    gives, never a step something else takes on the way past.
-``load_model``
-    Stages 1-3 on one device, raising on the first thing that is wrong.
-``read_model``
-    A canonical model back from JSON — the other end of the wire. A build
-    server receives one of these and starts at stage 4; it never sees
-    the project directory and never sees a secrets file.
-    ``mcuhome device build --model <file>`` is the same thing
-    as a command.
-``validate_device``
-    The same three stages, returning **every** problem as typed errors
-    instead of raising — one pass, all markers.
-``error_dicts`` / ``ConfigError.to_dict``
-    Those errors as plain dictionaries: message, file (relative to the
-    project), line, column, key, hint, kind.
-``registry_data`` / ``device_schema``
-    What the builder knows about hardware and Matter, and the shape of
-    ``main.yaml``, as data an editor or a picker can consume.
-``generate_application`` / ``CompilerUnavailable``
-    Stage 4 on this machine: the Zephyr application a device model
-    describes, written out and nothing more. A build does not take this
-    path — a build environment generates from the model its context
-    carries — so this is the caller who wants the tree for its own sake,
-    and it refuses in words where ``mcuhome-compiler`` is not installed.
-``build_firmware`` / ``BuildRequest`` / ``BuildResult``
-    Build a device behind one awaitable call, whichever target runs it:
-    a target object, a target name, or nothing at all, which takes the
-    request's builder and then ``build.target``. A build has two
-    placement questions in it and only the first belongs to a caller:
-    **where** it runs (``LocalBuild``, ``RemoteBuild``) and **how** the
-    machine that runs it executes the work (``ContainerExecution`` in a
-    build container, ``SubprocessExecution`` against a build environment
-    unpacked on the host) — which is why ``LocalBuild`` carries an
-    ``Execution`` and ``RemoteBuild`` does not. ``RemoteNotConfigured``
-    is the typed refusal a caller renders.
-``resolve_build_target`` / ``resolve_build_mode``
-    A name into a value, for a caller whose choice arrived as a
-    command-line flag or a configuration value:
-    ``resolve_build_target`` answers one of ``TARGET_LOCAL``,
-    ``TARGET_REMOTE`` (``BUILD_TARGETS``, ``DEFAULT_BUILD_TARGET``) or
-    raises ``UnknownBuildTarget``, and ``resolve_build_mode`` does the
-    same for the other axis — ``MODE_CONTAINER``, ``MODE_SUBPROCESS``
-    (``BUILD_MODES``, ``DEFAULT_BUILD_MODE``), or ``UnknownBuildMode``.
-    ``BuildRequest.mode`` is where a caller states the mode.
-``BuildOptions`` / ``resolve_build_options``
-    What the ``build`` section of the configuration says about *this
-    machine*: the execution it uses, where it keeps unpacked build
-    environments and which interpreter finalizes them, how much a package
-    may unpack to, which directories each package is looked for in, and
-    where the compiler cache tiers are. ``resolve_build_options`` turns resolved
-    ``Settings`` into that object; a request that states none has them
-    resolved from the environment and the project it names.
-    ``build.target`` is in there too: where a build of this machine runs
-    when nothing more explicit said otherwise, and so are the three
-    package source lists both targets resolve their pins from. A caller
-    that never touches any of it builds the way the machine is
-    configured, which is the point: the registry derives no command-line
-    flag for these keys.
-``BuilderSession`` / ``StepResult``
-    The **backend role**, for the caller that owns its own sessions
-    rather than asking for a firmware: a build server. It is handed a
-    context somebody else created and locked, plus the environment that
-    context pins, and drives one step of the build-environment
-    specification at a time — the tree, the request document, the result
-    document, the verdict. The split into ``prepare`` and ``run`` is
-    what makes a step cancellable: the sentinel whose existence means
-    stop is known before the call that blocks. Everything the build
-    methods above do goes through the same code, which is the point:
-    what a local build does and what a build server does differ in who
-    owns the session, not in what a build is.
-``resolve_shutdown_seconds``
-    How long stopping a step can take, from the decision to the last
-    rung of the liveness ladder — the caller's grace period plus the
-    fixed ones. For the caller that has to wait for a build it stopped
-    instead of restating those numbers itself. A bound, not a promise.
-``open_build_lock`` / ``BuildDirectoryBusy``
-    One build directory, one operation at a time. ``build_firmware``
-    takes the lock itself, so an embedder gets the guard for free; a
-    caller that does more to the same directory — signing after the
-    build, flashing what it produced, deleting it — holds it around the
-    whole sequence instead, and the nested acquisition inside the build
-    then costs nothing. What it keeps out is a *second process* working
-    in that directory, which is how a build ends up overwriting the
-    image another run is signing or flashing.
-
-Synchrony is a property of each operation here, not of the whole
-supported surface. Stages 1-3 are synchronous and CPU-bound (YAML
-parsing, mostly), and this is deliberate:
-making 40 ms of pure computation awaitable buys nothing against a build
-that blocks for minutes, and a synchronous core is what keeps synchronous
-embedding possible at all (an ``asyncio.run`` facade over an async core
-raises inside a caller that already has a loop). What is made
-awaitable is the *waiting* — :func:`build_firmware`, which drives a
-subprocess, a container or a socket. So a caller with an event loop
-awaits the build directly and offloads one of the synchronous operations
-with ``asyncio.to_thread`` when it must.
+Synchrony is a property of each operation, not of the surface:
+``build_firmware`` is the only awaitable here, because it is the only
+one that waits on a subprocess, a container or a socket. Everything else
+is synchronous — 40 ms of YAML parsing made awaitable buys nothing, and
+a synchronous core is what keeps synchronous embedding possible at all
+— so a caller with an event loop awaits the build and offloads the rest
+with ``asyncio.to_thread``. Because the build itself runs in a worker
+thread, cancelling the awaiting task does not stop it:
+``BuildRequest.should_stop`` does.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from mcuhome.model import __version__ as MODEL_PACKAGE_VERSION
+from mcuhome.model.artifacts import Artifact
+from mcuhome.model.buildenvironment import (
+    ENVIRONMENT_IMAGE_REPOSITORY,
+    LABEL_PREFIX,
+    SPEC_GENERATION_MEMBER,
+    Declaration,
+    PackageMember,
+)
+from mcuhome.model.context import (
+    BUILD_CONTEXT_FILE,
+    CONTEXT_FILE,
+    DEVELOPER_ENVIRONMENT,
+    KEYS_DIR,
+    MANIFEST_FILE,
+    MODEL_FILE,
+    PATCHES_DIR,
+    ContextEnvironment,
+    ContextFile,
+    ContextManifest,
+    ContextRequest,
+    DeveloperEnvironment,
+    EnvironmentPin,
+    GeneratorEntry,
+    PackagePin,
+    SdkPin,
+    context_id,
+    format_generator_chain,
+)
 from mcuhome.model.errors import (
     BuildError,
     ConfigError,
@@ -177,21 +104,41 @@ from mcuhome.model.errors import (
     MCUHomeError,
     error_dicts,
 )
-from mcuhome.model.export import registry_data
-from mcuhome.model.model import MODEL_VERSION, DeviceModel
+from mcuhome.model.export import registry_data as device_registry
+from mcuhome.model.export import to_json
+from mcuhome.model.hashes import sha256_file
+from mcuhome.model.imageref import DOCKER_HUB
+from mcuhome.model.imageref import parse_reference as parse_container_reference
+from mcuhome.model.jobs import BuildLimits
+from mcuhome.model.model import (
+    MODEL_VERSION,
+    DeviceModel,
+    PairingModel,
+)
 from mcuhome.model.modelfile import read_model
+from mcuhome.model.ota import (
+    OtaIdentity,
+    OtaImage,
+    ota_parameters,
+)
+from mcuhome.model.pairing import (
+    Pairing,
+    random_pairing,
+)
+from mcuhome.model.registry import (
+    BOARDS,
+    CLUSTERS,
+    PLANNED_BOARDS,
+    BoardDef,
+    ClusterDef,
+    PartitionDef,
+    UpdateSchemeDef,
+)
+from mcuhome.model.sdkindex import SDK_PACKAGE_NAME
+from mcuhome.model.userpaths import expand as _expand
 
 from mcuhome.workbench import __version__
 from mcuhome.workbench.build import (
-    BUILD_MODES,
-    BUILD_TARGETS,
-    DEFAULT_BUILD_MODE,
-    DEFAULT_BUILD_TARGET,
-    DEFAULT_MAX_WAIT_SECONDS,
-    MODE_CONTAINER,
-    MODE_SUBPROCESS,
-    TARGET_LOCAL,
-    TARGET_REMOTE,
     BuildOptions,
     BuildRequest,
     BuildResult,
@@ -204,17 +151,59 @@ from mcuhome.workbench.build import (
     resolve_build_target,
 )
 from mcuhome.workbench.buildenvsession import (
+    ACTION_BUILD,
+    ARTIFACT_ROLES,
+    CACHE_TIERS,
+    RESULT_FILE_PREFIX,
+    RESULT_FILE_SUFFIX,
+    ROOT_OUT,
+    SPEC_GENERATION,
+    STATUS_FAILURE,
+    STATUS_SUCCESS,
+    STATUS_UNSUPPORTED,
+    STEP_STATUSES,
     BuilderSession,
     CacheTier,
     EnvironmentUnavailable,
     EnvironmentUnusable,
+    Launcher,
     Step,
     StepResult,
+    parse_memory,
+    resolve_cache_tiers,
+    resolve_host_limits,
 )
-from mcuhome.workbench.builders import Builder, SelectedBuilder
-from mcuhome.workbench.buildlock import BuildDirectoryBusy, open_build_lock
-from mcuhome.workbench.buildprocess import resolve_shutdown_seconds
+from mcuhome.workbench.buildenvstore import (
+    BuildEnvironmentError,
+    StoreEntry,
+)
+from mcuhome.workbench.builders import (
+    Builder,
+    SelectedBuilder,
+)
+from mcuhome.workbench.buildlock import (
+    BUILD_LOCK_FILE,
+    BuildDirectoryBusy,
+    is_busy,
+    open_build_lock,
+)
+from mcuhome.workbench.buildprocess import (
+    Liveness,
+    current_user,
+    resolve_shutdown_seconds,
+)
 from mcuhome.workbench.buildtarget import (
+    BUILD_MODES,
+    BUILD_TARGETS,
+    DEFAULT_BUILD_MODE,
+    DEFAULT_BUILD_TARGET,
+    DEFAULT_CONTAINER_PROGRAM,
+    DEFAULT_CONTAINER_REPOSITORIES,
+    DEFAULT_MAX_WAIT_SECONDS,
+    MODE_CONTAINER,
+    MODE_SUBPROCESS,
+    TARGET_LOCAL,
+    TARGET_REMOTE,
     BuildTarget,
     ContainerExecution,
     Execution,
@@ -241,10 +230,65 @@ from mcuhome.workbench.configuration import (
     set_config_value,
     unset_config_value,
 )
-from mcuhome.workbench.generate import CompilerUnavailable, generate_application
-from mcuhome.workbench.loader import load_config
-from mcuhome.workbench.migrations import Migration, plan_upgrade
-from mcuhome.workbench.packagefetch import SdkUnavailable
+from mcuhome.workbench.containerbuild import (
+    DEFAULT_CONTAINER_PIDS,
+    ContainerLimits,
+    ContainerRuntime,
+    ensure_container_image,
+    require_container_image,
+    require_container_runtime,
+    resolve_cache_root,
+    resolve_container_program,
+)
+from mcuhome.workbench.contextdir import (
+    ContextFormatVersionError,
+    ContextVerification,
+    FileMismatch,
+    lock_context,
+    read_context_facts,
+    read_context_manifest,
+    read_generator_chain,
+    verify_context,
+)
+from mcuhome.workbench.devworkspace import WORKSPACE_LAYERS
+from mcuhome.workbench.generate import (
+    CompilerUnavailable,
+    generate_application,
+)
+from mcuhome.workbench.imgtool import (
+    BUILD_REPORT_FILE,
+    SignPlan,
+    read_build_report,
+)
+from mcuhome.workbench.loader import (
+    load_config,
+    read_yaml_file,
+)
+from mcuhome.workbench.migrations import (
+    Migration,
+    plan_upgrade,
+)
+from mcuhome.workbench.ociregistry import (
+    ImageRegistry,
+    ImageRegistryError,
+    ImageRegistryUnauthorized,
+    ImageRegistryUnreachable,
+)
+from mcuhome.workbench.otafile import ota_file_name
+from mcuhome.workbench.packagefetch import (
+    AcquiredPackage,
+    SdkUnavailable,
+    fetch_sdk_package,
+)
+from mcuhome.workbench.packageregistry import (
+    BUNDLED_ANCHOR_DIR,
+    OFFICIAL_BASE_DOMAIN,
+    PackageRegistryError,
+    RegistrySettings,
+    RegistrySource,
+    TrustAnchorMissing,
+    open_package_registry,
+)
 from mcuhome.workbench.project import (
     BUILD_DIR,
     DEVICE_FILE,
@@ -252,13 +296,13 @@ from mcuhome.workbench.project import (
     PROJECT_CONFIG_FILE,
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
-    InitResult,
     Project,
     create_project,
     find_project_root,
     is_project_root,
     is_upgrading,
     read_project,
+    require_secret_file,
     resolve_device,
     resolve_project,
 )
@@ -268,6 +312,7 @@ from mcuhome.workbench.projectfile import (
     ProjectFileError,
     ProjectUpgradeRequired,
     ProjectVersionUnsupported,
+    UpgradeRecord,
 )
 from mcuhome.workbench.projectupgrade import (
     MigrationFailed,
@@ -279,8 +324,22 @@ from mcuhome.workbench.projectupgrade import (
     find_running_builds,
     open_upgrade_session,
 )
-from mcuhome.workbench.provision import PairingResult, create_pairing
+from mcuhome.workbench.provision import create_pairing
 from mcuhome.workbench.resolve import resolve
+from mcuhome.workbench.resolve_image import (
+    ContainerImageMatch,
+    ContainerImagePin,
+    parse_container_image,
+    resolve_container_image,
+)
+from mcuhome.workbench.resolve_pins import (
+    KIND_SDK,
+    KIND_TOOLS,
+    KIND_WORKSPACE,
+    PACKAGE_KINDS,
+    ResolvedPackage,
+    resolve_package,
+)
 from mcuhome.workbench.scaffold import (
     BusChoice,
     ClusterChoice,
@@ -292,126 +351,283 @@ from mcuhome.workbench.scaffold import (
     render_device_file,
 )
 from mcuhome.workbench.schema import parse_config
+from mcuhome.workbench.sessionclient import (
+    SESSION_VERBS,
+    ContextIdMismatch,
+    ContextTooLarge,
+    PrivateKeyRefused,
+    RemoteDependencyMissing,
+    RemoteError,
+    RemoteTransportError,
+    SeatWait,
+    ServerRefusal,
+    WaitedTooLong,
+)
+from mcuhome.workbench.signing import (
+    SigningKey,
+    generate_key_pem,
+    public_key_pem,
+)
 from mcuhome.workbench.validate import validate
 
+#: Every name this module supports, and nothing else. Sorted plainly,
+#: which groups the constants, then the types, then the functions;
+#: the reading order and what each name is for are in ``docs/api.md``.
 __all__ = [
+    "ACTION_BUILD",
+    "ARTIFACT_ROLES",
+    "AcquiredPackage",
+    "Argument",
+    "Artifact",
+    "BOARDS",
+    "BUILD_CONTEXT_FILE",
     "BUILD_DIR",
-    "BuildDirectoryBusy",
-    "BuildError",
-    "BuilderSession",
-    "BuildOptions",
+    "BUILD_LOCK_FILE",
     "BUILD_MODES",
+    "BUILD_REPORT_FILE",
     "BUILD_TARGETS",
+    "BUNDLED_ANCHOR_DIR",
+    "BoardDef",
+    "BuildDirectoryBusy",
+    "BuildEnvironmentError",
+    "BuildError",
+    "BuildLimits",
+    "BuildOptions",
     "BuildRequest",
     "BuildResult",
     "BuildTarget",
     "Builder",
+    "BuilderSession",
     "BusChoice",
-    "Argument",
+    "CACHE_TIERS",
+    "CLUSTERS",
     "CONFIG_FILE",
     "CONFIG_ORIGINS",
     "CONFIG_SCOPES",
+    "CONTEXT_FILE",
     "CacheTier",
     "ClusterChoice",
+    "ClusterDef",
     "CompilerUnavailable",
     "ConfigError",
     "ConfigErrorGroup",
     "ContainerExecution",
-    "DEFAULT_MAX_WAIT_SECONDS",
+    "ContainerImageMatch",
+    "ContainerImagePin",
+    "ContainerLimits",
+    "ContainerRuntime",
+    "ContextEnvironment",
+    "ContextFile",
+    "ContextFormatVersionError",
+    "ContextIdMismatch",
+    "ContextManifest",
+    "ContextRequest",
+    "ContextTooLarge",
+    "ContextVerification",
     "DEFAULT_BUILD_MODE",
     "DEFAULT_BUILD_TARGET",
+    "DEFAULT_CONTAINER_PIDS",
+    "DEFAULT_CONTAINER_PROGRAM",
+    "DEFAULT_CONTAINER_REPOSITORIES",
+    "DEFAULT_MAX_WAIT_SECONDS",
+    "DEVELOPER_ENVIRONMENT",
     "DEVICES_DIR",
     "DEVICE_FILE",
+    "DOCKER_HUB",
+    "Declaration",
+    "DeveloperEnvironment",
     "DeviceModel",
     "DeviceOutline",
+    "ENVIRONMENT_IMAGE_REPOSITORY",
     "EndpointChoice",
+    "EnvironmentPin",
     "EnvironmentUnavailable",
     "EnvironmentUnusable",
     "Execution",
+    "FileMismatch",
     "GenerationError",
-    "InitResult",
+    "GeneratorEntry",
+    "ImageRegistry",
+    "ImageRegistryError",
+    "ImageRegistryUnauthorized",
+    "ImageRegistryUnreachable",
+    "KEYS_DIR",
+    "KIND_SDK",
+    "KIND_TOOLS",
+    "KIND_WORKSPACE",
+    "LABEL_PREFIX",
+    "Launcher",
+    "Liveness",
     "LocalBuild",
     "Location",
-    "PROJECT_MARKER_FILE",
+    "MANIFEST_FILE",
     "MCUHomeError",
+    "MODEL_FILE",
+    "MODEL_PACKAGE_VERSION",
+    "MODEL_VERSION",
     "MODE_CONTAINER",
     "MODE_SUBPROCESS",
-    "TARGET_LOCAL",
-    "TARGET_REMOTE",
-    "MODEL_VERSION",
     "Migration",
     "MigrationFailed",
     "NewDevice",
+    "OFFICIAL_BASE_DOMAIN",
     "OPTIONS",
     "OPTION_KINDS",
     "Option",
-    "ProgramDefaults",
+    "OtaIdentity",
+    "OtaImage",
+    "PACKAGE_KINDS",
+    "PATCHES_DIR",
+    "PLANNED_BOARDS",
     "PROJECT_CONFIG_FILE",
+    "PROJECT_MARKER_FILE",
     "PROJECT_VERSION",
-    "PairingResult",
+    "PackageMember",
+    "PackagePin",
+    "PackageRegistryError",
+    "Pairing",
+    "PairingModel",
+    "PartitionDef",
     "PeripheralChoice",
+    "PrivateKeyRefused",
+    "ProgramDefaults",
     "Project",
     "ProjectFile",
     "ProjectFileError",
     "ProjectUpgradeRequired",
     "ProjectVersionUnsupported",
+    "RESULT_FILE_PREFIX",
+    "RESULT_FILE_SUFFIX",
+    "ROOT_OUT",
+    "RegistrySettings",
+    "RegistrySource",
     "RemoteBuild",
+    "RemoteDependencyMissing",
+    "RemoteError",
     "RemoteNotConfigured",
+    "RemoteTransportError",
+    "ResolvedPackage",
     "RunningBuild",
+    "SDK_PACKAGE_NAME",
+    "SESSION_VERBS",
+    "SPEC_GENERATION",
+    "SPEC_GENERATION_MEMBER",
+    "STATUS_FAILURE",
+    "STATUS_SUCCESS",
+    "STATUS_UNSUPPORTED",
+    "STEP_STATUSES",
+    "SdkPin",
     "SdkUnavailable",
+    "SeatWait",
     "SelectedBuilder",
+    "ServerRefusal",
     "Setting",
     "Settings",
+    "SignPlan",
+    "SigningKey",
     "Step",
     "StepResult",
+    "StoreEntry",
     "SubprocessExecution",
+    "TARGET_LOCAL",
+    "TARGET_REMOTE",
+    "TrustAnchorMissing",
     "UPGRADE_MARKER_FILE",
     "UnknownBuildMode",
     "UnknownBuildTarget",
+    "UpdateSchemeDef",
     "UpgradeInProgress",
     "UpgradeInterrupted",
+    "UpgradeRecord",
     "UpgradeResult",
     "UpgradeSession",
     "VERSION",
     "ValidationResult",
+    "WORKSPACE_LAYERS",
+    "WaitedTooLong",
     "build_firmware",
+    "context_id",
     "create_device",
     "create_pairing",
     "create_project",
+    "current_user",
+    "device_registry",
     "device_schema",
+    "ensure_container_image",
     "error_dicts",
+    "expand_user_path",
+    "fetch_sdk_package",
     "find_project_root",
     "find_running_builds",
+    "format_generator_chain",
     "generate_application",
+    "generate_key_pem",
+    "is_busy",
     "is_project_root",
     "is_upgrading",
     "load_model",
+    "lock_context",
     "open_build_lock",
+    "open_package_registry",
     "open_upgrade_session",
     "option",
+    "ota_file_name",
+    "ota_parameters",
+    "parse_container_image",
+    "parse_container_reference",
+    "parse_memory",
     "plan_upgrade",
+    "public_key_pem",
+    "random_pairing",
+    "read_build_report",
+    "read_context_facts",
+    "read_context_manifest",
+    "read_generator_chain",
     "read_model",
     "read_project",
-    "registry_data",
+    "read_yaml_file",
     "render_device_file",
+    "require_container_image",
+    "require_container_runtime",
+    "require_secret_file",
     "resolve_build_mode",
     "resolve_build_options",
     "resolve_build_target",
     "resolve_builder",
+    "resolve_cache_root",
+    "resolve_cache_tiers",
     "resolve_config_file",
+    "resolve_container_image",
+    "resolve_container_program",
     "resolve_device",
+    "resolve_host_limits",
+    "resolve_package",
     "resolve_project",
     "resolve_settings",
     "resolve_shutdown_seconds",
     "set_config_value",
+    "sha256_file",
+    "to_json",
     "unset_config_value",
     "validate_device",
+    "verify_context",
 ]
 
 #: The workbench's own version, for a consumer that declares a supported
 #: range — deliberately not the model's, which versions with the SDK
 #: repository.
 VERSION = __version__
+
+
+def expand_user_path(path: Path | str, *, env: Mapping[str, str]) -> Path:
+    """*path* with a leading ``~`` resolved against *env*.
+
+    The one wrapper on this surface, and only because the parameter rule
+    holds for every name here: the model's own spelling takes the
+    environment positionally. It answers what that function answers —
+    a path without a leading tilde comes back untouched.
+    """
+    return _expand(path, dict(env))
 
 
 def load_model(

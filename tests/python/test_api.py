@@ -10,6 +10,7 @@ by name and by field, not only by behaviour.
 
 from __future__ import annotations
 
+import importlib
 import json
 import subprocess
 import sys
@@ -45,10 +46,129 @@ def _project(path: Path) -> api.Project:
 # --------------------------------------------------------------------------
 
 
-def test_the_supported_names_are_all_there() -> None:
-    """__all__ is the promise; every name in it has to resolve."""
-    for name in api.__all__:
-        assert hasattr(api, name), name
+#: Every exported name that is callable — the functions an embedder
+#: calls, the classes it constructs. One check each, so a name that goes
+#: missing is named by the failure instead of being counted in a loop.
+CALLABLES = sorted(name for name in api.__all__ if callable(getattr(api, name, None)))
+
+
+@pytest.mark.parametrize("name", CALLABLES)
+def test_an_exported_callable_is_reachable(name: str) -> None:
+    """__all__ is the promise; every name in it has to resolve.
+
+    ``docs/api.md`` and ``tests/python/test_surface.py`` hold the other
+    half of this: that the list is the one the reference states, and that
+    each of these has the signature it documents.
+    """
+    assert callable(getattr(api, name))
+
+
+#: Names of the device-model package that a caller needs to call the
+#: workbench or to render what it answered. The rule is re-export, never
+#: re-implement: one object under one name, whichever import a caller
+#: reaches it through. One row per model module, so a module that is
+#: dropped from the surface fails here rather than silently.
+MODEL_RE_EXPORTS = (
+    ("DeviceModel", "mcuhome.model.model"),
+    ("PairingModel", "mcuhome.model.model"),
+    ("read_model", "mcuhome.model.modelfile"),
+    ("to_json", "mcuhome.model.export"),
+    ("Artifact", "mcuhome.model.artifacts"),
+    ("BuildLimits", "mcuhome.model.jobs"),
+    ("Pairing", "mcuhome.model.pairing"),
+    ("random_pairing", "mcuhome.model.pairing"),
+    ("OtaImage", "mcuhome.model.ota"),
+    ("ota_parameters", "mcuhome.model.ota"),
+    ("BOARDS", "mcuhome.model.registry"),
+    ("CLUSTERS", "mcuhome.model.registry"),
+    ("sha256_file", "mcuhome.model.hashes"),
+    ("SDK_PACKAGE_NAME", "mcuhome.model.sdkindex"),
+    ("DOCKER_HUB", "mcuhome.model.imageref"),
+    ("context_id", "mcuhome.model.context"),
+    ("CONTEXT_FILE", "mcuhome.model.context"),
+    ("LABEL_PREFIX", "mcuhome.model.buildenvironment"),
+    ("Location", "mcuhome.model.errors"),
+    ("error_dicts", "mcuhome.model.errors"),
+)
+
+#: Names that were on this surface and are not any more. A consumer that
+#: still uses one has to fail on the import rather than on a look-alike
+#: that happens to be reachable.
+RETIRED = (
+    "find_device",
+    "run_build",
+    "build_target_for",
+    "options_for",
+    "BUILDER_TYPES",
+    "PROJECT_DIR_VAR",
+    "print_data",
+    "registry_data",
+    "parse_reference",
+    "expand",
+    "InitResult",
+    "PairingResult",
+)
+
+
+@pytest.mark.parametrize("name, module", MODEL_RE_EXPORTS)
+def test_a_model_name_is_re_exported_unchanged(name: str, module: str) -> None:
+    """The same object, never a look-alike.
+
+    Two shapes for one thing drift apart, and the model package versions
+    with the SDK rather than with the workbench — so a caller that has
+    both imports has to be talking about the same object, not about a
+    copy this package keeps in step by hand.
+    """
+    assert getattr(api, name) is getattr(importlib.import_module(module), name)
+
+
+def test_the_four_renamed_model_names_are_the_same_objects() -> None:
+    """Renamed because the bare name says nothing in a flat namespace.
+
+    ``registry`` means a package registry everywhere else on this
+    surface, ``parse_reference`` does not say what it parses, and a bare
+    ``__version__`` cannot be re-exported unambiguously beside the
+    workbench's own. The objects are unchanged; only the spelling here
+    is.
+    """
+    from mcuhome.model.export import registry_data
+    from mcuhome.model.imageref import parse_reference
+
+    from mcuhome import model
+
+    assert api.device_registry is registry_data
+    assert api.parse_container_reference is parse_reference
+    assert model.__version__ == api.MODEL_PACKAGE_VERSION
+
+
+def test_expand_user_path_takes_its_environment_by_keyword() -> None:
+    """The one wrapper on the surface, and what it is for.
+
+    Every other parameter here is keyword-only past the subject of the
+    call; the model's own spelling takes the environment positionally.
+    The wrapper exists to make the signature obey that rule and for
+    nothing else.
+    """
+    with pytest.raises(TypeError):
+        api.expand_user_path("~/thing", {"HOME": "/home/someone"})  # type: ignore[misc]
+    assert api.expand_user_path("~/thing", env={"HOME": "/home/someone"}) == Path(
+        "/home/someone/thing"
+    )
+
+
+def test_expand_user_path_answers_what_the_model_answers() -> None:
+    """A wrapper may change a signature, never what a name does."""
+    from mcuhome.model.userpaths import expand
+
+    env = {"HOME": "/home/someone"}
+    for path in ("~/thing", "~", "relative/thing", "/absolute/thing"):
+        assert api.expand_user_path(path, env=env) == expand(path, env)
+
+
+@pytest.mark.parametrize("name", RETIRED)
+def test_a_retired_name_is_gone_from_the_surface(name: str) -> None:
+    assert name not in api.__all__
+    assert not hasattr(api, name)
 
 
 def test_the_version_is_the_package_version() -> None:
@@ -114,22 +234,8 @@ def test_creating_a_device_is_part_of_the_surface() -> None:
         assert name in api.__all__, name
         assert getattr(api, name) is getattr(scaffold, name), name
 
-    for name in ("create_pairing", "PairingResult"):
-        assert name in api.__all__, name
-        assert getattr(api, name) is getattr(provision, name), name
-
-
-def test_the_two_init_results_are_not_the_same_thing() -> None:
-    """One name for one thing: starting a project, drawing credentials.
-
-    Both modules called their result ``InitResult`` while they were
-    apart, and both belong on one surface now. The pairing one is
-    ``PairingResult`` there — a caller reading ``InitResult`` in a
-    traceback should not have to work out which of two operations it
-    came from.
-    """
-    assert api.InitResult is not api.PairingResult
-    assert not hasattr(api.PairingResult, "created")
+    assert "create_pairing" in api.__all__
+    assert api.create_pairing is provision.create_pairing
 
 
 def test_load_model_runs_stages_one_to_three(tmp_path) -> None:
@@ -289,8 +395,8 @@ def test_the_validation_result_serializes_whole(tmp_path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_registry_data_and_schema_are_reachable_from_the_api() -> None:
-    assert api.registry_data()["registry_version"] >= 1
+def test_the_registry_and_the_schema_are_reachable_from_the_api() -> None:
+    assert api.device_registry()["registry_version"] >= 1
     assert api.device_schema()["type"] == "object"
 
 
