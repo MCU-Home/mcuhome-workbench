@@ -62,7 +62,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -1061,6 +1061,7 @@ def run_locked_build(
     registry: RegistrySource | None = None,
     deadline_seconds: int = 5400,
     on_line: LineSink | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> SubprocessBuildResult:
     """Drive one ``build`` step over a locked context, in the subprocess profile.
 
@@ -1094,6 +1095,15 @@ def run_locked_build(
     device's Zephyr constraint is **not** among them: it is a property of
     the device model, which a locked context does not carry, so
     :func:`check_environment` is given it by the composition instead.
+
+    *should_stop* is asked while the step runs, on the supervisor's own
+    tick. The first ``True`` starts the liveness ladder, and in this
+    profile the signal reaches the builder itself: SIGTERM after the
+    session's grace period, SIGKILL ten seconds later. What the step had
+    already written into ``out`` stays where it is, and the step failed
+    without a result document — which is what a stopped step is here.
+    :func:`~mcuhome.workbench.buildprocess.resolve_shutdown_seconds` is
+    how long that can take.
     """
     context_dir = Path(context_dir).resolve()
     work_root = Path(work_root).resolve()
@@ -1149,6 +1159,7 @@ def run_locked_build(
         # outside.
         limits=limits if limits is not None else host_limits(),
         deadline_seconds=deadline_seconds,
+        should_stop=should_stop,
     )
     with session:
         outcome = session.invoke(ACTION_BUILD, on_line=on_line)

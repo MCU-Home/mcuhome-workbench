@@ -861,6 +861,7 @@ class BuilderSession:
         limits: BuildLimits | None = None,
         deadline_seconds: int = 5400,
         cancel_grace_seconds: int = 0,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.root = Path(root).resolve()
         self.context_dir = Path(context_dir).resolve()
@@ -885,6 +886,12 @@ class BuilderSession:
         self.limits = limits
         self.deadline_seconds = deadline_seconds
         self.cancel_grace_seconds = cancel_grace_seconds
+        #: Asked while a step runs: ``True`` means stop this session's
+        #: current step. It belongs to the session rather than to a
+        #: single call because a caller stops *a build*, not an
+        #: invocation it cannot see; every step this session runs is
+        #: supervised with it.
+        self.should_stop = should_stop
         self._counter = 0
         self._current: Step | None = None
         self._running = False
@@ -921,12 +928,14 @@ class BuilderSession:
         missing: generation 3 defines no cancel sentinel the environment
         could see, so the grace period between "stop" and SIGTERM buys
         nothing here and is zero by default. What the ladder still does
-        is enforce the deadline and make sure a stopped step really ends.
+        is enforce the deadline, ask this session's :attr:`should_stop`
+        on every tick, and make sure a stopped step really ends.
         """
         return Liveness(
             cancel=step.cancel,
             deadline_seconds=self.deadline_seconds,
             cancel_grace_seconds=self.cancel_grace_seconds,
+            should_stop=self.should_stop,
         )
 
     def prepare(self, action: str, *, parameters: Mapping[str, Any] | None = None) -> Step:

@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -930,6 +930,7 @@ def run_locked_build(
     container_program: str = DEFAULT_CONTAINER_PROGRAM,
     runtime: Runtime | None = None,
     on_line: LineSink | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> ContainerBuildResult:
     """Drive one ``build`` step over a locked context, in the container profile.
 
@@ -970,6 +971,16 @@ def run_locked_build(
     holds one states it as *zephyr_constraint*. A plain reference instead
     of a :class:`ResolvedImage` carries no declaration and is taken as
     already checked by whoever resolved it.
+
+    *should_stop* is asked while the step runs, on the supervisor's own
+    tick. The first ``True`` starts the liveness ladder: the container is
+    removed, the client this process started is signalled and then
+    killed, and what the step had already written into ``out`` stays
+    where it is. The step then failed without a result document, which is
+    what a stopped step is — the specification has no cancelled status
+    and the side that asked for the stop is the only one that can say
+    why. :func:`~mcuhome.workbench.buildprocess.resolve_shutdown_seconds`
+    is how long that can take.
 
     The containers this session started are swept when it ends. ``--rm``
     already removed the ones that finished; the sweep is for a step that
@@ -1021,6 +1032,7 @@ def run_locked_build(
         tiers=tiers,
         limits=given,
         deadline_seconds=deadline_seconds,
+        should_stop=should_stop,
     )
     try:
         with session:
