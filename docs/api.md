@@ -857,8 +857,11 @@ A package file is a `Path`, or a string spelled like one
 from that file name and the bytes are taken from that file alone.
 A package name is `<package>[:<constraint>][@sha256:…]` — a bare name is
 the newest version a source offers, a constraint narrows it, and a
-version with a hash decides everything and reads no index. A hash that
-the index contradicts is a refusal. Which kind of package it is comes
+version with a hash asks no index which version is meant, which is the
+one form a directory without an index can still serve. The bytes are
+looked for the ordinary way either way: a directory's index where it has
+one, the conventional file name where it has not. A hash that an index
+contradicts is a refusal. Which kind of package it is comes
 from the name, since the bound it unpacks under and what is made of it
 are settled before anything is read: `mcuhome-sdk`,
 `mcuhome-build-workspace` and `mcuhome-build-tools` (with this host's
