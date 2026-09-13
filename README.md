@@ -260,9 +260,10 @@ another host, which is then read with that host's own trust anchor and mirrors
 a colon or contains one, as YAML asks.
 
 A device can also carry **patches** for the trees it is built from. They live in
-`devices/<name>/patches/<layer>/NNNN-description.patch`: the layer names the tree
-the patch applies to (`zephyr`, `sdk`, `chip`, whatever the build environment
-knows), and the number is the order they are applied in inside that layer. Every
+the device's own folder, `devices/<device>/patches/<layer>/NNNN-description.patch`:
+the layer names the tree the patch applies to (`zephyr`, `sdk`, `chip`, whatever
+the build environment knows), and the number is the order they are applied in
+inside that layer. Every
 build of that device carries them, and there is no flag to switch it on — the
 folder is the statement. Patches travel in the build context beside the device
 model and are hashed into its id like every other file in it, so a build with a
@@ -271,7 +272,8 @@ none at all, changes nothing. Two things are refused rather than guessed: a file
 that is not inside a layer folder, because nothing could say which tree it
 belongs to, and a patched device built against a west workspace you maintain
 yourself (`build.dev_workspace`), because those trees are yours and MCUHome does
-not patch them.
+not patch them. Leave `device.name` and the folder name the same — the folder is
+what MCUHome keys a device's files on, and `mcuhome device new` writes both.
 
 ### Which SDK a build uses
 

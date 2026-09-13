@@ -796,9 +796,12 @@ directories the pins resolve against, *project_root* whether there is a
 registry to fall through to at all.
 
 The patches a context carries are the device's own unless stated: without
-a *patches_dir*, `<project>/devices/<name>/patches/` is picked up when it
-is there — no flag switches it on — and a stated *patches_dir* replaces
-it rather than adding to it. An empty directory, or none, changes
+a *patches_dir*, `<project>/devices/<device>/patches/` — the device's own
+folder — is picked up when it is there, no flag switches it on, and a
+stated *patches_dir* replaces it rather than adding to it. A device file
+whose `device.name` differs from the folder it sits in is not supported:
+the folder is what every other per-device path is keyed on, and a device
+`create_device` wrote has the two equal. An empty directory, or none, changes
 nothing. Patches are context content: they are hashed into the context ID
 like the model and the key, so a device builds something else with a
 patch than without one.
@@ -1558,7 +1561,7 @@ workspace, and passed to that build alone.
 | project marker | `<project>/.mcuhome-project-root` | TOML |
 | upgrade marker | `<project>/.mcuhome-project-root.upgrade` | TOML |
 | devices | `<project>/devices/<name>/main.yaml` | YAML |
-| device patches | `<project>/devices/<name>/patches/<layer>/NNNN-*.patch`, carried into every context of that device | patch |
+| device patches | `<project>/devices/<device>/patches/<layer>/NNNN-*.patch` — the device folder's own, carried into every context of that device | patch |
 | project secrets | `<project>/secrets/` (mode 0700), never committed | |
 | shared secrets | `secrets/main.yaml` | YAML |
 | signing key | `secrets/signing/key.pem`, its public half `key.pub`, the reference `key.yaml` | PEM, YAML |
