@@ -51,8 +51,10 @@ __all__ = [
     "SecretRef",
     "device_secrets_file",
     "editing_yaml",
+    "in_project_layout",
     "load_config",
     "read_yaml_file",
+    "require_folder_name",
     "resolve_secrets",
 ]
 
@@ -216,8 +218,73 @@ def read_yaml_file(path: Path) -> Any:
         ) from exc
 
 
+def in_project_layout(entry: Path, *, secrets_file: Path) -> bool:
+    """Whether *entry* is a device of the project ``secrets_file`` belongs to.
+
+    The one thing that separates the two kinds of device file this
+    package reads: one that lives at ``<project>/devices/<device>/`` is a
+    device *of* a project, with everything the project keys on its
+    folder, and one anywhere else is a file somebody handed over —
+    ``mcuhome device validate ./example.yaml`` — whose directory stands
+    in for a project that does not exist.
+    """
+    return entry.parent.parent == secrets_file.parent.parent / DEVICES_DIR
+
+
+def require_folder_name(data: Any, *, entry: Path, secrets_file: Path) -> None:
+    """A device of a project is named by its folder, and says so itself.
+
+    The folder is the identity: the build directory, the build lock, the
+    result documents, the OTA image, the per-device secrets, the pairing
+    credentials and the patches a build carries are all keyed on it. A
+    file that claims a different ``device.name`` would make the same
+    device two devices, each answering to a different half of that list —
+    so it is refused here, once, rather than reconciled differently by
+    every surface that asks.
+
+    Only inside a project. A bare file somebody points at has no folder
+    that means anything (:func:`in_project_layout`), and its own name is
+    all there is.
+    """
+    if not in_project_layout(entry, secrets_file=secrets_file):
+        return
+    device = data.get("device") if isinstance(data, dict) else None
+    stated = device.get("name") if isinstance(device, dict) else None
+    folder = entry.parent.name
+    if not isinstance(stated, str) or not stated or stated == folder:
+        return
+    raise ConfigError(
+        f'This device lives in the folder "{folder}" and calls itself "{stated}".',
+        location=_key_location(device, "name", entry=entry),
+        hint=(
+            f"a device is one name: the folder and device.name are the same word, because "
+            f"everything MCUHome writes for a device — its build directory, its secrets, "
+            f"its pairing credentials, the patches it is built with — is keyed on it. "
+            f"Either rename the folder:\n"
+            f"    mv devices/{folder} devices/{stated}\n"
+            f"  or write the folder's name in the file:\n"
+            f"    device:\n"
+            f"      name: {folder}"
+        ),
+    )
+
+
+def _key_location(mapping: Any, key: str, *, entry: Path) -> Location:
+    """Where *key* is written in *mapping*, as far as the parser knows."""
+    lc = getattr(mapping, "lc", None)
+    path = f"device.{key}"
+    if lc is not None:
+        try:
+            line, column = lc.key(key)
+        except (KeyError, TypeError):  # pragma: no cover - defensive
+            pass
+        else:
+            return Location(file=entry, line=line + 1, column=column + 1, key=path)
+    return Location(file=entry, key=path)
+
+
 def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
-    """``secrets/devices/<name>.yaml``, next to the project's main secrets file.
+    """``secrets/devices/<device>.yaml``, next to the project's main secrets file.
 
     The per-device secrets file of the project layout —
     where ``mcuhome device matter-pairing`` puts a device's commissioning
@@ -225,13 +292,15 @@ def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
     device *folder's*, never the configuration's own ``device.name``
     claim: the folder is the identity every project surface keys on, and
     a ``device.name`` that disagrees must not let one device read — or
-    overwrite — another device's credentials (review 2026-08-15). Only a
-    bare file outside the layout answers with its ``device.name``
-    (folder name standing in); its stand-in root holds no second device
-    to collide with.
+    overwrite — another device's credentials. Such a file is refused
+    before this is asked (:func:`require_folder_name`); keying on the
+    folder here is what makes that refusal the only way the two can
+    differ. Only a bare file outside the layout answers with its
+    ``device.name`` (folder name standing in); its stand-in root holds no
+    second device to collide with.
     """
     parent = entry.parent
-    if parent.parent == secrets_file.parent.parent / DEVICES_DIR:
+    if in_project_layout(entry, secrets_file=secrets_file):
         return secrets_file.parent / "devices" / f"{parent.name}.yaml"
     device = data.get("device") if isinstance(data, dict) else None
     name = device.get("name") if isinstance(device, dict) else None
@@ -365,4 +434,7 @@ def load_config(
             location=Location(file=entry, line=1, column=1),
             hint="the top level holds the sections device:, network:, hardware:, node:",
         )
+    # Before a secret is read: a file that cannot say which device it is
+    # must not send this package looking for that device's secrets.
+    require_folder_name(data, entry=entry, secrets_file=secrets_file)
     return resolve_secrets(data, file=entry, secrets_file=secrets_file, on_warning=on_warning)

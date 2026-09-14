@@ -14,7 +14,7 @@ from mcuhome.model import registry
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import provision, scaffold
-from mcuhome.workbench.api import load_model, validate_device
+from mcuhome.workbench.api import load_model, read_yaml_file, validate_device
 from mcuhome.workbench.project import DEVICE_FILE, DEVICES_DIR, create_project
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
@@ -31,6 +31,20 @@ def test_it_creates_the_device_folder(tmp_path) -> None:
     assert created.entry == tmp_path / DEVICES_DIR / "bench-node" / DEVICE_FILE
     assert created.entry.is_file()
     assert created.project.root == tmp_path
+
+
+def test_the_folder_and_the_written_name_are_the_same_word(tmp_path) -> None:
+    """What the loader refuses, this must never produce.
+
+    A device of a project is named by its folder and its file says so;
+    the two disagreeing is a refusal when the device is loaded, so the
+    one thing that writes both has to write them equal.
+    """
+    project = create_project(tmp_path).project
+    created = scaffold.create_device("bench-node", project=project, board=BOARD)
+    written = read_yaml_file(created.entry)
+    assert created.entry.parent.name == "bench-node"
+    assert written["device"]["name"] == created.entry.parent.name
 
 
 # --------------------------------------------------------------------------

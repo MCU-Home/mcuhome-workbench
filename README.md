@@ -272,8 +272,11 @@ none at all, changes nothing. Two things are refused rather than guessed: a file
 that is not inside a layer folder, because nothing could say which tree it
 belongs to, and a patched device built against a west workspace you maintain
 yourself (`build.dev_workspace`), because those trees are yours and MCUHome does
-not patch them. Leave `device.name` and the folder name the same — the folder is
-what MCUHome keys a device's files on, and `mcuhome device new` writes both.
+not patch them. The folder is the device's name: a device file that calls itself
+something else is refused when it is loaded, because everything MCUHome writes
+for a device is keyed on that one name — `mcuhome device new` writes both the
+same, and a file you point at from outside a project is free to call itself
+anything.
 
 ### Which SDK a build uses
 

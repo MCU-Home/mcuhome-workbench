@@ -420,6 +420,16 @@ the wire format of a remote build. Raises `ConfigError` for a single
 problem and `ConfigErrorGroup` when validation found several.
 *on_warning* receives the non-fatal findings.
 
+A device of a project is named by its folder: a file at
+`<project>/devices/<device>/main.yaml` whose `device.name` says something
+else is refused, located at that key and naming both spellings, because
+every file MCUHome writes for a device — its build directory, its
+secrets, its pairing credentials, the patches it is built with — is keyed
+on that one name. A device file *outside* a project (the stand-in project
+of `resolve_device`'s second form) is not subject to it: its directory
+stands in for a project that does not exist and holds no second device to
+collide with.
+
 ```python
 def validate_device(
     entry: Path, *, project: Project, on_warning: Callable[[Diagnostic], None] | None = None
@@ -798,11 +808,11 @@ registry to fall through to at all.
 The patches a context carries are the device's own unless stated: without
 a *patches_dir*, `<project>/devices/<device>/patches/` — the device's own
 folder — is picked up when it is there, no flag switches it on, and a
-stated *patches_dir* replaces it rather than adding to it. A device file
-whose `device.name` differs from the folder it sits in is not supported:
-the folder is what every other per-device path is keyed on, and a device
-`create_device` wrote has the two equal. An empty directory, or none, changes
-nothing. Patches are context content: they are hashed into the context ID
+stated *patches_dir* replaces it rather than adding to it. The folder is
+the device — `load_model` refuses a device file that calls itself
+something else — so the patches, the build directory, the secrets and the
+pairing credentials of a device are all keyed on one name. An empty
+directory, or none, changes nothing. Patches are context content: they are hashed into the context ID
 like the model and the key, so a device builds something else with a
 patch than without one.
 

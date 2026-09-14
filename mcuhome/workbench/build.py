@@ -1070,12 +1070,12 @@ def _device_patches_dir(
     directory in the context and the context ID is what it would have
     been.
 
-    The folder is the one named after the device, because the model is
-    all a build is given and it carries no path of its own. A device file
-    whose ``device.name`` does not match the folder it sits in therefore
-    does not find that folder's patches, while the project's per-device
-    *secrets* key on the folder instead — two rules for one identity,
-    and they have to become one. A device MCUHome created has them equal.
+    The folder is the one named after the device, which is all a build is
+    given and is enough: a device of a project *is* its folder, and a
+    file that calls itself something else is refused when it is loaded
+    (:func:`~mcuhome.workbench.loader.require_folder_name`). So the
+    patches found here and the secrets, the build directory and the
+    pairing credentials found elsewhere are one device's.
     """
     if patches_dir is not None:
         return Path(patches_dir)

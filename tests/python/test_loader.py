@@ -198,21 +198,73 @@ def test_a_device_file_alone_is_enough(write_config) -> None:
     assert data["device"]["friendly_name"] == "Own"
 
 
-def test_a_project_devices_secrets_file_is_keyed_by_its_folder(tmp_path) -> None:
-    """A config cannot claim another device's identity (review 2026-08-15).
-
-    device.name is the hostname, not the identity the project keys on —
-    a devices/device-b/main.yaml claiming `name: device-a` must not read
-    (or, through matter-pairing, overwrite) device-a's credentials.
-    """
-    entry = tmp_path / "devices" / "device-b" / "main.yaml"
+def _device_of_a_project(tmp_path: Path, folder: str, *, name: str) -> Path:
+    """A device file at ``<project>/devices/<folder>/main.yaml``."""
+    entry = tmp_path / "devices" / folder / "main.yaml"
     entry.parent.mkdir(parents=True)
-    entry.write_text(CONFIG_WITH_SECRET.replace("name: bench-node", "name: device-a"), "utf-8")
-    secrets_main = tmp_path / "secrets" / "main.yaml"
-    for owner, value in (("device-a", "Stolen"), ("device-b", "Own")):
+    entry.write_text(CONFIG_WITH_SECRET.replace("name: bench-node", f"name: {name}"), "utf-8")
+    return entry
+
+
+def _device_secret_files(tmp_path: Path, **labels: str) -> None:
+    """One ``secrets/devices/<device>.yaml`` per named device."""
+    for owner, value in labels.items():
         target = tmp_path / "secrets" / "devices" / f"{owner}.yaml"
         target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         target.write_text(f"device_label: {value}\n", encoding="utf-8")
         target.chmod(0o600)
-    data = load_config(entry, secrets_file=secrets_main)
+
+
+def test_a_device_of_a_project_that_calls_itself_something_else_is_refused(tmp_path) -> None:
+    """One device, one name — the folder's.
+
+    Everything a project writes for a device is keyed on the folder: its
+    build directory, its secrets, its pairing credentials, the patches it
+    is built with. A file claiming a different `device.name` would make
+    one device two, each answering to a different half of that list, so
+    it is refused once here instead of being reconciled differently by
+    every surface that asks.
+    """
+    entry = _device_of_a_project(tmp_path, "device-b", name="device-a")
+    _device_secret_files(tmp_path, **{"device-a": "Stolen", "device-b": "Own"})
+
+    with pytest.raises(ConfigError) as caught:
+        load_config(entry, secrets_file=tmp_path / "secrets" / "main.yaml")
+
+    assert '"device-b"' in caught.value.message and '"device-a"' in caught.value.message
+    assert caught.value.location.file == entry
+    assert caught.value.location.line == line_of(entry.read_text("utf-8"), "name: device-a")
+    assert caught.value.location.key == "device.name"
+    # Both ways out, and the folder's name is the one this file should
+    # carry: a person reads the fix rather than working it out.
+    assert "mv devices/device-b devices/device-a" in caught.value.hint
+    assert "name: device-b" in caught.value.hint
+
+
+def test_a_device_of_a_project_that_agrees_with_its_folder_loads(tmp_path) -> None:
+    """The same layout with the two names equal is the ordinary device."""
+    entry = _device_of_a_project(tmp_path, "device-b", name="device-b")
+    _device_secret_files(tmp_path, **{"device-a": "Stolen", "device-b": "Own"})
+
+    data = load_config(entry, secrets_file=tmp_path / "secrets" / "main.yaml")
+
+    # And its secrets are still the folder's, which is what the refusal
+    # above is there to keep true.
     assert data["device"]["friendly_name"] == "Own"
+
+
+def test_a_file_outside_a_project_may_call_itself_anything(write_config) -> None:
+    """A file somebody points at has no folder that means anything.
+
+    `mcuhome device validate ./example.yaml` reads a file wherever it
+    lies — an example out of this repository, a device file in a
+    download folder — and the directory it sits in stands in for a
+    project that does not exist. There is no second device there to
+    collide with, so there is nothing to refuse.
+    """
+    entry = write_config(CONFIG_WITH_SECRET, secrets="device_label: Bench Node\n")
+
+    data = load_config(entry, secrets_file=entry.parent / "secrets" / "main.yaml")
+
+    assert entry.parent.name != data["device"]["name"]
+    assert data["device"]["friendly_name"] == "Bench Node"
