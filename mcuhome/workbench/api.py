@@ -354,7 +354,7 @@ from mcuhome.workbench.projectupgrade import (
     find_running_builds,
     open_upgrade_session,
 )
-from mcuhome.workbench.provision import NewPairing, create_pairing
+from mcuhome.workbench.provision import NewPairing, create_pairing, read_pairing
 from mcuhome.workbench.resolve import resolve
 from mcuhome.workbench.resolve_image import (
     ContainerImageMatch,
@@ -650,6 +650,7 @@ __all__ = [
     "read_context_manifest",
     "read_generator_chain",
     "read_model",
+    "read_pairing",
     "read_project",
     "read_yaml_file",
     "render_device_file",

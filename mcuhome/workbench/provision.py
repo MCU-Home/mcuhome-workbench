@@ -48,11 +48,18 @@ from mcuhome.model import pairing
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML
 
-from mcuhome.workbench.loader import device_secrets_file, read_yaml_file
+from mcuhome.workbench.loader import device_secrets_file, load_config, read_yaml_file
 from mcuhome.workbench.project import Project
-from mcuhome.workbench.validate import PAIRING_KEYS
+from mcuhome.workbench.schema import parse_config
+from mcuhome.workbench.validate import PAIRING_KEYS, is_matter_enabled
 
-__all__ = ["CREDENTIAL_COMMENT", "NewPairing", "create_pairing", "secret_names"]
+__all__ = [
+    "CREDENTIAL_COMMENT",
+    "NewPairing",
+    "create_pairing",
+    "read_pairing",
+    "secret_names",
+]
 
 #: Written above the credentials, and recognized again when ``--force``
 #: replaces them so that repeated runs do not stack up comment blocks.
@@ -342,6 +349,55 @@ def create_pairing(
         secrets_file=device_file,
         pairing=credentials,
         replaced=bool(anchor.occupied),
+    )
+
+
+def read_pairing(entry: Path, *, project: Project) -> pairing.Pairing | None:
+    """The commissioning credentials *entry* already has, or ``None``.
+
+    The counterpart of :func:`create_pairing`, which refuses rather than
+    replacing them: this is the only way to show a device's codes — the
+    manual code and the QR payload are derived from the tuple — without
+    drawing new ones and making every controller commission the device
+    again. It **writes nothing**, not to the configuration and not to the
+    secrets file.
+
+    ``None`` is the answer wherever there is nothing to show: Matter is
+    off for this device, or its credentials have not been drawn yet, or
+    only some of the three are there — a half-finished edit is not a
+    credential set, and
+    :func:`~mcuhome.workbench.validate.validate` is what says so in
+    words. ``use_test_pairing`` answers the published test tuple, which
+    is what that device is actually commissioned with.
+
+    The values live in the device's own secrets file and reach the
+    configuration as ``!secret`` references, so reading them is reading
+    *both* files — which is why this takes the project: the secrets
+    ladder is the loader's, and the credentials it answers are the ones
+    the device model carries.
+
+    Raises :class:`~mcuhome.model.errors.ConfigError` for a file that is
+    not a device configuration at all, or whose secrets cannot be
+    resolved — the same refusals :func:`load_model` raises on the way to
+    the same values.
+    """
+    config = parse_config(load_config(entry, secrets_file=project.secrets_file), file=Path(entry))
+    matter = config.network.matter if config.network is not None else None
+    if matter is None or not is_matter_enabled(config):
+        return None
+    if matter.use_test_pairing:
+        return pairing.TEST_PAIRING
+    if any(getattr(matter, key) is None for key in PAIRING_KEYS):
+        return None
+    return pairing.Pairing(
+        discriminator=matter.discriminator,
+        passcode=matter.passcode,
+        salt=matter.salt,
+        # The one derived value, and a constant of the builder rather
+        # than of the device — the same one the resolved model carries,
+        # which is what makes these two readings of one device agree.
+        iterations=pairing.DEFAULT_ITERATIONS,
+        test_credentials=False,
     )
 
 

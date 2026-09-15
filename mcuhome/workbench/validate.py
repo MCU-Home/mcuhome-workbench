@@ -40,7 +40,7 @@ from mcuhome.workbench.schema import (
     assign_endpoint_ids,
 )
 
-__all__ = ["INT16S_MAX", "INT16S_MIN", "PAIRING_KEYS", "validate"]
+__all__ = ["INT16S_MAX", "INT16S_MIN", "PAIRING_KEYS", "is_matter_enabled", "validate"]
 
 #: Range of the ``int16s`` attributes every measurement cluster uses.
 INT16S_MIN = -32768
@@ -241,7 +241,7 @@ def _check_network(config: RawConfig, errors: ErrorCollector) -> None:
             hint="choose a board with an 802.15.4 radio, or remove the thread: section",
         )
 
-    if _matter_enabled(config) is False and _endpoints(config):
+    if is_matter_enabled(config) is False and _endpoints(config):
         off_by = (
             "switched off" if network.matter is not None else "off (there is no matter: section)"
         )
@@ -257,7 +257,7 @@ def _check_network(config: RawConfig, errors: ErrorCollector) -> None:
         )
 
 
-def _matter_enabled(config: RawConfig) -> bool:
+def is_matter_enabled(config: RawConfig) -> bool:
     """Matter is on exactly when the configuration says so (PO 2026-08-15).
 
     The ``matter:`` block is the opt-in — a block that states
@@ -297,7 +297,7 @@ def _check_pairing(config: RawConfig, errors: ErrorCollector) -> None:
     """
     network = config.network
     matter = network.matter if network is not None else None
-    enabled = _matter_enabled(config)
+    enabled = is_matter_enabled(config)
     device = config.device.name or "<device>"
 
     if matter is None:

@@ -209,6 +209,150 @@ def test_a_configuration_without_a_matter_section_is_refused(write_config) -> No
 
 
 # --------------------------------------------------------------------------
+# Reading back what was written
+# --------------------------------------------------------------------------
+
+
+def _read(path: Path):
+    return provision.read_pairing(path, project=_project(path))
+
+
+def test_read_pairing_answers_what_was_drawn(write_config) -> None:
+    """The counterpart of the command that draws: the same four values.
+
+    ``create_pairing`` refuses rather than replacing, so without this
+    there is no way at all to show a person the codes of a device that
+    already has credentials — and re-drawing them to find out would make
+    every controller commission the device again.
+    """
+    path = write_config(WITHOUT_CREDENTIALS)
+    written = _init(path)
+
+    found = _read(path)
+
+    assert found == written.pairing
+    assert found.discriminator == FIXED.discriminator
+    assert found.passcode == FIXED.passcode
+    assert found.salt == FIXED.salt
+    assert found.iterations == pairing.DEFAULT_ITERATIONS
+    assert found.test_credentials is False
+    # The two codes a person types into a controller, derived from the
+    # tuple — the whole reason this answers `Pairing` and not the values.
+    assert found.manual_code == FIXED.manual_code
+    assert found.qr_payload == FIXED.qr_payload
+
+
+def test_read_pairing_agrees_with_the_model_the_builder_resolves(write_config) -> None:
+    """Two readings of one device, and they must not drift apart.
+
+    The resolved model carries the same credentials under
+    ``network.pairing``; if this call read them differently, a client
+    would show one thing and the firmware would be built with another.
+    """
+    path = write_config(WITHOUT_CREDENTIALS)
+    _init(path)
+
+    found = _read(path)
+    resolved = resolve_file(path).network.pairing
+
+    assert isinstance(resolved, PairingModel)
+    assert (found.discriminator, found.passcode, found.salt, found.iterations) == (
+        resolved.discriminator,
+        resolved.passcode,
+        resolved.salt,
+        resolved.iterations,
+    )
+    assert found.test_credentials == resolved.test_credentials
+
+
+def test_read_pairing_writes_nothing(write_config) -> None:
+    """A read of a security-relevant file changes neither of its two halves."""
+    path = write_config(WITHOUT_CREDENTIALS)
+    result = _init(path)
+    before = (
+        path.read_text(encoding="utf-8"),
+        result.secrets_file.read_text(encoding="utf-8"),
+        result.secrets_file.stat().st_mode,
+    )
+
+    _read(path)
+
+    assert (
+        path.read_text(encoding="utf-8"),
+        result.secrets_file.read_text(encoding="utf-8"),
+        result.secrets_file.stat().st_mode,
+    ) == before
+
+
+def test_a_device_without_credentials_reads_as_none(write_config) -> None:
+    """Nothing drawn yet is an answer, not a refusal — the device is fine."""
+    path = write_config(WITHOUT_CREDENTIALS)
+    assert _read(path) is None
+
+
+def test_a_device_whose_matter_is_off_reads_as_none(write_config) -> None:
+    """Off is off: a device that is never commissioned has no codes to show.
+
+    Credentials left under a switched-off ``matter:`` block are as
+    inactive as the protocol, and answering them would tell a person to
+    go and commission a device that speaks nothing.
+    """
+    path = write_config(WITHOUT_CREDENTIALS)
+    _init(path)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("    enabled: true", "    enabled: false"),
+        encoding="utf-8",
+    )
+    assert _read(path) is None
+
+
+def test_a_device_with_no_matter_section_reads_as_none(write_config) -> None:
+    path = write_config(WITHOUT_CREDENTIALS.replace("  matter:\n    enabled: true\n", ""))
+    assert _read(path) is None
+
+
+def test_half_a_credential_set_is_not_a_credential_set(write_config) -> None:
+    """A half-finished edit is refused by validation, never half-answered here.
+
+    Two of the three values commission nothing, and answering a tuple
+    with an invented third would be the one thing this package never does
+    with credentials.
+    """
+    path = write_config(WITHOUT_CREDENTIALS)
+    _init(path)
+    kept = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+        if "salt: !secret" not in line
+    ]
+    path.write_text("".join(kept), encoding="utf-8")
+
+    assert _read(path) is None
+
+
+def test_the_published_test_credentials_are_what_that_device_has(write_config) -> None:
+    """``use_test_pairing`` is commissioned with the tuple CHIP publishes.
+
+    It is what that device actually answers to, so it is what a person
+    asking for its codes has to be shown — flagged as the test set, which
+    is what ``test_credentials`` is for.
+    """
+    path = write_config(VALID_CONFIG)
+
+    found = _read(path)
+
+    assert found == pairing.TEST_PAIRING
+    assert found.test_credentials is True
+
+
+def test_reading_a_file_that_is_no_device_configuration_refuses(write_config) -> None:
+    """The same refusal loading it would give: this reads a device file."""
+    path = write_config("- not a device\n")
+    with pytest.raises(ConfigError):
+        _read(path)
+
+
+# --------------------------------------------------------------------------
 # The atomic Kconfig group, from this side of the split
 # --------------------------------------------------------------------------
 
