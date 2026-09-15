@@ -42,6 +42,26 @@ request = api.BuildRequest(model=model, out_dir=out)
 result = await api.build_firmware(request, target="local")
 ```
 
+A client that comes back to a build directory later — a second process, a
+dashboard that restarted, a run tomorrow — reads what is in it instead of
+building again to find out. Every build leaves a record behind, whatever its
+verdict:
+
+```python
+record = api.read_build(out)  # None where no build was ever made
+if record and not record.busy:  # somebody else may be working in there
+    print(record.device, record.artifacts, record.signed)
+    api.clean_build(out, device=record.device)
+```
+
+`read_build` verifies nothing and re-computes no hash — it states what the
+build declared — and `clean_build` removes what a build wrote and leaves
+everything else, holding the directory while it does. Before a build starts,
+`api.build_steps(target=…, options=…)` says which steps it will report through
+`on_step`, so a client can lay its progress out in advance;
+`api.read_pairing(entry, project=project)` shows a device's commissioning codes
+without drawing new ones.
+
 Install the `remote` extra for the build-server client, or `generate` for writing
 a device's Zephyr application tree on this machine without building it.
 
