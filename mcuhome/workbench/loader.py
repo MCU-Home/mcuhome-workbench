@@ -197,8 +197,14 @@ def editing_yaml() -> YAML:
     where the ``!file`` reference stood — replacing a pointer to a secret
     with the secret. This instance writes every ``FileRef`` back as
     ``!file <raw>``, byte-for-byte the reference the user wrote.
+
+    Preserving quotes is the other half of "writing back": a round trip
+    is a promise about the whole file, and a value the user wrote as
+    ``'keep me'`` that comes back as ``keep me`` is an edit they did not
+    ask for, in a line they did not touch.
     """
     yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True
     yaml.representer.add_representer(FileRef, _fileref_representer)
     return yaml
 

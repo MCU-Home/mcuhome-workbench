@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -306,3 +307,18 @@ def test_this_packages_tags_stay_in_this_packages_parser(tmp_path: Path) -> None
     )
     assert str(data["certificate"]) != "the device's own file\n"
     assert data["certificate"].tag.value == "!file", "the tag round-trips as a tag"
+
+
+def test_an_edit_keeps_the_quoting_the_user_wrote(tmp_path: Path) -> None:
+    """A round trip is a promise about the whole file, quotes included."""
+    file = tmp_path / "secrets.yaml"
+    original = "wifi_password: 'keep me'   # the one the router wants\nother: plain\n"
+    file.write_text(original, encoding="utf-8")
+    yaml = editing_yaml()
+
+    data = yaml.load(file.read_text(encoding="utf-8"))
+    data["other"] = "changed"
+    buffer = io.StringIO()
+    yaml.dump(data, buffer)
+
+    assert buffer.getvalue() == original.replace("other: plain", "other: changed")
