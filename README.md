@@ -722,6 +722,48 @@ pins no SDK package. That is honest and it has two consequences: the context is
 bytes it was compiled against — and it is **not remote-buildable**, so sending
 it to a build server is refused before the upload.
 
+## Secrets
+
+Everything a project must not commit lives in its `secrets/` directory, one file
+per kind and name: `secrets/main.yaml` for the values every device shares,
+`secrets/devices/<device>.yaml` for a device's own, `secrets/builder/<name>.yaml`
+for a build server's token, and the firmware signing key with the YAML that
+references it. A device configuration reads a value with `!secret <name>`, its
+own file first and the shared one second.
+
+Six calls are the supported way to look at those files, and **no document any of
+them answers carries a value**:
+
+```python
+for scope in api.find_secret_scopes(project):
+    print(scope.kind, scope.name, scope.exists)
+
+shared = api.read_secrets(project, kind="main")
+for entry in shared.keys:
+    print(entry.key, entry.masked, entry.used_by)  # masked is a constant
+
+api.set_secret(project, kind="main", key="wifi_password", value="…")
+api.unset_secret(project, kind="device", name="thermostat", key="passcode")
+api.delete_secret_file(project, kind="builder", name="attic")
+```
+
+`read_secrets` masks every value with the same constant — a mask that kept the
+length or the first character would be part of the secret — and says for the
+shared file which devices actually read each entry, following the same ladder a
+build follows. `reveal_secret(project, kind=…, key=…)` is the one call that
+answers a value, and it has a verb of its own so that it cannot be made by
+accident.
+
+Writing is a round trip: comments, order and everything else in the file survive
+`set_secret`, the first secret of a scope creates the file with mode 0600, and
+removing the last one leaves an empty file rather than a deleted one.
+`delete_secret_file` removes a whole device or builder file and refuses for the
+project's own two, which are emptied entry by entry instead. Every one of the
+six refuses a secrets file other users can reach, naming the `chmod` that fixes
+it, rather than reading it — and none of them ever prints key material: the
+signing key is a file, drawn by `create_signing_key`, and `set_secret` refuses
+that scope.
+
 ## Security
 
 Firmware is signed on the machine the user controls, never on a build server:
