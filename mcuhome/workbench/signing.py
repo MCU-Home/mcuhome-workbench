@@ -441,7 +441,7 @@ def _refuse_other_key_material(path: Path) -> BuildError:
     )
 
 
-def _refuse_inline_key(file: Path) -> BuildError:
+def refuse_inline_key(file: Path) -> BuildError:
     return BuildError(
         f"The {FIRMWARE_KEY} entry in {file} must be a !file reference to the key file.",
         hint=(
@@ -598,7 +598,7 @@ def _referenced_key(file: Path, data: dict) -> SigningKey | None:
     if value is None:
         return None
     if not isinstance(value, FileRef):
-        raise _refuse_inline_key(file)
+        raise refuse_inline_key(file)
     require_secret_file(value.path, key_material=True)
     if not is_p256_private_key(str(value)):
         raise _refuse_not_a_key(value.path)
