@@ -97,6 +97,7 @@ __all__ = [
     "is_p256_private_key",
     "is_p256_public_key",
     "public_key_pem",
+    "refuse_inline_key",
     "resolve_signing_key",
 ]
 

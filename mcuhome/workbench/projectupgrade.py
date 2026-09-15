@@ -83,6 +83,7 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
 __all__ = [
+    "BUILD_DIR",
     "MigrationFailed",
     "MigrationRefused",
     "RunningBuild",
@@ -92,6 +93,7 @@ __all__ = [
     "UpgradeSession",
     "is_upgrading",
     "find_running_builds",
+    "in_flight_error",
     "open_upgrade_session",
 ]
 

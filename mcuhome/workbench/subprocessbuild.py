@@ -122,6 +122,7 @@ from mcuhome.workbench.packageregistry import RegistrySource
 from mcuhome.workbench.resolve_pins import resolve_package
 
 __all__ = [
+    "BUILDER_INTERPRETER",
     "DEV_WORKSPACE_OPTION",
     "ENTRY_POINT_DIR",
     "TOOLS_ROOT_VAR",

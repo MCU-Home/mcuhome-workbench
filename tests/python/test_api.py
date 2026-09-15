@@ -1,16 +1,23 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The public API surface, and the serialized shape of an error.
+"""The public API surface, the shape of an error, and the lists behind both.
 
-:mod:`mcuhome.workbench.api` is what a program embedding the builder imports, and
-:meth:`mcuhome.model.errors.ConfigError.to_dict` is what it puts in an editor's
-gutter. Both are covered by the SemVer promise, so both are pinned here
-by name and by field, not only by behaviour.
+:mod:`mcuhome.workbench.api` is what a program embedding the builder
+imports, and :meth:`mcuhome.model.errors.ConfigError.to_dict` is what it
+puts in an editor's gutter. Both are what a consumer writes code against,
+so both are pinned here by name and by field, not only by behaviour.
+
+Beside them, the two ``__all__`` rules that keep the surface and the
+package from disagreeing about the same name: what ``api`` republishes is
+public in the module it comes from, and what one module imports from
+another is public there too.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib
+import inspect
 import json
 import os
 import subprocess
@@ -613,3 +620,74 @@ def test_the_supported_surface_pulls_in_no_compiler() -> None:
         f"importing mcuhome.workbench.api now loads {compiler} — a consumer of "
         "the supported surface would need a distribution it can never run"
     )
+
+
+def _where_api_takes_it_from() -> dict[str, tuple[str, str]]:
+    """For every re-exported name: the module it comes from, and its name there.
+
+    Read out of ``api.py`` with :mod:`ast` rather than from the objects,
+    because a constant — a string, a tuple — carries no ``__module__``,
+    and the constants are half of what the surface republishes.
+    """
+    source = ast.parse((REPO_ROOT / "mcuhome" / "workbench" / "api.py").read_text("utf-8"))
+    taken: dict[str, tuple[str, str]] = {}
+    for node in source.body:
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("mcuhome.workbench"):
+            module = node.module.split(".")[-1]  # type: ignore[union-attr]
+            for alias in node.names:
+                taken[alias.asname or alias.name] = (module, alias.name)
+    return taken
+
+
+def test_every_re_exported_name_is_public_in_the_module_it_comes_from() -> None:
+    """The surface republishes; it does not promote.
+
+    Every module here states its own public names in ``__all__``, and a
+    name `api` exports out of one of them has to be among them. Where it
+    is not, two lists disagree about the same name: the module says
+    "internal", the surface says "supported", and the next reader of that
+    module moves or renames it in good faith.
+    """
+    disagreeing = []
+    for exported, (module, name) in sorted(_where_api_takes_it_from().items()):
+        if exported not in api.__all__:
+            continue
+        public = getattr(importlib.import_module(f"mcuhome.workbench.{module}"), "__all__", ())
+        if name not in public:
+            disagreeing.append(f"{module}.{name}")
+    assert not disagreeing, f"{disagreeing} are exported by api and not in their module's __all__"
+
+
+def test_every_name_one_module_takes_from_another_is_public_there() -> None:
+    """``__all__`` is a module's statement of what its neighbours may use.
+
+    The package's modules import from each other, and a list that says
+    less than the imports do is a list nobody can act on: the next reader
+    of a module cannot tell what may be renamed and what three files
+    away depend on. Submodules are not names and are skipped — importing
+    ``migrations.v2_secrets_layout`` reaches for a file, not for
+    something ``migrations`` publishes.
+    """
+    package = REPO_ROOT / "mcuhome" / "workbench"
+    undeclared: list[str] = []
+    for source in sorted(package.rglob("*.py")):
+        for node in ast.walk(ast.parse(source.read_text("utf-8"))):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            if node.level:
+                module = node.module
+            elif node.module.startswith("mcuhome.workbench."):
+                module = node.module.split("mcuhome.workbench.", 1)[1]
+            else:
+                continue
+            if module == "api":
+                continue
+            imported = importlib.import_module(f"mcuhome.workbench.{module}")
+            public = set(getattr(imported, "__all__", ()))
+            for alias in node.names:
+                if alias.name.startswith("_") or alias.name in public:
+                    continue
+                if inspect.ismodule(getattr(imported, alias.name, None)):
+                    continue
+                undeclared.append(f"{module}.{alias.name} (imported by {source.name})")
+    assert not undeclared, f"{sorted(undeclared)} are imported across modules and not in __all__"

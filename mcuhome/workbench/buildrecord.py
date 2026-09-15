@@ -62,6 +62,8 @@ if TYPE_CHECKING:  # pragma: no cover - the build layer imports this module, not
 
 __all__ = [
     "BUILD_RECORD_FILE",
+    "LOCAL_WORK_DIR",
+    "REMOTE_WORK_DIR",
     "BuildRecord",
     "clean_build",
     "read_build",
