@@ -274,6 +274,8 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
             try:
                 _empty_build_dir(directory)
             except OSError as error:
+                # Named one by one: a message that always said the
+                # device's own would send somebody to the wrong path.
                 raise _refuse_unremovable("build directory", directory, error) from error
         if had_build:
             changed.append(build_dir)

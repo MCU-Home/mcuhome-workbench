@@ -625,3 +625,30 @@ def test_a_build_directory_somebody_took_afterwards_is_left_alone(tmp_path: Path
     assert build_dir.is_dir()
     assert discard_build_directory(build_dir), "and it goes once nobody is in it"
     assert not build_dir.exists()
+
+
+def test_a_build_directory_that_will_not_empty_is_named(tmp_path: Path, monkeypatch) -> None:
+    """The refusal names the directory that failed, not the first one.
+
+    A rename empties two directories, the device's and the target's, and
+    a message that always named the first would send somebody to look at
+    the wrong one.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    make_build_output(project, "bench-node")
+    target_dir = project.device_build_dir("kitchen")
+    real = device._empty_build_dir  # noqa: SLF001 - the seam whose refusal is under test
+
+    def refuse(directory: Path) -> None:
+        if directory == target_dir:
+            raise OSError(errno.EACCES, "Permission denied")
+        real(directory)
+
+    monkeypatch.setattr(device, "_empty_build_dir", refuse)
+
+    with pytest.raises(ConfigError) as caught:
+        api.rename_device("bench-node", project=project, to="kitchen")
+
+    assert str(target_dir) in str(caught.value)
+    assert str(project.device_build_dir("bench-node")) not in str(caught.value)
