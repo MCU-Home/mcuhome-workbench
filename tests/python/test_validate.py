@@ -341,7 +341,7 @@ def test_endpoints_without_matter(write_config) -> None:
 
 
 def test_a_transport_alone_does_not_enable_matter(write_config) -> None:
-    """PO 2026-08-15: the matter: block is the opt-in — absence is off.
+    """The `matter:` block is the opt-in — absence is off.
 
     Deleting the block deactivates the device now, loudly, instead of
     the day a second application protocol changes an implied default.
@@ -525,8 +525,8 @@ def test_the_version_reaches_the_kconfig_fragment(write_config) -> None:
 
 
 def test_an_empty_matter_block_is_still_the_opt_in(write_config) -> None:
-    """`matter:` with nothing under it is the block, and the block is the
-    opt-in — every stage answers the same way (review 2026-08-15)."""
+    """`matter:` with nothing under it is the block, and the block is
+    the opt-in — every stage answers the same way."""
     text = VALID_CONFIG.replace(
         "  matter:\n    enabled: true\n    use_test_pairing: true\n", "  matter:\n"
     )

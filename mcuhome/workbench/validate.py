@@ -258,7 +258,7 @@ def _check_network(config: RawConfig, errors: ErrorCollector) -> None:
 
 
 def is_matter_enabled(config: RawConfig) -> bool:
-    """Matter is on exactly when the configuration says so (PO 2026-08-15).
+    """Matter is on exactly when the configuration says so.
 
     The ``matter:`` block is the opt-in — a block that states
     credentials is unmistakably a Matter device, ``enabled:`` line or

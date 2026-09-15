@@ -78,7 +78,7 @@ def test_missing_file_is_reported(tmp_path: Path) -> None:
     assert "does not exist" in caught.value.message
 
 
-# --- !file: a value out of an external file (PO 2026-08-14) -----------
+# --- !file: a value out of an external file ---------------------------
 
 
 def _write(path: Path, text: str) -> Path:

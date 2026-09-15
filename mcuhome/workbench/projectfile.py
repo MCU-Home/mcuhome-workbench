@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The project file: identity and version of a project (PO 2026-08-16).
+"""The project file: identity and version of a project.
 
 ``.mcuhome-project-root`` used to be a marker and nothing else — a
 dotfile whose presence made a directory a project, carrying one comment

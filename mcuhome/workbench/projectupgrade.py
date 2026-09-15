@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Upgrading a project to the current layout (PO 2026-08-16).
+"""Upgrading a project to the current layout.
 
 A project states which layout it speaks
 (:mod:`mcuhome.workbench.projectfile`), and when MCUHome moves past that
@@ -37,8 +37,8 @@ renamed and unusable, and the supported way out is the backup the
 upgrade told the user to make. Re-running half a migration would need
 every migration to be exactly repeatable at every point inside itself —
 a promise no migration can make and a machinery whose own bugs would
-cost more than they save (PO 2026-08-16). A *clean* stop is the
-exception, and it is not a resumption: when the caller asks to stop, the
+cost more than they save. A *clean* stop is the exception, and it is
+not a resumption: when the caller asks to stop, the
 current migration runs to its end, the version reached is written, and
 the file is renamed back. The project is then simply a project of that
 version, and the next upgrade starts there like any other.

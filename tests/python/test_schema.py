@@ -109,7 +109,7 @@ def test_device_name_must_be_hostname_shaped(write_config) -> None:
 
 
 def test_a_digits_only_name_is_refused(write_config) -> None:
-    """A bare all-digit hostname reads as a numeric IP address (PO 2026-08-15)."""
+    """A bare all-digit hostname reads as a numeric IP address."""
     text = VALID_CONFIG.replace("name: bench-node", 'name: "1234"')
     errors = expect_failure(write_config(text))
     error = find_error(errors, "is not a usable device name")

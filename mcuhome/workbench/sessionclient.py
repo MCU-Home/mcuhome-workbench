@@ -504,11 +504,10 @@ class IngressCaps:
     frame_bytes: int = DEFAULT_CHUNK_BYTES
 
     #: The names read out of an announcement, in the order they are
-    #: tried. **This is the wire shape:** the product owner
-    #: fixed the ``capabilities`` payload's ``ingress`` block on the
-    #: names this client had guessed, so one server changed and nothing
-    #: here did. A peer that announces other names, or none, simply
-    #: leaves the defaults in place.
+    #: tried. **This is the wire shape:** the ``capabilities``
+    #: payload's ``ingress`` block carries exactly these names, and a
+    #: peer that announces other names, or none, simply leaves the
+    #: defaults in place.
     _FIELDS = (
         "compressed_bytes",
         "decompressed_bytes",

@@ -18,7 +18,7 @@ the ``!secret`` tag, not of the file it should have been in. Reading the
 secrets file runs the secrets-hygiene permission check: a file other
 users can reach draws a warning through the caller's *on_warning*.
 
-``!file path`` makes a value out of an external file (PO 2026-08-14):
+``!file path`` makes a value out of an external file:
 the value **is** the file's raw content — a :class:`FileRef`, a plain
 ``str`` to every consumer — and the file itself stays reachable as
 ``value.path`` for the consumer that must hand a *file* to an external

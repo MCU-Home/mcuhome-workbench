@@ -173,11 +173,11 @@ def _resolve_network(config: RawConfig) -> NetworkModel:
     elif raw.wifi is not None:  # pragma: no cover - rejected in stage 2
         transport = "wifi"
 
-    # Matter is on exactly when the configuration says so (PO
-    # 2026-08-15): the matter: block is the opt-in, enabled: false the
-    # explicit off switch. A transport alone no longer implies Matter —
-    # a silently-implied protocol would break loudly the day a second
-    # application protocol changes the implication.
+    # Matter is on exactly when the configuration says so: the matter:
+    # block is the opt-in, enabled: false the explicit off switch. A
+    # transport alone no longer implies Matter — a silently-implied
+    # protocol would break loudly the day a second application protocol
+    # changes the implication.
     matter_enabled = raw.matter is not None
     if raw.matter is not None and raw.matter.enabled is not None:
         matter_enabled = raw.matter.enabled

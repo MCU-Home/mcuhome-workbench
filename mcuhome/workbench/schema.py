@@ -771,7 +771,7 @@ def _parse_network(reader: MapReader) -> RawNetwork:
             use_test_pairing=matter_reader.boolean("use_test_pairing"),
         )
     elif reader.has("matter") and reader.data["matter"] is None:
-        # A bare `matter:` line. The block is the opt-in (PO 2026-08-15)
+        # A bare `matter:` line. The block is the opt-in
         # and an empty block is still the block — so it becomes a present,
         # empty RawMatter rather than vanishing into "no section", and
         # every later stage (Matter on, credentials demanded, pairing

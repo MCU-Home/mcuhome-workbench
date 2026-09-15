@@ -73,7 +73,7 @@ def test_a_name_that_cannot_be_a_hostname_is_refused(tmp_path, name: str) -> Non
 
 
 def test_a_single_letter_name_is_allowed(tmp_path) -> None:
-    """The floor is non-empty plus one letter — no length minimum (PO 2026-08-15)."""
+    """The floor is non-empty plus one letter — no length minimum."""
     project = create_project(tmp_path).project
     scaffold.create_device("a", project=project, board=BOARD)
     assert (tmp_path / DEVICES_DIR / "a" / DEVICE_FILE).is_file()

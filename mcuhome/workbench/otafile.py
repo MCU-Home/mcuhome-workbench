@@ -11,8 +11,8 @@ where the user's controlling instance runs, and a detached build's signed
 image therefore only comes into existence during ``mcuhome device sign-firmware``, on a
 machine that has no compiler, no west workspace and no Matter
 SDK. An .ota wraps the *signed* image, so a builder that could only
-produce it during the build could not produce it for the delivery path the
-product owner actually asked for.
+produce it during the build could not produce it for the delivery path
+MCUHome supports: compiled in one place, signed and wrapped in another.
 
 That same sentence is why this module sits beside signing rather than
 inside the compiler package: the machine that wraps an image

@@ -198,8 +198,8 @@ def test_the_declared_dependencies_are_the_ones_the_package_needs() -> None:
     """The runtime set: the model, a line-preserving YAML parser, PEP 440,
     MCUboot's signing tool — the workbench performs the host-side signing
     step, so imgtool is a declared dependency rather than an environment
-    accident (PO 2026-08-15) — a TOML writer for the project file
-    (tomllib reads it, and only reads), a zstd codec, because the
+    accident — a TOML writer for the project file (tomllib reads it,
+    and only reads), a zstd codec, because the
     orchestrator unpacks the SDK package for every container build, and
     the package registry's own reference verifier, because the rules for
     signatures, key rotation and the meta-entry hash have one

@@ -63,7 +63,7 @@ dependencies = [
   "tomli-w>=1.0",
   # MCUboot's own signing tool. The workbench performs the one host-side
   # signing step, so the tool is a declared
-  # dependency rather than an environment accident (PO 2026-08-15).
+  # dependency rather than an environment accident.
   # Pinned to the release line of the MCUboot revision the SDK's west
   # manifest resolves to — bump the two as a pair, like CHIP and Zephyr.
   "imgtool~=2.4",
@@ -79,8 +79,8 @@ dependencies = [
 # is a core dependency now — SDK packages are unpacked on every path.
 # Bound matches the build server's for the same library.
 remote = ["aiohttp>=3.10,<4"]
-# `generate_tree` and nothing else: writing a device's Zephyr application
-# on this machine, for the caller who wants the tree for its own sake
+# `generate_application` and nothing else: writing a device's Zephyr
+# application on this machine, for the caller who wants the tree for its own sake
 # (`mcuhome device build --generate-only`). No build needs it — a
 # build environment generates from the model its context carries — so it
 # is an optional edge resolved at call time, and an
@@ -127,7 +127,8 @@ packages = ["mcuhome.workbench", "mcuhome.workbench.migrations"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-# ADRs are prose; ruff format would rewrite fenced code blocks.
+# docs/ is prose documentation; ruff format would rewrite the fenced
+# Python examples in docs/api.md.
 extend-exclude = ["docs/"]
 
 [tool.ruff.lint]

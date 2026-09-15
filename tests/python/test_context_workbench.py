@@ -419,7 +419,7 @@ def test_patches_pass_through_as_ordinary_integrity_entries(model, tmp_path: Pat
 
 
 def test_the_facts_of_a_context_name_its_pins_and_its_patches(model, tmp_path: Path) -> None:
-    """What a build says about the context it just wrote (PO 2026-08-16).
+    """What a build says about the context it just wrote.
 
     Read back off the directory, so what a person is shown is what the
     build environment receives — including *which* patches ride along,

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""One build directory, one operation at a time (PO 2026-08-16).
+"""One build directory, one operation at a time.
 
 A build directory is a working area, not an archive: every build
 wipes and rebuilds its scratch tree at the start of a run, because a

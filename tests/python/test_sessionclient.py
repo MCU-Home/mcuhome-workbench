@@ -1340,8 +1340,7 @@ def test_a_wrong_context_id_closes_the_session_and_raises(tmp_path: Path) -> Non
 def test_no_frame_this_client_sends_carries_the_private_signing_key(tmp_path: Path) -> None:
     """The security invariant, in its sharpest form.
 
-    As the product owner restated it on 2026-08-10:
-    the private signing key never leaves the local machine. For the
+    The private signing key never leaves the local machine. For the
     ``remote`` target that means it appears in **no frame sent to the
     build server** — the server is not trusted, which is the whole reason
     the build returns an unsigned image and the host signs afterwards.

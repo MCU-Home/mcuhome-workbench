@@ -16,16 +16,15 @@ so the credentials are drawn once, written down, and are ordinary
 configuration input from then on. Nothing is stored anywhere else: no
 state directory, no cache, no log file. The values are security-relevant
 and ``main.yaml`` is the file a project commits, so they never land
-there (PO 2026-08-15): ``main.yaml`` gets ``!secret`` references, the
-values themselves go to the device's own ``secrets/device/<name>.yaml``
-— the per-device rung of the loader's secrets ladder.
+there: ``main.yaml`` gets ``!secret`` references, the values themselves
+go to the device's own ``secrets/device/<name>.yaml`` — the per-device
+rung of the loader's secrets ladder.
 
-**Matter has to be on.** Under the explicit-opt-in default (PO
-2026-08-15, yaml-schema.md §4) an absent ``matter:`` block means Matter
-is off, and a command that silently switched a protocol on while writing
-credentials would decide something the configuration's author did not —
-so both the absent block and ``enabled: false`` are refusals that say
-what to write.
+**Matter has to be on.** Under the explicit-opt-in default an absent
+``matter:`` block means Matter is off, and a command that silently
+switched a protocol on while writing credentials would decide something
+the configuration's author did not — so both the absent block and
+``enabled: false`` are refusals that say what to write.
 
 **The file is edited, not rewritten.** A YAML round-trip that
 re-serializes the document reflows indentation and moves comments, which
@@ -123,7 +122,7 @@ def secret_names() -> dict[str, str]:
     Plain, unprefixed names: the file is the device's own
     (``secrets/device/<name>.yaml``), so there is nothing to
     disambiguate — the old per-device slug prefix retired with the
-    shared secrets file (PO 2026-08-15).
+    shared secrets file.
     """
     return {key: f"matter_{key}" for key in PAIRING_KEYS}
 
@@ -221,9 +220,9 @@ def _find_anchor(data: Any, text: _Text, entry: Path) -> _Anchor:
         )
 
     if "matter" not in network:
-        # Under the explicit-opt-in default (PO 2026-08-15) an absent
-        # block means Matter is off — writing one here would switch a
-        # protocol on behind the author's back.
+        # Under the explicit-opt-in default an absent block means
+        # Matter is off — writing one here would switch a protocol on
+        # behind the author's back.
         raise _refuse(
             "Matter is off for this device (there is no matter: section), so there "
             "is nothing to draw commissioning credentials for.",

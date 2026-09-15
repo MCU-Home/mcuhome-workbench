@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Project migrations: one module per project version (PO 2026-08-16).
+"""Project migrations: one module per project version.
 
 A project states which layout it speaks
 (:data:`~mcuhome.workbench.projectfile.PROJECT_VERSION`), and when MCUHome

@@ -84,8 +84,8 @@ def test_init_pairing_only_adds_lines(write_config) -> None:
 
     added = [line for line in after if line not in before or after.count(line) > before.count(line)]
     assert [line for line in after if line not in added] == before
-    # References only — the values themselves are in the secrets file
-    # (PO 2026-08-15, security-relevant values never in the committable file).
+    # References only — the values themselves are in the secrets file,
+    # because security-relevant values never belong in the committable file.
     assert added == [
         *[f"    {line}" for line in provision.CREDENTIAL_COMMENT],
         "    discriminator: !secret matter_discriminator",
@@ -197,8 +197,8 @@ def test_a_matter_section_that_is_only_a_key_still_works(write_config) -> None:
 
 
 def test_a_configuration_without_a_matter_section_is_refused(write_config) -> None:
-    """PO 2026-08-15: absence means off, and a credentials command must
-    not switch a protocol on behind the author's back."""
+    """Absence means off, and a credentials command must not switch a
+    protocol on behind the author's back."""
     path = write_config(WITHOUT_CREDENTIALS.replace("  matter:\n    enabled: true\n", ""))
     before = path.read_text(encoding="utf-8")
     with pytest.raises(ConfigError) as caught:
