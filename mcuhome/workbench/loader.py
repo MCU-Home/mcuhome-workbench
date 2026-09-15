@@ -54,9 +54,11 @@ __all__ = [
     "editing_yaml",
     "in_project_layout",
     "load_config",
+    "read_editable_yaml",
     "read_yaml_file",
     "require_folder_name",
     "resolve_secrets",
+    "secret_references",
 ]
 
 
@@ -209,10 +211,28 @@ def editing_yaml() -> YAML:
     return yaml
 
 
-def read_yaml_file(path: Path) -> Any:
-    """Parse one YAML file, turning parser failures into config errors."""
+def _not_valid_yaml(exc: YAMLError, path: Path) -> ConfigError:
+    """The parser's complaint, at the line it happened on."""
+    mark = getattr(exc, "problem_mark", None)
+    problem = getattr(exc, "problem", None) or "the file is not valid YAML"
+    return ConfigError(
+        f"This file is not valid YAML: {problem}.",
+        location=Location(
+            file=path,
+            line=(mark.line + 1) if mark is not None else None,
+            column=(mark.column + 1) if mark is not None else None,
+        ),
+        hint=(
+            "YAML is indentation-sensitive: check that the line above is indented "
+            "with spaces (never tabs) and that every key ends with a colon"
+        ),
+    )
+
+
+def _text_of(path: Path) -> str:
+    """The file's text, with the two ways of not having one said in words."""
     try:
-        text = path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ConfigError(
             f'The configuration file "{path}" does not exist.',
@@ -225,23 +245,63 @@ def read_yaml_file(path: Path) -> Any:
             location=Location(file=path),
         ) from exc
 
+
+def read_editable_yaml(path: Path) -> Any:
+    """Parse one YAML file the way a writer of it has to: tags stay tags.
+
+    The counterpart of :func:`read_yaml_file` for a caller that is about
+    to *edit* the file, or that only wants to know which keys are in it:
+    the round-trip parser keeps comments, order and unknown tags, and no
+    ``!file`` is followed. The second half is the point wherever the file
+    holds key material — reading the name of an entry must not read the
+    private key it points at — and it is what makes a write through
+    :func:`editing_yaml` reproduce the reference instead of the content.
+
+    The value of a tagged entry is therefore ruamel's own
+    ``TaggedScalar``, not a :class:`FileRef`: it round-trips, and a
+    caller that means to answer a value refuses it rather than printing
+    a path as if it were one.
+    """
+    text = _text_of(path)
+    try:
+        return editing_yaml().load(text)
+    except YAMLError as exc:
+        raise _not_valid_yaml(exc, path) from exc
+
+
+def secret_references(data: Any) -> tuple[str, ...]:
+    """Every ``!secret`` name *data* refers to, in the order they appear.
+
+    Reads a parsed device configuration — :func:`read_yaml_file`'s
+    answer, before :func:`resolve_secrets` has replaced anything — and
+    answers the names, deduplicated. That is what makes "which devices
+    use this secret" a fact rather than a guess: the list comes from the
+    same references a build resolves.
+    """
+    found: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, SecretRef):
+            if value.name not in found:
+                found.append(value.name)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(data)
+    return tuple(found)
+
+
+def read_yaml_file(path: Path) -> Any:
+    """Parse one YAML file, turning parser failures into config errors."""
+    text = _text_of(path)
     try:
         return _yaml(path).load(text)
     except YAMLError as exc:
-        mark = getattr(exc, "problem_mark", None)
-        problem = getattr(exc, "problem", None) or "the file is not valid YAML"
-        raise ConfigError(
-            f"This file is not valid YAML: {problem}.",
-            location=Location(
-                file=path,
-                line=(mark.line + 1) if mark is not None else None,
-                column=(mark.column + 1) if mark is not None else None,
-            ),
-            hint=(
-                "YAML is indentation-sensitive: check that the line above is indented "
-                "with spaces (never tabs) and that every key ends with a colon"
-            ),
-        ) from exc
+        raise _not_valid_yaml(exc, path) from exc
 
 
 def in_project_layout(entry: Path, *, secrets_file: Path) -> bool:

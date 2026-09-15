@@ -372,9 +372,45 @@ refuses for `main` and `signing`, which are the project's own and are
 emptied key by key rather than removed under a user's feet.
 
 Every one of them calls `require_secret_file` first, so an exposed file
-is refused rather than read. `ConfigError` names the file for a scope
+is refused rather than read — with `key_material=True`, which is
+stricter than the build path: a build only *warns* about a readable
+`secrets/main.yaml`, while a call whose whole subject is those values
+does not hand them out of a file that is already handing them to
+everybody else. `ConfigError` names the file for a scope
 that does not exist, a kind outside `SECRET_KINDS`, or a key a file does
 not hold.
+
+A **scope** is a place, not a file. `main` and `signing` are always
+scopes of a project and take no *name*; a `device` scope is one of the
+project's devices, or a leftover file of a device that was deleted, and
+any other name is refused with the devices the project has; a `builder`
+scope is any plain name, because which builders exist is a question for
+the configuration ladder and no call here reads one. A *name* is one
+plain word — it becomes a file name in `secrets/`. Reading a scope whose
+file does not exist answers no keys and `exists: false` rather than
+refusing, so a client can open a scope it just listed; `reveal_secret` is
+the one read that refuses there, because there is no value to answer.
+
+The **mask** is a constant, the same string for every entry. It is not a
+redaction of the value: a mask that kept the length, the first character
+or the sameness of two values would put part of the secret into every
+document that shows it.
+
+The **signing** scope is the key file's YAML reference, and key material
+is neither printed nor typed in: `read_secrets` lists the entry that
+points at the key (no `!file` reference is ever followed, so not a byte
+of the key is read), `reveal_secret` refuses it, and `set_secret` refuses
+the scope outright and names `create_signing_key`, which is what draws a
+key. `unset_secret` removes the reference like any other entry and leaves
+the key file on disk.
+
+`set_secret` and `unset_secret` are round trips: comments, order, blank
+lines, quoting and every other entry survive the edit, and a new key is
+appended. Removing the **last** entry leaves an empty file — not a
+deleted one and not a `{}` — because the file is the user's and the call
+was asked to remove one secret. `reveal_secret` answers a number or a
+boolean as the file spells it, and an entry with no value at all as the
+empty string.
 
 `SecretScope` (frozen): `kind`, `name` (empty for `main` and `signing`),
 `file`, `exists`, `to_dict()`.
@@ -1789,6 +1825,15 @@ sdk_max_bytes, workspace_max_bytes, tools_max_bytes, cache_root,
 cache_local, cache_shared, cache_session, cache_project, sources}` —
 every key of the section, `null` where nobody configured one, and
 `sources` saying where each value came from by the key's leaf name.
+`SecretScope.to_dict()`: `{kind, name, file, exists}` — where one
+secrets file is and whether it is there. A scope is a location, so this
+document carries neither a key nor a value.
+`SecretKey.to_dict()`: `{key, masked, used_by}` — `masked` is the
+constant above and never a part of the value; `used_by` names the
+devices whose `!secret` references reach this entry, the shared file's
+entry being shadowed by a device's own file of the same name.
+`SecretFile.to_dict()`: `{scope, keys}` — one file, as its scope and its
+entries in the order the file spells them.
 `Project.to_dict()`: `{root, id, discovered, version}` — `version` is the
 layout version the project's file states, `null` for the stand-in
 project a device file outside any project gets.

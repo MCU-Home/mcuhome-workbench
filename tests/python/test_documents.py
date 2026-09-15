@@ -217,6 +217,15 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         token="s3cret",
         container_image=None,
     ),
+    "SecretFile": lambda: api.SecretFile(
+        scope=SAMPLES["SecretScope"](), keys=(SAMPLES["SecretKey"](),)
+    ),
+    "SecretKey": lambda: api.SecretKey(
+        key="wifi_password", masked="********", used_by=("thermostat",)
+    ),
+    "SecretScope": lambda: api.SecretScope(
+        kind="main", name="", file=ROOT / "secrets" / "main.yaml", exists=True
+    ),
     "Setting": lambda: SETTINGS.setting("build.mode"),
     "SignPlan": lambda: api.SignPlan(
         out_dir=ROOT / "build" / "thermostat",

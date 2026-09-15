@@ -174,13 +174,23 @@ class Project:
         """``secrets/firmware/mcuboot.yaml`` — the signing key's home."""
         return self.secrets_dir / "firmware" / "mcuboot.yaml"
 
+    @property
+    def builder_secrets_dir(self) -> Path:
+        """Where one builder's credentials file lives, by builder name."""
+        return self.secrets_dir / BUILDER_SECRETS_DIR
+
+    @property
+    def device_secrets_dir(self) -> Path:
+        """Where one device's secrets file lives, by device name."""
+        return self.secrets_dir / DEVICES_DIR
+
     def builder_secrets_file(self, name: str) -> Path:
         """``secrets/builder/<name>.yaml`` — one builder's credentials."""
-        return self.secrets_dir / BUILDER_SECRETS_DIR / f"{name}.yaml"
+        return self.builder_secrets_dir / f"{name}.yaml"
 
     def device_secrets_file(self, name: str) -> Path:
-        """``secrets/devices/<name>.yaml`` — per-device secrets (reserved)."""
-        return self.secrets_dir / DEVICES_DIR / f"{name}.yaml"
+        """``secrets/devices/<name>.yaml`` — one device's own secrets."""
+        return self.device_secrets_dir / f"{name}.yaml"
 
     def device_entry(self, name: str) -> Path:
         return self.devices_dir / name / DEVICE_FILE

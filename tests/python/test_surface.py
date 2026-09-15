@@ -56,17 +56,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # Secrets management.
-    "SECRET_KINDS": "secrets management",
-    "SecretFile": "secrets management",
-    "SecretKey": "secrets management",
-    "SecretScope": "secrets management",
-    "delete_secret_file": "secrets management",
-    "find_secret_scopes": "secrets management",
-    "read_secrets": "secrets management",
-    "reveal_secret": "secrets management",
-    "set_secret": "secrets management",
-    "unset_secret": "secrets management",
     # Device lifecycle.
     "LOCK_OPERATIONS": "device lifecycle",
     "delete_device": "device lifecycle",
