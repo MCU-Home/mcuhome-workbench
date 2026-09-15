@@ -351,7 +351,7 @@ def _scope_file(project: Project, kind: str, name: str) -> Path:
 
 #: What a device or a builder may be called, and therefore what a scope
 #: may be called: the rule
-#: :func:`~mcuhome.workbench.builders.builders_of` already holds a
+#: :func:`~mcuhome.workbench.builders.parse_builders` already holds a
 #: builder name to, and a superset of the device-name rule
 #: :func:`~mcuhome.workbench.scaffold.create_device` holds a device to
 #: (which demands a letter on top of it, because a device name becomes a

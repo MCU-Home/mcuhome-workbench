@@ -1309,7 +1309,7 @@ the refusals (`PackageRegistryError`, `TrustAnchorMissing`) therefore
 arrive at the point of use, not here. `fetch_sdk_package` raises
 `SdkUnavailable` when no source holds the pinned package and
 `PackageRegistryError` when a registry answered something unusable; it
-answers an `AcquiredPackage(version, source, tree, name)`.
+answers an `AcquiredPackage(version, sha256, source, tree, name)`.
 `resolve_package` raises `SdkUnavailable` for a constraint no published
 version satisfies and answers a `ResolvedPackage(name, version, file,
 sha256, size)`. Its *source* is the shelf inside a registry the package
@@ -2022,12 +2022,18 @@ the container command line are implementation detail and change without
 notice. A program that imports them is not covered by anything in this
 document.
 
-The re-exported device-model names track exactly the `mcuhome.model`
-version range this package declares as its dependency in
-`pyproject.toml`; that range is what an embedder pins beside this
-package, and a model release outside it is not covered by this document.
-`MODEL_PACKAGE_VERSION` answers which one is installed, `MODEL_VERSION`
-the model format it writes.
+The re-exported device-model names track the `mcuhome.model` of the same
+0.x development line as this package: before 1.0 the workbench and the
+SDK move together, and a name here is the name that package carries in
+the release this one was built against. The dependency in
+`pyproject.toml` is deliberately unbounded while neither package is
+published — every install, development and CI alike, is a checkout of
+the sibling repository, and a version range would name releases no index
+serves. From 1.0 on that edge becomes `~=X.Y.0` — the same major.minor
+family, newest patch — and that family is then the range these names
+track and what an embedder pins beside this package.
+`MODEL_PACKAGE_VERSION` answers which model package is installed,
+`MODEL_VERSION` the model format it writes.
 
 ### The seams MCUHome's own tests use
 The `mcuhome` command line and the build server import from `api` and

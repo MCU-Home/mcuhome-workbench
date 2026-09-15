@@ -99,8 +99,9 @@ so a configuration error arrives in an editor as a marker.
 
 This repository has its own virtual environment in `.venv/`; nothing is
 installed into the system Python or into another repository's environment.
-`bin/` holds the user-facing entry points, `scripts/` the development
-tooling: `scripts/test` and `scripts/lint` dispatch the checks — `all` runs
+It is a library and has no command of its own — `mcuhome-cli` is the command
+line over it — so `scripts/` holds the development tooling and nothing
+else: `scripts/test` and `scripts/lint` dispatch the checks — `all` runs
 every one, `list` names them, `<name>` runs one — and each check is its own
 wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
 `.venv` themselves (never activate one by hand) and are exactly what CI

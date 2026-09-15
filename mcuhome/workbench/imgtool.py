@@ -76,7 +76,7 @@ __all__ = [
     "BUILD_REPORT_FILE",
     "REPORT_VERSION",
     "SIGNED_FIRMWARE_NAMES",
-    "Runner",
+    "SigningRunner",
     "SignPlan",
     "SignedArtifact",
     "SigningResult",
@@ -116,10 +116,11 @@ SIGNED_FIRMWARE_NAMES = (
 
 #: Runs one imgtool invocation and answers with its exit status and
 #: whatever it printed. Injectable so the test suite can watch the
-#: commands without starting a process — the same shape
-#: :mod:`mcuhome.workbench.containerbuild` uses for the container
-#: runtime.
-Runner = Callable[[list[str]], tuple[int, str]]
+#: commands without starting a process. Named for what it runs:
+#: :data:`mcuhome.workbench.buildprocess.Runner` is the other callable of
+#: this kind in the package and answers a different type, and two aliases
+#: under one word would be read as one thing.
+SigningRunner = Callable[[list[str]], tuple[int, str]]
 
 
 def find_imgtool(*, env: dict[str, str], stated: str | None = None) -> list[str] | None:
@@ -476,7 +477,7 @@ def sign_firmware(
     )
 
 
-def run_signing(plan: SignPlan, *, runner: Runner | None = None) -> list[Path]:
+def run_signing(plan: SignPlan, *, runner: SigningRunner | None = None) -> list[Path]:
     """Run every command of *plan*, or raise with imgtool's own words.
 
     *runner* exists for the test suite; the default really does start
