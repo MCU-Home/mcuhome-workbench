@@ -44,7 +44,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from mcuhome.model.errors import ConfigError, Location
+from mcuhome.model.errors import Location
 
 from mcuhome.workbench.projectfile import ProjectFile
 
@@ -192,7 +192,12 @@ def _check_signing(secrets: Path) -> None:
         # has for it — the shape is the same question wherever it is met.
         from mcuhome.workbench.signing import refuse_inline_key
 
-        raise refuse_inline_key(secrets_file)
+        stated = refuse_inline_key(secrets_file)
+        raise _refused(
+            stated.message,
+            location=Location(file=secrets_file, key=_SIGNING_KEY_ENTRY),
+            hint=stated.hint or "",
+        )
 
     referenced = _referenced_name(data)
     if referenced is None:
@@ -251,8 +256,21 @@ def _key_material(directory: Path, *, ignoring: set[str]) -> Path | None:
 _UPGRADE_AGAIN = "then run the upgrade again:\n    mcuhome project upgrade"
 
 
-def _refuse_link(path: Path) -> ConfigError:
-    return ConfigError(
+def _refused(message: str, *, location: Location, hint: str) -> Exception:
+    """Every preflight refusal, in the one type that says "nothing moved".
+
+    Imported inside the call, for the reason :func:`_read_editable_yaml`
+    gives. The type is what the upgrade reads: a refusal from the look
+    this migration takes before its first write puts the project back
+    instead of leaving it marked mid-upgrade.
+    """
+    from mcuhome.workbench.projectupgrade import MigrationRefused
+
+    return MigrationRefused(message, location=location, hint=hint)
+
+
+def _refuse_link(path: Path) -> Exception:
+    return _refused(
         f"MCUHome will not move the secrets through a link: {path} is one.",
         location=Location(file=path),
         hint=(
@@ -263,16 +281,16 @@ def _refuse_link(path: Path) -> ConfigError:
     )
 
 
-def _refuse_not_a_directory(path: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_not_a_directory(path: Path) -> Exception:
+    return _refused(
         f"{path} is a file, and the upgrade needs it to be a directory of secrets.",
         location=Location(file=path),
         hint=f"move that file out of secrets/ or rename it, {_UPGRADE_AGAIN}",
     )
 
 
-def _refuse_two_signing_directories(old: Path, new: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_two_signing_directories(old: Path, new: Path) -> Exception:
+    return _refused(
         f"This project keeps signing secrets in two directories: {old} and {new}.",
         location=Location(file=old),
         hint=(
@@ -283,8 +301,8 @@ def _refuse_two_signing_directories(old: Path, new: Path) -> ConfigError:
     )
 
 
-def _refuse_two_files(old: Path, new: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_two_files(old: Path, new: Path) -> Exception:
+    return _refused(
         f"The signing directory holds two files for the same thing: {old.name} and {new.name}.",
         location=Location(file=old),
         hint=(
@@ -295,8 +313,8 @@ def _refuse_two_files(old: Path, new: Path) -> ConfigError:
     )
 
 
-def _refuse_two_keys(referenced: Path, other: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_two_keys(referenced: Path, other: Path) -> Exception:
+    return _refused(
         f"This project holds two signing keys: {referenced} (the one it points at) and {other}.",
         location=Location(file=other),
         hint=(
@@ -307,8 +325,8 @@ def _refuse_two_keys(referenced: Path, other: Path) -> ConfigError:
     )
 
 
-def _refuse_other_key_material(path: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_other_key_material(path: Path) -> Exception:
+    return _refused(
         f"{path} holds a signing key under a name MCUHome does not use, and nothing points at it.",
         location=Location(file=path),
         hint=(
@@ -320,8 +338,8 @@ def _refuse_other_key_material(path: Path) -> ConfigError:
     )
 
 
-def _refuse_dangling_reference(secrets_file: Path, key: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_dangling_reference(secrets_file: Path, key: Path) -> Exception:
+    return _refused(
         f"{secrets_file} points at the signing key {key.name}, and that file is not there.",
         location=Location(file=secrets_file, key=_SIGNING_KEY_ENTRY),
         hint=(
@@ -334,8 +352,8 @@ def _refuse_dangling_reference(secrets_file: Path, key: Path) -> ConfigError:
     )
 
 
-def _refuse_not_a_mapping(secrets_file: Path) -> ConfigError:
-    return ConfigError(
+def _refuse_not_a_mapping(secrets_file: Path) -> Exception:
+    return _refused(
         f"{secrets_file} is not a mapping of `name: value` pairs.",
         location=Location(file=secrets_file, line=1, column=1),
         hint=(

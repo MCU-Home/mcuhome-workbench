@@ -37,6 +37,7 @@ from mcuhome.workbench.projectfile import (
 )
 from mcuhome.workbench.projectupgrade import (
     MigrationFailed,
+    MigrationRefused,
     UpgradeInProgress,
     UpgradeInterrupted,
     find_running_builds,
@@ -574,13 +575,14 @@ def test_a_key_the_user_keeps_somewhere_else_is_left_as_it_is(tmp_path: Path) ->
 def refusal_of(root: Path) -> str:
     """Run the real upgrade on *root* and answer what the user is told.
 
-    A migration that refuses reaches the user through ``MigrationFailed``,
-    whose own message quotes the refusal whole — message and hint — so
-    this is the text a person reads.
+    A migration that refuses before it changes anything raises
+    :class:`MigrationRefused`, and the upgrade lets it through as it is,
+    so what a person reads is the migration's own message and hint.
     """
-    with pytest.raises(MigrationFailed) as caught, open_upgrade_session(root) as session:
+    with pytest.raises(MigrationRefused) as caught, open_upgrade_session(root) as session:
         session.apply()
-    return caught.value.message
+    error = caught.value
+    return f"{error.message}\n{error.hint or ''}"
 
 
 def test_two_signing_directories_are_refused_and_nothing_is_moved(tmp_path: Path) -> None:
@@ -822,3 +824,57 @@ def test_a_device_file_that_could_not_move_stays_where_it_was(tmp_path: Path) ->
     left = secrets / "devices" / "porch.yaml"
     assert left.is_file(), "the old directory stays, holding what could not move"
     assert left.read_text(encoding="utf-8") == "device_label: porch\n"
+
+
+def test_a_refused_upgrade_leaves_a_project_that_can_be_upgraded(tmp_path: Path) -> None:
+    """The point of the second outcome: nothing moved, so nothing is stuck.
+
+    A refusal from the migration's own look at the project must not cost
+    the user their project file — they fix what the refusal names and run
+    the upgrade again. The project is therefore exactly what it was: the
+    marker is back under its own name, and every command says what it
+    said before, "this project needs an upgrade".
+    """
+    root = v1_project(tmp_path / "old")
+    _write_secret(root / "secrets" / "firmware" / "vendor.pem", generate_key_pem())
+
+    with pytest.raises(MigrationRefused), open_upgrade_session(root) as session:
+        session.apply()
+
+    assert (root / PROJECT_MARKER_FILE).is_file(), "the marker is back"
+    assert not (root / UPGRADE_MARKER_FILE).exists()
+    assert read_project_file(root / PROJECT_MARKER_FILE, root=root).upgrade is None
+    with pytest.raises(ProjectUpgradeRequired):
+        resolve_project(root, env={}, cwd=tmp_path)
+
+    # And the way out is the one the refusal names, not a backup.
+    (root / "secrets" / "firmware" / "vendor.pem").unlink()
+    upgrade(root)
+    assert resolve_project(root, env={}, cwd=tmp_path).file.version == PROJECT_VERSION
+
+
+def test_a_migration_that_already_moved_something_still_leaves_it_marked(
+    tmp_path: Path,
+) -> None:
+    """The other outcome keeps its meaning: a failure is not a refusal."""
+    root = v1_project(tmp_path / "old")
+
+    def half_way(root_path: Path, _file: ProjectFile) -> ProjectFile:
+        (root_path / "secrets" / "devices").replace(root_path / "secrets" / "device")
+        raise RuntimeError("disk is on fire")
+
+    broken = Migration(
+        from_version=1,
+        to_version=2,
+        name="half-way",
+        description="fail after moving",
+        details="x\ny",
+        run=half_way,
+    )
+    with pytest.raises(MigrationFailed), open_upgrade_session(root) as session:
+        session.plan = (broken,)
+        session.apply()
+
+    assert (root / UPGRADE_MARKER_FILE).is_file(), "a started migration leaves it marked"
+    with pytest.raises(UpgradeInterrupted):
+        resolve_project(root, env={}, cwd=tmp_path)

@@ -1485,13 +1485,22 @@ approves and the `details` they read afterwards.
 A migration **decides before it changes anything**: a project it cannot
 migrate without guessing — two signing keys, a reference to a key that is
 not there, a link where a directory belongs — is refused with the file
-and the one thing to do about it, before the first file is touched, and
-`MigrationFailed` carries that refusal whole. What passes is then applied
-idempotently: every step skips what is already in the shape it produces,
-so a run that was interrupted anywhere finishes on the next attempt and a
-project that is already migrated is not touched. `UpgradeInterrupted`
-keeps its meaning for the project marker, not for what a migration
-moved.
+and the one thing to do about it, before the first file is touched.
+
+A step that does not go through therefore has two outcomes, and they are
+different exceptions because they leave different projects behind:
+
+| | `MigrationRefused` | `MigrationFailed` |
+|---|---|---|
+| when | the migration's own look at the project, before its first write | after it started moving |
+| the project | untouched | possibly half-migrated |
+| the marker | put back — `resolve_project` answers `ProjectUpgradeRequired` again | stays renamed — every command answers `UpgradeInterrupted` |
+| the way out | fix what the refusal names, run the upgrade again | restore the backup |
+
+What passes is then applied idempotently: every step skips what is
+already in the shape it produces, so a run that was interrupted anywhere
+finishes on the next attempt and a project that is already migrated is
+not touched.
 
 `UpgradeSession` — `root`, `file`, `path`, `plan`, `from_version`,
 `failed`; `running_builds()`, `apply(*, on_step=None, should_stop=None)
@@ -1499,8 +1508,8 @@ moved.
 `migration_done` with the facts `name`, `from_version`, `to_version`;
 `should_stop` is polled between migrations, and a stopped run answers
 `UpgradeResult.stopped` with the migrations it did not reach in
-`remaining`. Raises `MigrationFailed`, `UpgradeInProgress`,
-`UpgradeInterrupted`.
+`remaining`. Raises `MigrationRefused`, `MigrationFailed`,
+`UpgradeInProgress`, `UpgradeInterrupted`.
 
 `UpgradeResult` (frozen): `from_version`, `to_version`, `applied`,
 `stopped`, `remaining`, `to_dict()`.
@@ -1568,7 +1577,8 @@ with file paths relative to *root* where one is given.
 | `ProjectVersionUnsupported` | `ProjectFileError` | it is newer |
 | `UpgradeInProgress` | `ProjectFileError` | an upgrade is running |
 | `UpgradeInterrupted` | `ProjectFileError` | one was interrupted |
-| `MigrationFailed` | `MCUHomeError` | a migration refused or failed |
+| `MigrationFailed` | `MCUHomeError` | a migration stopped after it had started moving; the project is left mid-upgrade |
+| `MigrationRefused` | `MCUHomeError` | a migration refused before changing anything; the project is untouched |
 
 `Location` (frozen, re-exported): `file`, `line`, `column`, `key`.
 
@@ -2127,7 +2137,8 @@ this package is public.
 `RemoteTransportError`, `ServerRefusal`, `WaitedTooLong`,
 `ContextIdMismatch`, `ContextTooLarge`, `PrivateKeyRefused`,
 `ProjectFileError`, `ProjectUpgradeRequired`, `ProjectVersionUnsupported`,
-`UpgradeInProgress`, `UpgradeInterrupted`, `MigrationFailed`.
+`UpgradeInProgress`, `UpgradeInterrupted`, `MigrationFailed`,
+`MigrationRefused`.
 
 **Constants** — `VERSION`, `MODEL_VERSION`, `MODEL_PACKAGE_VERSION`,
 `PROJECT_VERSION`, `SPEC_GENERATION`, `PROJECT_MARKER_FILE`,

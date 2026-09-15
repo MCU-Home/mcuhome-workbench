@@ -84,6 +84,7 @@ except ImportError:  # pragma: no cover - Windows
 
 __all__ = [
     "MigrationFailed",
+    "MigrationRefused",
     "RunningBuild",
     "UpgradeInterrupted",
     "UpgradeInProgress",
@@ -108,6 +109,21 @@ class UpgradeInterrupted(ConfigError):
 
 class MigrationFailed(ConfigError):
     """A migration stopped part-way. The project is left mid-upgrade."""
+
+
+class MigrationRefused(ConfigError):
+    """A migration refused **before** changing anything.
+
+    The other outcome of a step that does not go through, and a different
+    one in every way that matters to the person in front of it: nothing
+    was moved, nothing is half-done, and the project is exactly what it
+    was. A migration raises this from its own look at the project —
+    before its first write — when what it finds cannot be migrated
+    without guessing, and it names the file and what to do about it. The
+    upgrade then puts the project back rather than leaving it marked, so
+    the way out is to fix the file and run the upgrade again, not to
+    restore a backup.
+    """
 
 
 @dataclass(frozen=True)
@@ -301,6 +317,12 @@ class UpgradeSession:
         running finishes, its version is written, and the upgrade ends
         there cleanly.
 
+        A migration that raises :class:`MigrationRefused` changed nothing:
+        the plan and the project's version stay as they were, the project
+        file is put back, and the refusal propagates. Anything else a
+        migration raises is a :class:`MigrationFailed` — it may have
+        moved something already, so the project stays marked.
+
         *on_step* is the progress channel every long operation of this
         package uses — a key and, as keyword facts, what the step is
         about. Here the keys are ``migration_started`` and
@@ -320,6 +342,13 @@ class UpgradeSession:
             _report(on_step, "migration_started", migration)
             try:
                 produced = migration.run(self.root, self.file)
+            except MigrationRefused:
+                # Nothing was applied: the migration looked at the project
+                # and said no before its first write. :attr:`failed` stays
+                # unset, so the session puts the project file back on the
+                # way out and the refusal reaches the caller as it is —
+                # with its own hint, which names the fix.
+                raise
             except MCUHomeError as error:
                 self.failed = migration
                 raise self._failure(migration, str(error)) from error

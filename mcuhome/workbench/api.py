@@ -348,6 +348,7 @@ from mcuhome.workbench.projectfile import (
 )
 from mcuhome.workbench.projectupgrade import (
     MigrationFailed,
+    MigrationRefused,
     RunningBuild,
     UpgradeInProgress,
     UpgradeInterrupted,
@@ -526,6 +527,7 @@ __all__ = [
     "MODE_SUBPROCESS",
     "Migration",
     "MigrationFailed",
+    "MigrationRefused",
     "NewDevice",
     "NewPairing",
     "NewProject",
