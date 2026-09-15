@@ -652,3 +652,52 @@ def test_a_build_directory_that_will_not_empty_is_named(tmp_path: Path, monkeypa
 
     assert str(target_dir) in str(caught.value)
     assert str(project.device_build_dir("bench-node")) not in str(caught.value)
+
+
+@pytest.mark.parametrize("call", ["rename", "delete"])
+def test_a_file_where_the_build_directory_belongs_is_refused_in_words(
+    tmp_path: Path, call: str
+) -> None:
+    """Taking the lock would `mkdir` over it and raise `FileExistsError`.
+
+    Everything else on this path refuses in this package's words; a
+    standard-library exception out of the middle of a rename is not an
+    answer anybody can act on.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    build_dir = project.device_build_dir("bench-node")
+    build_dir.parent.mkdir(parents=True, exist_ok=True)
+    build_dir.write_text("not a directory\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError) as caught:
+        if call == "rename":
+            api.rename_device("bench-node", project=project, to="kitchen")
+        else:
+            api.delete_device("bench-node", project=project)
+
+    assert "not a directory" in str(caught.value)
+    assert str(build_dir) in str(caught.value)
+    assert project.device_entry("bench-node").is_file()
+    assert build_dir.is_file()
+
+
+@pytest.mark.parametrize("call", ["rename", "delete"])
+def test_a_link_pointing_nowhere_where_the_build_directory_belongs_is_refused(
+    tmp_path: Path, call: str
+) -> None:
+    """`mkdir` over a dangling link raises the same way, so it is the same case."""
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    build_dir = project.device_build_dir("bench-node")
+    build_dir.parent.mkdir(parents=True, exist_ok=True)
+    build_dir.symlink_to(tmp_path / "gone")
+
+    with pytest.raises(ConfigError) as caught:
+        if call == "rename":
+            api.rename_device("bench-node", project=project, to="kitchen")
+        else:
+            api.delete_device("bench-node", project=project)
+
+    assert str(build_dir) in str(caught.value)
+    assert build_dir.is_symlink()

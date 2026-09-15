@@ -123,6 +123,28 @@ def _require_free(name: str, path: Path, what: str) -> None:
     )
 
 
+def _require_build_dir(path: Path) -> None:
+    """Refuse a build directory that is not one, before the lock is taken.
+
+    Taking the lock creates the directory, and ``mkdir`` over a file — or
+    over a link pointing nowhere — is a bare ``FileExistsError`` out of
+    the standard library in the middle of a call that refuses in words
+    everywhere else. A path that is there and is not a directory is
+    somebody's own file under a name this project keeps for build
+    output, and saying so is all that can be done with it.
+    """
+    if not _exists(path) or path.is_dir():
+        return
+    raise ConfigError(
+        f"MCUHome cannot use {path} as a build directory: it is not a directory.",
+        location=Location(file=path),
+        hint=(
+            "a device's build output lives in build/<device>/ — move that file out "
+            "of the way, then run this again"
+        ),
+    )
+
+
 def _renamed_text(entry: Path, *, to: str) -> str | None:
     """The device file with ``device.name`` set to *to*, or ``None``.
 
@@ -239,8 +261,9 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
     Raises :class:`~mcuhome.model.errors.ConfigError` for a device the
     project does not have, a *to* that is not a usable device name, a
     *to* the device already carries, a *to* some file or directory of
-    this project is already using, and a device file this package cannot
-    parse — none of which touches anything.
+    this project is already using, a device file this package cannot
+    parse, and a build directory that is not a directory — none of which
+    touches anything.
     :class:`~mcuhome.workbench.buildlock.BuildDirectoryBusy` when another
     process is working in either build directory.
     """
@@ -261,6 +284,7 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
     _require_free(to, target, "device folder")
     _require_free(to, new_secrets, "secrets file")
     _require_free(to, new_build_dir, "build directory")
+    _require_build_dir(build_dir)
 
     text = _renamed_text(project.device_entry(name), to=to)
     had_build = build_dir.is_dir()
@@ -364,13 +388,15 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
     and the secrets file (only when there was one and it was not kept).
 
     Raises :class:`~mcuhome.model.errors.ConfigError` for a device the
-    project does not have, which touches nothing, and
+    project does not have and for a build directory that is not a
+    directory, neither of which touches anything, and
     :class:`~mcuhome.workbench.buildlock.BuildDirectoryBusy` when another
     process is working in the device's build directory.
     """
     folder = _require_device(project, name)
     secrets = project.device_secrets_file(name)
     build_dir = project.device_build_dir(name)
+    _require_build_dir(build_dir)
     had_build = build_dir.is_dir()
     removed: list[Path] = []
 
