@@ -78,7 +78,7 @@ UPGRADE_MARKER_FILE = f"{PROJECT_MARKER_FILE}.upgrade"
 
 #: The project layout this build of MCUHome speaks. Raised by exactly one
 #: thing: a migration that produces the new layout.
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 
 #: How many trailing hex characters of the id make the short form.
 SHORT_ID_LENGTH = 6

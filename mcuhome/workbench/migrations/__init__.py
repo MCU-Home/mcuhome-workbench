@@ -33,7 +33,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from mcuhome.workbench.migrations import v1_project_identity
+from mcuhome.workbench.migrations import v1_project_identity, v2_secrets_layout
 from mcuhome.workbench.projectfile import ProjectFile
 
 __all__ = ["MIGRATIONS", "Migration", "plan_upgrade"]
@@ -83,7 +83,10 @@ class Migration:
 
 
 #: Every migration, oldest first. Append here when adding one.
-MIGRATIONS: tuple[Migration, ...] = (Migration.of(v1_project_identity),)
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration.of(v1_project_identity),
+    Migration.of(v2_secrets_layout),
+)
 
 
 def plan_upgrade(from_version: int) -> tuple[Migration, ...]:
