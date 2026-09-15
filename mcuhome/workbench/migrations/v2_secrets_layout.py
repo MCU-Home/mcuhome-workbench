@@ -23,8 +23,11 @@ bootloader carries, so a project holding two candidate keys is a
 question for its owner, not for this module.
 
 **The moves are repeatable.** Each of them asks what is on disk and
-skips what is already in shape, so a project that is already migrated is
-not touched.
+skips what is already in shape, so a run that was interrupted anywhere
+finishes on the next attempt and a project that is already migrated is
+not touched. The one half-done state a crash can leave — the key file
+renamed, its reference not yet rewritten — is completed rather than
+reported.
 
 **What is not decided here**: a device's or a builder's file that exists
 under both names. Those hold no identity, so the one already in the new
@@ -204,6 +207,8 @@ def _check_signing(secrets: Path) -> None:
         _check_unreferenced_key(directory, referenced=referenced)
         return
     if (directory / _SIGNING_KEY_FILE).is_file():
+        # The one half-done state a crash can leave: the key file was
+        # renamed and the reference was not rewritten. Completed below.
         _check_unreferenced_key(directory, referenced=_SIGNING_KEY_FILE)
         return
     raise _refuse_dangling_reference(secrets_file, key)
@@ -391,7 +396,9 @@ def _migrate_signing(directory: Path) -> None:
     """Rename the signing files and make the key reference name key.pem.
 
     Every shape that reaches here was accepted by the preflight, so this
-    only has to be repeatable: each step asks what is on disk.
+    only has to be repeatable: each step asks what is on disk, and the
+    one interrupted state — the key renamed, the reference not yet
+    rewritten — is finished rather than reported.
     """
     if not directory.is_dir():
         return
@@ -406,9 +413,10 @@ def _migrate_signing(directory: Path) -> None:
     if referenced is not None:
         if referenced == _SIGNING_KEY_FILE or _is_outside(referenced):
             return  # already named right, or a key the user keeps elsewhere
-        if not (directory / referenced).is_file():
-            return
-        os.replace(directory / referenced, key_file)
+        if (directory / referenced).is_file():
+            os.replace(directory / referenced, key_file)
+        # Either this run renamed the key or an interrupted one did: the
+        # rewrite is what is left, and it is the same write both times.
         _rewrite_reference(secrets_file, data)
         return
 

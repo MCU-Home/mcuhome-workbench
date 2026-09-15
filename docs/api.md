@@ -1488,7 +1488,10 @@ not there, a link where a directory belongs — is refused with the file
 and the one thing to do about it, before the first file is touched, and
 `MigrationFailed` carries that refusal whole. What passes is then applied
 idempotently: every step skips what is already in the shape it produces,
-so a project that is already migrated is not touched.
+so a run that was interrupted anywhere finishes on the next attempt and a
+project that is already migrated is not touched. `UpgradeInterrupted`
+keeps its meaning for the project marker, not for what a migration
+moved.
 
 `UpgradeSession` — `root`, `file`, `path`, `plan`, `from_version`,
 `failed`; `running_builds()`, `apply(*, on_step=None, should_stop=None)

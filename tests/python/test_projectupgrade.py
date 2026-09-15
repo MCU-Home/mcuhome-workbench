@@ -24,7 +24,7 @@ from mcuhome.model.errors import ConfigError, MCUHomeError
 
 from mcuhome.workbench.configuration import resolve_builder, resolve_settings
 from mcuhome.workbench.migrations import MIGRATIONS, Migration, plan_upgrade, v2_secrets_layout
-from mcuhome.workbench.project import create_project, resolve_project
+from mcuhome.workbench.project import Project, create_project, resolve_project
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
@@ -779,8 +779,33 @@ def test_an_interruption_at_any_step_finishes_on_the_next_run(
         assert shape_of(root / "secrets") == expected, f"a kill at move {step} did not finish"
         migrated = (root / "secrets" / "signing" / "key.pem").read_text(encoding="utf-8")
         assert migrated == pem, "the project's own key, not one this migration invented"
+        # And the project can sign afterwards: the reference is the one
+        # half-done state a kill can leave, so it is checked at every step.
+        key = resolve_signing_key(env={}, project=Project(root=root, discovered=True))
+        assert key.pem == pem
+        assert key.path == root / "secrets" / "signing" / "key.pem"
         _migrate(root)
         assert shape_of(root / "secrets") == expected, "and the run after that changes nothing"
+
+
+def test_the_reference_is_completed_when_the_key_was_renamed_already(tmp_path: Path) -> None:
+    """The one half-done state a kill can leave, as a shape of its own.
+
+    The key file carries the new name and the reference still carries the
+    old one — a run that died between the two writes, or a hand-rename.
+    Completing it is the only answer that leaves a project able to sign.
+    """
+    root = v1_project(tmp_path / "old")
+    directory = root / "secrets" / "firmware"
+    (directory / "mcuboot.pem").replace(directory / "key.pem")
+    pem = (directory / "key.pem").read_text(encoding="utf-8")
+
+    upgrade(root)
+
+    project = resolve_project(root, env={}, cwd=tmp_path)
+    assert "!file key.pem" in project.signing_secrets_file.read_text(encoding="utf-8")
+    key = resolve_signing_key(env={}, project=project)
+    assert key.pem == pem and key.path == project.secrets_dir / "signing" / "key.pem"
 
 
 def test_a_device_file_that_could_not_move_stays_where_it_was(tmp_path: Path) -> None:
