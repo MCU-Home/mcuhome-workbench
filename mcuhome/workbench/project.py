@@ -27,9 +27,9 @@ The layout inside a project::
     devices/<name>/main.yaml  # one folder per device
     secrets/                  # ALL secrets, no exceptions (mode 700)
       main.yaml               #   project-wide secrets (`!secret`)
-      devices/<name>.yaml     #   per-device secrets (future)
+      device/<name>.yaml      #   per-device secrets
       builder/<name>.yaml     #   per-builder credentials
-      firmware/mcuboot.yaml   #   the MCUboot signing key
+      signing/key.yaml        #   the signing key, beside key.pem
     build/                    # build output (disposable)
     .gitignore                # keeps secrets/ and build/ out of git
 
@@ -91,11 +91,13 @@ __all__ = [
     "BUILD_DIR",
     "DEVICES_DIR",
     "DEVICE_FILE",
+    "DEVICE_SECRETS_DIR",
     "GITIGNORE_LINES",
     "PROJECT_CONFIG_FILE",
     "PROJECT_MARKER_FILE",
     "PROJECT_VERSION",
     "SECRETS_DIR",
+    "SIGNING_SECRETS_DIR",
     "NewProject",
     "Project",
     "create_project",
@@ -121,8 +123,19 @@ SECRETS_DIR = "secrets"
 #: Project-wide secrets inside ``secrets/`` — what ``!secret`` reads.
 MAIN_SECRETS_FILE = "main.yaml"
 #: One kind of secret per directory below ``secrets/``, named after the
-#: kind: a builder's credentials live here, under the builder's name.
+#: kind and in the singular: the directory says what sort of thing is
+#: in it, not how many there are. A builder's credentials live here,
+#: under the builder's name.
 BUILDER_SECRETS_DIR = "builder"
+#: The kind directory of a device's own secrets, by device name.
+DEVICE_SECRETS_DIR = "device"
+#: The kind directory of the project's signing key: the key material,
+#: its public half and the YAML that references the two.
+SIGNING_SECRETS_DIR = "signing"
+#: The YAML inside ``secrets/signing/`` that references the key file.
+#: Named after what it is about — one project, one signing key — rather
+#: than after the bootloader that verifies against it.
+SIGNING_SECRETS_FILE = "key.yaml"
 
 #: What ``mcuhome project init`` keeps out of git. ``secrets/`` is the point of
 #: the file; ``build/`` is disposable output that would
@@ -171,9 +184,14 @@ class Project:
         return self.secrets_dir / MAIN_SECRETS_FILE
 
     @property
+    def signing_secrets_dir(self) -> Path:
+        """``secrets/signing/`` — the key, its public half, the reference."""
+        return self.secrets_dir / SIGNING_SECRETS_DIR
+
+    @property
     def signing_secrets_file(self) -> Path:
-        """``secrets/firmware/mcuboot.yaml`` — the signing key's home."""
-        return self.secrets_dir / "firmware" / "mcuboot.yaml"
+        """``secrets/signing/key.yaml`` — what references the key file."""
+        return self.signing_secrets_dir / SIGNING_SECRETS_FILE
 
     @property
     def builder_secrets_dir(self) -> Path:
@@ -183,14 +201,14 @@ class Project:
     @property
     def device_secrets_dir(self) -> Path:
         """Where one device's secrets file lives, by device name."""
-        return self.secrets_dir / DEVICES_DIR
+        return self.secrets_dir / DEVICE_SECRETS_DIR
 
     def builder_secrets_file(self, name: str) -> Path:
         """``secrets/builder/<name>.yaml`` — one builder's credentials."""
         return self.builder_secrets_dir / f"{name}.yaml"
 
     def device_secrets_file(self, name: str) -> Path:
-        """``secrets/devices/<name>.yaml`` — one device's own secrets."""
+        """``secrets/device/<name>.yaml`` — one device's own secrets."""
         return self.device_secrets_dir / f"{name}.yaml"
 
     def device_file(self, name: str) -> Path:

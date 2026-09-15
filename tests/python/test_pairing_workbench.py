@@ -60,7 +60,7 @@ def test_init_pairing_writes_credentials_the_builder_then_accepts(write_config) 
 
     assert result.pairing == FIXED
     assert not result.replaced
-    assert result.secrets_file == path.parent / "secrets" / "devices" / "bench-node.yaml"
+    assert result.secrets_file == path.parent / "secrets" / "device" / "bench-node.yaml"
 
     model = resolve_file(path)
     assert model.network.pairing is not None

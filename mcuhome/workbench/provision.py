@@ -17,7 +17,7 @@ configuration input from then on. Nothing is stored anywhere else: no
 state directory, no cache, no log file. The values are security-relevant
 and ``main.yaml`` is the file a project commits, so they never land
 there (PO 2026-08-15): ``main.yaml`` gets ``!secret`` references, the
-values themselves go to the device's own ``secrets/devices/<name>.yaml``
+values themselves go to the device's own ``secrets/device/<name>.yaml``
 — the per-device rung of the loader's secrets ladder.
 
 **Matter has to be on.** Under the explicit-opt-in default (PO
@@ -121,7 +121,7 @@ def secret_names() -> dict[str, str]:
     """The secrets-file key each credential gets.
 
     Plain, unprefixed names: the file is the device's own
-    (``secrets/devices/<name>.yaml``), so there is nothing to
+    (``secrets/device/<name>.yaml``), so there is nothing to
     disambiguate — the old per-device slug prefix retired with the
     shared secrets file (PO 2026-08-15).
     """
@@ -453,7 +453,7 @@ def _write_secrets(
     if created:
         # A fresh secrets file starts owner-only, and so does any missing
         # directory on the way to it — exactly the missing
-        # ones (secrets/devices/ typically): an existing directory's
+        # ones (secrets/device/ typically): an existing directory's
         # permissions are the user's. Rewriting an existing file goes
         # through its inode and keeps whatever the user set.
         missing: list[Path] = []

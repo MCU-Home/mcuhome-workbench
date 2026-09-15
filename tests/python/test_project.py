@@ -179,12 +179,16 @@ def test_the_layout_hangs_off_the_root(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     assert project.config_file == tmp_path / "mcuhome.yaml"
     assert project.secrets_file == tmp_path / "secrets" / "main.yaml"
-    assert project.signing_secrets_file == tmp_path / "secrets" / "firmware" / "mcuboot.yaml"
-    # One directory per kind of secret, named after the kind.
+    assert project.signing_secrets_file == tmp_path / "secrets" / "signing" / "key.yaml"
+    # One directory per kind of secret, named after the kind, singular:
+    # the name says what sort of thing is in there, not how many.
+    assert project.signing_secrets_dir == tmp_path / "secrets" / "signing"
+    assert project.device_secrets_dir == tmp_path / "secrets" / "device"
+    assert project.builder_secrets_dir == tmp_path / "secrets" / "builder"
     assert project.builder_secrets_file("attic") == (
         tmp_path / "secrets" / "builder" / "attic.yaml"
     )
-    assert project.device_secrets_file("porch") == tmp_path / "secrets" / "devices" / "porch.yaml"
+    assert project.device_secrets_file("porch") == tmp_path / "secrets" / "device" / "porch.yaml"
     assert project.device_file("porch") == tmp_path / "devices" / "porch" / "main.yaml"
     assert project.device_build_dir("porch") == tmp_path / "build" / "porch"
 
@@ -357,7 +361,7 @@ def test_an_exposed_secrets_file_draws_a_warning_with_the_fix(tmp_path: Path) ->
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
 def test_exposed_key_material_is_refused_not_warned_about(tmp_path: Path) -> None:
-    path = tmp_path / "mcuboot.yaml"
+    path = tmp_path / "key.yaml"
     path.write_text("firmware_signing_key: x\n", encoding="utf-8")
     path.chmod(0o640)
     with pytest.raises(ConfigError) as caught:
@@ -373,7 +377,7 @@ def test_a_missing_file_is_not_this_checks_problem(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
 def test_ensure_secrets_dir_creates_every_level_private(tmp_path: Path) -> None:
-    directory = ensure_secrets_dir(tmp_path, "firmware")
-    assert directory == tmp_path / "secrets" / "firmware"
+    directory = ensure_secrets_dir(tmp_path, "signing")
+    assert directory == tmp_path / "secrets" / "signing"
     assert mode_of(tmp_path / "secrets") == 0o700
     assert mode_of(directory) == 0o700

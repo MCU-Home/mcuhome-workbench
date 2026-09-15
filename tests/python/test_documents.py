@@ -182,7 +182,7 @@ SAMPLES: dict[str, Callable[[], Any]] = {
     ),
     "NewPairing": lambda: api.NewPairing(
         entry=ROOT / "devices" / "thermostat" / "main.yaml",
-        secrets_file=ROOT / "secrets" / "devices" / "thermostat.yaml",
+        secrets_file=ROOT / "secrets" / "device" / "thermostat.yaml",
         pairing=TEST_PAIRING,
         replaced=True,
     ),

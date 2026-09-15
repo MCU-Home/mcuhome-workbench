@@ -8,7 +8,7 @@ whole validation layer is built around pointing at the offending line
 (yaml-schema.md §10, builder-pipeline.md §1.5).
 
 ``!secret name`` reads ``name`` from the device's own
-``secrets/devices/<name>.yaml`` first and the project-wide
+``secrets/device/<name>.yaml`` first and the project-wide
 ``secrets/main.yaml`` second (yaml-schema.md §9, deliberately
 ESPHome-shaped UX; the ladder is the project layout's — commissioning
 identity per device, shared values project-wide).
@@ -45,7 +45,7 @@ from ruamel.yaml import YAML, YAMLError
 from ruamel.yaml.constructor import RoundTripConstructor
 
 from mcuhome.workbench.diagnostics import Diagnostic
-from mcuhome.workbench.project import DEVICES_DIR, require_secret_file
+from mcuhome.workbench.project import DEVICE_SECRETS_DIR, DEVICES_DIR, require_secret_file
 
 __all__ = [
     "FileRef",
@@ -389,7 +389,7 @@ def _key_location(mapping: Any, key: str, *, entry: Path) -> Location:
 
 
 def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
-    """``secrets/devices/<device>.yaml``, next to the project's main secrets file.
+    """``secrets/device/<device>.yaml``, next to the project's main secrets file.
 
     The per-device secrets file of the project layout —
     where ``mcuhome device matter-pairing`` puts a device's commissioning
@@ -406,12 +406,12 @@ def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
     """
     parent = entry.parent
     if in_project_layout(entry, secrets_file=secrets_file):
-        return secrets_file.parent / "devices" / f"{parent.name}.yaml"
+        return secrets_file.parent / DEVICE_SECRETS_DIR / f"{parent.name}.yaml"
     device = data.get("device") if isinstance(data, dict) else None
     name = device.get("name") if isinstance(device, dict) else None
     if not isinstance(name, str) or not name:
         name = parent.name
-    return secrets_file.parent / "devices" / f"{name}.yaml"
+    return secrets_file.parent / DEVICE_SECRETS_DIR / f"{name}.yaml"
 
 
 def _read_secret_file(
@@ -443,7 +443,7 @@ def _load_secrets(
     """Every secret this configuration may name, device values winning.
 
     The ladder: the device's own
-    ``secrets/devices/<name>.yaml`` answers first — its commissioning
+    ``secrets/device/<name>.yaml`` answers first — its commissioning
     identity lives there — and the project-wide ``secrets/main.yaml``
     answers for everything shared between devices (a WiFi password).
     Lookup is per name, so one configuration can read from both.

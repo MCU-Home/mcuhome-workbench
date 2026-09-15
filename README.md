@@ -744,10 +744,11 @@ it to a build server is refused before the upload.
 
 Everything a project must not commit lives in its `secrets/` directory, one file
 per kind and name: `secrets/main.yaml` for the values every device shares,
-`secrets/devices/<device>.yaml` for a device's own, `secrets/builder/<name>.yaml`
-for a build server's token, and the firmware signing key with the YAML that
-references it. A device configuration reads a value with `!secret <name>`, its
-own file first and the shared one second.
+`secrets/device/<device>.yaml` for a device's own, `secrets/builder/<name>.yaml`
+for a build server's token, and `secrets/signing/key.pem` — the firmware
+signing key — with the `secrets/signing/key.yaml` that references it. A device
+configuration reads a value with `!secret <name>`, its own file first and the
+shared one second.
 
 Six calls are the supported way to look at those files, and **no document any of
 them answers carries a value**:

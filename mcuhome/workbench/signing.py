@@ -80,7 +80,12 @@ from mcuhome.model.userpaths import expand
 from ruamel.yaml.comments import TaggedScalar
 
 from mcuhome.workbench.loader import FileRef, editing_yaml, read_yaml_file
-from mcuhome.workbench.project import Project, ensure_secrets_dir, require_secret_file
+from mcuhome.workbench.project import (
+    SIGNING_SECRETS_DIR,
+    Project,
+    ensure_secrets_dir,
+    require_secret_file,
+)
 
 __all__ = [
     "FIRMWARE_KEY",
@@ -641,7 +646,7 @@ def _create_project_key(project: Project) -> SigningKey:
     # leaves a valid pem that the next run adopts, never a dangling
     # reference.
     try:
-        directory = ensure_secrets_dir(project.root, "firmware")
+        directory = ensure_secrets_dir(project.root, SIGNING_SECRETS_DIR)
     except OSError as error:
         raise _refuse_unwritable(file, error.strerror or "cannot write") from error
     pem_path = directory / SIGNING_KEY_FILE

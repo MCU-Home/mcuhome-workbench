@@ -169,7 +169,7 @@ def test_editing_yaml_writes_the_reference_back_never_the_content(tmp_path: Path
 def test_the_device_secrets_file_answers_first(write_config) -> None:
     """The ladder: device value beats main.yaml."""
     entry = write_config(CONFIG_WITH_SECRET, secrets="device_label: From Main\n")
-    device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
+    device_file = entry.parent / "secrets" / "device" / "bench-node.yaml"
     device_file.parent.mkdir(mode=0o700)
     device_file.write_text("device_label: From Device\n", encoding="utf-8")
     device_file.chmod(0o600)
@@ -180,7 +180,7 @@ def test_the_device_secrets_file_answers_first(write_config) -> None:
 def test_a_shared_secret_falls_through_to_the_project_file(write_config) -> None:
     """A name the device file does not carry answers from main.yaml."""
     entry = write_config(CONFIG_WITH_SECRET, secrets="device_label: Shared\n")
-    device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
+    device_file = entry.parent / "secrets" / "device" / "bench-node.yaml"
     device_file.parent.mkdir(mode=0o700)
     device_file.write_text("matter_passcode: 1234\n", encoding="utf-8")
     device_file.chmod(0o600)
@@ -191,7 +191,7 @@ def test_a_shared_secret_falls_through_to_the_project_file(write_config) -> None
 def test_a_device_file_alone_is_enough(write_config) -> None:
     """No main.yaml needed when the device's own file answers."""
     entry = write_config(CONFIG_WITH_SECRET)
-    device_file = entry.parent / "secrets" / "devices" / "bench-node.yaml"
+    device_file = entry.parent / "secrets" / "device" / "bench-node.yaml"
     device_file.parent.mkdir(parents=True, mode=0o700)
     device_file.write_text("device_label: Own\n", encoding="utf-8")
     device_file.chmod(0o600)
@@ -208,9 +208,9 @@ def _device_of_a_project(tmp_path: Path, folder: str, *, name: str) -> Path:
 
 
 def _device_secret_files(tmp_path: Path, **labels: str) -> None:
-    """One ``secrets/devices/<device>.yaml`` per named device."""
+    """One ``secrets/device/<device>.yaml`` per named device."""
     for owner, value in labels.items():
-        target = tmp_path / "secrets" / "devices" / f"{owner}.yaml"
+        target = tmp_path / "secrets" / "device" / f"{owner}.yaml"
         target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         target.write_text(f"device_label: {value}\n", encoding="utf-8")
         target.chmod(0o600)

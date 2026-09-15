@@ -480,11 +480,17 @@ empty string.
 ### Project
 Frozen dataclass. Fields `root`, `discovered: bool`, `file: ProjectFile |
 None`. Properties `marker`, `id`, `config_file`, `devices_dir`,
-`secrets_dir`, `secrets_file`, `signing_secrets_file`. Methods
-`builder_secrets_file(name)`, `device_secrets_file(name)`,
+`secrets_dir`, `secrets_file`, `signing_secrets_dir`,
+`signing_secrets_file`, `device_secrets_dir`, `builder_secrets_dir`.
+Methods `builder_secrets_file(name)`, `device_secrets_file(name)`,
 `device_file(name)`, `device_patches_dir(name)`, `device_build_dir(name)`,
 `device_names()`, `to_dict()` → `{root, id, discovered, version}`. `discovered` is false for
 the stand-in project a device file outside any project gets.
+
+Every path under `secrets/` is one of these members and is spelled
+nowhere else, so the layout has one place it is stated: one directory per
+kind of secret, named after that kind in the singular
+([Files and directories](#files-and-directories)).
 
 ### ProjectFile
 Frozen dataclass. Fields `root`, `version: int`, `id: str | None`,

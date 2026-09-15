@@ -129,8 +129,8 @@ def package_modules() -> list[Path]:
 def _no_real_signing_key(monkeypatch, tmp_path):
     """No test may touch the developer's own firmware signing key.
 
-    The key lives per project (``secrets/firmware/
-    mcuboot.yaml``), but ``MCUHOME_SIGNING_KEY``
+    The key lives per project (``secrets/signing/
+    key.yaml``), but ``MCUHOME_SIGNING_KEY``
     still names a real, long-lived private key file wherever the
     developer set it. A test that reaches one would either read a
     secret it has no business reading or — worse — create one silently
