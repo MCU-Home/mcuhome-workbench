@@ -195,6 +195,17 @@ class Project:
     def device_entry(self, name: str) -> Path:
         return self.devices_dir / name / DEVICE_FILE
 
+    def device_build_dir(self, name: str) -> Path:
+        """``build/<device>/`` — where a build of one device works.
+
+        The convention, in one place: a build of a device that was not
+        given a directory of its own works here, which is what makes two
+        devices of one project buildable at the same time without either
+        of them saying so. A path, not a promise — a device that has
+        never been built has none.
+        """
+        return self.root / BUILD_DIR / name
+
     def device_patches_dir(self, name: str) -> Path:
         """``devices/<device>/patches/`` — the source patches of one device.
 

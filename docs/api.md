@@ -433,8 +433,8 @@ Frozen dataclass. Fields `root`, `discovered: bool`, `file: ProjectFile |
 None`. Properties `marker`, `id`, `config_file`, `devices_dir`,
 `secrets_dir`, `secrets_file`, `signing_secrets_file`. Methods
 `builder_secrets_file(name)`, `device_secrets_file(name)`,
-`device_file(name)`, `device_patches_dir(name)`, `device_names()`,
-`to_dict()` → `{root, id, discovered, version}`. `discovered` is false for
+`device_file(name)`, `device_patches_dir(name)`, `device_build_dir(name)`,
+`device_names()`, `to_dict()` → `{root, id, discovered, version}`. `discovered` is false for
 the stand-in project a device file outside any project gets.
 
 ### ProjectFile

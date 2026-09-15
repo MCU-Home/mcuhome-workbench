@@ -186,6 +186,7 @@ def test_the_layout_hangs_off_the_root(tmp_path: Path) -> None:
     )
     assert project.device_secrets_file("porch") == tmp_path / "secrets" / "devices" / "porch.yaml"
     assert project.device_entry("porch") == tmp_path / "devices" / "porch" / "main.yaml"
+    assert project.device_build_dir("porch") == tmp_path / "build" / "porch"
 
 
 def test_the_fixture_project_lists_its_devices() -> None:
