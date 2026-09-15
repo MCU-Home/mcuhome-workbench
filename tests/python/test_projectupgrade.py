@@ -401,6 +401,11 @@ def upgrade(root: Path) -> None:
         session.apply()
 
 
+def shape_of(directory: Path) -> dict[str, int]:
+    """Every file below *directory* with its mode — the layout, not the bytes."""
+    return {path: mode for path, (_, mode) in tree_of(directory).items()}
+
+
 def tree_of(directory: Path) -> dict[str, tuple[str, int]]:
     """Every file below *directory*, with its text and its mode."""
     return {
@@ -557,3 +562,238 @@ def test_a_key_the_user_keeps_somewhere_else_is_left_as_it_is(tmp_path: Path) ->
     assert (secrets / "own" / "key.pem").is_file()
     assert "!file ../own/key.pem" in (secrets / "signing" / "key.yaml").read_text(encoding="utf-8")
     assert (secrets / "signing" / "own.pem").is_file(), "no file is renamed behind the reference"
+
+
+# --- 1 → 2: what the preflight refuses before it moves anything --------
+#
+# The rule: every shape this migration cannot move without guessing is
+# refused *before* the first file is touched, and no refusal ever leaves
+# the secrets half-moved. What passes the preflight is then repeatable.
+
+
+def refusal_of(root: Path) -> str:
+    """Run the real upgrade on *root* and answer what the user is told.
+
+    A migration that refuses reaches the user through ``MigrationFailed``,
+    whose own message quotes the refusal whole — message and hint — so
+    this is the text a person reads.
+    """
+    with pytest.raises(MigrationFailed) as caught, open_upgrade_session(root) as session:
+        session.apply()
+    return caught.value.message
+
+
+def test_two_signing_directories_are_refused_and_nothing_is_moved(tmp_path: Path) -> None:
+    """The project's identity is never chosen for it."""
+    root = v1_project(tmp_path / "old")
+    _write_secret(root / "secrets" / "signing" / "key.pem", generate_key_pem())
+    _write_secret(
+        root / "secrets" / "signing" / "key.yaml",
+        "firmware_signing_key: !file key.pem\n",
+    )
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert "two directories" in told
+    assert str(root / "secrets" / "firmware") in told
+    assert str(root / "secrets" / "signing") in told
+    assert "mcuhome project upgrade" in told
+    assert tree_of(root / "secrets") == before, "a refusal moves nothing"
+
+
+def test_two_files_for_the_same_thing_are_refused(tmp_path: Path) -> None:
+    """`mcuboot.pem` beside `key.pem`: two keys, and no way to tell which."""
+    root = v1_project(tmp_path / "old")
+    _write_secret(root / "secrets" / "firmware" / "key.pem", generate_key_pem())
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert "two files for the same thing" in told
+    assert "mcuboot.pem" in told and "key.pem" in told
+    assert tree_of(root / "secrets") == before
+
+
+def test_a_reference_to_a_key_that_is_not_there_is_refused(tmp_path: Path) -> None:
+    """Carrying it over would produce a project that can never sign."""
+    root = v1_project(tmp_path / "old", key_file="elsewhere.pem", referenced="gone.pem")
+    (root / "secrets" / "firmware" / "elsewhere.pem").unlink()
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert "gone.pem" in told
+    assert "not there" in told
+    assert "Put the key file back" in told
+    assert tree_of(root / "secrets") == before
+
+
+def test_a_key_the_reference_points_past_is_refused(tmp_path: Path) -> None:
+    """A key under a name nothing points at is not left for signing to trip over."""
+    root = v1_project(tmp_path / "old")
+    _write_secret(root / "secrets" / "firmware" / "vendor.pem", generate_key_pem())
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert "vendor.pem" in told
+    assert "a name MCUHome does not use" in told
+    assert f"mv {root / 'secrets' / 'firmware' / 'vendor.pem'}" in told
+    assert tree_of(root / "secrets") == before
+
+
+def test_an_inline_key_is_refused_in_the_wording_signing_already_has(tmp_path: Path) -> None:
+    """The same shape, the same sentence — and no second entry appended."""
+    root = v1_project(tmp_path / "old", referenced=None)
+    _write_secret(
+        root / "secrets" / "firmware" / "mcuboot.yaml",
+        "firmware_signing_key: |\n  -----BEGIN PRIVATE KEY-----\n  x\n",
+    )
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert "must be a !file reference to the key file" in told
+    assert tree_of(root / "secrets") == before
+
+
+def test_a_secrets_file_that_is_not_a_mapping_is_refused(tmp_path: Path) -> None:
+    root = v1_project(tmp_path / "old", referenced=None)
+    _write_secret(root / "secrets" / "firmware" / "mcuboot.yaml", "- a list\n")
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert "not a mapping" in told
+    assert tree_of(root / "secrets") == before
+
+
+@pytest.mark.parametrize("kind", ["devices", "build-server", "firmware"])
+def test_a_linked_directory_is_refused_rather_than_moved(tmp_path: Path, kind: str) -> None:
+    """Moving through a link would put secrets where the project cannot see them."""
+    root = v1_project(tmp_path / "old")
+    secrets = root / "secrets"
+    elsewhere = tmp_path / "elsewhere" / kind
+    elsewhere.mkdir(parents=True)
+    for entry in sorted((secrets / kind).iterdir()):
+        entry.replace(elsewhere / entry.name)
+    (secrets / kind).rmdir()
+    (secrets / kind).symlink_to(elsewhere)
+    before = tree_of(secrets)
+
+    told = refusal_of(root)
+
+    assert str(secrets / kind) in told
+    assert "link" in told
+    assert tree_of(secrets) == before
+    assert (secrets / kind).is_symlink(), "the link is still the link"
+
+
+def test_a_linked_target_directory_is_refused(tmp_path: Path) -> None:
+    root = v1_project(tmp_path / "old")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "secrets" / "device").symlink_to(elsewhere)
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert str(root / "secrets" / "device") in told
+    assert tree_of(root / "secrets") == before
+    assert list(elsewhere.iterdir()) == [], "nothing went through the link"
+
+
+def test_a_file_where_a_secrets_directory_belongs_is_refused(tmp_path: Path) -> None:
+    root = v1_project(tmp_path / "old")
+    _write_secret(root / "secrets" / "device", "not a directory\n")
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert str(root / "secrets" / "device") in told
+    assert "directory" in told
+    assert tree_of(root / "secrets") == before
+
+
+# --- 1 → 2: the interrupted run ---------------------------------------
+
+
+def _failing_replace(monkeypatch: pytest.MonkeyPatch, after: int) -> None:
+    """Let the *after*-th ``os.replace`` of this migration die, like a kill."""
+    real = os.replace
+    seen = {"n": 0}
+
+    def replace(source, target, *args, **kwargs):
+        seen["n"] += 1
+        if seen["n"] == after:
+            raise RuntimeError(f"killed at move {after}")
+        return real(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+
+
+def _count_replaces(monkeypatch: pytest.MonkeyPatch, root: Path) -> int:
+    real = os.replace
+    seen = {"n": 0}
+
+    def replace(source, target, *args, **kwargs):
+        seen["n"] += 1
+        return real(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+    _migrate(root)
+    monkeypatch.undo()
+    return seen["n"]
+
+
+def _migrate(root: Path) -> None:
+    v2_secrets_layout.migrate(root, read_project_file(root / PROJECT_MARKER_FILE, root=root))
+
+
+def test_an_interruption_at_any_step_finishes_on_the_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every move and the reference rewrite, killed one at a time.
+
+    The marker is the upgrade's own story (``UpgradeInterrupted``); what
+    this pins is the layout: whatever half-moved state a killed run left
+    on disk, running the migration again completes it to exactly the
+    tree a run that was never interrupted produces.
+    """
+    _migrate(v1_project(tmp_path / "clean"))
+    expected = shape_of(tmp_path / "clean" / "secrets")
+
+    steps = _count_replaces(monkeypatch, v1_project(tmp_path / "counted"))
+    assert steps >= 4, "the fixture has to exercise every move this migration makes"
+
+    for step in range(1, steps + 1):
+        root = v1_project(tmp_path / f"killed-{step}")
+        pem = (root / "secrets" / "firmware" / "mcuboot.pem").read_text(encoding="utf-8")
+        _failing_replace(monkeypatch, step)
+        with pytest.raises(RuntimeError):
+            _migrate(root)
+        monkeypatch.undo()
+
+        _migrate(root)
+        assert shape_of(root / "secrets") == expected, f"a kill at move {step} did not finish"
+        migrated = (root / "secrets" / "signing" / "key.pem").read_text(encoding="utf-8")
+        assert migrated == pem, "the project's own key, not one this migration invented"
+        _migrate(root)
+        assert shape_of(root / "secrets") == expected, "and the run after that changes nothing"
+
+
+def test_a_device_file_that_could_not_move_stays_where_it_was(tmp_path: Path) -> None:
+    """The one shape that is not refused, and where the leftover ends up."""
+    root = v1_project(tmp_path / "old")
+    secrets = root / "secrets"
+    _write_secret(secrets / "device" / "porch.yaml", "device_label: the new one\n")
+
+    upgrade(root)
+
+    assert (secrets / "device" / "porch.yaml").read_text(encoding="utf-8") == (
+        "device_label: the new one\n"
+    )
+    left = secrets / "devices" / "porch.yaml"
+    assert left.is_file(), "the old directory stays, holding what could not move"
+    assert left.read_text(encoding="utf-8") == "device_label: porch\n"

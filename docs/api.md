@@ -1480,9 +1480,15 @@ A project whose file states a layout older than `PROJECT_VERSION` is
 refused by `resolve_project` with `ProjectUpgradeRequired` until it has
 been upgraded — every command, not only this one. `plan_upgrade` answers
 the steps that are missing, in order, each with the `description` a user
-approves and the `details` they read afterwards. A migration is
-idempotent: it skips what is already in the shape it produces, so a run
-that was interrupted finishes on the next attempt.
+approves and the `details` they read afterwards.
+
+A migration **decides before it changes anything**: a project it cannot
+migrate without guessing — two signing keys, a reference to a key that is
+not there, a link where a directory belongs — is refused with the file
+and the one thing to do about it, before the first file is touched, and
+`MigrationFailed` carries that refusal whole. What passes is then applied
+idempotently: every step skips what is already in the shape it produces,
+so a project that is already migrated is not touched.
 
 `UpgradeSession` — `root`, `file`, `path`, `plan`, `from_version`,
 `failed`; `running_builds()`, `apply(*, on_step=None, should_stop=None)
