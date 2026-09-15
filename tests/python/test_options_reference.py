@@ -151,15 +151,6 @@ PACKAGE = Path(__file__).resolve().parents[2] / "mcuhome" / "workbench"
 #: `mcuhome config print` cannot show and nobody can find.
 DECLARES_THE_RETIRED = PACKAGE / "configuration.py"
 
-#: What MCUHome sets *for* a build environment it starts, rather than
-#: reads: never options, and told apart from them by their prefix. These
-#: two still carry the configuration prefix and belong to the builder
-#: family with the rest — the environment package that reads them is
-#: released from another repository, so both sides move together.
-SET_FOR_THE_BUILD_ENVIRONMENT = frozenset(
-    {"MCUHOME_BUILD_ENV_TOOLS", "MCUHOME_BUILD_ENV_WORKSPACE"}
-)
-
 
 @pytest.mark.parametrize("variable", sorted(RETIRED_VARIABLES))
 def test_only_the_retired_table_still_spells_a_retired_variable(variable: str) -> None:
@@ -182,16 +173,30 @@ def test_every_variable_the_package_names_is_a_declared_one() -> None:
 
     The registry derives every variable from a key, so a literal in a
     module is either a second declaration of one or a variable nothing
-    declares — and both are the drift this rule exists against. The
-    builder-side family is the stated exception: those are what MCUHome
-    *sets* for a build environment it starts, never what it reads.
+    declares — and both are the drift this rule exists against.
+    ``MCUHOME_BUILDER_*`` is the one exception, and it is exhaustive:
+    that family is what MCUHome *sets* for a build environment it
+    starts, never what it reads, and no option is allowed in it.
     """
     declared = {opt.env_var for opt in OPTIONS if opt.env_var}
     pattern = re.compile(r"\bMCUHOME_[A-Z0-9_]+\b")
     for source in PACKAGE.rglob("*.py"):
         for found in pattern.findall(source.read_text(encoding="utf-8")):
-            if found.startswith("MCUHOME_BUILDER_") or found in SET_FOR_THE_BUILD_ENVIRONMENT:
+            if found.startswith("MCUHOME_BUILDER_"):
                 continue
             if found in RETIRED_VARIABLES and source == DECLARES_THE_RETIRED:
                 continue  # the table that says it is retired
             assert found in declared, f"{source}: {found}"
+
+
+def test_no_option_derives_a_variable_in_the_builder_family() -> None:
+    """The exception above is only safe while that family holds no option.
+
+    The check waves the whole ``MCUHOME_BUILDER_*`` prefix through, so an
+    option that derived a variable in it would be read as configuration
+    and set as an instruction to the build environment at the same time —
+    and the wave-through is exactly what would keep that from being
+    noticed. ``builder`` is a reserved area for this reason.
+    """
+    inside = [opt.name for opt in OPTIONS if opt.env_var.startswith("MCUHOME_BUILDER_")]
+    assert not inside, f"{inside} declare an environment variable in the builder family"

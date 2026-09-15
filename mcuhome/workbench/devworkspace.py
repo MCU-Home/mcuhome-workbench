@@ -9,7 +9,7 @@ a device of theirs compiled against exactly that, without MCUHome
 provisioning anything or touching a byte of it.
 
 The builder, though, is told where its trees are by the **workspace
-package** it runs out of: ``MCUHOME_BUILD_ENV_WORKSPACE`` names a
+package** it runs out of: ``MCUHOME_BUILDER_WORKSPACE`` names a
 directory, ``build-workspace.json`` in it says where the west workspace
 and the workspace record are, and the record says where each layer is. A
 workspace somebody checked out by hand carries neither document, and it

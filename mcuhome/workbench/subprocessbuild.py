@@ -158,8 +158,8 @@ ENTRY_POINT_DIR = "bin"
 #: can only *check* the workspace root, never derive it, so both are
 #: stated: a store entry is at a path no image and no package could have
 #: guessed.
-TOOLS_ROOT_VAR = "MCUHOME_BUILD_ENV_TOOLS"
-WORKSPACE_ROOT_VAR = "MCUHOME_BUILD_ENV_WORKSPACE"
+TOOLS_ROOT_VAR = "MCUHOME_BUILDER_TOOLS"
+WORKSPACE_ROOT_VAR = "MCUHOME_BUILDER_WORKSPACE"
 
 #: Where git is pointed at the store's own configuration. The workspace
 #: entry carries a file exempting its repositories from git's ownership
@@ -253,7 +253,7 @@ class Environment:
     #: Development build: the workspace's manifest repository, which is
     #: the SDK this build compiles and delivers at ``mcuhome/sdk``.
     sdk: Path | None = None
-    #: What ``MCUHOME_BUILD_ENV_WORKSPACE`` names. ``None`` is the
+    #: What ``MCUHOME_BUILDER_WORKSPACE`` names. ``None`` is the
     #: workspace entry itself, which is what a package is; a development
     #: build points it at the description written into the session
     #: (:mod:`mcuhome.workbench.devworkspace`).
@@ -283,7 +283,7 @@ class Environment:
 
     @property
     def workspace_root(self) -> Path:
-        """The directory ``MCUHOME_BUILD_ENV_WORKSPACE`` names."""
+        """The directory ``MCUHOME_BUILDER_WORKSPACE`` names."""
         return self.package_root if self.package_root is not None else self.workspace.path
 
     def described(self) -> str:
@@ -588,7 +588,7 @@ def developer_step_environment(
     Three things are added, and nothing is taken away except the one
     variable that would be actively wrong:
 
-    ``MCUHOME_BUILDER_BASE_DIR`` and ``MCUHOME_BUILD_ENV_WORKSPACE``
+    ``MCUHOME_BUILDER_BASE_DIR`` and ``MCUHOME_BUILDER_WORKSPACE``
         Where this step's tree is, and where the description of the
         workspace is — the two the builder cannot work out for itself.
     ``PYTHONPATH``
@@ -598,7 +598,7 @@ def developer_step_environment(
         So that importing it leaves no ``__pycache__`` in somebody's
         working tree. See the code below — this is the one write MCUHome
         itself would otherwise make in there.
-    ``MCUHOME_BUILD_ENV_TOOLS`` is **removed** when the caller's
+    ``MCUHOME_BUILDER_TOOLS`` is **removed** when the caller's
         environment carries one: it names a tools package, this build has
         none, and a value left over from another build would put a
         packaged toolchain in front of the developer's own.

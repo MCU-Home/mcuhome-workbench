@@ -578,8 +578,8 @@ def test_the_environment_the_child_is_given_is_composed_not_inherited(
     result = run_one_step(tmp_path, environment)
     values = child_environment(result)
 
-    assert values["MCUHOME_BUILD_ENV_TOOLS"] == str(environment.tools.path)
-    assert values["MCUHOME_BUILD_ENV_WORKSPACE"] == str(environment.workspace.path)
+    assert values["MCUHOME_BUILDER_TOOLS"] == str(environment.tools.path)
+    assert values["MCUHOME_BUILDER_WORKSPACE"] == str(environment.workspace.path)
     assert values["GIT_CONFIG_GLOBAL"] == str(environment.workspace.path / GIT_CONFIG_FILE)
     assert Path(values["GIT_CONFIG_GLOBAL"]).is_file()
     assert values["MCUHOME_BUILDER_BASE_DIR"].endswith("-1")
@@ -680,8 +680,8 @@ def test_the_frozen_store_denies_a_build_that_tries_to_write_into_it(
     thaw(environment.tools.path)
     entry_point(
         environment.tools.path,
-        'printf x > "$MCUHOME_BUILD_ENV_WORKSPACE/workspace/patched" || true\n'
-        'test -f "$MCUHOME_BUILD_ENV_WORKSPACE/workspace/patched" && exit 9\n'
+        'printf x > "$MCUHOME_BUILDER_WORKSPACE/workspace/patched" || true\n'
+        'test -f "$MCUHOME_BUILDER_WORKSPACE/workspace/patched" && exit 9\n'
         'cat > "$mc/out/result-$id.json" <<EOF\n'
         '{"spec_generation": 3, "invocation_id": "$id", "status": "success", '
         '"message": "", "artifacts": []}\n'
@@ -840,7 +840,7 @@ def test_a_developer_build_runs_the_builder_out_of_the_checkout(tmp_path, develo
     """
     environment = subprocessbuild.environment_from_workspace(developer.workspace)
     env = developer_env(developer)
-    env["MCUHOME_BUILD_ENV_TOOLS"] = "/leftover/from/another/build"
+    env["MCUHOME_BUILDER_TOOLS"] = "/leftover/from/another/build"
     result = run_one_step(tmp_path, environment, env=env)
     values = child_environment(result)
 
@@ -852,7 +852,7 @@ def test_a_developer_build_runs_the_builder_out_of_the_checkout(tmp_path, develo
     assert dumps[-1].read_text(encoding="utf-8").split() == ["-m", "mcuhome.compiler.abi"]
     assert values["SECRET_TOKEN"] == "do-not-leak"
     assert values["PYTHONPATH"].split(os.pathsep)[0] == str(developer.workspace / "mcuhome-sdk")
-    assert "MCUHOME_BUILD_ENV_TOOLS" not in values
+    assert "MCUHOME_BUILDER_TOOLS" not in values
     assert "GIT_CONFIG_GLOBAL" not in values
     assert "CCACHE_BASEDIR" not in values
     # Importing the builder out of the checkout would otherwise leave a
@@ -881,7 +881,7 @@ def test_a_developer_build_describes_its_workspace_inside_the_session(tmp_path, 
     values = child_environment(result)
 
     assert snapshot(developer.workspace) == before
-    root = Path(values["MCUHOME_BUILD_ENV_WORKSPACE"])
+    root = Path(values["MCUHOME_BUILDER_WORKSPACE"])
     assert not root.is_relative_to(developer.workspace)
     manifest = json.loads((root / "build-workspace.json").read_text(encoding="utf-8"))
     assert manifest["workspace"] == str(developer.workspace)
@@ -989,10 +989,10 @@ def test_the_step_environment_of_a_development_build_is_the_callers_own(
 
     assert values["SECRET_TOKEN"] == "do-not-leak"
     assert values["MCUHOME_BUILDER_BASE_DIR"] == str(tmp_path / "base")
-    assert values["MCUHOME_BUILD_ENV_WORKSPACE"] == str(developer.workspace)
+    assert values["MCUHOME_BUILDER_WORKSPACE"] == str(developer.workspace)
     assert "MCUHOME_JOBS" not in values
     assert values["PYTHONDONTWRITEBYTECODE"] == "1"
-    assert "MCUHOME_BUILD_ENV_TOOLS" not in values
+    assert "MCUHOME_BUILDER_TOOLS" not in values
     assert "GIT_CONFIG_GLOBAL" not in values
     assert "CCACHE_BASEDIR" not in values
 
