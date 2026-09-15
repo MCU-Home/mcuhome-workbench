@@ -22,6 +22,15 @@ from pathlib import Path
 import pytest
 from mcuhome.model.errors import ConfigError, MCUHomeError
 
+from mcuhome.workbench.api import (
+    MigrationFailed,
+    MigrationRefused,
+    UpgradeInProgress,
+    UpgradeInterrupted,
+    find_running_builds,
+    is_upgrading,
+    open_upgrade_session,
+)
 from mcuhome.workbench.configuration import resolve_builder, resolve_settings
 from mcuhome.workbench.migrations import MIGRATIONS, Migration, plan_upgrade, v2_secrets_layout
 from mcuhome.workbench.project import Project, create_project, resolve_project
@@ -34,15 +43,6 @@ from mcuhome.workbench.projectfile import (
     new_project_id,
     read_project_file,
     write_project_file,
-)
-from mcuhome.workbench.projectupgrade import (
-    MigrationFailed,
-    MigrationRefused,
-    UpgradeInProgress,
-    UpgradeInterrupted,
-    find_running_builds,
-    is_upgrading,
-    open_upgrade_session,
 )
 from mcuhome.workbench.secrets import find_secret_scopes
 from mcuhome.workbench.signing import create_signing_key, generate_key_pem, resolve_signing_key
@@ -62,7 +62,7 @@ def hold_upgrade(root: Path, seconds: float = 5) -> subprocess.Popen:
     """Another process, holding *root* in an upgrade until it is killed."""
     code = (
         "import sys, time\n"
-        "from mcuhome.workbench.projectupgrade import open_upgrade_session\n"
+        "from mcuhome.workbench.api import open_upgrade_session\n"
         f"with open_upgrade_session({str(root)!r}):\n"
         "    print('held', flush=True)\n"
         f"    time.sleep({seconds})\n"

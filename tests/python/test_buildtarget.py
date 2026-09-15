@@ -35,7 +35,7 @@ from conftest import EXAMPLES_DIR, resolve_file
 
 from mcuhome.workbench import build, buildtarget, containerbuild, sessionclient
 from mcuhome.workbench import buildenvsession as lb
-from mcuhome.workbench.builders import SelectedBuilder
+from mcuhome.workbench.api import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
 
 

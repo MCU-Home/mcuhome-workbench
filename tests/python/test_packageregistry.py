@@ -44,7 +44,7 @@ from mcuhome.packagetool.source import (
 )
 
 from mcuhome.workbench import packagefetch, packageregistry
-from mcuhome.workbench.diagnostics import Diagnostic
+from mcuhome.workbench.api import Diagnostic
 from mcuhome.workbench.packageregistry import (
     PackageRegistry,
     PackageRegistryError,

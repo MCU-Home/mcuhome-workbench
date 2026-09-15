@@ -74,12 +74,12 @@ from mcuhome.workbench import (
     signing,
 )
 from mcuhome.workbench import sessionclient as sc
+from mcuhome.workbench.api import SelectedBuilder
 from mcuhome.workbench.buildenvsession import (
     RESULT_FILE_PREFIX,
     RESULT_FILE_SUFFIX,
     StepResult,
 )
-from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.contextdir import read_context_request, write_context_request
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 

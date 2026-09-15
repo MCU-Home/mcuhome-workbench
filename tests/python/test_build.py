@@ -52,19 +52,18 @@ from mcuhome.model.context import DeveloperEnvironment
 from mcuhome.model.errors import BuildError, ConfigError
 
 from mcuhome.workbench import build, containerbuild, sessionclient, subprocessbuild
+from mcuhome.workbench.api import WARNING_KINDS, Diagnostic, SelectedBuilder
 from mcuhome.workbench.buildenvsession import (
     EnvironmentUnavailable,
     EnvironmentUnusable,
     StepResult,
 )
-from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import holder_of
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.contextdir import (
     read_context_manifest,
     read_context_request,
 )
-from mcuhome.workbench.diagnostics import WARNING_KINDS, Diagnostic
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, RegistrySettings
 from mcuhome.workbench.resolve_pins import (

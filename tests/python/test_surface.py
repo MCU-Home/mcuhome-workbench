@@ -39,6 +39,7 @@ is complete.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import re
 from typing import Any
@@ -294,3 +295,214 @@ def test_the_reference_is_read_from_this_repository() -> None:
     assert REFERENCE.is_file()
     assert len(INDEX) > 200  # noqa: PLR2004 - the surface is large by construction
     assert len(CHECKED) > 50  # noqa: PLR2004 - and most of it is callables
+
+
+# --------------------------------------------------------------------------
+# The seam table: what the suite reaches past the surface for
+# --------------------------------------------------------------------------
+#
+# ``docs/api.md`` states, under "What is not public", which names MCUHome's
+# own tests reach for behind ``api`` and why. A list like that is true on
+# the day it is written and quietly false a sub-step later — a module
+# acquires a test file, a module loses its last caller, and nobody notices
+# because nothing is checked. So the suite's own imports are read out of
+# the test tree and held against the table in both directions.
+#
+# What is compared, and what is not: the *names* are, the *reasons* are
+# not. Whether a test is right to reach for something is a judgement, and
+# the second column carries it for a reviewer. One part of that judgement
+# is mechanical, though, and is checked below: a module that is imported
+# only for names ``api`` exports is not a seam at all, it is an import to
+# fix.
+#
+# What this cannot see: an import spelled inside a string — the source a
+# test hands to a peer process it starts — and an attribute reached
+# through a module that was imported as a whole. The first is read by
+# nothing but the interpreter that runs it; the second is not a list an
+# import statement carries.
+
+SEAMS = REPO_ROOT / "tests" / "python"
+
+#: The first cell of every row of the seam table, in order.
+_SEAM_ROWS = [
+    row.split("|")[1].strip()
+    for row in REFERENCE_TEXT.split("### The seams MCUHome's own tests use", 1)[1]
+    .split("\nTwo consequences worth stating:", 1)[0]
+    .split("\n")
+    if row.startswith("| ") and not row.startswith("|---")
+][1:]  # the header row is not a seam
+
+
+def _quoted(cell: str) -> list[str]:
+    return re.findall(r"`([^`]+)`", cell)
+
+
+def _table_modules() -> set[str]:
+    """The module row's list: the row that says so, and only that one."""
+    row = next(cell for cell in _SEAM_ROWS if cell.startswith("the modules behind the surface"))
+    return set(_quoted(row))
+
+
+def _table_attributes() -> list[tuple[str, str]]:
+    """Every ``module.attribute`` the other rows name, as a pair."""
+    found: list[tuple[str, str]] = []
+    for cell in _SEAM_ROWS:
+        if cell.startswith("the modules behind the surface"):
+            continue
+        for name in _quoted(cell):
+            match = re.fullmatch(r"([a-z_][a-z0-9_]*)\.(\w+)", name)
+            if match is not None:
+                found.append((match.group(1), match.group(2)))
+    return found
+
+
+def _table_injections() -> list[tuple[str, tuple[str, ...]]]:
+    """Every ``function(param=, …)`` the table names, with its parameters."""
+    found: list[tuple[str, tuple[str, ...]]] = []
+    for cell in _SEAM_ROWS:
+        for name in _quoted(cell):
+            match = re.fullmatch(r"(\w+)\((.*)\)", name)
+            if match is not None:
+                parameters = tuple(
+                    part.strip().rstrip("=") for part in match.group(2).split(",") if part.strip()
+                )
+                found.append((match.group(1), parameters))
+    return found
+
+
+def _imported_modules() -> dict[str, set[str]]:
+    """Which workbench modules the test tree imports, and from where.
+
+    Every spelling an import can take — ``from mcuhome.workbench import
+    x``, ``from mcuhome.workbench.x import y``, ``import
+    mcuhome.workbench.x`` — because a rule that only sees one of them is
+    a rule with a way around it.
+    """
+    found: dict[str, set[str]] = {}
+    for source in sorted(SEAMS.rglob("*.py")):
+        for node in ast.walk(ast.parse(source.read_text("utf-8"))):
+            reached: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module == "mcuhome.workbench":
+                reached = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "mcuhome.workbench."
+            ):
+                reached = [node.module.split("mcuhome.workbench.", 1)[1]]  # type: ignore[union-attr]
+            elif isinstance(node, ast.Import):
+                reached = [
+                    alias.name.split("mcuhome.workbench.", 1)[1]
+                    for alias in node.names
+                    if alias.name.startswith("mcuhome.workbench.")
+                ]
+            for module in reached:
+                found.setdefault(module, set()).add(source.name)
+    # `api` is the surface itself and `__version__` is the package's own
+    # attribute; neither is a seam past anything.
+    found.pop("api", None)
+    found.pop("__version__", None)
+    return found
+
+
+def _imported_names() -> dict[str, set[str]]:
+    """Which names the test tree takes out of each workbench module.
+
+    Only the ``from mcuhome.workbench.x import y`` form: a module taken as
+    a whole is reached for whatever the file later spells on it, and that
+    is not a list an import statement carries.
+    """
+    found: dict[str, set[str]] = {}
+    for source in sorted(SEAMS.rglob("*.py")):
+        for node in ast.walk(ast.parse(source.read_text("utf-8"))):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "mcuhome.workbench."
+            ):
+                module = node.module.split("mcuhome.workbench.", 1)[1]  # type: ignore[union-attr]
+                found.setdefault(module, set()).update(alias.name for alias in node.names)
+    return found
+
+
+def _taken_as_a_whole() -> set[str]:
+    """The modules a test file imports as a module rather than by name."""
+    found: set[str] = set()
+    for source in sorted(SEAMS.rglob("*.py")):
+        for node in ast.walk(ast.parse(source.read_text("utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.module == "mcuhome.workbench":
+                found.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                found.update(
+                    alias.name.split("mcuhome.workbench.", 1)[1]
+                    for alias in node.names
+                    if alias.name.startswith("mcuhome.workbench.")
+                )
+    return found
+
+
+def test_the_seam_table_names_every_module_the_suite_imports() -> None:
+    """Both directions, because both are the same defect a day apart.
+
+    A module the suite reaches for and the table does not carry is an
+    undeclared seam — the document says the tests enter through `api`
+    except for the reasons listed, and that is then untrue. A module the
+    table carries and nothing imports is a seam that was removed and left
+    standing in the document, which is how a list stops being read.
+    """
+    imported = _imported_modules()
+    table = _table_modules()
+    assert set(imported) - table == set(), "imported by the suite and not in the seam table"
+    assert table - set(imported) == set(), "in the seam table and imported by nothing"
+
+
+def test_every_module_the_seam_table_names_exists() -> None:
+    """A renamed module leaves the table naming a file nobody has."""
+    package = REPO_ROOT / "mcuhome" / "workbench"
+    for module in sorted(_table_modules()):
+        assert (package / f"{module}.py").is_file() or (package / module / "__init__.py").is_file()
+
+
+def test_every_named_seam_resolves() -> None:
+    """The attributes the table names, against the package.
+
+    These are the rows that name one thing rather than a module: a
+    constant a container double reads, a composition a test replaces, a
+    private helper it patches. A row naming something that was renamed
+    reads as a seam somebody still uses and is not one.
+    """
+    for module, attribute in _table_attributes():
+        imported = importlib.import_module(f"mcuhome.workbench.{module}")
+        assert hasattr(imported, attribute), f"{module}.{attribute} is in the table and not there"
+
+
+def test_every_injection_parameter_the_table_names_is_in_the_signature() -> None:
+    """The stated exceptions on exported functions are still parameters.
+
+    They are the one place where a test is allowed to pass something the
+    supported call does not mention, so the document names them. A
+    parameter that went away leaves the document granting an exception
+    for something that cannot be passed.
+    """
+    for name, parameters in _table_injections():
+        assert name in api.__all__, f"{name} is named as an injection seam and is not exported"
+        signature = inspect.signature(getattr(api, name))
+        for parameter in parameters:
+            assert parameter in signature.parameters, f"{name} takes no {parameter}"
+
+
+def test_no_module_is_a_seam_only_for_a_name_the_surface_exports() -> None:
+    """The checkable half of "use the exported one where there is one".
+
+    A module the tests enter only to take names out of it that `api`
+    exports is not a seam: every one of those imports can name `api`
+    instead and the module leaves this list. Reaching *into* a module for
+    its own internals is a different thing and is what the table's first
+    row is about — so a module is only flagged when nothing is taken out
+    of it but exported names, and no file takes it as a whole.
+    """
+    by_name = _imported_names()
+    whole = _taken_as_a_whole()
+    exported = set(api.__all__)
+    avoidable = sorted(
+        module for module, names in by_name.items() if module not in whole and names <= exported
+    )
+    assert not avoidable, (
+        f"{avoidable} are imported only for names api exports — import them from api instead"
+    )

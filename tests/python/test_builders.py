@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 from mcuhome.model.errors import ConfigError
 
+from mcuhome.workbench.api import Diagnostic
 from mcuhome.workbench.configuration import (
     CONFIG_FILE,
     resolve_builder,
     resolve_settings,
 )
-from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.project import Project, create_project
 
 

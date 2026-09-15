@@ -21,8 +21,8 @@ import pytest
 from conftest import FIXTURE_TREE
 from mcuhome.model.errors import ConfigError
 
+from mcuhome.workbench.api import WARNING_KINDS, Diagnostic
 from mcuhome.workbench.configuration import option
-from mcuhome.workbench.diagnostics import WARNING_KINDS, Diagnostic
 from mcuhome.workbench.project import (
     GITIGNORE_LINES,
     PROJECT_MARKER_FILE,

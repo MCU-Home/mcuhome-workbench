@@ -44,8 +44,8 @@ from test_subprocessbuild import (  # noqa: F401 - the store fixtures of the pro
 )
 
 from mcuhome.workbench import api, build, buildlock, buildprocess, containerbuild, sessionclient
+from mcuhome.workbench.api import SelectedBuilder
 from mcuhome.workbench.buildenvsession import StepResult
-from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildprocess import Liveness, resolve_shutdown_seconds, spawn_process
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 

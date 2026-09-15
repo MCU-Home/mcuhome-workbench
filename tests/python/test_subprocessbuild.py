@@ -31,6 +31,7 @@ from mcuhome.model.hashes import sha256_file
 from test_buildenvsession import _PREAMBLE, DELIVERS, entry_point
 
 from mcuhome.workbench import buildenvsession, devworkspace, subprocessbuild
+from mcuhome.workbench.api import resolve_cache_tiers
 from mcuhome.workbench.buildenvstore import (
     GIT_CONFIG_FILE,
     KIND_SDK,
@@ -43,7 +44,6 @@ from mcuhome.workbench.buildenvstore import (
 from mcuhome.workbench.subprocessbuild import (
     Environment,
     environment_from_store,
-    resolve_cache_tiers,
     run_locked_build,
 )
 

@@ -20,7 +20,14 @@ from conftest import REPO_ROOT, package_modules
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import buildlock, sessionclient
-from mcuhome.workbench.api import ValidationResult
+from mcuhome.workbench.api import (
+    SEVERITIES,
+    SEVERITY_ERROR,
+    SEVERITY_WARNING,
+    WARNING_KINDS,
+    Diagnostic,
+    ValidationResult,
+)
 from mcuhome.workbench.buildenvsession import (
     STATUS_FAILURE,
     STATUS_SUCCESS,
@@ -30,13 +37,6 @@ from mcuhome.workbench.buildenvsession import (
 from mcuhome.workbench.buildenvstore import EXTRACTION_BOUNDS
 from mcuhome.workbench.buildlock import LOCK_OPERATIONS
 from mcuhome.workbench.configuration import CONFIG_ORIGINS, OPTIONS, resolve_settings
-from mcuhome.workbench.diagnostics import (
-    SEVERITIES,
-    SEVERITY_ERROR,
-    SEVERITY_WARNING,
-    WARNING_KINDS,
-    Diagnostic,
-)
 from mcuhome.workbench.hostcheck import HOST_CHECKS
 from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import KIND_SDK, KIND_TOOLS, KIND_WORKSPACE, PACKAGE_KINDS
