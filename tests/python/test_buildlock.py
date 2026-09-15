@@ -46,8 +46,14 @@ def _child_env() -> dict[str, str]:
 
 
 @contextmanager
-def _held_elsewhere(out_dir: Path, *, device: str, operation: str = "build") -> Iterator[None]:
-    """A real second process holding *out_dir*, released on the way out."""
+def held_elsewhere(out_dir: Path, *, device: str, operation: str = "build") -> Iterator[None]:
+    """A real second process holding *out_dir*, released on the way out.
+
+    Public because it is the only way to hold a build directory against
+    this one: the lock is re-entrant per process, so a thread of our own
+    would be granted it rather than refused. ``test_buildrecord`` uses it
+    for the same reason this module does.
+    """
     code = (
         "import sys\n"
         "from pathlib import Path\n"
@@ -111,7 +117,7 @@ def _a_second_process_is_still_refused(out_dir: Path) -> bool:
 
 
 def test_a_second_build_of_the_same_directory_is_refused(tmp_path) -> None:
-    with _held_elsewhere(tmp_path, device="bmp180-node"):
+    with held_elsewhere(tmp_path, device="bmp180-node"):
         refusal = _refused(tmp_path)
     assert "A build of bmp180-node is already running" in refusal
     assert "process " in refusal  # which build, so the user can find it
@@ -124,7 +130,7 @@ def test_a_flash_is_refused_while_a_build_runs_and_says_which(tmp_path) -> None:
     A build that rewrites the signed image while it is being flashed
     would put half of one image and half of another on the device.
     """
-    with _held_elsewhere(tmp_path, device="bmp180-node", operation="build"):
+    with held_elsewhere(tmp_path, device="bmp180-node", operation="build"):
         refusal = _refused(tmp_path, operation="flash")
     assert "A build of bmp180-node is already running" in refusal
     # The escape hatch belongs to builds — a flash cannot go to another
@@ -133,7 +139,7 @@ def test_a_flash_is_refused_while_a_build_runs_and_says_which(tmp_path) -> None:
 
 
 def test_a_build_is_refused_while_the_device_is_being_flashed(tmp_path) -> None:
-    with _held_elsewhere(tmp_path, device="bmp180-node", operation="flash"):
+    with held_elsewhere(tmp_path, device="bmp180-node", operation="flash"):
         refusal = _refused(tmp_path)
     assert "bmp180-node is being flashed" in refusal
 
@@ -155,7 +161,7 @@ def test_one_run_holds_its_directory_through_several_steps(tmp_path) -> None:
 def test_another_directory_runs_at_the_same_time(tmp_path) -> None:
     """The lock is per build directory: two devices are two runs."""
     with (
-        _held_elsewhere(tmp_path / "one", device="a"),
+        held_elsewhere(tmp_path / "one", device="a"),
         open_build_lock(tmp_path / "two", device="b"),
     ):
         assert (tmp_path / "one" / BUILD_LOCK_FILE).is_file()
@@ -163,7 +169,7 @@ def test_another_directory_runs_at_the_same_time(tmp_path) -> None:
 
 
 def test_the_directory_is_free_again_afterwards(tmp_path) -> None:
-    with _held_elsewhere(tmp_path, device="bmp180-node"):
+    with held_elsewhere(tmp_path, device="bmp180-node"):
         pass
     with open_build_lock(tmp_path, device="bmp180-node"):
         assert holder_of(tmp_path)["pid"] == str(os.getpid())
@@ -200,7 +206,7 @@ def test_a_lock_file_without_a_holder_stops_nothing(tmp_path) -> None:
 
 
 def test_a_garbled_record_costs_the_refusal_its_detail_not_its_correctness(tmp_path) -> None:
-    with _held_elsewhere(tmp_path, device="bmp180-node"):
+    with held_elsewhere(tmp_path, device="bmp180-node"):
         (tmp_path / BUILD_LOCK_FILE).write_text("{not json", encoding="utf-8")
         assert holder_of(tmp_path) == {}
         refusal = _refused(tmp_path)

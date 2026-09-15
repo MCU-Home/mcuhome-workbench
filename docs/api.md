@@ -659,12 +659,32 @@ comes back to it later — after a restart, or in a second process — and
 `BuildRecord(out_dir, device, context_id, artifacts, report,
 signed: tuple[SignedArtifact, ...], container_image, busy)` with
 `to_dict()`. It states what is there and re-verifies nothing: the hashes
-in `artifacts` are the ones the build declared.
+in `artifacts` are the ones the build declared, so an artifact that was
+replaced afterwards still appears, under the hash it had when it was
+built. `out_dir` is where the build *delivered* — the report, the
+artifacts and the signed images are in it, which is the directory that
+was asked about wherever the build wrote there and a directory inside it
+where a build environment delivered into one of its own. `busy` is
+`is_busy` at the moment of the read.
+
+Every build `build_firmware` ran leaves the record this is read from,
+a failed and a stopped one included (the build record under
+[Files and directories](#files-and-directories)). A directory that holds
+no record is read off its files instead — the build report and the
+firmware beside it, with an empty `sha256`, because nothing measured
+one — and what only a record knows (`device`, `context_id`,
+`container_image`) is then empty rather than guessed. Raises nothing: a
+directory that is not there, holds nothing, or holds a record this
+version cannot read is an answer, not a refusal.
 
 `clean_build` removes what a build produced, holding the directory under
-the `clean` operation, and answers what it removed. It leaves the
-directory itself and raises `BuildDirectoryBusy` when something is
-running in it.
+the `clean` operation, and answers what it removed: the build record, the
+build report, the artifacts the build delivered, the signed images beside
+them, and the hidden work directories a build keeps for itself. It
+removes nothing else — a file somebody put there is theirs, however much
+it looks like output — and it leaves the directory itself. A directory
+that does not exist is an empty answer and is not created. Raises
+`BuildDirectoryBusy` when something is running in it.
 
 ### BuildRequest
 Frozen dataclass — everything a build may be given, whichever target runs
@@ -1580,6 +1600,7 @@ workspace, and passed to that build alone.
 | trust anchors | `secrets/trust-anchor/<base-domain>.json` | JSON |
 | build directory | `<project>/build/<device>/` | tree |
 | build lock | `<build-dir>/.mcuhome-build.lock` | flock plus a JSON record |
+| build record | `<build-dir>/.mcuhome-build.json` | JSON |
 | build report | `<build-dir>/build-report.json` | JSON |
 | build context | `build-context.json`, `context.yaml`, `manifest.yaml`, `model/device-model.json`, `keys/signing.pub`, `patches/<layer>/NNNN-*.patch` | JSON, YAML, PEM, patch |
 | build environment store | `${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments/<package>-<version>/`, each entry marked by `.mcuhome-provisioned` | tree |
@@ -1591,6 +1612,16 @@ Names of files and directories are lowercase with hyphens. Anything this
 package writes for its own bookkeeping inside a directory that belongs to
 the user is hidden and prefixed `.mcuhome-`; what a user takes away has a
 plain name.
+
+The **build record** is bookkeeping of that kind: `build_firmware` writes
+it when a build ends — a failed and a stopped one included — and
+`read_build` reads it. Its keys are `build` (the record format version,
+`1`), `device`, `context_id`, `out_dir` (where the build delivered, or
+`null`), `report`, `container_image` and `artifacts` (the artifact
+documents the build declared). A record that is missing, unreadable or
+written under another format version is not an error: `read_build` falls
+back to the build report and the files beside it, and `clean_build`
+removes it with the rest.
 
 Two names in this table are another program's and are kept as that
 program spells them: the compiler cache directory a build writes into is

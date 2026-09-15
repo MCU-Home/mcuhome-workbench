@@ -120,6 +120,16 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         server="10.0.0.5:8291",
     ),
     "BuildOptions": lambda: api.resolve_build_options(SETTINGS),
+    "BuildRecord": lambda: api.BuildRecord(
+        out_dir=ROOT / "build" / "thermostat",
+        device="thermostat",
+        context_id="sha256:" + "c" * 64,
+        artifacts=(_sample_artifact(),),
+        report="build-report.json",
+        signed=(SAMPLES["SignedArtifact"](),),
+        container_image="ghcr.io/mcu-home/build-environment@sha256:" + "d" * 64,
+        busy=False,
+    ),
     "BuildResult": lambda: api.BuildResult(
         ok=True,
         target="local",

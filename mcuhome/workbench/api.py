@@ -195,6 +195,11 @@ from mcuhome.workbench.buildprocess import (
     current_user,
     resolve_shutdown_seconds,
 )
+from mcuhome.workbench.buildrecord import (
+    BuildRecord,
+    clean_build,
+    read_build,
+)
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
@@ -422,6 +427,7 @@ __all__ = [
     "BuildError",
     "BuildLimits",
     "BuildOptions",
+    "BuildRecord",
     "BuildRequest",
     "BuildResult",
     "BuildTarget",
@@ -592,6 +598,7 @@ __all__ = [
     "WaitedTooLong",
     "build_firmware",
     "check_build_host",
+    "clean_build",
     "context_id",
     "create_context",
     "create_device",
@@ -633,6 +640,7 @@ __all__ = [
     "provision_environment",
     "public_key_pem",
     "random_pairing",
+    "read_build",
     "read_build_report",
     "read_context_facts",
     "read_context_manifest",

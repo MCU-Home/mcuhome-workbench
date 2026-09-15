@@ -110,6 +110,7 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import open_build_lock
+from mcuhome.workbench.buildrecord import write_build_record
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
@@ -1716,6 +1717,15 @@ async def build_firmware(
     care which two were running — nor whether the other one is a command
     line or a dashboard.
 
+    **Every build that ran leaves a record behind**
+    (:func:`~mcuhome.workbench.buildrecord.write_build_record`), a failed
+    and a stopped one included, so that a client which comes back to the
+    directory later — after a restart, in a second process — can read
+    what is in it (:func:`~mcuhome.workbench.buildrecord.read_build`)
+    instead of building again to find out. A refusal writes none: nothing
+    was built, and the directory still holds whatever the last build that
+    did run put there.
+
     **Stopping is** :attr:`BuildRequest.should_stop` **and not task
     cancellation**: the work of a local build happens in a worker thread
     and a remote one happens on somebody else's machine, so cancelling
@@ -1730,18 +1740,26 @@ async def build_firmware(
     if not isinstance(target, BuildTarget):
         target = build_target_for(target, request)
     with open_build_lock(request.out_dir, device=request.model.device.name):
-        if isinstance(target, LocalBuild):
-            execution = target.execution
-            if isinstance(execution, ContainerExecution):
-                return await _run_local(request, execution)
-            if isinstance(execution, SubprocessExecution):
-                return await _run_subprocess(request, execution)
-            raise TypeError(
-                f"{type(execution).__name__} is not a build execution this package runs"
-            )
-        if isinstance(target, RemoteBuild):
-            return await _run_remote(request, target)
-        raise TypeError(f"{type(target).__name__} is not a build target this package runs")
+        result = await _run(request, target)
+        # Inside the lock, so the record is written by the one party that
+        # may write in there at this moment, and a client reading the
+        # directory afterwards never meets a half-written one.
+        write_build_record(request.out_dir, result=result)
+        return result
+
+
+async def _run(request: BuildRequest, target: BuildTarget) -> BuildResult:
+    """The composition *target* names, run over *request*."""
+    if isinstance(target, LocalBuild):
+        execution = target.execution
+        if isinstance(execution, ContainerExecution):
+            return await _run_local(request, execution)
+        if isinstance(execution, SubprocessExecution):
+            return await _run_subprocess(request, execution)
+        raise TypeError(f"{type(execution).__name__} is not a build execution this package runs")
+    if isinstance(target, RemoteBuild):
+        return await _run_remote(request, target)
+    raise TypeError(f"{type(target).__name__} is not a build target this package runs")
 
 
 def compose_local_build(

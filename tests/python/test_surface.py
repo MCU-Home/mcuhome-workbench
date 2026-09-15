@@ -56,12 +56,10 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
-    # Reading a finished build, its pairing, and the step vocabulary.
+    # The step vocabulary a client lays its progress out from.
     "BUILD_STEPS": "reading a build, pairing, steps",
-    "BuildRecord": "reading a build, pairing, steps",
     "build_steps": "reading a build, pairing, steps",
-    "clean_build": "reading a build, pairing, steps",
-    "read_build": "reading a build, pairing, steps",
+    # Reading a device's commissioning credentials.
     "read_pairing": "reading a build, pairing, steps",
     # Secrets management.
     "SECRET_KINDS": "secrets management",
