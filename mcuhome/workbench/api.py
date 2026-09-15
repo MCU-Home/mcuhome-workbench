@@ -188,6 +188,7 @@ from mcuhome.workbench.builders import (
 )
 from mcuhome.workbench.buildlock import (
     BUILD_LOCK_FILE,
+    LOCK_OPERATIONS,
     BuildDirectoryBusy,
     is_busy,
     open_build_lock,
@@ -510,6 +511,7 @@ __all__ = [
     "KIND_TOOLS",
     "KIND_WORKSPACE",
     "LABEL_PREFIX",
+    "LOCK_OPERATIONS",
     "Launcher",
     "Liveness",
     "LocalBuild",

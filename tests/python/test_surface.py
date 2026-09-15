@@ -57,7 +57,6 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: :func:`test_every_pending_name_is_in_the_index` pins.
 PENDING: dict[str, str] = {
     # Device lifecycle.
-    "LOCK_OPERATIONS": "device lifecycle",
     "delete_device": "device lifecycle",
     "rename_device": "device lifecycle",
 }

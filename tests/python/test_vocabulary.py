@@ -19,7 +19,7 @@ import pytest
 from conftest import REPO_ROOT, package_modules
 from mcuhome.model.errors import ConfigError
 
-from mcuhome.workbench import sessionclient
+from mcuhome.workbench import buildlock, sessionclient
 from mcuhome.workbench.api import ValidationResult
 from mcuhome.workbench.buildenvsession import (
     STATUS_FAILURE,
@@ -28,6 +28,7 @@ from mcuhome.workbench.buildenvsession import (
     STEP_STATUSES,
 )
 from mcuhome.workbench.buildenvstore import EXTRACTION_BOUNDS
+from mcuhome.workbench.buildlock import LOCK_OPERATIONS
 from mcuhome.workbench.configuration import CONFIG_ORIGINS, OPTIONS, resolve_settings
 from mcuhome.workbench.diagnostics import (
     SEVERITIES,
@@ -208,6 +209,47 @@ def test_the_host_checks_are_spelled_the_way_the_scheme_says() -> None:
     for check in HOST_CHECKS:
         assert check == check.lower()
         assert check.isalpha(), f"{check} is not one word"
+
+
+def _reference_lock_operations() -> set[str]:
+    """The operations the constants row of the reference lists."""
+    row = next(
+        line
+        for line in REFERENCE.read_text("utf-8").split("\n")
+        if line.startswith("| `LOCK_OPERATIONS` |")
+    )
+    return set(re.findall(r'"([a-z]+)"', row))
+
+
+def test_the_reference_lists_every_lock_operation() -> None:
+    """The published set is the documented set.
+
+    The word travels in the lock record and comes back out in somebody
+    else's refusal, so an operation the reference does not carry is one
+    a reader of that refusal cannot look up.
+    """
+    assert _reference_lock_operations() == set(LOCK_OPERATIONS)
+
+
+def test_every_lock_operation_has_a_sentence_of_its_own() -> None:
+    """The set is the sentences' keys, and each names what is going on.
+
+    A word without a sentence falls back to "another MCUHome run is
+    working", which is exactly the message the vocabulary exists to
+    avoid — so the two cannot be kept in step by hand.
+    """
+    assert tuple(buildlock._SENTENCES) == LOCK_OPERATIONS  # noqa: SLF001 - the pair under test
+    for operation in LOCK_OPERATIONS:
+        sentence = buildlock._SENTENCES[operation]  # noqa: SLF001 - the pair under test
+        assert "kitchen" in sentence.format(device="kitchen")
+
+
+def test_the_lock_operations_are_spelled_the_way_the_scheme_says() -> None:
+    """One lowercase word each, and no duplicates."""
+    assert len(set(LOCK_OPERATIONS)) == len(LOCK_OPERATIONS)
+    for operation in LOCK_OPERATIONS:
+        assert operation == operation.lower()
+        assert operation.isalpha(), f"{operation} is not one word"
 
 
 def test_the_severities_are_the_two_a_finding_can_carry() -> None:

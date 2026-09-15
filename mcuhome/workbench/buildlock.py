@@ -70,7 +70,7 @@ except ImportError:  # pragma: no cover - Windows
 
 __all__ = [
     "BUILD_LOCK_FILE",
-    "OPERATIONS",
+    "LOCK_OPERATIONS",
     "BuildDirectoryBusy",
     "open_build_lock",
     "holder_of",
@@ -81,15 +81,22 @@ __all__ = [
 BUILD_LOCK_FILE = ".mcuhome-build.lock"
 
 #: What an operation is called in a refusal — "<device> is being …".
-#: Append-only vocabulary: a word this version does not know is rendered
-#: by the generic sentence rather than refused, so a newer caller (or a
-#: newer command) never turns into a worse message.
-OPERATIONS = {
+#: One sentence per operation, and the set below is its keys: a word and
+#: the words a person reads for it are one thing, kept in one place.
+_SENTENCES = {
     "build": "A build of {device} is already running",
     "sign": "{device} is being signed",
     "flash": "{device} is being flashed",
     "clean": "The build output of {device} is being deleted",
+    "rename": "{device} is being renamed",
+    "delete": "{device} is being deleted",
 }
+
+#: What a caller may state as the *operation* it holds a build directory
+#: for. Append-only vocabulary: a word this version does not know is
+#: rendered by the generic sentence rather than refused, so a newer
+#: caller (or a newer command) never turns into a worse message.
+LOCK_OPERATIONS = tuple(_SENTENCES)
 
 #: Paths this process already holds, and how deep. Guarded by
 #: :data:`_COUNTS_LOCK`, because the count is read-modify-write state and
@@ -146,7 +153,7 @@ def is_busy(out_dir: Path) -> bool:
 
 @contextmanager
 def open_build_lock(out_dir: Path, *, device: str = "", operation: str = "build") -> Iterator[None]:
-    """Hold *out_dir* for one operation — ``build``, ``sign``, ``flash``, ``clean``.
+    """Hold *out_dir* for one operation — one of :data:`LOCK_OPERATIONS`.
 
     Raises :class:`BuildDirectoryBusy` — a typed refusal like any
     other — when another process is working there, naming what it is
@@ -206,7 +213,7 @@ def open_build_lock(out_dir: Path, *, device: str = "", operation: str = "build"
 
 def _busy(out_dir: Path, device: str, operation: str) -> BuildDirectoryBusy:
     holder = holder_of(out_dir)
-    running = OPERATIONS.get(holder.get("operation", ""))
+    running = _SENTENCES.get(holder.get("operation", ""))
     who = holder.get("device") or device
     what = running.format(device=who) if running and who else "Another MCUHome run is working"
     since = f", started {holder['started']}" if holder.get("started") else ""
