@@ -39,6 +39,7 @@ from mcuhome.workbench import api, build, buildrecord, containerbuild, sessioncl
 from mcuhome.workbench.buildenvsession import StepResult
 from mcuhome.workbench.buildlock import BUILD_LOCK_FILE, BuildDirectoryBusy
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.projectfile import PROJECT_MARKER_FILE, UPGRADE_MARKER_FILE
 from mcuhome.workbench.signing import generate_key_pem, public_key_pem
 
 #: A fixed public key, so nothing here draws one.
@@ -525,6 +526,75 @@ def test_clean_build_removes_the_artifacts_a_client_copied_up(tmp_path) -> None:
         "firmware.signed.bin",
     ]
     assert sorted(path.name for path in out.iterdir()) == [BUILD_LOCK_FILE]
+
+
+def test_clean_build_leaves_a_hidden_file_it_does_not_know(tmp_path, model, monkeypatch) -> None:
+    """Removal is by name, never by "it looks like ours".
+
+    ``.mcuhome-*`` is the rule that says which files this package writes,
+    and sweeping by it would take whatever a later version — or another
+    MCUHome tool — puts in a directory, including the markers that make a
+    project a project.
+    """
+    _built(tmp_path, model, monkeypatch)
+    out = tmp_path / "build"
+    (out / ".mcuhome-something-else").write_text("not this call's\n", "utf-8")
+    (out / ".mcuhome-signing.pub").write_text("-----BEGIN PUBLIC KEY-----\n", "utf-8")
+
+    removed = api.clean_build(out)
+
+    assert (out / ".mcuhome-something-else").is_file()
+    assert (out / ".mcuhome-signing.pub").is_file()
+    assert not (out / ".mcuhome-local").exists()
+    assert out / ".mcuhome-something-else" not in removed
+
+
+def test_clean_build_refuses_a_project_root(tmp_path) -> None:
+    """The mistake this refusal exists for: one directory too high.
+
+    A project root holds the marker, the devices and the secrets. Aimed
+    at one, a clean that swept hidden files would take the marker with
+    it — and a project whose marker is gone is no longer findable.
+    """
+    root = tmp_path / "attic"
+    (root / "devices" / "thermostat").mkdir(parents=True)
+    (root / PROJECT_MARKER_FILE).write_text("version = 2\n", "utf-8")
+    (root / "mcuhome.yaml").write_text("build:\n  mode: container\n", "utf-8")
+
+    with pytest.raises(api.BuildError) as caught:
+        api.clean_build(root)
+
+    assert "is an MCUHome project" in str(caught.value)
+    assert "build/<device>/" in (caught.value.hint or "")
+    assert (root / PROJECT_MARKER_FILE).is_file()
+    assert (root / "mcuhome.yaml").is_file()
+
+
+def test_clean_build_refuses_a_project_that_is_being_upgraded(tmp_path) -> None:
+    """The upgrade marker is the project's identity while an upgrade runs."""
+    root = tmp_path / "attic"
+    root.mkdir()
+    (root / UPGRADE_MARKER_FILE).write_text("version = 1\n", "utf-8")
+
+    with pytest.raises(api.BuildError):
+        api.clean_build(root)
+
+    assert (root / UPGRADE_MARKER_FILE).is_file()
+
+
+def test_clean_build_refuses_a_device_folder(tmp_path) -> None:
+    """A device folder holds what the person wrote, not what a build produced."""
+    device = tmp_path / "devices" / "thermostat"
+    device.mkdir(parents=True)
+    (device / "main.yaml").write_text("device:\n  name: thermostat\n", "utf-8")
+    (device / "patches").mkdir()
+
+    with pytest.raises(api.BuildError) as caught:
+        api.clean_build(device)
+
+    assert "device configuration" in str(caught.value)
+    assert (device / "main.yaml").is_file()
+    assert (device / "patches").is_dir()
 
 
 def test_clean_build_refuses_while_a_build_is_running(tmp_path, model, monkeypatch) -> None:

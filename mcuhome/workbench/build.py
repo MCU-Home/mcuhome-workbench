@@ -110,7 +110,7 @@ from mcuhome.workbench.buildenvsession import (
 )
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildlock import open_build_lock
-from mcuhome.workbench.buildrecord import write_build_record
+from mcuhome.workbench.buildrecord import LOCAL_WORK_DIR, REMOTE_WORK_DIR, write_build_record
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
@@ -2387,7 +2387,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         request.model,
         signing_pub=request.signing_pub,
         sdk_sources=options.sdk_sources,
-        work_root=_work_root(request, ".mcuhome-local"),
+        work_root=_work_root(request, LOCAL_WORK_DIR),
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
@@ -2439,7 +2439,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         request.model,
         signing_pub=request.signing_pub,
         sdk_sources=options.sdk_sources,
-        work_root=_work_root(request, ".mcuhome-local"),
+        work_root=_work_root(request, LOCAL_WORK_DIR),
         env=dict(request.env),
         project_root=request.project_root,
         registries=request.registries,
@@ -2604,7 +2604,7 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
             ),
         )
     url = websocket_url(target.server)
-    work_root = _work_root(request, ".mcuhome-remote")
+    work_root = _work_root(request, REMOTE_WORK_DIR)
     context_dir = Path(request.context_dir) if request.context_dir is not None else None
     if context_dir is not None:
         _refuse_developer_context(context_dir)

@@ -49,10 +49,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.artifacts import Artifact, artifacts_from_wire
+from mcuhome.model.errors import BuildError
 
 from mcuhome.workbench.buildenvsession import ROOT_OUT
-from mcuhome.workbench.buildlock import BUILD_LOCK_FILE, is_busy, open_build_lock
+from mcuhome.workbench.buildlock import is_busy, open_build_lock
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE, SIGNED_FIRMWARE_NAMES, SignedArtifact
+from mcuhome.workbench.project import DEVICE_FILE
+from mcuhome.workbench.projectfile import PROJECT_MARKER_FILE, UPGRADE_MARKER_FILE
 
 if TYPE_CHECKING:  # pragma: no cover - the build layer imports this module, not the other way round
     from mcuhome.workbench.build import BuildResult
@@ -76,11 +79,15 @@ BUILD_RECORD_FILE = ".mcuhome-build.json"
 #: shape being half-understood by an older reader.
 RECORD_VERSION = 1
 
-#: The hidden entries inside a build directory that are **not** a build's
-#: leftovers: the lock file is the guard itself, held while
-#: :func:`clean_build` runs, and deleting it would hand out two exclusive
-#: locks on two inodes under one name (see :mod:`…buildlock`).
-_KEPT = frozenset({BUILD_LOCK_FILE})
+#: Where a build keeps its scratch tree inside the directory it was given
+#: — one name per target, spelled here because this module removes what
+#: :mod:`…build` creates and the two must not drift apart. They are the
+#: work roots of a build that was not given one; a caller that states
+#: :attr:`BuildRequest.work_root` owns that directory and this never
+#: touches it.
+LOCAL_WORK_DIR = ".mcuhome-local"
+REMOTE_WORK_DIR = ".mcuhome-remote"
+WORK_DIRS = (LOCAL_WORK_DIR, REMOTE_WORK_DIR)
 
 
 @dataclass(frozen=True)
@@ -286,43 +293,92 @@ def _inside(path: Path, directory: Path) -> bool:
 
 
 def _removals(directory: Path) -> list[Path]:
-    """Every path in *directory* a build put there, in no particular order."""
+    """Every path in *directory* a build put there, in no particular order.
+
+    **By name, every one of them**, and never by a pattern: an earlier
+    version swept every hidden ``.mcuhome-*`` entry, which is the rule
+    that says which files are this package's — and aimed at a project
+    root it would have taken the project marker with it. What a build
+    writes is a short, known list, and a list is the only thing that
+    cannot grow teeth when a later version puts another file somewhere.
+    """
     found: list[Path] = [directory / BUILD_RECORD_FILE, directory / BUILD_REPORT_FILE]
+    found += [directory / name for name in WORK_DIRS]
     data = _recorded(directory)
     delivery = Path(_text(data, "out_dir") or directory) if data is not None else directory
     for artifact in artifacts_from_wire((data or {}).get("artifacts") or ()):
         found.append(delivery / artifact.path)
-    for where in {directory, delivery}:
+    # Both places, because the report and the firmware are a build's
+    # output wherever they lie: the delivery directory the build wrote
+    # into, and the top of the build directory, where a client that
+    # copied them up for the user keeps them.
+    for where in (directory, delivery):
+        found += [where / BUILD_REPORT_FILE]
         for unsigned, signed in SIGNED_FIRMWARE_NAMES:
             found += [where / unsigned, where / signed]
-    # Everything this package keeps for itself in there — the work roots
-    # of both targets, the record, whatever a later version adds — by the
-    # one rule that says which files those are: hidden, prefixed
-    # `.mcuhome-`. The lock is the exception, because it is being held.
-    with contextlib.suppress(OSError):
-        found += [
-            entry
-            for entry in directory.iterdir()
-            if entry.name.startswith(".mcuhome-") and entry.name not in _KEPT
-        ]
     return [path for path in found if _inside(path, directory)]
+
+
+def _refuse_a_directory_of_theirs(directory: Path) -> None:
+    """Refuse to clean a project root or a device folder.
+
+    ``clean_build`` deletes, and the one mistake it must not carry out is
+    being aimed one directory too high: a project root and a device
+    folder both hold files whose names this package knows, and a caller
+    that passes one meant a build directory. Saying so costs two
+    ``stat`` calls and saves somebody's project.
+    """
+    for marker in (PROJECT_MARKER_FILE, UPGRADE_MARKER_FILE):
+        if (directory / marker).exists():
+            raise BuildError(
+                f"{directory} is an MCUHome project, not a build directory.",
+                hint=(
+                    "cleaning removes what a build produced, and a build writes into "
+                    "build/<device>/ inside the project. Name that directory instead — "
+                    "nothing here was removed."
+                ),
+            )
+    if (directory / DEVICE_FILE).is_file():
+        raise BuildError(
+            f"{directory} holds a device configuration ({DEVICE_FILE}), "
+            "so it is a device folder rather than a build directory.",
+            hint=(
+                "cleaning removes what a build produced; a device's own folder holds "
+                "what you wrote. The build output of a device is in build/<device>/ — "
+                "nothing here was removed."
+            ),
+        )
 
 
 def clean_build(out_dir: Path, *, device: str = "") -> tuple[Path, ...]:
     """Remove what a build wrote into *out_dir*, and answer what went.
 
     The build directory itself stays, and so does everything in it that a
-    build did not write: this removes the build record, the build report,
-    the artifacts the build delivered, the signed images beside them and
-    the hidden work directories — and nothing else. A file somebody put
-    there themselves is not a build's leftover, however much it looks
-    like one.
+    build did not write. What goes is named one by one and nothing else
+    is: the build record, the build report, the artifacts the record
+    declares, the unsigned and signed firmware beside them — in the
+    delivery directory and at the top of the build directory, because a
+    client may have copied them up — and the two work roots a build
+    creates when it was not given one (``.mcuhome-local``,
+    ``.mcuhome-remote``). A file somebody put there themselves is not a
+    build's leftover, however much it looks like one, and neither is a
+    work root the *caller* named: that directory is theirs.
+
+    The **lock file stays**, deliberately: it is the guard this call is
+    holding, and unlinking a path another process has already opened
+    hands out two exclusive locks on two inodes under one name (see
+    :mod:`~mcuhome.workbench.buildlock`).
 
     The directory is **held** for the duration, under the ``clean``
     operation, so a build or a signature that is running there refuses
     this one in words (:class:`~mcuhome.workbench.buildlock.BuildDirectoryBusy`)
     rather than losing its output half-way through. *device* is what the
     refusal calls the thing being cleaned, for whoever meets it.
+
+    A **project root or a device folder is refused** with a
+    :class:`~mcuhome.model.errors.BuildError` before anything is removed:
+    both hold files this package knows by name, and a caller that hands
+    one over meant a build directory.
 
     A directory that does not exist is answered with an empty tuple and
     is **not** created: there was nothing there to remove, and a clean
@@ -332,6 +388,7 @@ def clean_build(out_dir: Path, *, device: str = "") -> tuple[Path, ...]:
     directory = Path(out_dir)
     if not directory.is_dir():
         return ()
+    _refuse_a_directory_of_theirs(directory)
     removed: list[Path] = []
     with open_build_lock(directory, device=device, operation="clean"):
         for path in _removals(directory):

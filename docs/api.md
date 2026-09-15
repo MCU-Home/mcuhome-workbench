@@ -679,13 +679,32 @@ directory that is not there, holds nothing, or holds a record this
 version cannot read is an answer, not a refusal.
 
 `clean_build` removes what a build produced, holding the directory under
-the `clean` operation, and answers what it removed: the build record, the
-build report, the artifacts the build delivered, the signed images beside
-them, and the hidden work directories a build keeps for itself. It
-removes nothing else — a file somebody put there is theirs, however much
-it looks like output — and it leaves the directory itself. A directory
-that does not exist is an empty answer and is not created. Raises
-`BuildDirectoryBusy` when something is running in it.
+the `clean` operation, and answers what it removed. Everything it removes
+is named, and nothing else is:
+
+- `.mcuhome-build.json`, the build record;
+- `build-report.json`, in `out_dir` and at the top of the build directory;
+- every artifact the record declares, under the directory the build
+  delivered into;
+- `firmware.bin`, `firmware.hex` and the `firmware.signed.*` beside them,
+  in both of those places;
+- `.mcuhome-local` and `.mcuhome-remote`, the work roots a build creates
+  when it was given no `work_root` of its own.
+
+A file that is not on that list is not a build's leftover, whatever it
+looks like: a work root the *caller* named is theirs, and so is anything
+else in the directory. The directory itself stays, and so does
+`.mcuhome-build.lock` — it is the lock this call is holding, and
+unlinking a file another process has opened would hand out two exclusive
+locks under one name. A path that would leave the build directory (a
+hand-edited record) is skipped.
+
+Raises `BuildDirectoryBusy` when something is running in the directory,
+and `BuildError` for a directory that is a **project root**
+(`.mcuhome-project-root`, `.mcuhome-project-root.upgrade`) or a **device
+folder** (`main.yaml`) — both are a caller that meant a build directory,
+and nothing is removed before that refusal. A directory that does not
+exist is an empty answer and is not created.
 
 ### BuildRequest
 Frozen dataclass — everything a build may be given, whichever target runs
