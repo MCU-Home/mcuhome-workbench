@@ -130,9 +130,33 @@ def test_a_scope_is_not_a_second_spelling_of_a_path(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     add_device(project, "thermostat")
 
-    for name in ("../../etc/passwd", "sub/dir", ".hidden", ""):
-        with pytest.raises(ConfigError):
+    refused = (
+        "../../etc/passwd",  # a path
+        "sub/dir",
+        ".hidden",
+        "attic\x00.yaml",  # a NUL, which an open() turns into a ValueError
+        "attic\nkitchen",  # a newline
+        "two words",
+        "-leading-dash",
+        "Attic",  # not a name a device or a builder may carry
+        "attic.yaml",
+    )
+    for name in refused:
+        with pytest.raises(ConfigError) as caught:
             api.read_secrets(project, kind="builder", name=name)
+        assert "lowercase letters" in (caught.value.hint or ""), name
+        with pytest.raises(ConfigError):
+            api.set_secret(project, kind="builder", name=name, key="token", value="t")
+        with pytest.raises(ConfigError):
+            api.delete_secret_file(project, kind="builder", name=name)
+    assert sorted(path.name for path in project.secrets_dir.iterdir()) == ["trust-anchor"], (
+        "a refused name left something behind"
+    )
+
+    # And the names that are names: what a builder and a device may be
+    # called is what a scope may be called.
+    api.set_secret(project, kind="builder", name="attic-2", key="token", value="t")
+    assert api.read_secrets(project, kind="builder", name="attic-2").keys[0].key == "token"
 
     with pytest.raises(ConfigError) as caught:
         api.read_secrets(project, kind="device", name="ghost")
@@ -144,6 +168,9 @@ def test_a_scope_is_not_a_second_spelling_of_a_path(tmp_path: Path) -> None:
         api.read_secrets(project, kind="main", name="thermostat")
     with pytest.raises(ConfigError):
         api.read_secrets(project, kind="device")
+    with pytest.raises(ConfigError) as caught:
+        api.read_secrets(project, kind="builder", name="")
+    assert "none was named" in caught.value.message
 
 
 # --------------------------------------------------------------------------

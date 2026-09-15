@@ -78,6 +78,7 @@ are held to, and ``tests/python/test_secrets.py`` holds them to it.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -219,10 +220,11 @@ def _refuse_unnamed(kind: str) -> ConfigError:
 
 def _refuse_bad_name(kind: str, name: str) -> ConfigError:
     return ConfigError(
-        f'"{name}" is not a {kind} name.',
+        f"{name!r} is not a usable {kind} name.",
         hint=(
-            "a name is one plain word — no slashes, no dots leading it — because it "
-            "is also the name of a file in the project's secrets directory"
+            "use lowercase letters, digits and dashes, starting with a letter or "
+            "digit — the name becomes the name of a file in the project's secrets "
+            "directory, and only one word can be one"
         ),
     )
 
@@ -338,9 +340,22 @@ def _scope_file(project: Project, kind: str, name: str) -> Path:
     return project.builder_secrets_file(name)
 
 
-def _is_plain_name(name: str) -> bool:
-    """A name that is one file in one directory, and cannot be anything else."""
-    return bool(name) and name == Path(name).name and not name.startswith(".")
+#: What a device or a builder may be called, and therefore what a scope
+#: may be called: the rule
+#: :func:`~mcuhome.workbench.builders.builders_of` already holds a
+#: builder name to, and a superset of the device-name rule
+#: :func:`~mcuhome.workbench.scaffold.create_device` holds a device to
+#: (which demands a letter on top of it, because a device name becomes a
+#: hostname). One word of lowercase letters, digits and dashes — a name
+#: becomes a file name in the project's secrets directory, and anything
+#: that is not one word is a path, a shell surprise, or a byte an
+#: operating system refuses halfway through a write.
+_SCOPE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _is_scope_name(name: str) -> bool:
+    """Whether *name* is a name and not something spelled like one."""
+    return bool(_SCOPE_NAME_RE.match(name))
 
 
 def _scope(project: Project, kind: str, name: str) -> SecretScope:
@@ -363,7 +378,7 @@ def _scope(project: Project, kind: str, name: str) -> SecretScope:
             raise _refuse_named(kind)
     elif not name:
         raise _refuse_unnamed(kind)
-    elif not _is_plain_name(name):
+    elif not _is_scope_name(name):
         raise _refuse_bad_name(kind, name)
     file = _scope_file(project, kind, name)
     exists = file.is_file()
@@ -379,13 +394,19 @@ def _guard(scope: SecretScope) -> None:
 
 
 def _names_in(directory: Path) -> list[str]:
-    """The names the ``<name>.yaml`` files in *directory* carry."""
+    """The names the ``<name>.yaml`` files in *directory* carry.
+
+    A file whose stem is not a name this package could have written is
+    not a scope and is left out: every call here takes a name, so a scope
+    nothing can address would be listed and then refused. What such a
+    file is remains visible where it lies.
+    """
     if not directory.is_dir():
         return []
     return sorted(
         entry.stem
         for entry in directory.glob("*.yaml")
-        if entry.is_file() and _is_plain_name(entry.stem)
+        if entry.is_file() and _is_scope_name(entry.stem)
     )
 
 
