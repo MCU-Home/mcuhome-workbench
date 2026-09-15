@@ -339,6 +339,11 @@ and the device's secrets file unless *keep_secrets* — commissioning
 credentials a controller already knows cannot be drawn again — and
 answers them in that order.
 
+Holding a build directory creates it, so a device that was never built
+has one for the length of the call and not afterwards; the project's
+`build/` goes the same way when it was this call that brought it into
+existence, and stays when it was already there.
+
 Both raise `ConfigError` for a name the project does not have.
 `rename_device` also raises it for a *to* that is not a usable device
 name (the rule `create_device` follows), for one the device already

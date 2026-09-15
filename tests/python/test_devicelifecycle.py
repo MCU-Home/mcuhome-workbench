@@ -764,3 +764,57 @@ def test_the_device_file_keeps_the_mode_its_owner_gave_it(tmp_path: Path) -> Non
     moved = project.device_entry("kitchen")
     assert stat.S_IMODE(moved.stat().st_mode) == 0o640
     assert stated_name(moved) == "kitchen"
+
+
+@pytest.mark.parametrize("call", ["rename", "delete"])
+def test_neither_call_leaves_a_build_directory_nobody_asked_for(tmp_path: Path, call: str) -> None:
+    """Holding a directory creates it; a device that never built has none."""
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    assert not (project.root / api.BUILD_DIR).exists()
+
+    if call == "rename":
+        api.rename_device("bench-node", project=project, to="kitchen")
+    else:
+        api.delete_device("bench-node", project=project)
+
+    assert not (project.root / api.BUILD_DIR).exists()
+
+
+@pytest.mark.parametrize("call", ["rename", "delete"])
+def test_a_build_directory_that_was_already_there_stays(tmp_path: Path, call: str) -> None:
+    """What this call did not create, it does not tidy away.
+
+    Another device's output is the ordinary case; an empty `build/`
+    somebody made is theirs as well.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    make_device(project, "porch")
+    other = make_build_output(project, "porch")
+
+    if call == "rename":
+        api.rename_device("bench-node", project=project, to="kitchen")
+    else:
+        api.delete_device("bench-node", project=project)
+
+    assert other.is_dir()
+    assert (other / "build-report.json").is_file()
+    assert (project.root / api.BUILD_DIR).is_dir()
+
+
+@pytest.mark.parametrize("call", ["rename", "delete"])
+def test_an_empty_build_directory_somebody_made_is_not_tidied_away(
+    tmp_path: Path, call: str
+) -> None:
+    """The rule is "what this call created", not "what is empty now"."""
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    (project.root / api.BUILD_DIR).mkdir()
+
+    if call == "rename":
+        api.rename_device("bench-node", project=project, to="kitchen")
+    else:
+        api.delete_device("bench-node", project=project)
+
+    assert (project.root / api.BUILD_DIR).is_dir()

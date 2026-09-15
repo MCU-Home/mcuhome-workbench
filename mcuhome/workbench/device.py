@@ -54,6 +54,13 @@ build output would leave the path free for a second process to create
 another one under the same name and start working — in the build
 directory of a device this call is still moving.
 
+**Neither leaves a trace of itself.** Holding a build directory creates
+it, and a device that was never built has none — so both calls remove
+the directories they only took in order to hold them, and the project's
+``build/`` as well when it was this call that brought it into existence.
+A ``build/`` that was already there stays: it is the project's, not
+this call's to tidy away.
+
 **What the order of operations promises.** Everything that can be
 refused is refused before the first file is touched, and the new device
 file is rendered in memory at that point too — so a device whose YAML
@@ -84,7 +91,7 @@ from mcuhome.workbench.buildlock import (
     open_build_lock,
 )
 from mcuhome.workbench.loader import editing_yaml, read_editable_yaml
-from mcuhome.workbench.project import DEVICE_FILE, Project, refuse_unknown_device
+from mcuhome.workbench.project import BUILD_DIR, DEVICE_FILE, Project, refuse_unknown_device
 
 __all__ = [
     "delete_device",
@@ -121,6 +128,23 @@ def _require_free(name: str, path: Path, what: str) -> None:
             "a device onto something that already exists."
         ),
     )
+
+
+def _discard_build_root(project: Project, *, created: bool) -> None:
+    """Remove the ``build/`` this call brought into existence, if it is empty.
+
+    Taking a lock creates the directory it guards, and the directory it
+    guards is inside ``build/`` — so a rename or a delete of a device
+    that was never built would otherwise leave a ``build/`` behind that
+    nobody asked for. What this call created, this call removes; a
+    ``build/`` that was already there is the project's, and stays even
+    when the last device's output has just gone out of it.
+    """
+    if not created:
+        return
+    with contextlib.suppress(OSError):
+        # Fails, and is meant to, while anything is still in it.
+        (project.root / BUILD_DIR).rmdir()
 
 
 def _require_build_dir(path: Path) -> None:
@@ -288,6 +312,7 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
 
     text = _renamed_text(project.device_entry(name), to=to)
     had_build = build_dir.is_dir()
+    made_build_root = not (project.root / BUILD_DIR).exists()
     changed: list[Path] = []
 
     with (
@@ -329,6 +354,7 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
 
     discard_build_directory(build_dir)
     discard_build_directory(new_build_dir)
+    _discard_build_root(project, created=made_build_root)
     return tuple(changed)
 
 
@@ -398,6 +424,7 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
     build_dir = project.device_build_dir(name)
     _require_build_dir(build_dir)
     had_build = build_dir.is_dir()
+    made_build_root = not (project.root / BUILD_DIR).exists()
     removed: list[Path] = []
 
     with open_build_lock(build_dir, device=name, operation="delete"):
@@ -422,4 +449,5 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
             removed.append(secrets)
 
     discard_build_directory(build_dir)
+    _discard_build_root(project, created=made_build_root)
     return tuple(removed)
