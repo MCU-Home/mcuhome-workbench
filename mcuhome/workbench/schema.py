@@ -46,7 +46,9 @@ __all__ = [
     "RawThread",
     "RawWifi",
     "assign_endpoint_ids",
+    "is_device_name",
     "parse_config",
+    "refuse_device_name",
 ]
 
 
@@ -71,6 +73,40 @@ def assign_endpoint_ids(node: RawNodeModel | None) -> dict[int, int]:
 # host called 1234).
 DEVICE_NAME_RE = re.compile(r"^(?=[0-9-]*[a-z])[a-z0-9][a-z0-9-]*$")
 DEVICE_NAME_MAX = 32
+
+
+def is_device_name(name: str) -> bool:
+    """Whether *name* is one a device may carry.
+
+    The one place the rule is spelled: the parse below asks it of a
+    name read out of a device file, and every call that is *given* one
+    asks it before it writes anything. A name that is legal for one of
+    them and not for the others would be a device MCUHome can create
+    and then refuses to load.
+    """
+    return (
+        bool(DEVICE_NAME_RE.match(name)) and not name.endswith("-") and len(name) <= DEVICE_NAME_MAX
+    )
+
+
+def refuse_device_name(name: str) -> ConfigError:
+    """The refusal for a name :func:`is_device_name` rejects.
+
+    One wording wherever a name is stated rather than read out of a
+    file, so a user meets the rule in the same words whichever command
+    they typed. The parse below has the same sentence with a location,
+    because there the name sits in a file that can be pointed at.
+    """
+    return ConfigError(
+        f'"{name}" is not a usable device name.',
+        hint=(
+            f"use lowercase letters, digits and dashes, at most "
+            f"{DEVICE_NAME_MAX} characters, at least one letter, not starting "
+            "or ending with a dash — the name becomes the device's folder and the "
+            "node's hostname"
+        ),
+    )
+
 
 _DURATION_UNITS = {
     "ms": 1,
@@ -574,9 +610,7 @@ def _parse_device(reader: MapReader) -> RawDevice:
         required=True,
         hint="add name: my-sensor — lowercase letters, digits and dashes; it becomes the hostname",
     )
-    if name is not None and (
-        not DEVICE_NAME_RE.match(name) or name.endswith("-") or len(name) > DEVICE_NAME_MAX
-    ):
+    if name is not None and not is_device_name(name):
         reader.errors.add(
             f'"{name}" is not a usable device name.',
             location=reader.loc_of("name"),

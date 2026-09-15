@@ -180,18 +180,6 @@ def _refuse_unknown_board(board: str) -> ConfigError:
     )
 
 
-def _refuse_bad_name(name: str) -> ConfigError:
-    return ConfigError(
-        f'"{name}" is not a usable device name.',
-        hint=(
-            f"use lowercase letters, digits and dashes, at most "
-            f"{schema.DEVICE_NAME_MAX} characters, at least one letter, not starting "
-            "or ending with a dash — the name becomes the device's folder and the "
-            "node's hostname"
-        ),
-    )
-
-
 def _refuse_unknown(kind: str, name: str, known: Mapping[str, object], planned: Mapping[str, str]):
     """One refusal shape for every registry table the outline names.
 
@@ -483,10 +471,8 @@ def create_device(
     when missing — it is part of the layout the marker promises, not a
     decision.
     """
-    if not schema.DEVICE_NAME_RE.match(name) or name.endswith("-"):
-        raise _refuse_bad_name(name)
-    if len(name) > schema.DEVICE_NAME_MAX:
-        raise _refuse_bad_name(name)
+    if not schema.is_device_name(name):
+        raise schema.refuse_device_name(name)
     if board not in registry.BOARDS:
         raise _refuse_unknown_board(board)
     # Before the folder is touched: an outline that cannot be rendered is
