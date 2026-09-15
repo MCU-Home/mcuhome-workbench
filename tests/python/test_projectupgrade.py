@@ -692,8 +692,21 @@ def test_a_linked_directory_is_refused_rather_than_moved(tmp_path: Path, kind: s
     assert (secrets / kind).is_symlink(), "the link is still the link"
 
 
-def test_a_linked_target_directory_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source", ["present", "absent"])
+def test_a_linked_target_directory_is_refused(tmp_path: Path, source: str) -> None:
+    """Whether or not this kind has anything to move into it.
+
+    An empty source is no reason to leave a link at the target unsaid:
+    the project writes its secrets into that directory from now on, so a
+    link there puts them somewhere else on the disk, under permissions
+    this project does not set. The version-1 project has a
+    ``secrets/devices/`` — removing it is the second case.
+    """
     root = v1_project(tmp_path / "old")
+    if source == "absent":
+        for entry in sorted((root / "secrets" / "devices").iterdir()):
+            entry.unlink()
+        (root / "secrets" / "devices").rmdir()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (root / "secrets" / "device").symlink_to(elsewhere)
@@ -704,6 +717,21 @@ def test_a_linked_target_directory_is_refused(tmp_path: Path) -> None:
     assert str(root / "secrets" / "device") in told
     assert tree_of(root / "secrets") == before
     assert list(elsewhere.iterdir()) == [], "nothing went through the link"
+
+
+def test_a_file_at_a_target_is_refused_with_nothing_to_move_into_it(tmp_path: Path) -> None:
+    """The other shape of the same case: a plain file where a directory belongs."""
+    root = v1_project(tmp_path / "old")
+    for entry in sorted((root / "secrets" / "build-server").iterdir()):
+        entry.unlink()
+    (root / "secrets" / "build-server").rmdir()
+    _write_secret(root / "secrets" / "builder", "not a directory\n")
+    before = tree_of(root / "secrets")
+
+    told = refusal_of(root)
+
+    assert str(root / "secrets" / "builder") in told
+    assert tree_of(root / "secrets") == before
 
 
 def test_a_file_where_a_secrets_directory_belongs_is_refused(tmp_path: Path) -> None:

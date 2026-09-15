@@ -69,8 +69,10 @@ keeps working with nothing else to do.
 
 What this means for you:
 
-  * Your secrets keep their content and their permissions. Nothing is
-    copied anywhere, nothing is deleted and nothing leaves this machine.
+  * Your secrets keep their content and their permissions. No file is
+    copied, no file is deleted and nothing leaves this machine. An old
+    directory the move leaves empty is removed with it; one that still
+    holds something stays where it is.
   * The .gitignore line for secrets/ still covers all of it.
   * Nothing here overwrites a file of yours. Anything this upgrade
     cannot move without guessing — two signing keys, a reference to a
@@ -150,19 +152,25 @@ def _preflight(secrets: Path) -> None:
 
 
 def _check_directories(source: Path, target: Path) -> None:
-    """The two directories of one kind, before anything is moved between them."""
+    """The two directories of one kind, before anything is moved between them.
+
+    The target is examined whether or not there is anything to move into
+    it. A link or a plain file where a secrets directory belongs is the
+    same problem either way: the project writes its secrets there from
+    now on, and a link would put them somewhere else on the disk under
+    permissions this project does not set. An empty source is not a
+    reason to leave that unsaid.
+    """
+    if target.is_symlink():
+        raise _refuse_link(target)
+    if target.exists() and not target.is_dir():
+        raise _refuse_not_a_directory(target)
     if not source.exists() and not source.is_symlink():
-        return  # nothing to move out of: the target is whatever it is
+        return  # nothing to move out of; the target has been looked at
     if source.is_symlink():
         raise _refuse_link(source)
     if not source.is_dir():
         raise _refuse_not_a_directory(source)
-    if not target.exists() and not target.is_symlink():
-        return
-    if target.is_symlink():
-        raise _refuse_link(target)
-    if not target.is_dir():
-        raise _refuse_not_a_directory(target)
 
 
 def _check_signing(secrets: Path) -> None:
