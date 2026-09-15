@@ -102,6 +102,7 @@ __all__ = [
     "find_project_root",
     "is_project_root",
     "is_upgrading",
+    "refuse_unknown_device",
     "require_secret_file",
     "resolve_device",
     "resolve_project",
@@ -373,6 +374,24 @@ def resolve_project(
     return read_project(found, require_version=require_version)
 
 
+def refuse_unknown_device(project: Project, name: str) -> ConfigError:
+    """The refusal for a device name the project does not have.
+
+    One wording for every call that takes a device by name, because they
+    all fail the same way and a user who mistyped wants the same thing
+    from each of them: the devices that *are* there, and where "there"
+    is. The project root is the location rather than a file, since the
+    file the name would have named is exactly what does not exist.
+    """
+    known = project.device_names()
+    listing = ", ".join(known) if known else "none yet"
+    return ConfigError(
+        f'There is no device called "{name}" in this project.',
+        location=Location(file=project.root),
+        hint=f"devices in {project.root}: {listing}",
+    )
+
+
 def _looks_like_path(spec: str) -> bool:
     return "/" in spec or "\\" in spec or spec.endswith((".yaml", ".yml"))
 
@@ -435,13 +454,7 @@ def resolve_device(
         if entry.is_file():
             return project, entry
         if project_dir is not None or not candidate_path.exists():
-            known = project.device_names()
-            listing = ", ".join(known) if known else "none yet"
-            raise ConfigError(
-                f'There is no device called "{spec}" in this project.',
-                location=Location(file=project.root),
-                hint=f"devices in {project.root}: {listing}",
-            )
+            raise refuse_unknown_device(project, spec)
 
     # 2. Explicit path: a device folder or a bare YAML file.
     entry = _entry_for_path(candidate_path, spec)
