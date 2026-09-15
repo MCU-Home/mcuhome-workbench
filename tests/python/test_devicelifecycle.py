@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 from conftest import REPO_ROOT
 from mcuhome.model.errors import ConfigError
-from test_buildlock import held_elsewhere
+from test_buildlock import child_env, held_elsewhere
 
 from mcuhome.workbench import api, build, device
 from mcuhome.workbench.buildlock import (
@@ -42,6 +42,13 @@ from mcuhome.workbench.buildlock import (
 )
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
+
+#: The tests that need a real peer: the lock is a POSIX advisory lock
+#: and re-entrant per process, so nothing else can hold a directory
+#: against this one — where there is no ``fork`` there is no way to ask.
+needs_a_peer = pytest.mark.skipif(
+    not hasattr(os, "fork"), reason="the lock is a POSIX advisory lock"
+)
 
 
 def make_project(tmp_path: Path) -> api.Project:
@@ -97,11 +104,7 @@ def taken_elsewhere(out_dir: Path) -> bool:
     done = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
-        env={
-            "PYTHONPATH": str(REPO_ROOT),
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PATH": os.environ.get("PATH", ""),
-        },
+        env=child_env(),
         capture_output=True,
         text=True,
         timeout=60,
@@ -351,6 +354,7 @@ def test_a_rename_refuses_a_device_file_it_cannot_read(tmp_path: Path) -> None:
     assert not (project.devices_dir / "kitchen").exists()
 
 
+@needs_a_peer
 def test_a_rename_refuses_while_somebody_is_in_the_build_directory(tmp_path: Path) -> None:
     """A build in flight keeps its device, and hears about it in words."""
     project = make_project(tmp_path)
@@ -428,6 +432,7 @@ def test_a_delete_refuses_a_device_the_project_does_not_have(tmp_path: Path) -> 
     assert project.device_names() == ["bench-node"]
 
 
+@needs_a_peer
 def test_a_delete_refuses_while_somebody_is_in_the_build_directory(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     make_device(project, "bench-node")
@@ -616,6 +621,7 @@ def _probing_rename(build_dir: Path, probes: list[bool]):
     return rename
 
 
+@needs_a_peer
 def test_nobody_gets_the_build_directory_while_a_rename_is_working(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -641,6 +647,7 @@ def test_nobody_gets_the_build_directory_while_a_rename_is_working(
     assert not build_dir.exists()
 
 
+@needs_a_peer
 def test_nobody_gets_the_build_directory_while_a_delete_is_working(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -664,6 +671,7 @@ def test_nobody_gets_the_build_directory_while_a_delete_is_working(
     assert not build_dir.exists()
 
 
+@needs_a_peer
 def test_a_build_directory_somebody_took_afterwards_is_left_alone(tmp_path: Path) -> None:
     """The last removal happens under the lock too, or not at all.
 

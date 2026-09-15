@@ -39,7 +39,13 @@ from mcuhome.workbench.buildlock import (
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="the lock is a POSIX advisory lock")
 
 
-def _child_env() -> dict[str, str]:
+def child_env() -> dict[str, str]:
+    """The environment a peer process of this suite is started with.
+
+    Public for the same reason :func:`held_elsewhere` is: every test
+    that needs a second process needs this, and a second copy of it
+    somewhere else is a second thing to keep in step.
+    """
     return {
         "PYTHONPATH": str(REPO_ROOT),
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -71,7 +77,7 @@ def held_elsewhere(out_dir: Path, *, device: str, operation: str = "build") -> I
     process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
-        env=_child_env(),
+        env=child_env(),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -109,7 +115,7 @@ def _a_second_process_is_still_refused(out_dir: Path) -> bool:
     completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-c", code],
         cwd=REPO_ROOT,
-        env=_child_env(),
+        env=child_env(),
         capture_output=True,
         text=True,
         timeout=60,
