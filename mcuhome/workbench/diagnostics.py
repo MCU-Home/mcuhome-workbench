@@ -67,6 +67,9 @@ WARNING_KINDS: tuple[str, ...] = (
     # A package registry is being read without checking any signature,
     # because the project configured it as untrusted.
     "unverified_registry",
+    # An environment variable MCUHome used to read is set. It is not
+    # read any more, and the successor is named in the message.
+    "retired_environment_variable",
 )
 
 

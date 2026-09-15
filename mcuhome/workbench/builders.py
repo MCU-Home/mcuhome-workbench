@@ -185,7 +185,27 @@ def _check_name(name: Any, *, location: Location) -> None:
         )
 
 
+#: Keys an entry used to carry, and what each is called now. One word
+#: per thing: where a build runs is a ``target`` wherever it is written,
+#: and the image a build environment is delivered in is a
+#: ``container_image`` — a bare ``image`` says nothing about which of a
+#: build's images it means.
+_RETIRED_KEYS = {"type": "target", "image": "container_image"}
+
+
+def _refuse_retired_key(name: str, old: str, *, location: Location) -> ConfigError:
+    new = _RETIRED_KEYS[old]
+    return ConfigError(
+        f'The builder "{name}" has no option called {old!r}.',
+        location=location,
+        hint=f"it is {new!r} now — write `{new}:` where the entry says `{old}:`.",
+    )
+
+
 def _parse_entry(name: str, entry: dict, *, location: Location, origin: str, file: Path) -> Builder:
+    for old in _RETIRED_KEYS:
+        if old in entry:
+            raise _refuse_retired_key(name, old, location=location)
     target = entry.get("target")
     if target not in BUILD_TARGETS:
         raise ConfigError(

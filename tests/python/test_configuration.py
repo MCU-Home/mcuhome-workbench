@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import line_of
 from mcuhome.model.errors import ConfigError
 
 from mcuhome.workbench import configuration
@@ -320,6 +321,125 @@ def test_arguments_for_undeclared_or_bootstrap_names_are_programming_errors(
         resolve_settings(project=project, env={}, args=[Argument("no_such", 1)])
     with pytest.raises(ValueError):
         resolve_settings(project=project, env={}, args=[Argument("project.dir", "x")])
+
+
+# --- retired names ----------------------------------------------------
+#
+# A configuration file carries no version, so nothing can migrate it: the
+# successor is named where the old key is written instead. The variables
+# are the deliberate asymmetry — a warning, because a stale export would
+# otherwise refuse the command that fixes it.
+
+
+@pytest.mark.parametrize(
+    ("key", "successor", "written"),
+    [
+        ("builders", "builder", "builders:\n  - name: attic\n    type: remote\n"),
+        ("ccache_dir", "build.cache_root", "ccache_dir: /var/cache/ccache\n"),
+        ("default_builder", "build.builder", "default_builder: attic\n"),
+        ("project_dir", "project.dir", "project_dir: /elsewhere\n"),
+        ("signing_key", "signing.key", "signing_key: /keys/mine.pem\n"),
+    ],
+)
+def test_a_retired_key_is_refused_with_the_option_it_is_now(
+    project: Project, key: str, successor: str, written: str
+) -> None:
+    text = f"# my configuration\n{written}"
+    file = write_project(project, text)
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+
+    assert caught.value.message == f"There is no option called {key!r}."
+    assert successor in (caught.value.hint or "")
+    assert caught.value.location is not None
+    assert caught.value.location.file == file
+    assert caught.value.location.line == line_of(text, key)
+
+
+def test_the_hint_of_a_retired_key_is_the_line_to_write(project: Project) -> None:
+    """Not only the name: the shape, so the fix is a copy of the hint."""
+    write_project(project, "ccache_dir: /var/cache/ccache\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert "build:\n      cache_root:" in (caught.value.hint or "")
+
+
+def test_a_retired_key_whose_successor_no_file_may_set_says_so(project: Project) -> None:
+    """`signing_key` is `signing.key`, and that one is per-invocation."""
+    write_project(project, "signing_key: /keys/mine.pem\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    hint = caught.value.hint or ""
+    assert "--signing-key" in hint
+    assert "MCUHOME_SIGNING_KEY" in hint
+
+
+def test_the_builder_map_hint_carries_the_renamed_entry_keys(project: Project) -> None:
+    """The list became a map, and two of its keys changed with it."""
+    write_project(project, "builders:\n  - name: attic\n    type: remote\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    hint = caught.value.hint or ""
+    assert "target:" in hint
+    assert "container_image:" in hint
+
+
+def test_every_retired_key_names_a_successor_that_exists() -> None:
+    """A hint pointing at a key nobody declares would be worse than none."""
+    declared = {opt.name for opt in OPTIONS}
+    for key, successor in configuration.RETIRED_OPTIONS.items():
+        assert successor in declared, key
+        assert key not in declared, f"{key} is retired and declared at the same time"
+
+
+def test_a_retired_key_is_refused_in_every_file_layer(tmp_path: Path, project: Project) -> None:
+    """The user file too — it is the one this is most likely to sit in."""
+    env = user_env(tmp_path)
+    file = write_user(tmp_path, "ccache_dir: /var/cache/ccache\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=None, env=env)
+    assert caught.value.location is not None and caught.value.location.file == file
+    assert "build.cache_root" in (caught.value.hint or "")
+
+
+def test_config_set_refuses_a_retired_name_the_same_way(project: Project) -> None:
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(project.config_file, "ccache_dir", "/tmp/x", env={})
+    assert caught.value.message == "There is no option called 'ccache_dir'."
+    assert "build.cache_root" in (caught.value.hint or "")
+
+
+@pytest.mark.parametrize(("retired", "successor"), sorted(configuration.RETIRED_VARIABLES.items()))
+def test_a_retired_variable_warns_and_does_not_refuse(
+    project: Project, retired: str, successor: str
+) -> None:
+    found: list[object] = []
+    settings = resolve_settings(
+        project=project, env={retired: "something"}, on_warning=found.append
+    )
+    assert settings.value("build.target") == "local", "the resolution went through"
+    assert len(found) == 1
+    warning = found[0]
+    assert warning.kind == "retired_environment_variable"
+    assert warning.severity == "warning"
+    assert retired in warning.message
+    assert successor in (warning.hint or "")
+
+
+def test_a_retired_variable_without_a_channel_is_not_an_error(project: Project) -> None:
+    """A caller that takes no findings still gets its settings."""
+    settings = resolve_settings(project=project, env={"MCUHOME_DOCKER": "podman"})
+    assert settings.value("build.container_program") == "docker", "the old name sets nothing"
+
+
+def test_nothing_is_warned_about_when_no_retired_variable_is_set(project: Project) -> None:
+    found: list[object] = []
+    resolve_settings(
+        project=project,
+        env={"MCUHOME_BUILD_CONTAINER_PROGRAM": "podman"},
+        on_warning=found.append,
+    )
+    assert found == []
 
 
 # --- config print -----------------------------------------------------

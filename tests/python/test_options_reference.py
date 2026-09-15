@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome.workbench.configuration import OPTION_KINDS, OPTIONS
+from mcuhome.workbench.configuration import OPTION_KINDS, OPTIONS, RETIRED_VARIABLES
 
 REFERENCE = Path(__file__).resolve().parents[2] / "docs" / "api.md"
 
@@ -143,18 +143,13 @@ def test_every_kind_is_one_the_reference_knows(documented):
         assert opt.kind in OPTION_KINDS
 
 
-#: Variables MCUHome used to read behind the registry's back. Each one is
-#: an option now, and the point of this list is that the literal is gone:
-#: a module that reads a variable no option declares is a spelling
-#: `mcuhome config print` cannot show and nobody can find.
-RETIRED_VARIABLES = (
-    "MCUHOME_DOCKER",
-    "MCUHOME_IMGTOOL",
-    "MCUHOME_CCACHE_DIR",
-    "MCUHOME_DEFAULT_BUILDER",
-)
-
 PACKAGE = Path(__file__).resolve().parents[2] / "mcuhome" / "workbench"
+
+#: The one module that may spell a retired variable: the table that
+#: declares it retired. Everywhere else the literal is gone, which is the
+#: point — a module reading a variable no option declares is a spelling
+#: `mcuhome config print` cannot show and nobody can find.
+DECLARES_THE_RETIRED = PACKAGE / "configuration.py"
 
 #: What MCUHome sets *for* a build environment it starts, rather than
 #: reads: never options, and told apart from them by their prefix. These
@@ -166,10 +161,20 @@ SET_FOR_THE_BUILD_ENVIRONMENT = frozenset(
 )
 
 
-@pytest.mark.parametrize("variable", RETIRED_VARIABLES)
-def test_no_module_carries_a_retired_variable(variable: str) -> None:
+@pytest.mark.parametrize("variable", sorted(RETIRED_VARIABLES))
+def test_only_the_retired_table_still_spells_a_retired_variable(variable: str) -> None:
+    """Named once, to warn about it — and read nowhere."""
     for source in PACKAGE.rglob("*.py"):
+        if source == DECLARES_THE_RETIRED:
+            continue
         assert variable not in source.read_text(encoding="utf-8"), source
+
+
+def test_every_retired_variable_names_a_declared_successor() -> None:
+    """A successor nobody declares is a hint that points at nothing."""
+    declared = {opt.env_var for opt in OPTIONS if opt.env_var}
+    for retired, successor in RETIRED_VARIABLES.items():
+        assert successor in declared, retired
 
 
 def test_every_variable_the_package_names_is_a_declared_one() -> None:
@@ -187,4 +192,6 @@ def test_every_variable_the_package_names_is_a_declared_one() -> None:
         for found in pattern.findall(source.read_text(encoding="utf-8")):
             if found.startswith("MCUHOME_BUILDER_") or found in SET_FOR_THE_BUILD_ENVIRONMENT:
                 continue
+            if found in RETIRED_VARIABLES and source == DECLARES_THE_RETIRED:
+                continue  # the table that says it is retired
             assert found in declared, f"{source}: {found}"

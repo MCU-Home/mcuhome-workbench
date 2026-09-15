@@ -602,6 +602,7 @@ def resolve_settings(
     args: Sequence[Argument] = (),
     program: ProgramDefaults | None = None,
     declared_options: tuple[Option, ...] = OPTIONS,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> Settings
 ```
 *project* may be `None` outside a project — the project layer is then
@@ -611,6 +612,33 @@ flag was not used" and "the flag was used to clear the value" are
 different statements. Bootstrap options are skipped; a file that sets one
 is refused with the reason. Raises `ConfigError` for a value that does
 not fit its declaration, naming the file and line that supplied it.
+
+**Retired names.** A configuration file has no version and therefore no
+migration — the system file belongs to the machine, the user file to its
+owner. A key that used to be an option is refused instead, at the line it
+stands on, with the option it is today in the hint:
+
+| written | refused with |
+|---|---|
+| `builders:` | the map `builder`, keyed by the builder's name; inside an entry `type:` is `target:` and `image:` is `container_image:` |
+| `ccache_dir:` | `build.cache_root` |
+| `default_builder:` | `build.builder` |
+| `project_dir:` | `project.dir`, which no file may set — it decides where the project layer is |
+| `signing_key:` | `signing.key`, a per-invocation value |
+
+A **retired environment variable** is a warning instead of a refusal — a
+stale variable in a shell profile would otherwise block every command,
+including the one that fixes it. `MCUHOME_CCACHE_DIR`,
+`MCUHOME_DEFAULT_BUILDER`, `MCUHOME_DOCKER` and `MCUHOME_IMGTOOL` each
+draw a `retired_environment_variable` finding through `on_warning`,
+naming `MCUHOME_BUILD_CACHE_ROOT`, `MCUHOME_BUILD_BUILDER`,
+`MCUHOME_BUILD_CONTAINER_PROGRAM` and `MCUHOME_SIGNING_IMGTOOL`.
+
+A builder's credentials under the old path are refused the same way a
+retired key is: a `secrets/build-server/<name>.yaml` in the user or
+system configuration directory is named with the `mv` that moves it to
+`secrets/builder/<name>.yaml`. Inside a project that move is the
+project upgrade's, not the user's.
 
 ```python
 @dataclass(frozen=True)
@@ -1553,6 +1581,7 @@ not know a value still has the message:
 |---|---|
 | `exposed_secret_file` | a secrets file is readable by other users; the read went ahead, because only key material is refused outright |
 | `unverified_registry` | a package registry is being read without checking any signature, because the project configured it as untrusted |
+| `retired_environment_variable` | a variable MCUHome used to read is set; the message names the one that replaced it |
 
 Every function that can report one takes `on_warning`; a result that can
 carry findings answers them in its `diagnostics` list.
@@ -1579,7 +1608,7 @@ carry findings answers them in its `diagnostics` list.
 | `CONFIG_ORIGINS` | `("default", "program", "system", "user", "project", "environment", "arguments")` — ascending; `program` is a value an embedding program states for a shared key |
 | `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
 | `HOST_CHECKS` | `("runtime", "image", "store", "python", "workspace", "imgtool", "cache")` — what a `HostFinding.check` may be, append-only |
-| `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry")` — the kinds a warning's `kind` may carry, append-only |
+| `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry", "retired_environment_variable")` — the kinds a warning's `kind` may carry, append-only |
 | `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
 | `OPTIONS` | the declared option registry |
 | `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET` | where a build runs |

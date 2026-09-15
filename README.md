@@ -180,6 +180,15 @@ build:
   builder: attic
 ```
 
+A key that used to be an option is **refused where it is written**, naming the
+option it is today: `ccache_dir` is `build.cache_root`, `default_builder` is
+`build.builder`, `builders` is the map `builder` (with `type:` as `target:` and
+`image:` as `container_image:`), `signing_key` is `signing.key` and `project_dir`
+is `project.dir`. A configuration file carries no version, so nothing can
+rewrite it for you — the refusal states the line to write instead. A retired
+`MCUHOME_*` variable only warns, so a stale export cannot block the command that
+would fix it.
+
 ### Package registries
 
 A registry is a base domain. The workbench asks it where a source is served —

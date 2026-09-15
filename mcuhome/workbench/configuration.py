@@ -507,6 +507,36 @@ OPTIONS: tuple[Option, ...] = (
     ),
 )
 
+#: Keys a configuration file used to carry, and the option each of them
+#: is today. A configuration file has no version and therefore no
+#: migration — what a project's layout gets, a file in
+#: ``$XDG_CONFIG_HOME`` or ``/etc`` cannot have — so the successor is
+#: named where the old key is written instead, and the one edit a user
+#: has to make is a line they can see.
+RETIRED_OPTIONS: dict[str, str] = {
+    "builders": "builder",
+    "ccache_dir": "build.cache_root",
+    "default_builder": "build.builder",
+    "project_dir": "project.dir",
+    "signing_key": "signing.key",
+}
+
+#: Environment variables MCUHome used to read, and what each is called
+#: now. Unlike a retired key this is a **warning**, not a refusal: a
+#: stale variable exported in somebody's shell profile would otherwise
+#: block every command they run, including the one that would fix it.
+RETIRED_VARIABLES: dict[str, str] = {
+    "MCUHOME_CCACHE_DIR": "MCUHOME_BUILD_CACHE_ROOT",
+    "MCUHOME_DEFAULT_BUILDER": "MCUHOME_BUILD_BUILDER",
+    "MCUHOME_DOCKER": "MCUHOME_BUILD_CONTAINER_PROGRAM",
+    "MCUHOME_IMGTOOL": "MCUHOME_SIGNING_IMGTOOL",
+}
+
+#: The directory a builder's credentials used to live in, beside the
+#: configuration file of the user and system layers. Those two are
+#: outside every project, so no upgrade reaches them.
+RETIRED_BUILDER_SECRETS_DIR = "build-server"
+
 
 def option(name: str, declared_options: tuple[Option, ...] = OPTIONS) -> Option:
     """The declaration of *name*, or a ``ValueError`` for a name nobody declared.
@@ -843,6 +873,49 @@ def _refuse_not_file_settable(opt: Option, location: Location | None) -> ConfigE
     )
 
 
+def _refuse_retired_option(
+    key: str,
+    *,
+    location: Location | None = None,
+    registry: tuple[Option, ...] = OPTIONS,
+) -> ConfigError:
+    """The refusal for a key that was an option once, naming what it is now.
+
+    A configuration file carries no version, so there is no migration
+    that could rewrite it — the file in ``/etc`` belongs to the machine
+    and the one in a user's configuration directory to them. What
+    MCUHome can do is refuse at the line the old key stands on and say
+    what to write instead, which is the one edit that makes the file
+    current again.
+    """
+    successor = RETIRED_OPTIONS[key]
+    opt = next((one for one in registry if one.name == successor), None)
+    if opt is None:  # pragma: no cover - a test holds the table to the registry
+        hint = f"it is {successor!r} now."
+    elif opt.bootstrap or not opt.files:
+        # The successor cannot be written into a file either, so the
+        # hint is the channel refusal's — one source for the spellings a
+        # per-invocation value is set with.
+        hint = f"it is {successor!r} now, and {_refuse_not_file_settable(opt, location).hint}"
+    elif not opt.leaf:
+        hint = (
+            f"it is the map {successor!r} now, one section per builder, keyed by its "
+            "name:\n"
+            "    builder:\n"
+            "      <name>:\n"
+            "        target: remote\n"
+            "        server: <host[:port]>\n"
+            "Inside an entry, `type:` is `target:` and `image:` is `container_image:`."
+        )
+    else:
+        hint = f"it is {successor!r} now; write it as:\n    {opt.area}:\n      {opt.leaf}: <value>"
+    return ConfigError(
+        f"There is no option called {key!r}.",
+        location=location,
+        hint=hint,
+    )
+
+
 def _read_layer(
     file: Path,
     *,
@@ -917,6 +990,8 @@ def _read_layer(
                 location=location,
                 hint=f"write it as:\n    {declared.area}:\n      {declared.leaf}: <value>",
             )
+        if key in RETIRED_OPTIONS:
+            raise _refuse_retired_option(str(key), location=location, registry=registry)
         raise ConfigError(
             f"There is no option called {key!r}.",
             location=location,
@@ -932,6 +1007,7 @@ def resolve_settings(
     args: Sequence[Argument] = (),
     program: ProgramDefaults | None = None,
     declared_options: tuple[Option, ...] = OPTIONS,
+    on_warning: Callable[[Diagnostic], None] | None = None,
 ) -> Settings:
     """Resolve *declared_options* through the layers.
 
@@ -952,6 +1028,14 @@ def resolve_settings(
     The bootstrap option is skipped: it was consumed before this ran
     (:func:`mcuhome.workbench.project.resolve_project`), and a file that
     tries to set it is refused with the reason.
+
+    A configuration file holding a key that *used* to be an option is
+    refused at the line it stands on, naming the option it is today
+    (:data:`RETIRED_OPTIONS`); a retired **environment variable** draws a
+    ``retired_environment_variable`` warning through *on_warning*
+    instead. The asymmetry is deliberate: a file is edited once by
+    whoever owns it, while a stale variable exported in a shell profile
+    would refuse every command including the one that fixes it.
     """
     resolved: dict[str, Setting] = {
         opt.name: Setting(option=opt, value=opt.default, origin="default")
@@ -1010,6 +1094,11 @@ def resolve_settings(
             source=opt.env_var,
         )
 
+    if on_warning is not None:
+        for retired, successor in RETIRED_VARIABLES.items():
+            if env.get(retired):
+                on_warning(_retired_variable_warning(retired, successor))
+
     for argument in args:
         opt = _settable(argument.name, declared_options, channel="the command line")
         # The spelling the tool used, or the one this registry derives:
@@ -1022,6 +1111,23 @@ def resolve_settings(
         )
 
     return Settings(resolved)
+
+
+def _retired_variable_warning(retired: str, successor: str) -> Diagnostic:
+    """The finding for a variable that is set and is not read any more.
+
+    It carries no location: an environment variable stands in no file,
+    and a finding about nothing in particular renders without a place
+    rather than with a wrong one.
+    """
+    return Diagnostic.warning(
+        f"{retired} is set, and MCUHome does not read it any more.",
+        kind="retired_environment_variable",
+        hint=(
+            f"it is {successor} now. Export that one instead, and unset {retired} so "
+            "it cannot mislead the next person who reads your environment."
+        ),
+    )
 
 
 def _settable(name: str, registry: tuple[Option, ...], *, channel: str) -> Option:
@@ -1074,6 +1180,27 @@ def resolve_builder(
     )
 
 
+def _refuse_retired_credentials(found: Path, expected: Path, name: str) -> ConfigError:
+    """A credentials file under the name the layout used to give it.
+
+    Refused rather than read: the file holds a token, and quietly
+    ignoring it would make a build that should reach a builder go
+    somewhere else — or nowhere — with nothing said. Refused rather than
+    followed, too: one name for one thing is what the layout is for, and
+    a second path that also works is a second layout.
+    """
+    return ConfigError(
+        f'The credentials of the builder "{name}" are at {found}, which MCUHome does '
+        "not read any more.",
+        location=Location(file=found),
+        hint=(
+            f"a builder's credentials live under the builder's own directory now. "
+            f"Move the file:\n    mv {found} {expected}\n"
+            f"and remove {found.parent} once it is empty."
+        ),
+    )
+
+
 def _builder_token(
     name: str,
     *,
@@ -1082,14 +1209,22 @@ def _builder_token(
     on_warning: Callable[[Diagnostic], None] | None,
 ) -> str | None:
     relative = Path(BUILDER_SECRETS_DIR) / f"{name}.yaml"
-    candidates: list[Path] = []
+    retired = Path(RETIRED_BUILDER_SECRETS_DIR) / f"{name}.yaml"
+    secrets_dirs: list[Path] = []
     if project is not None:
-        candidates.append(project.secrets_dir / relative)
+        secrets_dirs.append(project.secrets_dir)
     for directory in (user_config_dir(env), system_config_dir(env)):
         if directory is not None:
-            candidates.append(directory / "secrets" / relative)
-    for file in candidates:
+            secrets_dirs.append(directory / "secrets")
+    for secrets_dir in secrets_dirs:
+        file = secrets_dir / relative
         if not file.is_file():
+            # The old name, at the rung that would otherwise be walked
+            # past in silence. A project's layout is moved by its
+            # upgrade; the user and system directories are outside every
+            # project, so the file is named here instead.
+            if (secrets_dir / retired).is_file():
+                raise _refuse_retired_credentials(secrets_dir / retired, file, name)
             continue
         require_secret_file(file, key_material=False, on_warning=on_warning)
         data = read_yaml_file(file)
@@ -1185,6 +1320,8 @@ def resolve_config_file(
 def _declared_or_refuse(name: str, registry: tuple[Option, ...]) -> Option:
     by_name = {opt.name: opt for opt in registry}
     if name not in by_name:
+        if name in RETIRED_OPTIONS:
+            raise _refuse_retired_option(name, registry=registry)
         settable = sorted(n for n, o in by_name.items() if o.files and not o.bootstrap)
         raise ConfigError(
             f"There is no option called {name!r}.",

@@ -288,6 +288,79 @@ def test_a_missing_credentials_file_means_a_tokenless_builder(project: Project) 
     assert resolve_builder(settings, project=project, env={}).token is None
 
 
+@pytest.mark.parametrize(
+    ("retired", "successor"), [("type", "target"), ("image", "container_image")]
+)
+def test_a_retired_entry_key_is_refused_with_the_one_it_is_now(
+    project: Project, retired: str, successor: str
+) -> None:
+    """The two keys the list-to-map move renamed inside an entry.
+
+    One word per thing: where a build runs is a target wherever it is
+    written, and a bare `image` does not say which of a build's images it
+    means.
+    """
+    write_project(project, f"builder:\n  attic:\n    {retired}: local\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert f"no option called {retired!r}" in caught.value.message
+    assert successor in (caught.value.hint or "")
+    assert caught.value.location is not None
+    assert caught.value.location.file == project.config_file
+
+
+def test_a_retired_entry_key_is_named_even_beside_a_valid_target(project: Project) -> None:
+    """`target: local` plus `image:` — the refusal is about the old key."""
+    write_project(project, "builder:\n  attic:\n    target: local\n    image: ghcr.io/x:1\n")
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert "no option called 'image'" in caught.value.message
+    assert "container_image" in (caught.value.hint or "")
+
+
+def test_credentials_under_the_retired_path_are_refused_not_ignored(
+    tmp_path: Path, project: Project
+) -> None:
+    """A token nothing reads any more must not be walked past in silence.
+
+    The user and system configuration directories lie outside every
+    project, so no project upgrade reaches them: the file is named here,
+    with the move that fixes it.
+    """
+    env = user_env(tmp_path)
+    write_project(project, REMOTE_ATTIC + "build:\n  builder: attic\n")
+    retired = tmp_path / "xdg" / "mcuhome" / "secrets" / "build-server" / "attic.yaml"
+    retired.parent.mkdir(parents=True, mode=0o700)
+    retired.write_text("token: from-user\n", encoding="utf-8")
+    retired.chmod(0o600)
+    settings = resolve_settings(project=project, env=env)
+
+    with pytest.raises(ConfigError) as caught:
+        resolve_builder(settings, project=project, env=env)
+
+    expected = retired.parent.parent / "builder" / "attic.yaml"
+    assert str(retired) in caught.value.message
+    assert caught.value.location is not None and caught.value.location.file == retired
+    assert f"mv {retired} {expected}" in (caught.value.hint or "")
+
+
+def test_a_credentials_file_in_the_new_place_wins_over_the_retired_one(
+    tmp_path: Path, project: Project
+) -> None:
+    """Refused only where the old file would otherwise be missed."""
+    env = user_env(tmp_path)
+    write_project(project, REMOTE_ATTIC + "build:\n  builder: attic\n")
+    directory = tmp_path / "xdg" / "mcuhome" / "secrets"
+    for kind, token in (("build-server", "old"), ("builder", "new")):
+        file = directory / kind / "attic.yaml"
+        file.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        file.write_text(f"token: {token}\n", encoding="utf-8")
+        file.chmod(0o600)
+
+    settings = resolve_settings(project=project, env=env)
+    assert resolve_builder(settings, project=project, env=env).token == "new"
+
+
 def test_the_nearest_credentials_file_answers_whole(tmp_path: Path, project: Project) -> None:
     env = user_env(tmp_path)
     write_project(project, REMOTE_ATTIC + "build:\n  builder: attic\n")
