@@ -529,3 +529,131 @@ def test_a_file_emptied_and_written_again_keeps_its_comments(tmp_path: Path) -> 
     assert project.secrets_file.read_text(encoding="utf-8") == (
         "# the shared secrets of this project\nwifi_password: again\n"
     )
+
+
+# --------------------------------------------------------------------------
+# Who may write into secrets/
+# --------------------------------------------------------------------------
+
+#: Every place in the package **outside this surface** that writes
+#: anything under a project's ``secrets/``, with what it is for. Each of
+#: them is a call that brings a secret into existence in the first place;
+#: changing one afterwards is the six functions' job alone, and a
+#: seventh writer appearing anywhere in the package fails this test
+#: instead of going unnoticed.
+WRITERS = {
+    "project.create_project": "creates secrets/ (mode 700) when a project is created",
+    "project.ensure_secrets_dir": "creates a directory inside it, owner-only",
+    "packageregistry.install_trust_anchors": "writes the bundled trust anchors",
+    "provision.create_pairing": "draws a device's commissioning credentials",
+    "provision._write_secrets": "and writes them into the device's own file",
+    "signing._create_project_key": "draws the firmware signing key and references it",
+}
+
+#: The writers inside :mod:`~mcuhome.workbench.secrets` itself: the three
+#: functions that change a file, and the one helper they share. Every
+#: other function of that module reads, and this is what says so.
+#: ``_render`` is in the list because it dumps — into a string buffer,
+#: which the check below cannot tell from a file, and a list that left it
+#: out would have to leave the dump out of the vocabulary instead.
+OWN_WRITERS = ("_render", "_write", "delete_secret_file", "set_secret", "unset_secret")
+
+#: How a path under ``secrets/`` is spelled anywhere in this package: the
+#: project's own accessors and the constant they are built from. A new
+#: spelling has to be added here, which is the point — a module that
+#: reaches into the directory by another name is exactly what this test
+#: is looking for.
+SECRETS_PATHS = frozenset(
+    {
+        "SECRETS_DIR",
+        "builder_secrets_dir",
+        "builder_secrets_file",
+        "device_secrets_dir",
+        "device_secrets_file",
+        "ensure_secrets_dir",
+        "firmware_secrets_file",
+        "secrets_dir",
+        "secrets_file",
+    }
+)
+
+#: What counts as writing, the private helpers of this package included —
+#: a writer that went through one of them and was not listed here would
+#: be invisible to this test.
+WRITE_CALLS = frozenset(
+    {
+        "_mkdir_private",
+        "_write",
+        "_write_owner_only",
+        "chmod",
+        "dump",
+        "mkdir",
+        "open",
+        "rename",
+        "replace",
+        "rmtree",
+        "touch",
+        "unlink",
+        "write_bytes",
+        "write_text",
+    }
+)
+
+
+def called_names(node: ast.AST) -> set[str]:
+    """Every name called inside *node*, attribute calls by their attribute."""
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            if isinstance(child.func, ast.Attribute):
+                names.add(child.func.attr)
+            elif isinstance(child.func, ast.Name):
+                names.add(child.func.id)
+    return names
+
+
+def mentioned_names(node: ast.AST) -> set[str]:
+    """Every name and attribute *node* mentions, called or not."""
+    return {child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)} | {
+        child.id for child in ast.walk(node) if isinstance(child, ast.Name)
+    }
+
+
+def functions_of(module: Path) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    return [
+        node
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+
+
+def test_nothing_outside_this_surface_writes_into_secrets() -> None:
+    """Every function of every module is read, not only the ones we remember.
+
+    A surface that promises "these six calls are how you change your
+    secrets" is worth exactly what the rest of the package does behind
+    it. A function that names a path under ``secrets/`` and writes has to
+    be in :data:`WRITERS`, with a line saying why it is there.
+    """
+    found = sorted(
+        f"{module.stem}.{node.name}"
+        for module in package_modules()
+        if module.stem != "secrets"
+        for node in functions_of(module)
+        if mentioned_names(node) & SECRETS_PATHS
+        if called_names(node) & WRITE_CALLS
+    )
+
+    assert found == sorted(WRITERS), (
+        "the writers of secrets/ changed — add the new one to WRITERS with its reason, "
+        "or route the write through the six functions"
+    )
+
+
+def test_only_the_three_changing_calls_write_in_this_module() -> None:
+    """The other half: inside the module, reading reads and writing writes."""
+    module = next(path for path in package_modules() if path.stem == "secrets")
+
+    writers = sorted(node.name for node in functions_of(module) if called_names(node) & WRITE_CALLS)
+
+    assert writers == sorted(OWN_WRITERS)
