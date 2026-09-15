@@ -577,25 +577,47 @@ SECRETS_PATHS = frozenset(
     }
 )
 
-#: What counts as writing, the private helpers of this package included —
-#: a writer that went through one of them and was not listed here would
-#: be invisible to this test.
+#: What counts as writing: every call in the standard library's
+#: vocabulary for putting something where a file was, or taking one
+#: away, plus the private helpers of this package — a writer that went
+#: through one of those and was not listed here would be invisible.
+#: ``open`` is in the list whatever mode it is called with, because the
+#: mode is an argument this check does not read, and a needless entry
+#: costs one line in :data:`WRITERS` while a missing one costs the test.
 WRITE_CALLS = frozenset(
     {
         "_mkdir_private",
         "_write",
         "_write_owner_only",
         "chmod",
+        "chown",
+        "copy",
+        "copy2",
+        "copyfile",
+        "copytree",
         "dump",
+        "hardlink_to",
+        "link",
+        "makedirs",
         "mkdir",
+        "move",
         "open",
+        "remove",
+        "removedirs",
         "rename",
+        "renames",
         "replace",
+        "rmdir",
         "rmtree",
+        "symlink",
+        "symlink_to",
         "touch",
+        "truncate",
         "unlink",
+        "write",
         "write_bytes",
         "write_text",
+        "writelines",
     }
 )
 
@@ -634,6 +656,16 @@ def test_nothing_outside_this_surface_writes_into_secrets() -> None:
     secrets" is worth exactly what the rest of the package does behind
     it. A function that names a path under ``secrets/`` and writes has to
     be in :data:`WRITERS`, with a line saying why it is there.
+
+    **What this cannot see**, stated so that nobody reads more into a
+    passing run than is in it: the check is two vocabularies
+    (:data:`SECRETS_PATHS`, :data:`WRITE_CALLS`) matched against one
+    function's own body. A write that goes through a private helper this
+    file does not name, or through a path spelled some other way — a
+    string joined together, a directory handed in as an argument — is
+    invisible to it. Both vocabularies are therefore kept wide rather
+    than exact, and the day a writer is added behind a new helper, the
+    helper goes in the list with it.
     """
     found = sorted(
         f"{module.stem}.{node.name}"
