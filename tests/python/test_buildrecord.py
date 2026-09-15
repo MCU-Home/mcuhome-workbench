@@ -35,7 +35,14 @@ from mcuhome.model.artifacts import Artifact
 from test_buildlock import held_elsewhere
 from test_localbuild import Seam, make_sdk_source
 
-from mcuhome.workbench import api, build, buildrecord, containerbuild, sessionclient
+from mcuhome.workbench import (
+    api,
+    build,
+    buildrecord,
+    containerbuild,
+    sessionclient,
+    subprocessbuild,
+)
 from mcuhome.workbench.buildenvsession import StepResult
 from mcuhome.workbench.buildlock import BUILD_LOCK_FILE, BuildDirectoryBusy
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
@@ -83,6 +90,61 @@ def _built(tmp_path, model, monkeypatch, **overrides) -> build.BuildResult:
         **overrides,
     )
     return asyncio.run(build.build_firmware(request, target="local"))
+
+
+class _Environment:
+    """A build environment the store would otherwise have to hold.
+
+    The subprocess composition provisions one from the context's pins
+    unless it is handed one, and provisioning needs a real store — which
+    is ``test_subprocessbuild``'s subject, not this file's.
+    """
+
+    developer = False
+
+    def described(self) -> str:
+        return "mcuhome-build-workspace 0.1.0"
+
+
+def _built_without_a_container(tmp_path, model, monkeypatch, **overrides) -> build.BuildResult:
+    """One real subprocess build through ``build_firmware``.
+
+    The mirror of :func:`_built` for the other local execution: the
+    composition is the true one — it creates the context and reports its
+    steps — and what is stubbed is the backend it would hand the context
+    to, plus the environment it would otherwise unpack.
+    """
+    make_sdk_source(tmp_path / "src")
+    original = build.compose_subprocess_build
+
+    def ran(context_dir, **kwargs):
+        (tmp_path / "out").mkdir(parents=True, exist_ok=True)
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=StepResult(action="build", context_id="", exit_code=0, status="success"),
+            out_dir=tmp_path / "out",
+            context_dir=context_dir,
+            environment=kwargs["environment"],
+        )
+
+    def composed(*args, **kwargs):
+        kwargs["environment"] = _Environment()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subprocessbuild, "run_locked_build", ran)
+    monkeypatch.setattr(subprocessbuild, "check_environment", lambda environment, **facts: None)
+    monkeypatch.setattr(build, "compose_subprocess_build", composed)
+    request = build.BuildRequest(
+        model=model,
+        out_dir=tmp_path / "build",
+        signing_pub=_PUBLIC_PEM,
+        options=_options(tmp_path / "src"),
+        **overrides,
+    )
+    return asyncio.run(
+        build.build_firmware(
+            request, target=build.LocalBuild(execution=build.SubprocessExecution())
+        )
+    )
 
 
 def _record_document(out_dir: Path) -> dict[str, Any]:
@@ -742,19 +804,29 @@ def test_the_step_vocabulary_is_ordered_and_published(tmp_path) -> None:
     assert all(key == key.lower() and "-" not in key for key in api.BUILD_STEPS)
 
 
-def test_build_steps_equals_the_keys_a_local_build_emits(tmp_path, model, monkeypatch) -> None:
-    """The plan against reality, for the container execution.
+@pytest.mark.parametrize(
+    ("build_it", "target"),
+    [
+        (_built, api.LocalBuild(execution=api.ContainerExecution())),
+        (_built_without_a_container, api.LocalBuild(execution=api.SubprocessExecution())),
+    ],
+    ids=["container", "subprocess"],
+)
+def test_build_steps_equals_the_keys_a_local_build_emits(
+    tmp_path, model, monkeypatch, build_it, target
+) -> None:
+    """The plan against reality, for both local executions.
 
     This is the test the whole seam stands on: a plan a client renders
     "step 2 of 3" from is a lie the moment the build reports something
     else, and the only thing that can establish it is a build that
-    actually reported.
+    actually reported. Both executions, because the plan has a row per
+    composition and a row nothing drives is a row nothing holds.
     """
     steps: list[str] = []
-    options = _options(tmp_path / "src")
-    planned = api.build_steps(target="local", options=options)
+    planned = api.build_steps(target=target, options=_options(tmp_path / "src"))
 
-    _built(tmp_path, model, monkeypatch, on_step=lambda key, **facts: steps.append(key))
+    build_it(tmp_path, model, monkeypatch, on_step=lambda key, **facts: steps.append(key))
 
     assert _first_seen(steps) == list(planned)
     assert planned == api.BUILD_STEPS
