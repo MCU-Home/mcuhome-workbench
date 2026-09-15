@@ -24,6 +24,7 @@ import errno
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +34,7 @@ from conftest import REPO_ROOT
 from mcuhome.model.errors import ConfigError
 from test_buildlock import held_elsewhere
 
-from mcuhome.workbench import api, device
+from mcuhome.workbench import api, build, device
 from mcuhome.workbench.buildlock import (
     BUILD_LOCK_FILE,
     BuildDirectoryBusy,
@@ -701,3 +702,65 @@ def test_a_link_pointing_nowhere_where_the_build_directory_belongs_is_refused(
 
     assert str(build_dir) in str(caught.value)
     assert build_dir.is_symlink()
+
+
+# --------------------------------------------------------------------------
+# What the rest of the package sees afterwards
+# --------------------------------------------------------------------------
+
+
+def test_the_patches_are_picked_up_under_the_new_name(tmp_path: Path) -> None:
+    """The convention keys on the device folder, and the folder moved.
+
+    A build of the renamed device has to carry the patches that
+    travelled with it — the same folder, found under the name it has
+    now. Asked of the build layer's own lookup rather than of the
+    filesystem, because that is what decides it.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    make_patch(project, "bench-node")
+
+    api.rename_device("bench-node", project=project, to="kitchen")
+
+    model = api.load_model(project.device_entry("kitchen"), project=project)
+    found = build._device_patches_dir(  # noqa: SLF001 - the convention under test
+        model, patches_dir=None, project_root=project.root
+    )
+    assert found == project.device_patches_dir("kitchen")
+    assert (found / "zephyr" / "0001-fix-uart.patch").is_file()
+
+
+def test_a_target_name_a_broken_link_occupies_is_taken(tmp_path: Path) -> None:
+    """A link pointing nowhere owns the name as much as a folder does.
+
+    Renaming onto it would follow it and write outside the project.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    link = project.devices_dir / "kitchen"
+    link.symlink_to(tmp_path / "nowhere")
+
+    with pytest.raises(ConfigError) as caught:
+        api.rename_device("bench-node", project=project, to="kitchen")
+
+    assert 'name "kitchen" is taken' in str(caught.value)
+    assert link.is_symlink()
+    assert project.device_entry("bench-node").is_file()
+
+
+def test_the_device_file_keeps_the_mode_its_owner_gave_it(tmp_path: Path) -> None:
+    """The rename writes the file back; it does not re-create it.
+
+    A file somebody restricted stays restricted — the replace takes the
+    mode that was there rather than the one a new file would get.
+    """
+    project = make_project(tmp_path)
+    entry = make_device(project, "bench-node")
+    entry.chmod(0o640)
+
+    api.rename_device("bench-node", project=project, to="kitchen")
+
+    moved = project.device_entry("kitchen")
+    assert stat.S_IMODE(moved.stat().st_mode) == 0o640
+    assert stated_name(moved) == "kitchen"
