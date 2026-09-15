@@ -277,6 +277,38 @@ def test_used_by_names_the_devices_whose_references_reach_the_entry(tmp_path: Pa
     assert [key.used_by for key in own.keys] == [("thermostat",)]
 
 
+def test_a_device_file_is_scanned_without_reading_what_it_points_at(tmp_path: Path) -> None:
+    """``used_by`` names secrets; it does not open a device's other files.
+
+    A device configuration may reference files of its own with ``!file``,
+    and the question "which devices read this secret" must not answer
+    itself by reading a certificate or a key. Both cases prove it from
+    the outside: a reference whose target is not there at all, and one
+    whose target cannot be read. Following either would raise, the
+    refusal would be swallowed as "this device names nothing", and the
+    device would drop out of ``used_by`` — which is what happens without
+    this, and what these two assertions are.
+    """
+    project = make_project(tmp_path)
+    entry = add_device(project, "kitchen")
+    entry.write_text(
+        entry.read_text(encoding="utf-8") + "  certificate: !file missing.pem\n",
+        encoding="utf-8",
+    )
+    unreadable = add_device(project, "attic")
+    (unreadable.parent / "secret.pem").write_text("-----BEGIN PRIVATE KEY-----\n", "utf-8")
+    (unreadable.parent / "secret.pem").chmod(0o000)
+    unreadable.write_text(
+        unreadable.read_text(encoding="utf-8") + "  certificate: !file secret.pem\n",
+        encoding="utf-8",
+    )
+    write_secrets(project.secrets_file, "wifi_password: x\n")
+
+    shared = api.read_secrets(project, kind="main")
+
+    assert [key.used_by for key in shared.keys] == [("attic", "kitchen")]
+
+
 def test_a_device_file_that_cannot_be_parsed_is_not_reported_here(tmp_path: Path) -> None:
     """A broken configuration is the validator's to report, not this list."""
     project = make_project(tmp_path)

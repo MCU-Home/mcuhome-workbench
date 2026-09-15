@@ -34,14 +34,17 @@ file would help nobody, while a call whose entire subject is those
 values must not hand them out of a file that is already handing them to
 everyone else.
 
-**Nothing here follows a ``!file`` reference.** The files are parsed with
-:func:`~mcuhome.workbench.loader.read_editable_yaml`, so a tagged entry
-stays a tag: listing the signing scope reads the *name* of the entry
-that points at the key, never a byte of the key itself
-(:func:`reveal_secret` refuses such an entry outright). The same parse is
-what makes a write a round trip — comments, order, blank lines and every
-other entry survive :func:`set_secret` and :func:`unset_secret` exactly
-as they were.
+**Nothing here follows a ``!file`` reference** — not in a secrets file
+and not in a device configuration. Every file these calls read is parsed
+with :func:`~mcuhome.workbench.loader.read_editable_yaml`, so a tagged
+entry stays a tag: listing the signing scope reads the *name* of the
+entry that points at the key and never a byte of the key itself
+(:func:`reveal_secret` refuses such an entry outright), and the
+``used_by`` scan reads the ``!secret`` names out of the devices' own
+configurations without opening whatever else those point at. The same
+parse is what makes a write a round trip — comments, order, blank lines
+and every other entry survive :func:`set_secret` and :func:`unset_secret`
+exactly as they were.
 
 **What the four kinds are.** :data:`SECRET_KINDS` is the vocabulary, and
 each kind says where its file is and who names it:
@@ -85,7 +88,6 @@ from mcuhome.model.errors import ConfigError, Location
 from mcuhome.workbench.loader import (
     editing_yaml,
     read_editable_yaml,
-    read_yaml_file,
     secret_references,
 )
 from mcuhome.workbench.project import Project, ensure_secrets_dir, require_secret_file
@@ -443,10 +445,18 @@ def _entries(scope: SecretScope) -> dict[str, Any]:
 
 
 def _device_references(project: Project, device: str) -> tuple[str, ...]:
-    """Which secrets *device*'s configuration reads, by the loader's own parse.
+    """Which secrets *device*'s configuration names, without resolving one.
 
-    A device whose file is missing or unreadable refers to nothing as far
-    as this is concerned: what is wrong with it is
+    The editing parse again, and here it matters twice over: a device
+    file may hold ``!file`` references of its own, and the question
+    "which devices read this secret" must not answer itself by reading a
+    certificate, a key, or whatever else somebody pointed a configuration
+    at. So the tags stay tags — the ``!secret`` names are read off them —
+    and a device whose ``!file`` neighbour is missing, unreadable or
+    exposed is answered from its references like any other.
+
+    A device whose file is missing or is not valid YAML names nothing as
+    far as this is concerned: what is wrong with it is
     :func:`~mcuhome.workbench.validate.validate`'s to say, and a list of
     who uses a secret must not be the place a broken configuration is
     reported.
@@ -455,7 +465,7 @@ def _device_references(project: Project, device: str) -> tuple[str, ...]:
     if not entry.is_file():
         return ()
     try:
-        return secret_references(read_yaml_file(entry))
+        return secret_references(read_editable_yaml(entry))
     except ConfigError:
         return ()
 

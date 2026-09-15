@@ -362,7 +362,9 @@ def delete_secret_file(project: Project, *, kind: str, name: str) -> bool
 `find_secret_scopes` answers every scope the project could have and
 whether its file exists — which devices and which builders have one.
 `read_secrets` answers the keys of one file with **masked** values and,
-for the shared file, which devices refer to each key.
+for the shared file, which devices refer to each key — read off the
+devices' own configurations without resolving anything in them, their
+`!file` references included.
 `reveal_secret` is a verb of its own so that the one call which returns a
 value cannot be made by accident; it answers exactly the key asked for.
 `set_secret` writes one key, creating the file with mode 0600 if it is

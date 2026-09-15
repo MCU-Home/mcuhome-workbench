@@ -269,21 +269,40 @@ def read_editable_yaml(path: Path) -> Any:
         raise _not_valid_yaml(exc, path) from exc
 
 
+def _secret_name(value: Any) -> str | None:
+    """The name a ``!secret`` reference carries, in either parse of it.
+
+    :func:`read_yaml_file` builds a :class:`SecretRef`, because it is on
+    the way to resolving one; :func:`read_editable_yaml` leaves the tag
+    as ruamel's ``TaggedScalar``, because it reads a file it is not going
+    to resolve — and a caller that only wants to know *which* secrets a
+    configuration names has no business resolving anything, its
+    ``!file`` neighbours included.
+    """
+    if isinstance(value, SecretRef):
+        return value.name
+    tag = getattr(value, "tag", None)
+    if getattr(tag, "value", None) == "!secret":
+        return str(value.value)
+    return None
+
+
 def secret_references(data: Any) -> tuple[str, ...]:
     """Every ``!secret`` name *data* refers to, in the order they appear.
 
-    Reads a parsed device configuration — :func:`read_yaml_file`'s
-    answer, before :func:`resolve_secrets` has replaced anything — and
-    answers the names, deduplicated. That is what makes "which devices
-    use this secret" a fact rather than a guess: the list comes from the
-    same references a build resolves.
+    Reads a parsed device configuration — from either parse this package
+    has, the resolving one and the editing one (:func:`_secret_name`) —
+    and answers the names, deduplicated. That is what makes "which
+    devices use this secret" a fact rather than a guess: the list comes
+    from the same references a build resolves.
     """
     found: list[str] = []
 
     def walk(value: Any) -> None:
-        if isinstance(value, SecretRef):
-            if value.name not in found:
-                found.append(value.name)
+        name = _secret_name(value)
+        if name is not None:
+            if name not in found:
+                found.append(name)
         elif isinstance(value, dict):
             for item in value.values():
                 walk(item)
