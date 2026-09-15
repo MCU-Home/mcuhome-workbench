@@ -789,6 +789,12 @@ answers the ones *this* target will report, in order, resolved from the
 same dispatch the build uses. That is what makes "step 2 of 3" true: the
 build itself reports no count and no percentage, because a step knows
 that it started and, later, what it found — and nothing in between.
+*target* is a target object, a target name, or `None` for "no
+preference", which takes `build.target` off *options* exactly as a build
+does; an unknown name is `UnknownBuildTarget` and a target object this
+package does not implement is a `TypeError`. The one thing it cannot
+know is a caller's own context: a build given a `context_dir` has had
+its first step done for it and reports no `context`.
 
 `on_wait(SeatWait)` is called each time a build server refuses a turn.
 `SeatWait` (frozen): `retry_after`, `waited`, `attempt`. It is

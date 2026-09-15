@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""Coming back to a build directory (``buildrecord.py``).
+"""Coming back to a build directory (``buildrecord.py``), and the step plan.
 
-What a build leaves behind, read by somebody who did not run it. The
-builds here are real — ``test_localbuild``'s scripted container runtime,
-driven through ``build_firmware`` — because a record written by a test is
-the one thing that cannot establish that a build writes one.
+Two subjects that need the same thing to be worth anything — a build that
+really ran — so they are tested from the same harness: ``test_localbuild``'s
+scripted container runtime, driven through ``build_firmware``, with no
+container and no socket anywhere.
 
 * **The record.** A build writes ``.mcuhome-build.json`` when it ends,
   whatever the verdict, and ``read_build`` answers what the directory
@@ -16,6 +16,10 @@ the one thing that cannot establish that a build writes one.
 * **Cleaning.** ``clean_build`` holds the directory while it works,
   refuses while somebody else is in it, and removes what a build wrote
   and nothing else.
+* **The step plan.** ``build_steps`` says what a target will report, and
+  the test compares it against the keys ``on_step`` actually emitted in a
+  build of that target — the strongest available check that the plan is
+  honest rather than a second list somebody keeps in step by hand.
 """
 
 from __future__ import annotations
@@ -614,6 +618,216 @@ def test_clean_build_never_follows_a_record_out_of_the_directory(tmp_path) -> No
     assert (elsewhere / "firmware.bin").is_file()
     assert keepsake.is_file()
     assert [path.name for path in removed] == [buildrecord.BUILD_RECORD_FILE]
+
+
+# --------------------------------------------------------------------------
+# The step plan
+# --------------------------------------------------------------------------
+
+
+def test_the_step_vocabulary_is_ordered_and_published(tmp_path) -> None:
+    """``BUILD_STEPS`` is what a client lays its progress out from.
+
+    Before a build starts there is nothing else to lay it out from, so
+    the vocabulary is a published constant rather than something a client
+    learns by watching one build.
+    """
+    assert api.BUILD_STEPS == ("context", "environment", "compile")
+    assert all(key == key.lower() and "-" not in key for key in api.BUILD_STEPS)
+
+
+def test_build_steps_equals_the_keys_a_local_build_emits(tmp_path, model, monkeypatch) -> None:
+    """The plan against reality, for the container execution.
+
+    This is the test the whole seam stands on: a plan a client renders
+    "step 2 of 3" from is a lie the moment the build reports something
+    else, and the only thing that can establish it is a build that
+    actually reported.
+    """
+    steps: list[str] = []
+    options = _options(tmp_path / "src")
+    planned = api.build_steps(target="local", options=options)
+
+    _built(tmp_path, model, monkeypatch, on_step=lambda key, **facts: steps.append(key))
+
+    assert _first_seen(steps) == list(planned)
+    assert planned == api.BUILD_STEPS
+
+
+def test_build_steps_equals_the_keys_a_remote_build_emits(tmp_path, model, monkeypatch) -> None:
+    """The same, for the target whose work happens on somebody else's machine.
+
+    The session client is stubbed at the seam ``test_build`` stubs it at;
+    what runs for real is everything this side does before the socket,
+    which is where the remote target's steps are reported.
+    """
+    make_sdk_source(tmp_path / "src")
+    steps: list[str] = []
+
+    async def fake_remote(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "c" * 64,
+            status="success",
+            artifacts=(),
+            out_dir=tmp_path / "out",
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake_remote)
+    options = _options(tmp_path / "src")
+    request = build.BuildRequest(
+        model=model,
+        out_dir=tmp_path / "build",
+        signing_pub=_PUBLIC_PEM,
+        options=options,
+        builder=api.SelectedBuilder(target="remote", server="10.0.0.5:8291"),
+        on_step=lambda key, **facts: steps.append(key),
+    )
+    result = asyncio.run(build.build_firmware(request, target="remote"))
+    assert result.ok
+
+    assert _first_seen(steps) == list(api.build_steps(target="remote", options=options))
+
+
+def test_a_remote_build_reports_the_environment_step_without_facts(
+    tmp_path, model, monkeypatch
+) -> None:
+    """Which environment serves a remote build is the server's answer, not this side's.
+
+    The step is reported — the server settles an environment, and a
+    client's step bar has to be able to show it — and it carries nothing,
+    because everything this side knows about it is the package set the
+    context already pinned. It is reported *after* the context, too: a
+    step that finished between another step's start and its facts is a
+    progress bar going backwards.
+    """
+    make_sdk_source(tmp_path / "src")
+    steps: list[tuple[str, dict]] = []
+
+    async def fake_remote(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "c" * 64,
+            status="success",
+            artifacts=(),
+            out_dir=tmp_path / "out",
+        )
+
+    monkeypatch.setattr(sessionclient, "run_remote_build", fake_remote)
+    request = build.BuildRequest(
+        model=model,
+        out_dir=tmp_path / "build",
+        signing_pub=_PUBLIC_PEM,
+        options=_options(tmp_path / "src"),
+        builder=api.SelectedBuilder(target="remote", server="10.0.0.5:8291"),
+        on_step=lambda key, **facts: steps.append((key, facts)),
+    )
+    assert asyncio.run(build.build_firmware(request, target="remote")).ok
+
+    assert [key for key, _facts in steps] == ["context", "context", "environment", "compile"]
+    # What the context pinned is in the context step's own facts, which
+    # is why the environment step has nothing left to say.
+    assert steps[1][1]["build_environment"]
+    assert steps[2][1] == {}
+    assert steps[3][1] == {"server": "10.0.0.5:8291"}
+
+
+def test_build_steps_resolves_the_target_the_way_a_build_does(tmp_path) -> None:
+    """No second dispatch: the same words, the same configuration, the same answer.
+
+    A caller hands over what it has — a name, a target object, or nothing
+    and the machine's configuration — exactly as it does to
+    ``build_firmware``, and an unknown name is the same refusal there as
+    here.
+    """
+    configured = build.BuildOptions(target="remote")
+
+    assert api.build_steps(options=configured) == api.build_steps(
+        target="remote", options=configured
+    )
+    assert api.build_steps(target=api.LocalBuild(), options=configured) == api.build_steps(
+        target="local", options=configured
+    )
+    assert api.build_steps(target="", options=build.BuildOptions()) == api.build_steps(
+        target=None, options=build.BuildOptions()
+    )
+    with pytest.raises(api.UnknownBuildTarget):
+        api.build_steps(target="somewhere-else", options=build.BuildOptions())
+    # A target *object* this package does not implement is the entry
+    # point's refusal for one: a name can be mistyped and an object
+    # cannot.
+    with pytest.raises(TypeError):
+        api.build_steps(target=_Elsewhere(), options=build.BuildOptions())
+    with pytest.raises(TypeError):
+        api.build_steps(
+            target=api.LocalBuild(execution=api.Execution()), options=build.BuildOptions()
+        )
+
+
+class _Elsewhere(api.BuildTarget):
+    """A build target nobody implements — an embedder's own, or a typo."""
+
+
+def test_a_build_that_was_given_a_context_reports_one_step_fewer(
+    tmp_path, model, monkeypatch
+) -> None:
+    """What the plan cannot know, stated where a caller meets it.
+
+    A caller that hands over a context it created itself has already done
+    the first step, and the build says nothing about work it did not do.
+    The plan is a property of the target, so it still names three — which
+    is the one difference between it and a recorded build, and it is in
+    the reference for that reason.
+    """
+    make_sdk_source(tmp_path / "src")
+    context = tmp_path / "context"
+    build.create_context(
+        model,
+        out_dir=context,
+        work_root=tmp_path / "made",
+        options=_options(tmp_path / "src"),
+        signing_pub=_PUBLIC_PEM,
+    )
+    steps: list[str] = []
+
+    _built(
+        tmp_path,
+        model,
+        monkeypatch,
+        context_dir=context,
+        on_step=lambda key, **facts: steps.append(key),
+    )
+
+    assert _first_seen(steps) == ["environment", "compile"]
+
+
+def _first_seen(keys: list[str]) -> list[str]:
+    """The step keys in the order they were first reported.
+
+    ``on_step`` is called twice per step — once when it starts and once
+    with what it found — so what is compared against the plan is the
+    order of the steps, not the number of calls.
+    """
+    seen: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.append(key)
+    return seen
+
+
+def test_every_key_a_build_reports_is_in_the_vocabulary(tmp_path, model, monkeypatch) -> None:
+    """Append-only means nothing if something reports outside the list.
+
+    A client switches on these keys, so one a build emits without
+    publishing it is a step nobody can render.
+    """
+    steps: list[str] = []
+    _built(tmp_path, model, monkeypatch, on_step=lambda key, **facts: steps.append(key))
+
+    assert set(steps) <= set(api.BUILD_STEPS)
+    assert isinstance(api.BUILD_STEPS, tuple)
 
 
 def test_the_artifact_type_is_what_the_record_carries() -> None:

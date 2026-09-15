@@ -164,6 +164,7 @@ if TYPE_CHECKING:  # pragma: no cover - types only
 
 __all__ = [
     "BUILD_MODES",
+    "BUILD_STEPS",
     "BUILD_TARGETS",
     "DEFAULT_BUILD_MODE",
     "DEFAULT_BUILD_TARGET",
@@ -185,6 +186,7 @@ __all__ = [
     "UnknownBuildMode",
     "UnknownBuildTarget",
     "build_firmware",
+    "build_steps",
     "create_context",
     "resolve_build_options",
     "compose_container_build",
@@ -1600,6 +1602,28 @@ def image_pin(model: DeviceModel, override: str | None) -> str | None:
     return model.sources.container_image or None
 
 
+def _chosen_target(
+    name: str | None, *, builder: SelectedBuilder | None, options: BuildOptions
+) -> str:
+    """Where a build runs: what was stated, then the builder, then the machine.
+
+    One ladder, so that a caller which asks what a build *would* report
+    (:func:`build_steps`) and the build itself cannot disagree about
+    which target that is. A stated name is refused by name; everything
+    else was resolved before it got here.
+    """
+    if name:
+        return resolve_build_target(name)
+    if builder is not None:
+        return resolve_build_target(builder.target)
+    return options.target
+
+
+def _chosen_mode(mode: str | None, *, options: BuildOptions) -> str:
+    """How a local build executes: what this build stated, then the machine."""
+    return resolve_build_mode(mode) if mode else options.mode
+
+
 def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
     """The build target a target *name* and a request describe together.
 
@@ -1623,14 +1647,9 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
     selected builder is such a statement.
     """
     options = options_for(request)
-    if name:
-        chosen = resolve_build_target(name)
-    elif request.builder is not None:
-        chosen = resolve_build_target(request.builder.target)
-    else:
-        chosen = options.target
+    chosen = _chosen_target(name, builder=request.builder, options=options)
     if chosen == TARGET_LOCAL:
-        mode = resolve_build_mode(request.mode) if request.mode else options.mode
+        mode = _chosen_mode(request.mode, options=options)
         if mode == MODE_SUBPROCESS:
             if request.container_image is not None:
                 raise _refuse_image_without_container(
@@ -1675,6 +1694,89 @@ def build_target_for(name: str | None, request: BuildRequest) -> BuildTarget:
         # which is the one thing an image pin exists to prevent. What is
         # allowed there stays the server operator's decision.
         container_image=image_pin(request.model, _stated_container_image(request)),
+    )
+
+
+#: Every step a build reports through ``on_step``, in the order they
+#: happen: the context is written, the build environment is settled, and
+#: the compile itself runs. Append-only, and the whole vocabulary — a
+#: client lays its progress out from this before a build starts, because
+#: nothing else can tell it in advance. The build reports no count and no
+#: percentage: a step says that it started and, later, what it found, and
+#: nothing in between is known.
+BUILD_STEPS = ("context", "environment", "compile")
+
+#: What each composition reports, by the word for the thing that ran it
+#: (the same vocabulary :data:`_UNSUPPORTED_HINTS` is keyed by). Every
+#: composition reports all three today; this is a table rather than one
+#: constant because *which* steps happen is a property of the
+#: composition — the day one of them stops having a step, it says so
+#: here, next to the dispatch that picks it, and :func:`build_steps`
+#: keeps being true without anybody maintaining a second list.
+_COMPOSITION_STEPS: dict[str, tuple[str, ...]] = {
+    MODE_CONTAINER: BUILD_STEPS,
+    MODE_SUBPROCESS: BUILD_STEPS,
+    TARGET_REMOTE: BUILD_STEPS,
+}
+
+
+def _ran_by(target: BuildTarget) -> str:
+    """Which composition *target* dispatches to, in one word.
+
+    The dispatch itself, factored out of :func:`_run` so that a caller
+    asking what a build would report goes through exactly the code that
+    decides what runs it — a second reading of the same target object is
+    how a plan and a build start disagreeing. The refusals are the
+    entry point's: a name can be mistyped and an object cannot, so an
+    object this package does not implement is a :class:`TypeError`.
+    """
+    if isinstance(target, LocalBuild):
+        if isinstance(target.execution, ContainerExecution):
+            return MODE_CONTAINER
+        if isinstance(target.execution, SubprocessExecution):
+            return MODE_SUBPROCESS
+        raise TypeError(
+            f"{type(target.execution).__name__} is not a build execution this package runs"
+        )
+    if isinstance(target, RemoteBuild):
+        return TARGET_REMOTE
+    raise TypeError(f"{type(target).__name__} is not a build target this package runs")
+
+
+def build_steps(
+    *, target: BuildTarget | str | None = None, options: BuildOptions
+) -> tuple[str, ...]:
+    """The steps *this* target will report, in order.
+
+    :data:`BUILD_STEPS` is the whole vocabulary; this is the part of it a
+    given target actually emits, resolved from the same dispatch
+    :func:`build_firmware` runs — which is what makes a client's "step 2
+    of 3" true rather than invented. *target* is what a caller has: a
+    target object, a target name, or ``None`` for "no preference", which
+    takes ``build.target`` off *options* exactly as a build does.
+
+    One thing it cannot know: a caller that hands a build a context it
+    created itself (:attr:`BuildRequest.context_dir`) has already done
+    the first step, and that build reports no ``context`` — the plan is a
+    property of the target, and the caller that skipped a step is the one
+    that knows it did.
+    """
+    chosen = target if isinstance(target, BuildTarget) else _target_by_name(target, options)
+    return _COMPOSITION_STEPS[_ran_by(chosen)]
+
+
+def _target_by_name(name: str | None, options: BuildOptions) -> BuildTarget:
+    """The target a name and the machine's configuration describe on their own.
+
+    :func:`build_target_for` with no request behind it: there is no
+    builder to consult and no per-build override, so what is left is the
+    stated name and the two configured values it falls back to.
+    """
+    if _chosen_target(name, builder=None, options=options) != TARGET_LOCAL:
+        return RemoteBuild()
+    mode = _chosen_mode(None, options=options)
+    return LocalBuild(
+        execution=SubprocessExecution() if mode == MODE_SUBPROCESS else ContainerExecution()
     )
 
 
@@ -1749,17 +1851,25 @@ async def build_firmware(
 
 
 async def _run(request: BuildRequest, target: BuildTarget) -> BuildResult:
-    """The composition *target* names, run over *request*."""
-    if isinstance(target, LocalBuild):
-        execution = target.execution
-        if isinstance(execution, ContainerExecution):
-            return await _run_local(request, execution)
-        if isinstance(execution, SubprocessExecution):
-            return await _run_subprocess(request, execution)
-        raise TypeError(f"{type(execution).__name__} is not a build execution this package runs")
+    """The composition *target* names, run over *request*.
+
+    The dispatch is :func:`_ran_by`, which is also what :func:`build_steps`
+    asks — so what a build reports and what a client was told it would
+    report come from one decision.
+    """
+    ran = _ran_by(target)
     if isinstance(target, RemoteBuild):
         return await _run_remote(request, target)
-    raise TypeError(f"{type(target).__name__} is not a build target this package runs")
+    if not isinstance(target, LocalBuild):  # pragma: no cover - `_ran_by` refused it already
+        raise TypeError(f"{type(target).__name__} is not a build target this package runs")
+    execution = target.execution
+    if ran == MODE_CONTAINER and isinstance(execution, ContainerExecution):
+        return await _run_local(request, execution)
+    if isinstance(execution, SubprocessExecution):
+        return await _run_subprocess(request, execution)
+    raise TypeError(  # pragma: no cover - `_ran_by` refused it already
+        f"{type(execution).__name__} is not a build execution this package runs"
+    )
 
 
 def compose_local_build(
@@ -2406,8 +2516,6 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
     finding an environment that delivers them.
     """
     context_dir = Path(work_root) / "context"
-    if request.on_step is not None:
-        request.on_step("environment")
     options = options_for(request)
     _create_context(
         request.model,
@@ -2435,14 +2543,6 @@ def _remote_context(request: BuildRequest, work_root: Path) -> Path:
         ),
         on_line=request.on_line,
     )
-    if request.on_step is not None:
-        request.on_step(
-            "environment",
-            build_environment=read_context_facts(context_dir)["build_environment"],
-            zephyr="",
-            found_under="",
-            fetched=False,
-        )
     return context_dir
 
 
@@ -2524,6 +2624,13 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
     from mcuhome.workbench import sessionclient
 
     if request.on_step is not None:
+        # Reported without facts, and after the context rather than
+        # inside it: which build environment serves this build is the
+        # server's choice, out of what its operator provisioned. The
+        # packages this side pinned are already in the context step's
+        # own facts, and repeating them here with two empty fields
+        # beside them would be a step inventing something to say.
+        request.on_step("environment")
         request.on_step("compile", server=target.server)
     stop = _StopSwitch(request.should_stop)
     result = await sessionclient.run_remote_build(

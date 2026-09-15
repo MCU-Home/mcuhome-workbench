@@ -140,6 +140,7 @@ from mcuhome.model.userpaths import expand as _expand
 
 from mcuhome.workbench import __version__
 from mcuhome.workbench.build import (
+    BUILD_STEPS,
     BuildOptions,
     BuildRequest,
     BuildResult,
@@ -147,6 +148,7 @@ from mcuhome.workbench.build import (
     UnknownBuildMode,
     UnknownBuildTarget,
     build_firmware,
+    build_steps,
     create_context,
     resolve_build_mode,
     resolve_build_options,
@@ -418,6 +420,7 @@ __all__ = [
     "BUILD_DIR",
     "BUILD_LOCK_FILE",
     "BUILD_MODES",
+    "BUILD_STEPS",
     "BUILD_REPORT_FILE",
     "BUILD_TARGETS",
     "BUNDLED_ANCHOR_DIR",
@@ -597,6 +600,7 @@ __all__ = [
     "WORKSPACE_LAYERS",
     "WaitedTooLong",
     "build_firmware",
+    "build_steps",
     "check_build_host",
     "clean_build",
     "context_id",
