@@ -661,11 +661,12 @@ signed: tuple[SignedArtifact, ...], container_image, busy)` with
 `to_dict()`. It states what is there and re-verifies nothing: the hashes
 in `artifacts` are the ones the build declared, so an artifact that was
 replaced afterwards still appears, under the hash it had when it was
-built. `out_dir` is where the build *delivered* — the report, the
-artifacts and the signed images are in it, which is the directory that
-was asked about wherever the build wrote there and a directory inside it
-where a build environment delivered into one of its own. `busy` is
-`is_busy` at the moment of the read.
+built. `out_dir` is where the build *delivered*: the report, the
+artifacts and the signed images are in it. That is the directory
+`read_build` was asked about wherever the build wrote there, and a
+directory inside it — the build environment's own output directory under
+the work root — where it did not, which is what a local build does.
+`busy` is `is_busy` at the moment of the read.
 
 Every build `build_firmware` ran leaves the record this is read from,
 a failed and a stopped one included (the build record under
