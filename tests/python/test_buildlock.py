@@ -27,10 +27,12 @@ from pathlib import Path
 import pytest
 from conftest import REPO_ROOT
 
+from mcuhome.workbench import buildlock
 from mcuhome.workbench.buildlock import (
     BUILD_LOCK_FILE,
     BuildDirectoryBusy,
     holder_of,
+    is_busy,
     open_build_lock,
 )
 
@@ -211,3 +213,58 @@ def test_a_garbled_record_costs_the_refusal_its_detail_not_its_correctness(tmp_p
         assert holder_of(tmp_path) == {}
         refusal = _refused(tmp_path)
     assert "Another MCUHome run is working" in refusal
+
+
+def test_a_lock_file_replaced_between_the_open_and_the_lock_is_taken_again(
+    tmp_path, monkeypatch
+) -> None:
+    """Locking the file that was there is not locking the path.
+
+    The two steps are not one, and between them the file this descriptor
+    points at can be removed — which is what the discard of an emptied
+    build directory does. A lock on a file that is no longer at that
+    path holds nothing: the path is free, and the next process creates
+    one of its own there and is granted the same directory. Forced here
+    by replacing the file inside the first ``flock`` call, and asserted
+    from outside: while the lock is held, the file *at the path* is
+    locked, which is what ``is_busy`` asks.
+    """
+    real_flock = buildlock.fcntl.flock
+    calls: list[int] = []
+
+    def flock(handle, operation):
+        calls.append(handle)
+        if len(calls) == 1:
+            # Somebody took the file away and put another one there.
+            path = tmp_path / BUILD_LOCK_FILE
+            path.unlink()
+            path.write_bytes(b"")
+        return real_flock(handle, operation)
+
+    monkeypatch.setattr(buildlock.fcntl, "flock", flock)
+
+    with open_build_lock(tmp_path, device="bmp180-node"):
+        assert is_busy(tmp_path), "the file at the path is not the one that was locked"
+
+    assert len(calls) > 1, "the take was not repeated"
+
+
+def test_a_lock_file_that_keeps_being_replaced_is_a_refusal(tmp_path, monkeypatch) -> None:
+    """A path that changes under every attempt is somebody working there.
+
+    Repeating forever would be a call that never answers; the bound is
+    small and what it ends in is the refusal every other way of not
+    getting the directory ends in.
+    """
+    real_flock = buildlock.fcntl.flock
+
+    def flock(handle, operation):
+        path = tmp_path / BUILD_LOCK_FILE
+        path.unlink()
+        path.write_bytes(b"")
+        return real_flock(handle, operation)
+
+    monkeypatch.setattr(buildlock.fcntl, "flock", flock)
+
+    with pytest.raises(BuildDirectoryBusy), open_build_lock(tmp_path, device="bmp180-node"):
+        pass

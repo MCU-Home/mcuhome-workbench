@@ -249,12 +249,8 @@ def open_build_lock(out_dir: Path, *, device: str = "", operation: str = "build"
         yield
         return
     path = out_dir / BUILD_LOCK_FILE
-    handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    handle = _take(path, out_dir, device, operation)
     try:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise _busy(out_dir, device, operation) from None
         os.ftruncate(handle, 0)
         record = {
             "pid": str(os.getpid()),
@@ -277,6 +273,47 @@ def open_build_lock(out_dir: Path, *, device: str = "", operation: str = "build"
                 del _COUNTS[out_dir]
         # Closing releases the lock; the file stays where it is.
         os.close(handle)
+
+
+#: How often a take is repeated when the file it locked turned out to be
+#: gone from the path it was opened at. Two is one more than the case
+#: that is real (the emptied directory of a rename being taken away);
+#: a path that keeps changing under a caller is somebody else working
+#: there, which is what the refusal says.
+_TAKE_ATTEMPTS = 3
+
+
+def _take(path: Path, out_dir: Path, device: str, operation: str) -> int:
+    """An open descriptor holding the lock file that is *at* ``path``.
+
+    Opening and locking are two steps, and between them the file the
+    descriptor points at can be removed — which is exactly what
+    :func:`discard_build_directory` does to an emptied directory. A lock
+    on a file that is no longer at that path is a lock on nothing: the
+    path is free, the next process creates a file of its own there and
+    is granted the same directory. So the inode that was locked is
+    compared against the one at the path afterwards, and a take that
+    locked the wrong one is repeated.
+
+    Raises :class:`BuildDirectoryBusy` when somebody holds it — and when
+    the file keeps being replaced, because a path that changes under
+    every attempt is somebody else working in that directory.
+    """
+    for _ in range(_TAKE_ATTEMPTS):
+        handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(handle)
+            raise _busy(out_dir, device, operation) from None
+        try:
+            locked = os.fstat(handle).st_ino == os.stat(path).st_ino
+        except OSError:  # pragma: no cover - the file went in between
+            locked = False
+        if locked:
+            return handle
+        os.close(handle)
+    raise _busy(out_dir, device, operation)
 
 
 def _busy(out_dir: Path, device: str, operation: str) -> BuildDirectoryBusy:
