@@ -876,3 +876,34 @@ def test_an_empty_build_directory_somebody_made_is_not_tidied_away(
         api.delete_device("bench-node", project=project)
 
     assert (project.root / api.BUILD_DIR).is_dir()
+
+
+@pytest.mark.parametrize("call", ["rename", "delete"])
+def test_a_linked_build_directory_is_refused_rather_than_followed(
+    tmp_path: Path, call: str
+) -> None:
+    """Somebody's link is not this call's to empty.
+
+    A link to a real directory is the one of the three that *works*:
+    the removal would take the contents of a directory somewhere else on
+    the disk and then report the link as what it removed.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    elsewhere = tmp_path / "scratch"
+    elsewhere.mkdir()
+    (elsewhere / "build-report.json").write_text("{}", encoding="utf-8")
+    build_dir = project.device_build_dir("bench-node")
+    build_dir.parent.mkdir(parents=True, exist_ok=True)
+    build_dir.symlink_to(elsewhere)
+
+    with pytest.raises(ConfigError) as caught:
+        if call == "rename":
+            api.rename_device("bench-node", project=project, to="kitchen")
+        else:
+            api.delete_device("bench-node", project=project)
+
+    assert "is a link" in str(caught.value)
+    assert build_dir.is_symlink()
+    assert (elsewhere / "build-report.json").is_file()
+    assert project.device_entry("bench-node").is_file()

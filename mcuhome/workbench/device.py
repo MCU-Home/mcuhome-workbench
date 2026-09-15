@@ -175,14 +175,28 @@ def _discard(project: Project, *directories: Path, build_root: bool) -> None:
 def _require_build_dir(path: Path) -> None:
     """Refuse a build directory that is not one, before the lock is taken.
 
-    Taking the lock creates the directory, and ``mkdir`` over a file — or
-    over a link pointing nowhere — is a bare ``FileExistsError`` out of
-    the standard library in the middle of a call that refuses in words
-    everywhere else. A path that is there and is not a directory is
-    somebody's own file under a name this project keeps for build
-    output, and saying so is all that can be done with it.
+    Two things are not one, and both would otherwise go wrong quietly.
+    A **file** — or a link pointing nowhere — meets the ``mkdir`` that
+    taking the lock does and comes back as a bare ``FileExistsError``
+    from the standard library, in the middle of a call that refuses in
+    words everywhere else. A **link to a directory** is worse than that,
+    because it works: this call would remove the contents of whatever it
+    points at, somewhere else on the disk, and then report the link as
+    the build directory it removed. Somebody put that link there on
+    purpose; where their build output goes is not this call's to decide,
+    so it says so and does nothing.
     """
-    if not _exists(path) or path.is_dir():
+    if path.is_symlink():
+        raise ConfigError(
+            f"{path} is a link, and a device's build directory is a directory.",
+            location=Location(file=path),
+            hint=(
+                "MCUHome will not remove a device's build output through a link "
+                "somebody put in the project. Take the link away — and the directory "
+                "it points at, if that is what you meant — then run this again."
+            ),
+        )
+    if not path.exists() or path.is_dir():
         return
     raise ConfigError(
         f"MCUHome cannot use {path} as a build directory: it is not a directory.",
@@ -267,7 +281,7 @@ def _empty_build_dir(directory: Path) -> None:
     the lock is released
     (:func:`~mcuhome.workbench.buildlock.discard_build_directory`).
     """
-    if directory.is_symlink() or not directory.is_dir():
+    if not directory.is_dir():
         return
     for entry in directory.iterdir():
         if entry.name == BUILD_LOCK_FILE:

@@ -353,7 +353,9 @@ package cannot parse — the name has to be rewritten, so a file that
 cannot be read is refused rather than half-moved. Both raise it for a
 `build/<device>` that is there and is not a directory: holding it would
 create it, and `mkdir` over somebody's file is not an answer anybody can
-act on. Everything either of
+act on. A `build/<device>` that is a **link** is refused as well, this
+one because it would work — the removal would empty a directory
+somewhere else on the disk and report the link as what it removed. Everything either of
 them refuses is refused before the first file is touched; after that a
 rename removes the build output, moves the folder, rewrites the name and
 moves the secrets, in that order, and a failure part-way through is a
