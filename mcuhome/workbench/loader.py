@@ -42,6 +42,7 @@ from typing import Any
 
 from mcuhome.model.errors import ConfigError, Location
 from ruamel.yaml import YAML, YAMLError
+from ruamel.yaml.constructor import RoundTripConstructor
 
 from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.project import DEVICES_DIR, require_secret_file
@@ -159,7 +160,26 @@ def _file_constructor(file: Path) -> Callable[[Any, Any], FileRef]:
 
 
 def _yaml(path: Path) -> YAML:
+    """A parser that knows this package's two tags, and nothing else does.
+
+    The subclass is the point. ``add_constructor`` is a **class** method
+    in ruamel: calling it on the stock round-trip constructor registers
+    the tag on every round-trip parser in the process — this package's
+    own editing parser (:func:`editing_yaml`), and any other library
+    reading YAML in the same program. Two things follow from that, and
+    both are wrong: a document somebody else parses would suddenly
+    resolve ``!secret``, and ``!file`` — which is bound to the file being
+    read here — would resolve *their* relative paths against the last
+    device file this package happened to open.
+
+    So every parse gets a constructor class of its own, and the
+    registrations die with it. The representer of :func:`editing_yaml` is
+    deliberately not treated the same way: :class:`FileRef` is this
+    package's own type, and a dump that writes it back as the reference
+    it is, is right wherever it happens.
+    """
     yaml = YAML(typ="rt")
+    yaml.Constructor = type("_ConfigConstructor", (RoundTripConstructor,), {})
     yaml.constructor.add_constructor("!secret", _secret_constructor)
     yaml.constructor.add_constructor("!file", _file_constructor(path))
     return yaml

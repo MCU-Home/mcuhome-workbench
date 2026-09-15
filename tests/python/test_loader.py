@@ -268,3 +268,41 @@ def test_a_file_outside_a_project_may_call_itself_anything(write_config) -> None
 
     assert entry.parent.name != data["device"]["name"]
     assert data["device"]["friendly_name"] == "Bench Node"
+
+
+def test_this_packages_tags_stay_in_this_packages_parser(tmp_path: Path) -> None:
+    """Parsing a configuration must not teach every other parser our tags.
+
+    ruamel registers a constructor on the constructor **class**, so a
+    registration made for one parse is a registration for every
+    round-trip parser in the process — including the editing parser this
+    package writes files back with, and any other library reading YAML in
+    the same program. The ``!file`` constructor is worse than the tag
+    itself: it is bound to the file being read, so a leaked registration
+    resolves somebody else's relative path against the last device folder
+    this package happened to open.
+    """
+    device = tmp_path / "devices" / "thermostat" / "main.yaml"
+    device.parent.mkdir(parents=True)
+    (device.parent / "certificate.pem").write_text("the device's own file\n", encoding="utf-8")
+    device.write_text(
+        "device:\n  name: thermostat\n  label: !secret device_label\n"
+        "  certificate: !file certificate.pem\n",
+        encoding="utf-8",
+    )
+    read_yaml_file(device)
+
+    # A second file, elsewhere, with a reference of the same spelling and
+    # a file of that name next to *it*. A leaked constructor resolves it
+    # against the device folder above — or reads its content at all.
+    other = tmp_path / "other.yaml"
+    (tmp_path / "certificate.pem").write_text("not the device's\n", encoding="utf-8")
+    other.write_text("certificate: !file certificate.pem\nlabel: !secret device_label\n", "utf-8")
+
+    data = editing_yaml().load(other.read_text(encoding="utf-8"))
+
+    assert not isinstance(data["certificate"], FileRef), (
+        "the editing parser followed a !file reference it must not know about"
+    )
+    assert str(data["certificate"]) != "the device's own file\n"
+    assert data["certificate"].tag.value == "!file", "the tag round-trips as a tag"
