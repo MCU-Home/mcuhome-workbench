@@ -357,7 +357,13 @@ act on. Everything either of
 them refuses is refused before the first file is touched; after that a
 rename removes the build output, moves the folder, rewrites the name and
 moves the secrets, in that order, and a failure part-way through is a
-refusal naming what did move and the one command that finishes it.
+refusal naming what did move and the one command that finishes it. One
+step is **taken back** instead: a folder that moved and a name that
+could not be written is the one state that would not load, so the folder
+goes back where it was and the refusal says the device is unchanged.
+Whatever a refusal leaves, it leaves no build directory: the ones this
+call held are emptied and taken away on the way out of a failure as
+well, so the name they occupy is free for the call somebody makes next.
 
 ```python
 def read_pairing(entry: Path, *, project: Project) -> Pairing | None

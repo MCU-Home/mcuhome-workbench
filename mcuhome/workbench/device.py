@@ -69,7 +69,11 @@ the build output goes first (it is disposable, and removing it can be
 retried), then the device folder, then the file inside it, then the
 secrets file. A failure after the folder has moved is therefore a
 refusal that names what did move and the one command that finishes the
-job, rather than a project nothing can find its way around in.
+job, rather than a project nothing can find its way around in. The one
+exception is the name: a folder that moved and a file that could not be
+rewritten is the single state that would not *load*, so that one step is
+taken back rather than reported, and the refusal says the device is as it
+was.
 """
 
 from __future__ import annotations
@@ -145,6 +149,27 @@ def _discard_build_root(project: Project, *, created: bool) -> None:
     with contextlib.suppress(OSError):
         # Fails, and is meant to, while anything is still in it.
         (project.root / BUILD_DIR).rmdir()
+
+
+def _discard(project: Project, *directories: Path, build_root: bool) -> None:
+    """Take the emptied build directories away, whatever the call did.
+
+    Run on the way out of a refusal as much as after a rename that
+    worked, because a directory that was held and emptied and then left
+    standing holds nothing but a lock file — and the next call to look
+    at that name, which after a failure is most likely the rename back,
+    would refuse it as a name that is taken.
+
+    Removes nothing a run has taken in the meantime and nothing that
+    still holds build output
+    (:func:`~mcuhome.workbench.buildlock.discard_build_directory`), and
+    raises nothing: it runs while an exception is on its way out, and an
+    exception raised in there would replace the refusal the caller has
+    to read.
+    """
+    for directory in directories:
+        discard_build_directory(directory)
+    _discard_build_root(project, created=build_root)
 
 
 def _require_build_dir(path: Path) -> None:
@@ -315,46 +340,51 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
     made_build_root = not (project.root / BUILD_DIR).exists()
     changed: list[Path] = []
 
-    with (
-        open_build_lock(build_dir, device=name, operation="rename"),
-        open_build_lock(new_build_dir, device=to, operation="rename"),
-    ):
-        for directory in (build_dir, new_build_dir):
+    try:
+        with (
+            open_build_lock(build_dir, device=name, operation="rename"),
+            open_build_lock(new_build_dir, device=to, operation="rename"),
+        ):
+            for directory in (build_dir, new_build_dir):
+                try:
+                    _empty_build_dir(directory)
+                except OSError as error:
+                    # Named one by one: a message that always said the
+                    # device's own would send somebody to the wrong path.
+                    raise _refuse_unremovable("build directory", directory, error) from error
+            if had_build:
+                changed.append(build_dir)
+
             try:
-                _empty_build_dir(directory)
+                os.rename(folder, target)
             except OSError as error:
-                # Named one by one: a message that always said the
-                # device's own would send somebody to the wrong path.
-                raise _refuse_unremovable("build directory", directory, error) from error
-        if had_build:
-            changed.append(build_dir)
+                raise _refuse_unmovable_folder(folder, target, error) from error
+            changed.append(target)
 
-        try:
-            os.rename(folder, target)
-        except OSError as error:
-            raise _refuse_unmovable_folder(folder, target, error) from error
-        changed.append(target)
+            entry = target / DEVICE_FILE
+            if text is not None:
+                try:
+                    _replace_atomically(entry, text)
+                except OSError as error:
+                    raise _refuse_name_not_rewritten(
+                        folder, target, name=name, to=to, error=error
+                    ) from error
+                changed.append(entry)
 
-        entry = target / DEVICE_FILE
-        if text is not None:
-            try:
-                _replace_atomically(entry, text)
-            except OSError as error:
-                raise _refuse_name_not_rewritten(entry, name=name, to=to, error=error) from error
-            changed.append(entry)
-
-        if _exists(secrets):
-            try:
-                # No directory to create: the two names are two files of
-                # one directory, and the old one is in it.
-                os.rename(secrets, new_secrets)
-            except OSError as error:
-                raise _refuse_secrets_left(secrets, new_secrets, error) from error
-            changed.append(new_secrets)
-
-    discard_build_directory(build_dir)
-    discard_build_directory(new_build_dir)
-    _discard_build_root(project, created=made_build_root)
+            if _exists(secrets):
+                try:
+                    # No directory to create: the two names are two files
+                    # of one directory, and the old one is in it.
+                    os.rename(secrets, new_secrets)
+                except OSError as error:
+                    raise _refuse_secrets_left(secrets, new_secrets, error) from error
+                changed.append(new_secrets)
+    finally:
+        # On the way out of a refusal too: a directory held and emptied
+        # and then left behind holds nothing but a lock file, and the
+        # next call — renaming back, most likely — would refuse it as a
+        # name that is taken.
+        _discard(project, build_dir, new_build_dir, build_root=made_build_root)
     return tuple(changed)
 
 
@@ -371,17 +401,43 @@ def _refuse_unmovable_folder(folder: Path, target: Path, error: OSError) -> Conf
     )
 
 
-def _refuse_name_not_rewritten(entry: Path, *, name: str, to: str, error: OSError) -> ConfigError:
-    """The folder moved and the name inside it did not — say exactly that."""
+def _refuse_name_not_rewritten(
+    folder: Path, target: Path, *, name: str, to: str, error: OSError
+) -> ConfigError:
+    """The folder moved and the name inside it did not.
+
+    The one half-done state that would not load: a device file in a
+    folder it disagrees with is refused by the loader, so this is the
+    one step that is **taken back** rather than reported. The folder goes
+    to where it came from — nothing else has happened yet, the file was
+    never written and the secrets have not moved — and the refusal then
+    says the device is as it was. Only when that move fails too is there
+    something for a person to finish, and then the message says which
+    line, in which file.
+    """
+    try:
+        os.rename(target, folder)
+    except OSError:
+        entry = target / DEVICE_FILE
+        return ConfigError(
+            f'The device folder moved to {target}, and its file still says "{name}": '
+            f"{error.strerror or error}.",
+            location=Location(file=entry, key="device.name"),
+            hint=(
+                f"MCUHome refuses to load a device whose file disagrees with its folder. "
+                f"Finish it by hand — in {entry}:\n"
+                f"    device:\n"
+                f"      name: {to}"
+            ),
+        )
+    entry = folder / DEVICE_FILE
     return ConfigError(
-        f'The device folder moved to {entry.parent}, and its file still says "{name}": '
-        f"{error.strerror or error}.",
+        f"MCUHome cannot write the new name into {entry}: {error.strerror or error}.",
         location=Location(file=entry, key="device.name"),
         hint=(
-            f"MCUHome refuses to load a device whose file disagrees with its folder. "
-            f"Finish it by hand — in {entry}:\n"
-            f"    device:\n"
-            f"      name: {to}"
+            f'The device is still called "{name}" and nothing of it moved; only its '
+            "build output was removed, and the next build writes that again. Fix the "
+            "file's permissions and run the rename again."
         ),
     )
 
@@ -427,27 +483,27 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
     made_build_root = not (project.root / BUILD_DIR).exists()
     removed: list[Path] = []
 
-    with open_build_lock(build_dir, device=name, operation="delete"):
-        try:
-            _empty_build_dir(build_dir)
-        except OSError as error:
-            raise _refuse_unremovable("build directory", build_dir, error) from error
-        if had_build:
-            removed.append(build_dir)
-
-        try:
-            _remove_tree(folder)
-        except OSError as error:
-            raise _refuse_unremovable("device folder", folder, error) from error
-        removed.append(folder)
-
-        if not keep_secrets and _exists(secrets):
+    try:
+        with open_build_lock(build_dir, device=name, operation="delete"):
             try:
-                secrets.unlink()
+                _empty_build_dir(build_dir)
             except OSError as error:
-                raise _refuse_unremovable("secrets file", secrets, error) from error
-            removed.append(secrets)
+                raise _refuse_unremovable("build directory", build_dir, error) from error
+            if had_build:
+                removed.append(build_dir)
 
-    discard_build_directory(build_dir)
-    _discard_build_root(project, created=made_build_root)
+            try:
+                _remove_tree(folder)
+            except OSError as error:
+                raise _refuse_unremovable("device folder", folder, error) from error
+            removed.append(folder)
+
+            if not keep_secrets and _exists(secrets):
+                try:
+                    secrets.unlink()
+                except OSError as error:
+                    raise _refuse_unremovable("secrets file", secrets, error) from error
+                removed.append(secrets)
+    finally:
+        _discard(project, build_dir, build_root=made_build_root)
     return tuple(removed)

@@ -478,6 +478,38 @@ def test_a_folder_that_cannot_be_moved_refuses_in_this_package_s_words(
     assert not (project.devices_dir / "kitchen").exists()
 
 
+def test_a_refusal_leaves_no_build_directory_holding_only_a_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A rename that failed must not block the rename back.
+
+    Both build directories are held — and therefore created — before the
+    work starts. A refusal that left them standing would leave two
+    directories holding nothing but a lock file, and the next call would
+    refuse the name they occupy as taken, which for a half-done rename
+    is exactly the call somebody makes next.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+
+    def refuse(*_args, **_kwargs):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(device, "_replace_atomically", refuse)
+    with pytest.raises(ConfigError):
+        api.rename_device("bench-node", project=project, to="kitchen")
+    monkeypatch.undo()
+
+    assert not project.device_build_dir("bench-node").exists()
+    assert not project.device_build_dir("kitchen").exists()
+    assert not (project.root / api.BUILD_DIR).exists()
+
+    # The call somebody makes next, and the reason this matters: with the
+    # two directories left standing it would refuse the name as taken.
+    api.rename_device("bench-node", project=project, to="kitchen")
+    assert stated_name(project.device_entry("kitchen")) == "kitchen"
+
+
 def test_a_name_that_cannot_be_rewritten_says_what_moved(tmp_path: Path, monkeypatch) -> None:
     """The one state that would not load, named with the line that fixes it."""
     project = make_project(tmp_path)
@@ -487,6 +519,32 @@ def test_a_name_that_cannot_be_rewritten_says_what_moved(tmp_path: Path, monkeyp
         raise OSError(errno.EACCES, "Permission denied")
 
     monkeypatch.setattr(device, "_replace_atomically", refuse)
+
+    with pytest.raises(ConfigError) as caught:
+        api.rename_device("bench-node", project=project, to="kitchen")
+
+    assert "cannot write the new name" in str(caught.value)
+    assert 'still called "bench-node"' in (caught.value.hint or "")
+    assert project.device_entry("bench-node").is_file()
+    assert not (project.devices_dir / "kitchen").exists()
+    assert api.load_model(project.device_entry("bench-node"), project=project).device.name == (
+        "bench-node"
+    )
+
+
+def test_a_folder_that_cannot_be_moved_back_leaves_the_line_to_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When even taking the step back fails, the message finishes the job."""
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    target = project.devices_dir / "kitchen"
+
+    def refuse_write(*_args, **_kwargs):
+        raise OSError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(device, "_replace_atomically", refuse_write)
+    monkeypatch.setattr(os, "rename", _rename_that_refuses(target))
 
     with pytest.raises(ConfigError) as caught:
         api.rename_device("bench-node", project=project, to="kitchen")
