@@ -402,9 +402,11 @@ The **signing** scope is the key file's YAML reference, and key material
 is neither printed nor typed in: `read_secrets` lists the entry that
 points at the key (no `!file` reference is ever followed, so not a byte
 of the key is read), `reveal_secret` refuses it, and `set_secret` refuses
-the scope outright and names `create_signing_key`, which is what draws a
-key. `unset_secret` removes the reference like any other entry and leaves
-the key file on disk.
+the scope outright: its refusal says that MCUHome draws the key the first
+time it signs an image for the project, and that a key you already have
+is named with `--signing-key` or the option `signing.key` — the call that
+draws one is `create_signing_key`. `unset_secret` removes the reference
+like any other entry and leaves the key file on disk.
 
 `set_secret` and `unset_secret` are round trips: comments, order, blank
 lines, quoting and every other entry survive the edit, and a new key is
