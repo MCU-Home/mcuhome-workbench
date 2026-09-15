@@ -487,10 +487,12 @@ Methods `builder_secrets_file(name)`, `device_secrets_file(name)`,
 `device_names()`, `to_dict()` → `{root, id, discovered, version}`. `discovered` is false for
 the stand-in project a device file outside any project gets.
 
-Every path under `secrets/` is one of these members and is spelled
-nowhere else, so the layout has one place it is stated: one directory per
-kind of secret, named after that kind in the singular
-([Files and directories](#files-and-directories)).
+Every directory under `secrets/` is one of these members, and so is every
+file named after the thing it holds, so the layout has one place it is
+stated: one directory per kind of secret, named after that kind in the
+singular ([Files and directories](#files-and-directories)). The two files
+inside the signing directory are the constants `SIGNING_KEY_FILE` and
+`PUBLIC_KEY_FILE` beside `signing_secrets_file`.
 
 ### ProjectFile
 Frozen dataclass. Fields `root`, `version: int`, `id: str | None`,
