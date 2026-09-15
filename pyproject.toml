@@ -38,6 +38,13 @@ classifiers = [
 # published (development runs on editable checkouts); from v1.0 every
 # edge becomes `~=X.Y.0` — same major.minor family, newest patch wins.
 dependencies = [
+  # The device model, the code generator's input, and the types this
+  # package re-exports through `mcuhome.workbench.api`. Unbounded on
+  # purpose while it is unpublished: it is installed from a checkout of
+  # mcuhome-sdk (`packaging/model`), whose version is derived from that
+  # repository's own release lines and is unrelated to this one's. Until
+  # v1.0 what holds the two together is `docs/api.md` — the names and
+  # signatures it lists — and not a version range.
   "mcuhome-model",
   # The package registry's own reference verifier, used as a library.
   # Signature thresholds, key rotation, document freshness and the

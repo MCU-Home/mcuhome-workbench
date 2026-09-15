@@ -2022,16 +2022,19 @@ the container command line are implementation detail and change without
 notice. A program that imports them is not covered by anything in this
 document.
 
-The re-exported device-model names track the `mcuhome.model` of the same
-0.x development line as this package: before 1.0 the workbench and the
-SDK move together, and a name here is the name that package carries in
-the release this one was built against. The dependency in
-`pyproject.toml` is deliberately unbounded while neither package is
-published — every install, development and CI alike, is a checkout of
-the sibling repository, and a version range would name releases no index
-serves. From 1.0 on that edge becomes `~=X.Y.0` — the same major.minor
-family, newest patch — and that family is then the range these names
-track and what an embedder pins beside this package.
+**Which `mcuhome.model` the re-exported names come from.** Before 1.0
+this package declares no bound on `mcuhome-model` at all: nothing is
+published, every install — development and CI alike — is a checkout of
+the sibling repository, and what that checkout derives its version from
+is its own tree. The two repositories carry unrelated numbers today and
+are not going to be made to match. So before 1.0 the contract is this
+document's index, not a version: a name listed here exists with the
+signature stated here, and `MODEL_PACKAGE_VERSION` answers which model
+package is actually installed while `MODEL_VERSION` answers the model
+format it writes. From 1.0 on the edge in `pyproject.toml` becomes
+`~=X.Y.0` — the same major.minor family, newest patch — and *that*
+family is the range these names track and what an embedder pins beside
+this package.
 `MODEL_PACKAGE_VERSION` answers which model package is installed,
 `MODEL_VERSION` the model format it writes.
 
