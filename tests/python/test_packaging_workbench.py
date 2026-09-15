@@ -68,7 +68,13 @@ def _requirement_names(requirements: list[str]) -> set[str]:
 # --------------------------------------------------------------------------
 
 
-def test_the_distribution_is_the_one_the_adr_names() -> None:
+def test_the_distribution_carries_the_name_the_repository_is_known_by() -> None:
+    """One repository, one distribution, and the two are spelled alike.
+
+    `mcuhome-workbench` is what a consumer writes in its dependencies and
+    what every cross-repository reference names; a project table that
+    drifted from it would publish a package nobody is looking for.
+    """
     assert _project()["project"]["name"] == DISTRIBUTION
 
 

@@ -75,14 +75,14 @@ enforce:
 
 **The ingress caps are announced, and this client sizes itself by them.**
 ``capabilities`` carries an ``ingress`` block with the five
-caps :data:`E44_CAPS` fixes — read from the server's own configuration,
+caps :data:`INGRESS_CAPS` names — read from the server's own configuration,
 so an operator who lowered one has lowered what a client is told — plus
 ``frame_bytes``, the largest WebSocket message the endpoint accepts. The
 last one is announced because it is the only bound whose overrun is a
 dropped connection rather than a typed refusal: it cannot be discovered
 by hitting it and surviving. :meth:`Capabilities.ingress` reads all six
-and falls back to :data:`E44_CAPS`'s decided defaults for anything a peer
-leaves out — never to a number of this client's own invention.
+and falls back to :data:`INGRESS_CAPS` for anything a peer leaves out —
+never to a number of this client's own invention.
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ __all__ = [
     "DEFAULT_CALL_TIMEOUT",
     "DEFAULT_CHUNK_BYTES",
     "DEFAULT_MAX_WAIT_SECONDS",
-    "E44_CAPS",
+    "INGRESS_CAPS",
     "MAX_ARTIFACT_ARCHIVE_BYTES",
     "MAX_ARTIFACT_BYTES",
     "MAX_INBOUND_FRAME_BYTES",
@@ -208,7 +208,7 @@ DEFAULT_CHUNK_BYTES = 256 * 1024
 #: 8 KiB, download chunks at 256 KiB and every other frame is small JSON.
 MAX_INBOUND_FRAME_BYTES = 8 * 1024 * 1024
 
-#: What one artifact delivery may cost this machine. :data:`E44_CAPS`
+#: What one artifact delivery may cost this machine. :data:`INGRESS_CAPS`
 #: sizes what goes *up*; nothing announces a ceiling for what comes down, so these
 #: are this client's own — an artifact archive above the first number is
 #: refused from its announcement, before a byte reaches the spool, and an
@@ -482,12 +482,12 @@ class IngressCaps:
     policy" — and this client uses an announced value wherever it finds
     one. The build server announces all six in ``capabilities``,
     out of its own configuration. Where a peer announces none — an older
-    or a third-party server — :data:`E44_CAPS`'s decided defaults stand,
+    or a third-party server — :data:`INGRESS_CAPS` stands,
     because a client that invented a cap of its own
     would refuse contexts a server would have taken.
 
     :attr:`frame_bytes` is not one of the five compressed/decompressed/
-    entries/file/path-depth caps :data:`E44_CAPS` fixes. It is the largest
+    entries/file/path-depth caps :data:`INGRESS_CAPS` fixes. It is the largest
     single WebSocket message the peer accepts, which bounds the *chunk*
     an archive is streamed in rather than the archive — and it is the one
     limit whose overrun is a dropped connection instead of a typed
@@ -519,17 +519,17 @@ class IngressCaps:
 
     @staticmethod
     def announced(payload: dict[str, Any]) -> IngressCaps:
-        """The caps a ``capabilities`` payload states, over :data:`E44_CAPS`'s defaults."""
+        """The caps a ``capabilities`` payload states, over :data:`INGRESS_CAPS`."""
         found = payload.get("ingress")
         if not isinstance(found, dict):
-            return E44_CAPS
+            return INGRESS_CAPS
         values = {}
         for name in IngressCaps._FIELDS:
             number = found.get(name)
             if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
                 continue
             values[name] = number
-        return E44_CAPS if not values else IngressCaps(**{**E44_CAPS.as_dict(), **values})
+        return INGRESS_CAPS if not values else IngressCaps(**{**INGRESS_CAPS.as_dict(), **values})
 
     def as_dict(self) -> dict[str, int]:
         return {name: getattr(self, name) for name in IngressCaps._FIELDS}
@@ -539,7 +539,7 @@ class IngressCaps:
 class IngressSpent:
     """What one session has already spent of its ingress budget.
 
-    :data:`E44_CAPS`'s caps are **cumulative across the base context and
+    The ingress caps are **cumulative across the base context and
     every extension of one session** — that is what the build server's ledger
     charges, and a client that checked each archive in isolation would
     pass its own check and then be refused at
@@ -571,12 +571,13 @@ class IngressSpent:
 #: session behind it.
 _NOTHING_SPENT = IngressSpent()
 
-#: The decided defaults: 64 MiB compressed, 256 MiB decompressed
-#: cumulative, 4096 entries, 64 MiB per file, path depth 16. They are the
-#: build server's own defaults, so a client that has heard no
-#: announcement and applies these refuses exactly what an unconfigured
-#: server would refuse.
-E44_CAPS = IngressCaps(
+#: The five ingress caps the session protocol fixes, at the values the
+#: build server defaults to: 64 MiB compressed, 256 MiB decompressed
+#: cumulative, 4096 entries, 64 MiB per file, path depth 16. A client
+#: that has heard no announcement applies these, and therefore refuses
+#: exactly what an unconfigured server would refuse — which is why they
+#: are the server's numbers and not a set of this client's own.
+INGRESS_CAPS = IngressCaps(
     compressed_bytes=64 * 1024 * 1024,
     decompressed_bytes=256 * 1024 * 1024,
     entries=4096,
@@ -743,7 +744,7 @@ def pack_context(
     root: Path,
     *,
     spool: Path,
-    caps: IngressCaps = E44_CAPS,
+    caps: IngressCaps = INGRESS_CAPS,
     only: Sequence[str] | None = None,
     for_extension: bool = False,
     spent: IngressSpent = _NOTHING_SPENT,
@@ -1332,7 +1333,7 @@ class SessionClient:
 
         #: What ``capabilities`` answered, and the caps derived from it.
         self.capabilities_payload: Capabilities | None = None
-        self.caps: IngressCaps = E44_CAPS
+        self.caps: IngressCaps = INGRESS_CAPS
         #: What this session has already spent of those caps. The
         #: server's ledger is cumulative across the base context and
         #: every extension, so the client's has to be too.
@@ -1669,7 +1670,7 @@ class SessionClient:
         is what tells this client which build containers the server has,
         which patch layers it allows and the ingress caps that size every
         upload afterwards — a peer that announces none leaves
-        :data:`E44_CAPS`'s defaults in place.
+        :data:`INGRESS_CAPS`'s defaults in place.
         """
         payload = await self._call("capabilities")
         self.capabilities_payload = Capabilities(payload)

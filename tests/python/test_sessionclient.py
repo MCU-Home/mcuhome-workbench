@@ -1608,7 +1608,7 @@ def test_an_oversized_file_is_refused_before_a_frame_goes_out(tmp_path: Path) ->
     context = tmp_path / "context"
     context.mkdir()
     make_context(context, sdk_sha256="a" * 64)
-    caps = replace(sc.E44_CAPS, file_bytes=8)
+    caps = replace(sc.INGRESS_CAPS, file_bytes=8)
     with pytest.raises(sc.ContextTooLarge, match="in one context file"):
         sc.pack_context(context, spool=tmp_path / "small.tar.zst", caps=caps)
     assert (
@@ -1621,18 +1621,18 @@ def test_an_oversized_file_is_refused_before_a_frame_goes_out(tmp_path: Path) ->
         sc.pack_context(
             context,
             spool=tmp_path / "deep.tar.zst",
-            caps=replace(sc.E44_CAPS, path_depth=1),
+            caps=replace(sc.INGRESS_CAPS, path_depth=1),
         )
     with pytest.raises(sc.ContextTooLarge, match="archive entries"):
         sc.pack_context(
             context,
             spool=tmp_path / "many.tar.zst",
-            caps=replace(sc.E44_CAPS, entries=1),
+            caps=replace(sc.INGRESS_CAPS, entries=1),
         )
 
 
 def test_the_caps_are_counted_across_the_session_not_per_archive(tmp_path: Path) -> None:
-    """``sc.E44_CAPS``'s caps are cumulative, so the client's arithmetic has to be too.
+    """``sc.INGRESS_CAPS``'s caps are cumulative, so the client's arithmetic has to be too.
 
     The server's ledger charges the base context and every extension of
     one session against one budget, and it charges entries *while it
@@ -1661,7 +1661,7 @@ def test_the_caps_are_counted_across_the_session_not_per_archive(tmp_path: Path)
                 "the two documents that make it a context, the model files and the key"
             )
             assert spent.compressed_bytes > 0 and spent.decompressed_bytes > 0
-            client.caps = replace(sc.E44_CAPS, entries=spent.entries)
+            client.caps = replace(sc.INGRESS_CAPS, entries=spent.entries)
 
             (context / "model" / "one-too-many.json").write_text("{}\n", encoding="utf-8")
             with pytest.raises(sc.ContextTooLarge, match="already sent in this session"):
@@ -1722,7 +1722,7 @@ def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) 
     client that applies what it was told refuses this context at
     home, which is the point of announcing — so this test puts the
     client's caps back where an announcement-blind client would have
-    them (``sc.E44_CAPS``'s defaults, what an older client or one talking
+    them (``sc.INGRESS_CAPS``, what an older client or one talking
     to a silent third-party server uses) and sends anyway. What is asserted is
     the far side: the server enforces its own configuration while the
     bytes arrive and answers a typed refusal, rather than dropping the
@@ -1740,7 +1740,7 @@ def test_an_oversized_file_the_client_did_send_is_refused_typed(tmp_path: Path) 
         ):
             await client.capabilities()
             assert client.caps.file_bytes == 8, "the small cap was announced"
-            client.caps = replace(client.caps, file_bytes=sc.E44_CAPS.file_bytes)
+            client.caps = replace(client.caps, file_bytes=sc.INGRESS_CAPS.file_bytes)
             await client.open_session()
             with pytest.raises(sc.ServerRefusal) as refusal:
                 await client.send_context(context)
@@ -1784,7 +1784,7 @@ def test_the_announced_caps_are_the_ones_the_client_applies(tmp_path: Path) -> N
     """End to end: the server's configuration sizes the client's checks.
 
     Every cap is given a distinctive value, and none of them is one of
-    ``sc.E44_CAPS``'s defaults — an assertion against the defaults would pass on a
+    ``sc.INGRESS_CAPS`` — an assertion against the defaults would pass on a
     client that read nothing at all. What is asserted is the *effective*
     caps: what ``capabilities`` left on the client, which is what
     :func:`~mcuhome.workbench.sessionclient.pack_context` then refuses
@@ -1815,7 +1815,7 @@ def test_the_announced_caps_are_the_ones_the_client_applies(tmp_path: Path) -> N
                 # anything, and announced for exactly that reason.
                 frame_bytes=bs_protocol.MAX_FRAME_BYTES,
             )
-            assert client.caps != sc.E44_CAPS
+            assert client.caps != sc.INGRESS_CAPS
 
     run(scenario())
 
