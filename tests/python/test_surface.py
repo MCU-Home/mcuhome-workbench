@@ -55,11 +55,7 @@ REFERENCE = REPO_ROOT / "docs" / "api.md"
 #: same commit that adds the name to ``__all__``; nothing is ever added
 #: to it without the name existing in the reference's index, which
 #: :func:`test_every_pending_name_is_in_the_index` pins.
-PENDING: dict[str, str] = {
-    # Device lifecycle.
-    "delete_device": "device lifecycle",
-    "rename_device": "device lifecycle",
-}
+PENDING: dict[str, str] = {}
 
 
 def _python_blocks(text: str) -> list[list[str]]:

@@ -262,6 +262,7 @@ from mcuhome.workbench.contextdir import (
     read_generator_chain,
     verify_context,
 )
+from mcuhome.workbench.device import delete_device, rename_device
 from mcuhome.workbench.devworkspace import WORKSPACE_LAYERS
 from mcuhome.workbench.diagnostics import (
     SEVERITIES,
@@ -631,6 +632,7 @@ __all__ = [
     "current_user",
     "device_registry",
     "device_schema",
+    "delete_device",
     "delete_secret_file",
     "ensure_container_image",
     "error_dicts",
@@ -675,6 +677,7 @@ __all__ = [
     "read_secrets",
     "read_yaml_file",
     "render_device_file",
+    "rename_device",
     "require_container_image",
     "require_container_runtime",
     "require_secret_file",

@@ -309,18 +309,41 @@ def delete_device(
     name: str, *, project: Project, keep_secrets: bool = False
 ) -> tuple[Path, ...]
 ```
-Both answer every path they changed, and both hold the device's build
-directory for the duration (the `rename` and `delete` lock operations),
-so a run in flight refuses in words — `BuildDirectoryBusy` — instead of
-losing its output. `rename_device` moves `devices/<name>/` and
-`secrets/device/<name>.yaml`, and **removes** `build/<name>/`: build
-output names the device inside its own report, so a moved build
-directory would describe a device that no longer exists.
-`delete_device` removes the device folder and its build directory, and
-the device's secrets file unless *keep_secrets* — commissioning
-credentials a controller already knows cannot be drawn again. Both raise
-`ConfigError` for a name the project does not have, and `rename_device`
-for a target name that is taken.
+Both answer every path they changed, in the order they changed it, and
+both hold the device's build directory for the duration (the `rename`
+and `delete` lock operations), so a run in flight refuses in words —
+`BuildDirectoryBusy` — instead of losing its output.
+
+`rename_device` moves `devices/<name>/` with everything in it, the
+device's patches included, writes *to* into the moved file's
+`device.name` — a device is named by its folder and states that name
+itself, so the two move together — moves `secrets/device/<name>.yaml`,
+and **removes** `build/<name>/`: build output names the device inside
+its own report, so a moved build directory would describe a device that
+no longer exists. The device file is replaced in one step and only the
+name changes; comments, order, quoting and tags survive. It answers the
+build directory that was removed (when the device had one), the device
+folder, the device file (when it stated a name) and the secrets file
+(when there was one), the last three under the new name. The *target's*
+build directory is held for the operation as well and is not answered:
+it is created by taking the lock and removed again.
+
+`delete_device` removes the device's build directory, the device folder
+and the device's secrets file unless *keep_secrets* — commissioning
+credentials a controller already knows cannot be drawn again — and
+answers them in that order.
+
+Both raise `ConfigError` for a name the project does not have.
+`rename_device` also raises it for a *to* that is not a usable device
+name (the rule `create_device` follows), for one the device already
+carries, for one a device folder, a device secrets file or a build
+directory of this project is already using, and for a device file this
+package cannot parse — the name has to be rewritten, so a file that
+cannot be read is refused rather than half-moved. Everything either of
+them refuses is refused before the first file is touched; after that a
+rename removes the build output, moves the folder, rewrites the name and
+moves the secrets, in that order, and a failure part-way through is a
+refusal naming what did move and the one command that finishes it.
 
 ```python
 def read_pairing(entry: Path, *, project: Project) -> Pairing | None
@@ -392,6 +415,10 @@ plain word — it becomes a file name in `secrets/`. Reading a scope whose
 file does not exist answers no keys and `exists: false` rather than
 refusing, so a client can open a scope it just listed; `reveal_secret` is
 the one read that refuses there, because there is no value to answer.
+A device's file belongs to the device: `rename_device` carries it to the
+new name and `delete_device` removes it unless `keep_secrets`, which is
+how a leftover `device` scope comes about in the first place. Neither of
+those reads the file, so neither refuses over its mode.
 
 The **mask** is a constant, the same string for every entry. It is not a
 redaction of the value: a mask that kept the length, the first character
@@ -1926,7 +1953,7 @@ a defect in the test, not a seam.
 
 | What a test reaches for | Why |
 |---|---|
-| the modules behind the surface, each with its own test file — `build`, `buildenvsession`, `buildenvstore`, `builders`, `buildlock`, `buildprocess`, `buildtarget`, `configschema`, `configuration`, `containerbuild`, `contextdir`, `devworkspace`, `diagnostics`, `generate`, `generatorconstraint`, `hostcheck`, `imgtool`, `loader`, `migrations`, `ociregistry`, `otafile`, `packagefetch`, `packageregistry`, `project`, `projectfile`, `projectupgrade`, `provision`, `resolve_image`, `resolve_pins`, `scaffold`, `schema`, `secrets`, `sessionclient`, `signing`, `subprocessbuild` | the workbench's own unit tests are tests *of* those modules. A unit test that may only enter through `api` is an integration test, and the behaviour it pins would be asserted three layers away from where it lives |
+| the modules behind the surface, each with its own test file — `build`, `buildenvsession`, `buildenvstore`, `builders`, `buildlock`, `buildprocess`, `buildtarget`, `configschema`, `configuration`, `containerbuild`, `contextdir`, `device`, `devworkspace`, `diagnostics`, `generate`, `generatorconstraint`, `hostcheck`, `imgtool`, `loader`, `migrations`, `ociregistry`, `otafile`, `packagefetch`, `packageregistry`, `project`, `projectfile`, `projectupgrade`, `provision`, `resolve_image`, `resolve_pins`, `scaffold`, `schema`, `secrets`, `sessionclient`, `signing`, `subprocessbuild` | the workbench's own unit tests are tests *of* those modules. A unit test that may only enter through `api` is an integration test, and the behaviour it pins would be asserted three layers away from where it lives |
 | `containerbuild.ENTRY_POINT_PATH`, `REQUEST_TARGET`, `OUT_TARGET` | the container layout of one execution profile. A double standing in for a build environment has to read the request document at the path the real profile mounts it at, and that path is not something the surface answers |
 | the composition functions the build targets are made of (`build.compose_local_build`, `build.compose_subprocess_build`, `subprocessbuild.run_locked_build`, `sessionclient.run_remote_build` and their neighbours) | replaced wholesale so that one build path can be driven without a container, a registry or a socket. The surface deliberately has no seam between `build_firmware` and the composition it picks |
 | `secrets.MASKED_VALUE` | what `read_secrets` puts in place of a value is one constant of that module and deliberately not on the surface — a client renders the `masked` it is given and never compares it against one of its own. The test that proves no document carries a value states the same constant, so a change to it cannot pass unnoticed |

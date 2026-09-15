@@ -652,11 +652,13 @@ def test_a_file_emptied_and_written_again_keeps_its_comments(tmp_path: Path) -> 
 # --------------------------------------------------------------------------
 
 #: Every place in the package **outside this surface** that writes
-#: anything under a project's ``secrets/``, with what it is for. Each of
-#: them is a call that brings a secret into existence in the first place;
-#: changing one afterwards is the six functions' job alone, and a
-#: seventh writer appearing anywhere in the package fails this test
-#: instead of going unnoticed.
+#: anything under a project's ``secrets/``, with what it is for. Most of
+#: them are calls that bring a secret into existence in the first place;
+#: the other two carry a whole device's file with the device it belongs
+#: to, which is the one thing the six functions cannot do — they change
+#: what is *in* a file and never which device owns it. Changing a value
+#: is their job alone, and a writer appearing anywhere else in the
+#: package fails this test instead of going unnoticed.
 WRITERS = {
     "project.create_project": "creates secrets/ (mode 700) when a project is created",
     "project.ensure_secrets_dir": "creates a directory inside it, owner-only",
@@ -664,6 +666,10 @@ WRITERS = {
     "provision.create_pairing": "draws a device's commissioning credentials",
     "provision._write_secrets": "and writes them into the device's own file",
     "signing._create_project_key": "draws the firmware signing key and references it",
+    "device.rename_device": (
+        "moves a device's own secrets file with the device folder it is named after"
+    ),
+    "device.delete_device": "removes it with the device, unless the caller keeps it",
 }
 
 #: The writers inside :mod:`~mcuhome.workbench.secrets` itself: the three

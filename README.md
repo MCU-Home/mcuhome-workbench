@@ -62,6 +62,24 @@ everything else, holding the directory while it does. Before a build starts,
 `api.read_pairing(entry, project=project)` shows a device's commissioning codes
 without drawing new ones.
 
+A device is its folder, and everything MCUHome keeps for it is keyed on that
+name, so renaming or deleting one is a call rather than a `mv`:
+
+```python
+api.rename_device("kitchen", project=project, to="hallway")
+api.delete_device("attic", project=project, keep_secrets=True)
+```
+
+`rename_device` moves the device folder with its patches, writes the new name
+into the file — a device whose file disagrees with its folder is refused when
+it is loaded — moves the device's own secrets, and removes the build
+directory, because build output names the device inside its own report.
+`delete_device` removes the device, its build output and its secrets, and
+`keep_secrets` holds on to commissioning credentials that cannot be drawn
+again. Both hold the device's build directory while they work, so a build in
+flight refuses them instead of losing its output, and both answer every path
+they changed.
+
 Install the `remote` extra for the build-server client, or `generate` for writing
 a device's Zephyr application tree on this machine without building it.
 
