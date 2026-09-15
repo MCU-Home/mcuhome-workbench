@@ -897,15 +897,21 @@ def _refuse_retired_option(
         # hint is the channel refusal's — one source for the spellings a
         # per-invocation value is set with.
         hint = f"it is {successor!r} now, and {_refuse_not_file_settable(opt, location).hint}"
-    elif not opt.leaf:
+    elif successor == "builder":
+        # The one retired key whose successor is a map, and the only
+        # place the entries' own renames can be said.
         hint = (
-            f"it is the map {successor!r} now, one section per builder, keyed by its "
-            "name:\n"
+            "it is the map 'builder' now, one section per builder, keyed by its name:\n"
             "    builder:\n"
             "      <name>:\n"
             "        target: remote\n"
             "        server: <host[:port]>\n"
             "Inside an entry, `type:` is `target:` and `image:` is `container_image:`."
+        )
+    elif not opt.leaf:  # pragma: no cover - no other map has a retired name
+        hint = (
+            f"it is the map {successor!r} now, one section per entry, keyed by its name:\n"
+            f"    {successor}:\n      <name>:\n        <option>: <value>"
         )
     else:
         hint = f"it is {successor!r} now; write it as:\n    {opt.area}:\n      {opt.leaf}: <value>"
