@@ -557,7 +557,7 @@ def _read_project_key(project: Project) -> SigningKey:
     at. Both are under the key-material rule — insecure permissions are a
     refusal, never a warning, checked before the first byte is used.
     """
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     data = _read_project_secrets(file)
     if data is None:
         raise _refuse_no_project_key(f"{file} does not exist")
@@ -626,7 +626,7 @@ def _other_key_material(directory: Path) -> Path | None:
 
 def _create_project_key(project: Project) -> SigningKey:
     """The project's key, drawn and referenced — or the one already there."""
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     data = _read_project_secrets(file)
     if data is not None:
         existing = _referenced_key(file, data)

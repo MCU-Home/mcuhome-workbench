@@ -171,7 +171,7 @@ class Project:
         return self.secrets_dir / MAIN_SECRETS_FILE
 
     @property
-    def firmware_secrets_file(self) -> Path:
+    def signing_secrets_file(self) -> Path:
         """``secrets/firmware/mcuboot.yaml`` — the signing key's home."""
         return self.secrets_dir / "firmware" / "mcuboot.yaml"
 
@@ -193,7 +193,7 @@ class Project:
         """``secrets/devices/<name>.yaml`` — one device's own secrets."""
         return self.device_secrets_dir / f"{name}.yaml"
 
-    def device_entry(self, name: str) -> Path:
+    def device_file(self, name: str) -> Path:
         return self.devices_dir / name / DEVICE_FILE
 
     def device_build_dir(self, name: str) -> Path:
@@ -450,7 +450,7 @@ def resolve_device(
     #    only accepted form for plain names.
     if not _looks_like_path(spec):
         project = resolve_project(project_dir, env=env, cwd=cwd)
-        entry = project.device_entry(spec)
+        entry = project.device_file(spec)
         if entry.is_file():
             return project, entry
         if project_dir is not None or not candidate_path.exists():

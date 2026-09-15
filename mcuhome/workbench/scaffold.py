@@ -480,7 +480,7 @@ def create_device(
     if outline is not None and not outline.is_empty():
         _check_outline(outline)
 
-    entry = project.device_entry(name)
+    entry = project.device_file(name)
     if entry.exists():
         raise ConfigError(
             f'There is already a device called "{name}" here.',

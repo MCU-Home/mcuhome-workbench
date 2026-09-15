@@ -179,13 +179,13 @@ def test_the_layout_hangs_off_the_root(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     assert project.config_file == tmp_path / "mcuhome.yaml"
     assert project.secrets_file == tmp_path / "secrets" / "main.yaml"
-    assert project.firmware_secrets_file == tmp_path / "secrets" / "firmware" / "mcuboot.yaml"
+    assert project.signing_secrets_file == tmp_path / "secrets" / "firmware" / "mcuboot.yaml"
     # One directory per kind of secret, named after the kind.
     assert project.builder_secrets_file("attic") == (
         tmp_path / "secrets" / "builder" / "attic.yaml"
     )
     assert project.device_secrets_file("porch") == tmp_path / "secrets" / "devices" / "porch.yaml"
-    assert project.device_entry("porch") == tmp_path / "devices" / "porch" / "main.yaml"
+    assert project.device_file("porch") == tmp_path / "devices" / "porch" / "main.yaml"
     assert project.device_build_dir("porch") == tmp_path / "build" / "porch"
 
 

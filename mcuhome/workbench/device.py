@@ -105,7 +105,7 @@ __all__ = [
 
 def _require_device(project: Project, name: str) -> Path:
     """The device folder of *name*, or the refusal that lists what is there."""
-    if not project.device_entry(name).is_file():
+    if not project.device_file(name).is_file():
         raise refuse_unknown_device(project, name)
     return project.devices_dir / name
 
@@ -349,7 +349,7 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
     _require_free(to, new_build_dir, "build directory")
     _require_build_dir(build_dir)
 
-    text = _renamed_text(project.device_entry(name), to=to)
+    text = _renamed_text(project.device_file(name), to=to)
     had_build = build_dir.is_dir()
     made_build_root = not (project.root / BUILD_DIR).exists()
     changed: list[Path] = []

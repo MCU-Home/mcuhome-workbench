@@ -501,7 +501,7 @@ def test_a_project_key_signs_with_the_referenced_file_and_the_plan_names_it(
     assert generated.path.is_file()  # the durable home, untouched
     assert result.key == generated.path
     assert result.key.name == signing.SIGNING_KEY_FILE
-    assert result.key != project.firmware_secrets_file  # the YAML is never a --key
+    assert result.key != project.signing_secrets_file  # the YAML is never a --key
 
 
 def test_signing_refuses_a_missing_key_rather_than_making_one(tmp_path) -> None:
@@ -517,7 +517,7 @@ def test_signing_refuses_a_missing_key_rather_than_making_one(tmp_path) -> None:
         assert "no firmware signing key yet" in caught.value.message
     assert not (out / "firmware.signed.bin").exists()
     assert not calls(), "nothing may run before the key is there"
-    assert not project.firmware_secrets_file.exists()
+    assert not project.signing_secrets_file.exists()
 
 
 def test_imgtool_failure_carries_imgtools_own_words(tmp_path) -> None:

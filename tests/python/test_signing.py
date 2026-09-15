@@ -103,7 +103,7 @@ def test_the_override_beats_the_project(tmp_path: Path, project: Project) -> Non
     assert key.path == by_flag
     assert key.pem == flag_pem
     assert not key.in_secrets
-    assert not project.firmware_secrets_file.exists()
+    assert not project.signing_secrets_file.exists()
 
 
 def test_a_tilde_override_uses_the_stated_home(tmp_path: Path) -> None:
@@ -127,14 +127,14 @@ def test_a_project_without_a_key_is_refused_rather_than_given_one(project: Proje
         resolve_signing_key(env={}, project=project)
     assert "no firmware signing key yet" in caught.value.message
     assert "--signing-key" in (caught.value.hint or "")
-    assert not project.firmware_secrets_file.exists()
+    assert not project.signing_secrets_file.exists()
     assert snapshot(project.secrets_dir) == before
 
 
 def test_a_secrets_file_without_the_entry_is_refused_rather_than_completed(
     project: Project,
 ) -> None:
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     file.parent.mkdir(parents=True, mode=0o700)
     file.write_text("other: value\n", encoding="utf-8")
     file.chmod(0o600)
@@ -172,7 +172,7 @@ def test_creating_the_project_key_draws_it_and_says_so(project: Project) -> None
     key = create_signing_key(env={}, project=project)
     assert key.created
     assert key.in_secrets
-    assert key.path == project.firmware_secrets_file.parent / SIGNING_KEY_FILE
+    assert key.path == project.signing_secrets_file.parent / SIGNING_KEY_FILE
     assert key.path.read_text(encoding="utf-8") == key.pem
     assert is_p256_private_key(key.pem)
     assert public_key_pem(key.pem).startswith("-----BEGIN PUBLIC KEY-----")
@@ -181,18 +181,18 @@ def test_creating_the_project_key_draws_it_and_says_so(project: Project) -> None
 def test_the_generated_files_are_readable_by_nobody_else(project: Project) -> None:
     key = create_signing_key(env={}, project=project)
     assert mode_of(key.path) == 0o600
-    assert mode_of(project.firmware_secrets_file) == 0o600
-    assert mode_of(project.firmware_secrets_file.parent) == 0o700
+    assert mode_of(project.signing_secrets_file) == 0o600
+    assert mode_of(project.signing_secrets_file.parent) == 0o700
     assert mode_of(project.secrets_dir) == 0o700
 
 
 def test_the_generated_yaml_references_the_key_and_never_holds_it(project: Project) -> None:
     key = create_signing_key(env={}, project=project)
-    text = project.firmware_secrets_file.read_text(encoding="utf-8")
+    text = project.signing_secrets_file.read_text(encoding="utf-8")
     assert text.splitlines()[0].startswith("#")  # the file explains itself
     assert f"{FIRMWARE_KEY}: !file {SIGNING_KEY_FILE}" in text
     assert "PRIVATE KEY" not in text  # the material lives in the pem alone
-    reference = read_yaml_file(project.firmware_secrets_file)[FIRMWARE_KEY]
+    reference = read_yaml_file(project.signing_secrets_file)[FIRMWARE_KEY]
     assert isinstance(reference, FileRef)
     assert reference.path == key.path
     assert str(reference) == key.pem
@@ -212,7 +212,7 @@ def test_creating_twice_answers_the_first_key_rather_than_a_second(project: Proj
 def test_the_key_is_added_to_an_existing_secrets_file_without_disturbing_it(
     project: Project,
 ) -> None:
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     file.parent.mkdir(parents=True, mode=0o700)
     file.write_text("# my notes\nother: value\n", encoding="utf-8")
     file.chmod(0o600)
@@ -231,7 +231,7 @@ def test_an_inline_pem_is_refused_toward_the_two_file_shape(
     project: Project, creating: bool
 ) -> None:
     """The retired literal form draws the migration, not a silent read."""
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     file.parent.mkdir(parents=True, mode=0o700)
     pem = generate_key_pem()
     body = "\n".join("  " + line for line in pem.strip().splitlines())
@@ -254,7 +254,7 @@ def test_an_inline_pem_is_refused_toward_the_two_file_shape(
 def test_a_referenced_file_that_is_not_a_key_is_never_overwritten(
     project: Project, creating: bool
 ) -> None:
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     file.parent.mkdir(parents=True, mode=0o700)
     bogus = file.parent / SIGNING_KEY_FILE
     bogus.write_text("not a key\n", encoding="utf-8")
@@ -272,7 +272,7 @@ def test_a_referenced_file_that_is_not_a_key_is_never_overwritten(
 
 
 def test_a_secrets_file_that_is_not_a_mapping_is_refused(project: Project) -> None:
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     file.parent.mkdir(parents=True, mode=0o700)
     file.write_text("- a list\n", encoding="utf-8")
     file.chmod(0o600)
@@ -284,7 +284,7 @@ def test_a_secrets_file_that_is_not_a_mapping_is_refused(project: Project) -> No
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
 def test_an_exposed_project_key_file_is_refused_outright(project: Project) -> None:
     create_signing_key(env={}, project=project)
-    project.firmware_secrets_file.chmod(0o644)
+    project.signing_secrets_file.chmod(0o644)
     with pytest.raises(ConfigError) as caught:
         resolve_signing_key(env={}, project=project)
     assert "refuses to use the key material" in caught.value.message
@@ -373,11 +373,11 @@ def test_the_project_key_is_the_referenced_file_itself(project: Project) -> None
     assert key.path.is_file()
     assert mode_of(key.path) == 0o600
     names = sorted(entry.name for entry in key.path.parent.iterdir())
-    assert names == sorted([project.firmware_secrets_file.name, SIGNING_KEY_FILE])
+    assert names == sorted([project.signing_secrets_file.name, SIGNING_KEY_FILE])
 
 
 def test_a_missing_referenced_key_file_is_a_located_refusal(project: Project) -> None:
-    file = project.firmware_secrets_file
+    file = project.signing_secrets_file
     file.parent.mkdir(parents=True, mode=0o700)
     file.write_text(f"{FIRMWARE_KEY}: !file gone.pem\n", encoding="utf-8")
     file.chmod(0o600)
@@ -395,11 +395,11 @@ def test_an_unreferenced_key_at_the_canonical_spot_is_adopted_not_overwritten(
     """A user-imported pem — or the remains of a crash between the two
     writes — is referenced as it stands; generating over existing key
     material is the one thing creation must never do."""
-    pem = write_key_file(project.firmware_secrets_file.parent / SIGNING_KEY_FILE)
+    pem = write_key_file(project.signing_secrets_file.parent / SIGNING_KEY_FILE)
     key = create_signing_key(env={}, project=project)
     assert not key.created  # no new material came into the world
     assert key.pem == pem
-    assert f"!file {SIGNING_KEY_FILE}" in project.firmware_secrets_file.read_text(encoding="utf-8")
+    assert f"!file {SIGNING_KEY_FILE}" in project.signing_secrets_file.read_text(encoding="utf-8")
 
 
 def test_a_key_under_another_name_is_refused_rather_than_doubled(project: Project) -> None:
@@ -410,7 +410,7 @@ def test_a_key_under_another_name_is_refused_rather_than_doubled(project: Projec
     Adoption stays limited to the canonical name; anything else is a
     refusal that names the file and the way to move it.
     """
-    directory = project.firmware_secrets_file.parent
+    directory = project.signing_secrets_file.parent
     directory.mkdir(parents=True, mode=0o700)
     write_key_file(directory / "mcuboot.pem")
     before = snapshot(project.secrets_dir)
@@ -431,13 +431,13 @@ def test_a_referenced_key_under_another_name_is_used_as_it_stands(project: Proje
     whose YAML names its key is answered with that key, whatever it is
     called.
     """
-    directory = project.firmware_secrets_file.parent
+    directory = project.signing_secrets_file.parent
     directory.mkdir(parents=True, mode=0o700)
     pem = write_key_file(directory / "mcuboot.pem")
-    project.firmware_secrets_file.write_text(
+    project.signing_secrets_file.write_text(
         f"{FIRMWARE_KEY}: !file mcuboot.pem\n", encoding="utf-8"
     )
-    project.firmware_secrets_file.chmod(0o600)
+    project.signing_secrets_file.chmod(0o600)
     key = create_signing_key(env={}, project=project)
     assert not key.created
     assert key.pem == pem
@@ -459,7 +459,7 @@ def test_an_exposed_referenced_key_file_is_refused_outright(project: Project) ->
 
 def test_no_refusal_ever_prints_the_key(project: Project) -> None:
     key = create_signing_key(env={}, project=project)
-    project.firmware_secrets_file.chmod(0o644)
+    project.signing_secrets_file.chmod(0o644)
     with pytest.raises((BuildError, ConfigError)) as caught:
         resolve_signing_key(env={}, project=project)
     scalars = key.pem.replace("-----BEGIN PRIVATE KEY-----", "").replace(

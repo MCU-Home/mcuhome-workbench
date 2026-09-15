@@ -343,7 +343,7 @@ def _scope_file(project: Project, kind: str, name: str) -> Path:
     if kind == "main":
         return project.secrets_file
     if kind == "signing":
-        return project.firmware_secrets_file
+        return project.signing_secrets_file
     if kind == "device":
         return project.device_secrets_file(name)
     return project.builder_secrets_file(name)
@@ -491,7 +491,7 @@ def _device_references(project: Project, device: str) -> tuple[str, ...]:
     who uses a secret must not be the place a broken configuration is
     reported.
     """
-    entry = project.device_entry(device)
+    entry = project.device_file(device)
     if not entry.is_file():
         return ()
     try:

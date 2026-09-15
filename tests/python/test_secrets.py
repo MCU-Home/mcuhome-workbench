@@ -56,7 +56,7 @@ def make_project(tmp_path: Path) -> api.Project:
 
 def add_device(project: api.Project, name: str, *, secret: str = "wifi_password") -> Path:
     """A device file that reads one secret, without a build behind it."""
-    entry = project.device_entry(name)
+    entry = project.device_file(name)
     entry.parent.mkdir(parents=True, exist_ok=True)
     entry.write_text(DEVICE_CONFIG.format(name=name, secret=secret), encoding="utf-8")
     return entry
@@ -340,7 +340,7 @@ def test_a_device_file_that_cannot_be_parsed_is_not_reported_here(tmp_path: Path
     """A broken configuration is the validator's to report, not this list."""
     project = make_project(tmp_path)
     add_device(project, "kitchen")
-    broken = project.device_entry("broken")
+    broken = project.device_file("broken")
     broken.parent.mkdir(parents=True, exist_ok=True)
     broken.write_text("device: [unclosed\n", encoding="utf-8")
     write_secrets(project.secrets_file, "wifi_password: x\n")
@@ -497,7 +497,7 @@ def test_the_projects_own_files_are_never_deleted_as_a_file(tmp_path: Path) -> N
     """``main`` and ``signing`` are emptied key by key, never removed."""
     project = make_project(tmp_path)
     write_secrets(project.secrets_file, "wifi_password: x\n")
-    write_secrets(project.firmware_secrets_file, "firmware_signing_key: !file key.pem\n")
+    write_secrets(project.signing_secrets_file, "firmware_signing_key: !file key.pem\n")
 
     for kind in ("main", "signing"):
         with pytest.raises(ConfigError) as caught:
@@ -505,7 +505,7 @@ def test_the_projects_own_files_are_never_deleted_as_a_file(tmp_path: Path) -> N
         assert "emptied" in (caught.value.hint or "")
 
     assert project.secrets_file.is_file()
-    assert project.firmware_secrets_file.is_file()
+    assert project.signing_secrets_file.is_file()
 
 
 # --------------------------------------------------------------------------
@@ -530,7 +530,7 @@ def test_the_signing_scope_answers_presence_and_not_a_key(tmp_path: Path) -> Non
 
     assert [entry.key for entry in file.keys] == ["firmware_signing_key"]
     assert file.scope.exists is True
-    assert file.scope.file == project.firmware_secrets_file
+    assert file.scope.file == project.signing_secrets_file
     document = json.dumps(file.to_dict())
     assert "PRIVATE KEY" not in document
     assert key.pem.splitlines()[1] not in document
@@ -549,13 +549,13 @@ def test_a_key_file_reference_is_never_revealed(tmp_path: Path) -> None:
 def test_key_material_is_drawn_and_not_typed_in(tmp_path: Path) -> None:
     """``set_secret`` refuses the signing scope and says what draws a key."""
     project = signing_project(tmp_path)
-    before = project.firmware_secrets_file.read_text(encoding="utf-8")
+    before = project.signing_secrets_file.read_text(encoding="utf-8")
 
     with pytest.raises(ConfigError) as caught:
         api.set_secret(project, kind="signing", key="firmware_signing_key", value="-----BEGIN…")
 
     assert "--signing-key" in (caught.value.hint or "")
-    assert project.firmware_secrets_file.read_text(encoding="utf-8") == before
+    assert project.signing_secrets_file.read_text(encoding="utf-8") == before
 
     # And the same refusal wherever an entry references a file, whatever
     # scope it is in: replacing a reference with a value would unhook key
@@ -574,7 +574,7 @@ def test_the_signing_reference_can_still_be_removed(tmp_path: Path) -> None:
 
     assert api.unset_secret(project, kind="signing", key="firmware_signing_key") is True
 
-    assert "{}" not in project.firmware_secrets_file.read_text(encoding="utf-8")
+    assert "{}" not in project.signing_secrets_file.read_text(encoding="utf-8")
     assert key_file.is_file(), "the key file is not removed by an edit of the YAML"
 
 
@@ -701,7 +701,7 @@ SECRETS_PATHS = frozenset(
         "device_secrets_dir",
         "device_secrets_file",
         "ensure_secrets_dir",
-        "firmware_secrets_file",
+        "signing_secrets_file",
         "secrets_dir",
         "secrets_file",
     }

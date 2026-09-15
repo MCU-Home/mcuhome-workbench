@@ -126,12 +126,12 @@ def test_a_rename_moves_the_folder_the_secrets_and_the_patches(tmp_path: Path) -
 
     changed = api.rename_device("bench-node", project=project, to="kitchen")
 
-    assert project.device_entry("kitchen").is_file()
+    assert project.device_file("kitchen").is_file()
     assert (project.device_patches_dir("kitchen") / "zephyr" / "0001-fix-uart.patch").is_file()
     assert project.device_secrets_file("kitchen").is_file()
     assert changed == (
         project.devices_dir / "kitchen",
-        project.device_entry("kitchen"),
+        project.device_file("kitchen"),
         project.device_secrets_file("kitchen"),
     )
 
@@ -147,7 +147,7 @@ def test_a_rename_writes_the_new_name_into_the_file(tmp_path: Path) -> None:
 
     api.rename_device("bench-node", project=project, to="kitchen")
 
-    assert stated_name(project.device_entry("kitchen")) == "kitchen"
+    assert stated_name(project.device_file("kitchen")) == "kitchen"
 
 
 def test_the_renamed_device_still_loads_and_validates(tmp_path: Path) -> None:
@@ -162,7 +162,7 @@ def test_the_renamed_device_still_loads_and_validates(tmp_path: Path) -> None:
 
     api.rename_device("bench-node", project=project, to="kitchen")
 
-    entry = project.device_entry("kitchen")
+    entry = project.device_file("kitchen")
     result = api.validate_device(entry, project=project)
     assert result.ok, [error.message for error in result.errors]
     model = api.load_model(entry, project=project)
@@ -182,7 +182,7 @@ def test_a_rename_changes_nothing_else_in_the_file(tmp_path: Path) -> None:
 
     api.rename_device("bench-node", project=project, to="kitchen")
 
-    after = project.device_entry("kitchen").read_text(encoding="utf-8")
+    after = project.device_file("kitchen").read_text(encoding="utf-8")
     assert after == before.replace("  name: bench-node\n", "  name: kitchen\n", 1)
 
 
@@ -193,7 +193,7 @@ def test_a_rename_leaves_a_file_that_states_no_name_alone(tmp_path: Path) -> Non
     answer says so by not naming the file.
     """
     project = make_project(tmp_path)
-    entry = project.device_entry("bench-node")
+    entry = project.device_file("bench-node")
     entry.parent.mkdir(parents=True)
     entry.write_text("# a device that never got around to it\nnetwork: {}\n", encoding="utf-8")
     before = entry.read_text(encoding="utf-8")
@@ -201,7 +201,7 @@ def test_a_rename_leaves_a_file_that_states_no_name_alone(tmp_path: Path) -> Non
     changed = api.rename_device("bench-node", project=project, to="kitchen")
 
     assert changed == (project.devices_dir / "kitchen",)
-    assert project.device_entry("kitchen").read_text(encoding="utf-8") == before
+    assert project.device_file("kitchen").read_text(encoding="utf-8") == before
 
 
 def test_nothing_is_left_under_the_old_name(tmp_path: Path) -> None:
@@ -281,7 +281,7 @@ def test_a_rename_refuses_a_target_that_is_not_a_device_name(tmp_path: Path, nam
         api.rename_device("bench-node", project=project, to=name)
 
     assert "not a usable device name" in str(caught.value)
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
 
 
 def test_a_rename_refuses_the_name_the_device_already_has(tmp_path: Path) -> None:
@@ -303,7 +303,7 @@ def test_a_rename_refuses_a_target_another_device_has(tmp_path: Path) -> None:
         api.rename_device("bench-node", project=project, to="kitchen")
 
     assert 'name "kitchen" is taken' in str(caught.value)
-    assert stated_name(project.device_entry("kitchen")) == "kitchen"
+    assert stated_name(project.device_file("kitchen")) == "kitchen"
 
 
 def test_a_rename_refuses_a_target_whose_secrets_file_is_there(tmp_path: Path) -> None:
@@ -324,7 +324,7 @@ def test_a_rename_refuses_a_target_whose_secrets_file_is_there(tmp_path: Path) -
 
     assert str(orphan) in str(caught.value)
     assert orphan.read_text(encoding="utf-8") == "passcode: 20202021\n"
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
 
 
 def test_a_rename_refuses_a_target_whose_build_directory_is_there(tmp_path: Path) -> None:
@@ -343,7 +343,7 @@ def test_a_rename_refuses_a_target_whose_build_directory_is_there(tmp_path: Path
 def test_a_rename_refuses_a_device_file_it_cannot_read(tmp_path: Path) -> None:
     """Refused before anything moves, because the name has to be rewritten."""
     project = make_project(tmp_path)
-    entry = project.device_entry("bench-node")
+    entry = project.device_file("bench-node")
     entry.parent.mkdir(parents=True)
     entry.write_text("device:\n  name: bench-node\n   board: [\n", encoding="utf-8")
 
@@ -368,7 +368,7 @@ def test_a_rename_refuses_while_somebody_is_in_the_build_directory(tmp_path: Pat
         api.rename_device("bench-node", project=project, to="kitchen")
 
     assert "A build of bench-node is already running" in str(caught.value)
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
     assert (build_dir / "build-report.json").is_file()
     assert not (project.devices_dir / "kitchen").exists()
 
@@ -445,7 +445,7 @@ def test_a_delete_refuses_while_somebody_is_in_the_build_directory(tmp_path: Pat
         api.delete_device("bench-node", project=project)
 
     assert "bench-node is being signed" in str(caught.value)
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
     assert project.device_secrets_file("bench-node").is_file()
 
 
@@ -479,7 +479,7 @@ def test_a_folder_that_cannot_be_moved_refuses_in_this_package_s_words(
 
     assert "cannot move" in str(caught.value)
     assert "The device itself is untouched" in (caught.value.hint or "")
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
     assert not (project.devices_dir / "kitchen").exists()
 
 
@@ -512,7 +512,7 @@ def test_a_refusal_leaves_no_build_directory_holding_only_a_lock(
     # The call somebody makes next, and the reason this matters: with the
     # two directories left standing it would refuse the name as taken.
     api.rename_device("bench-node", project=project, to="kitchen")
-    assert stated_name(project.device_entry("kitchen")) == "kitchen"
+    assert stated_name(project.device_file("kitchen")) == "kitchen"
 
 
 def test_a_name_that_cannot_be_rewritten_says_what_moved(tmp_path: Path, monkeypatch) -> None:
@@ -530,9 +530,9 @@ def test_a_name_that_cannot_be_rewritten_says_what_moved(tmp_path: Path, monkeyp
 
     assert "cannot write the new name" in str(caught.value)
     assert 'still called "bench-node"' in (caught.value.hint or "")
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
     assert not (project.devices_dir / "kitchen").exists()
-    assert api.load_model(project.device_entry("bench-node"), project=project).device.name == (
+    assert api.load_model(project.device_file("bench-node"), project=project).device.name == (
         "bench-node"
     )
 
@@ -556,7 +556,7 @@ def test_a_folder_that_cannot_be_moved_back_leaves_the_line_to_write(
 
     assert 'still says "bench-node"' in str(caught.value)
     assert "name: kitchen" in (caught.value.hint or "")
-    assert project.device_entry("kitchen").is_file()
+    assert project.device_file("kitchen").is_file()
 
 
 def test_secrets_that_could_not_follow_are_named_with_the_command(
@@ -577,8 +577,8 @@ def test_secrets_that_could_not_follow_are_named_with_the_command(
         api.rename_device("bench-node", project=project, to="kitchen")
 
     assert f"mv {secrets}" in (caught.value.hint or "")
-    assert project.device_entry("kitchen").is_file()
-    assert stated_name(project.device_entry("kitchen")) == "kitchen"
+    assert project.device_file("kitchen").is_file()
+    assert stated_name(project.device_file("kitchen")) == "kitchen"
     assert secrets.is_file()
 
 
@@ -591,7 +591,7 @@ def test_a_device_file_that_is_a_symlink_is_followed(tmp_path: Path) -> None:
     """
     project = make_project(tmp_path)
     make_device(project, "bench-node")
-    entry = project.device_entry("bench-node")
+    entry = project.device_file("bench-node")
     elsewhere = tmp_path / "shared" / "bench-node.yaml"
     elsewhere.parent.mkdir()
     entry.replace(elsewhere)
@@ -599,7 +599,7 @@ def test_a_device_file_that_is_a_symlink_is_followed(tmp_path: Path) -> None:
 
     api.rename_device("bench-node", project=project, to="kitchen")
 
-    moved = project.device_entry("kitchen")
+    moved = project.device_file("kitchen")
     assert moved.is_symlink()
     assert moved.readlink() == elsewhere
     assert stated_name(elsewhere) == "kitchen"
@@ -745,7 +745,7 @@ def test_a_file_where_the_build_directory_belongs_is_refused_in_words(
 
     assert "not a directory" in str(caught.value)
     assert str(build_dir) in str(caught.value)
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
     assert build_dir.is_file()
 
 
@@ -789,7 +789,7 @@ def test_the_patches_are_picked_up_under_the_new_name(tmp_path: Path) -> None:
 
     api.rename_device("bench-node", project=project, to="kitchen")
 
-    model = api.load_model(project.device_entry("kitchen"), project=project)
+    model = api.load_model(project.device_file("kitchen"), project=project)
     found = build._device_patches_dir(  # noqa: SLF001 - the convention under test
         model, patches_dir=None, project_root=project.root
     )
@@ -812,7 +812,7 @@ def test_a_target_name_a_broken_link_occupies_is_taken(tmp_path: Path) -> None:
 
     assert 'name "kitchen" is taken' in str(caught.value)
     assert link.is_symlink()
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
 
 
 def test_the_device_file_keeps_the_mode_its_owner_gave_it(tmp_path: Path) -> None:
@@ -827,7 +827,7 @@ def test_the_device_file_keeps_the_mode_its_owner_gave_it(tmp_path: Path) -> Non
 
     api.rename_device("bench-node", project=project, to="kitchen")
 
-    moved = project.device_entry("kitchen")
+    moved = project.device_file("kitchen")
     assert stat.S_IMODE(moved.stat().st_mode) == 0o640
     assert stated_name(moved) == "kitchen"
 
@@ -914,4 +914,4 @@ def test_a_linked_build_directory_is_refused_rather_than_followed(
     assert "is a link" in str(caught.value)
     assert build_dir.is_symlink()
     assert (elsewhere / "build-report.json").is_file()
-    assert project.device_entry("bench-node").is_file()
+    assert project.device_file("bench-node").is_file()
