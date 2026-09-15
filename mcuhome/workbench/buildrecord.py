@@ -117,9 +117,11 @@ class BuildRecord:
     artifacts: tuple[Artifact, ...]
     #: The build report's file name in :attr:`out_dir`.
     report: str
-    #: The signed images beside the unsigned ones, read off the directory:
-    #: signing happens after the build, so no record of the build can
-    #: know about them.
+    #: The signed images, read off the directory: signing happens after
+    #: the build, so no record of the build can know about them. Looked
+    #: for at the top of the build directory first — where a client
+    #: copies a build's output up for the user — and then beside the
+    #: unsigned images in :attr:`out_dir`.
     signed: tuple[SignedArtifact, ...]
     #: The build environment that ran, where one did.
     container_image: str
@@ -202,13 +204,24 @@ def _text(data: dict[str, Any], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _signed_artifacts(directory: Path) -> tuple[SignedArtifact, ...]:
-    """The signed images in *directory*, by the names signing gives them."""
+def _signed_artifacts(*places: Path) -> tuple[SignedArtifact, ...]:
+    """The signed images, by the names signing gives them, in the first place that has one.
+
+    Two places, because signing happens after the build and its output
+    ends up wherever the person who signed was working: beside the
+    unsigned images in the delivery directory, or at the top of the build
+    directory, where a client that copies a build's output up for the
+    user keeps them. The order the caller states decides which one is
+    answered for an encoding that exists in both; one entry per encoding
+    either way, because they are the same image.
+    """
     found: list[SignedArtifact] = []
     for _unsigned, signed in SIGNED_FIRMWARE_NAMES:
-        path = directory / signed
-        if path.is_file():
-            found.append(SignedArtifact(format=Path(signed).suffix.lstrip("."), path=path))
+        for place in places:
+            path = place / signed
+            if path.is_file():
+                found.append(SignedArtifact(format=Path(signed).suffix.lstrip("."), path=path))
+                break
     return tuple(found)
 
 
@@ -259,7 +272,10 @@ def read_build(out_dir: Path) -> BuildRecord | None:
             context_id=_text(data, "context_id"),
             artifacts=artifacts_from_wire(data.get("artifacts") or ()),
             report=_text(data, "report"),
-            signed=_signed_artifacts(into),
+            # The directory that was asked about first: what a client
+            # copied up for the user is the copy a person signs and
+            # flashes, and it is the one they would be shown.
+            signed=_signed_artifacts(directory, into),
             container_image=_text(data, "container_image"),
             busy=busy,
         )

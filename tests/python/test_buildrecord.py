@@ -432,6 +432,42 @@ def test_a_signed_build_answers_the_signed_images_beside_the_unsigned(
     ]
 
 
+def test_the_signed_images_are_found_where_the_person_signing_left_them(
+    tmp_path, model, monkeypatch
+) -> None:
+    """Both places, and the one a person would be shown first.
+
+    A build delivers into a directory of its own and a client copies the
+    output up for the user; signing happens afterwards, in whichever of
+    the two the person was working. A record that looked in one of them
+    would tell half of the clients that nothing is signed.
+    """
+    result = _built(tmp_path, model, monkeypatch)
+    out = tmp_path / "build"
+    (out / "firmware.signed.bin").write_bytes(b"SIGNED, copied up")
+    (result.out_dir / "firmware.signed.hex").write_text(":00000001FF\n", "utf-8")
+
+    record = api.read_build(out)
+
+    assert record is not None
+    assert [(signed.format, signed.path) for signed in record.signed] == [
+        ("bin", out / "firmware.signed.bin"),
+        ("hex", result.out_dir / "firmware.signed.hex"),
+    ]
+
+
+def test_one_entry_per_encoding_however_many_copies_there_are(tmp_path, model, monkeypatch) -> None:
+    """The same image in two places is one signed image, and the near one wins."""
+    result = _built(tmp_path, model, monkeypatch)
+    out = tmp_path / "build"
+    (result.out_dir / "firmware.signed.bin").write_bytes(b"SIGNED")
+    (out / "firmware.signed.bin").write_bytes(b"SIGNED, copied up")
+
+    record = api.read_build(out)
+
+    assert [signed.path for signed in record.signed] == [out / "firmware.signed.bin"]
+
+
 def test_a_directory_somebody_is_working_in_says_so(tmp_path, model, monkeypatch) -> None:
     """``busy`` is the difference between "this is the build" and "this is a build in flight".
 

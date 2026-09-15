@@ -666,7 +666,10 @@ artifacts and the signed images are in it. That is the directory
 `read_build` was asked about wherever the build wrote there, and a
 directory inside it — the build environment's own output directory under
 the work root — where it did not, which is what a local build does.
-`busy` is `is_busy` at the moment of the read.
+`signed` is looked for at the top of the build directory first — where a
+client copies a build's output up for the user — and then beside the
+unsigned images in `out_dir`, one entry per encoding. `busy` is
+`is_busy` at the moment of the read.
 
 Every build `build_firmware` ran leaves the record this is read from,
 a failed and a stopped one included (the build record under
