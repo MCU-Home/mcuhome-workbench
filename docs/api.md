@@ -312,7 +312,13 @@ def delete_device(
 Both answer every path they changed, in the order they changed it, and
 both hold the device's build directory for the duration (the `rename`
 and `delete` lock operations), so a run in flight refuses in words —
-`BuildDirectoryBusy` — instead of losing its output.
+`BuildDirectoryBusy` — instead of losing its output. The directory is
+**emptied** while the lock is held and removed once it is released: the
+lock file is the last thing in it, and unlinking it earlier would let a
+second process create a second one under the same name and start
+building in a device that is half-way through being renamed. A directory
+a new run has taken in the meantime is left standing, emptied, rather
+than pulled out from under it.
 
 `rename_device` moves `devices/<name>/` with everything in it, the
 device's patches included, writes *to* into the moved file's

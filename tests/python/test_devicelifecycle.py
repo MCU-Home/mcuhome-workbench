@@ -23,14 +23,22 @@ from __future__ import annotations
 import errno
 import json
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from conftest import REPO_ROOT
 from mcuhome.model.errors import ConfigError
 from test_buildlock import held_elsewhere
 
 from mcuhome.workbench import api, device
-from mcuhome.workbench.buildlock import BuildDirectoryBusy
+from mcuhome.workbench.buildlock import (
+    BUILD_LOCK_FILE,
+    BuildDirectoryBusy,
+    discard_build_directory,
+)
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 
@@ -65,6 +73,40 @@ def make_build_output(project: api.Project, name: str) -> Path:
 
 def stated_name(entry: Path) -> str:
     return str(api.read_yaml_file(entry)["device"]["name"])
+
+
+def taken_elsewhere(out_dir: Path) -> bool:
+    """Whether a real second process can take *out_dir* right now.
+
+    The other half of ``held_elsewhere``, and needed for the same
+    reason: the lock is re-entrant per process, so only a second one can
+    answer whether a directory is really held. It probes and lets go
+    again immediately.
+    """
+    code = (
+        "from pathlib import Path\n"
+        "from mcuhome.model.errors import BuildError\n"
+        "from mcuhome.workbench.buildlock import open_build_lock\n"
+        "try:\n"
+        f"    with open_build_lock(Path({str(out_dir)!r}), device='peer'):\n"
+        "        print('took')\n"
+        "except BuildError:\n"
+        "    print('refused')\n"
+    )
+    done = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        env={
+            "PYTHONPATH": str(REPO_ROOT),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PATH": os.environ.get("PATH", ""),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.stdout.strip() in ("took", "refused"), done.stderr
+    return done.stdout.strip() == "took"
 
 
 # --------------------------------------------------------------------------
@@ -497,3 +539,89 @@ def test_a_device_file_that_is_a_symlink_is_followed(tmp_path: Path) -> None:
     assert moved.is_symlink()
     assert moved.readlink() == elsewhere
     assert stated_name(elsewhere) == "kitchen"
+
+
+# --------------------------------------------------------------------------
+# The lock holds for the whole operation
+# --------------------------------------------------------------------------
+
+
+def _probing_rename(build_dir: Path, probes: list[bool]):
+    """``os.rename`` that asks a second process for the lock first."""
+    real = os.rename
+
+    def rename(source, destination):
+        probes.append(taken_elsewhere(build_dir))
+        return real(source, destination)
+
+    return rename
+
+
+def test_nobody_gets_the_build_directory_while_a_rename_is_working(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The removal must not take the lock file with it.
+
+    A build directory is emptied by the rename, and the lock file is the
+    one thing left in it: unlink it and a second process opening the
+    same path creates a second inode and is granted a second
+    "exclusive" lock — a build starting in the directory of a device
+    that is half-way through being renamed. Probed at both of the
+    moments the rename is still working: moving the folder, and moving
+    the secrets.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    build_dir = make_build_output(project, "bench-node")
+    probes: list[bool] = []
+    monkeypatch.setattr(os, "rename", _probing_rename(build_dir, probes))
+
+    api.rename_device("bench-node", project=project, to="kitchen")
+
+    assert probes == [False, False], "a second process took the build directory mid-rename"
+    assert not build_dir.exists()
+
+
+def test_nobody_gets_the_build_directory_while_a_delete_is_working(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The same for the delete, probed while the device folder goes."""
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    build_dir = make_build_output(project, "bench-node")
+    probes: list[bool] = []
+    real = shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path) == project.devices_dir / "bench-node":
+            probes.append(taken_elsewhere(build_dir))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(device.shutil, "rmtree", rmtree)
+
+    api.delete_device("bench-node", project=project)
+
+    assert probes == [False], "a second process took the build directory mid-delete"
+    assert not build_dir.exists()
+
+
+def test_a_build_directory_somebody_took_afterwards_is_left_alone(tmp_path: Path) -> None:
+    """The last removal happens under the lock too, or not at all.
+
+    Between the release and the removal of the emptied directory a new
+    run may have taken it. Removing it then would unlink the lock file
+    another process is holding, which is the same hazard one step later
+    — so the directory stays and is theirs.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    build_dir = make_build_output(project, "bench-node")
+    (build_dir / "build-report.json").unlink()  # emptied, as the rename leaves it
+
+    with held_elsewhere(build_dir, device="peer", operation="build"):
+        assert not discard_build_directory(build_dir)
+        assert (build_dir / BUILD_LOCK_FILE).is_file(), "the holder's lock file was unlinked"
+
+    assert build_dir.is_dir()
+    assert discard_build_directory(build_dir), "and it goes once nobody is in it"
+    assert not build_dir.exists()

@@ -72,6 +72,7 @@ __all__ = [
     "BUILD_LOCK_FILE",
     "LOCK_OPERATIONS",
     "BuildDirectoryBusy",
+    "discard_build_directory",
     "open_build_lock",
     "holder_of",
     "is_busy",
@@ -149,6 +150,73 @@ def is_busy(out_dir: Path) -> bool:
     finally:
         os.close(handle)
     return False
+
+
+def discard_build_directory(out_dir: Path) -> bool:
+    """Remove an emptied build directory, its lock file and all.
+
+    The counterpart of :func:`open_build_lock` for the one caller that
+    wants the directory itself gone — a device that is being renamed or
+    deleted has no build output any more, and an empty directory holding
+    nothing but a lock file would outlive the device it is named after.
+
+    Called **after** the lock has been released, never instead of
+    holding it: the lock file may not be unlinked while somebody is
+    working there, because a second process opening the same path would
+    then create a second inode and be granted a second "exclusive" lock
+    under one name (see the module docstring). So this takes the lock one
+    last time, and everything it does happens under it:
+
+    * a directory somebody else has taken in the meantime is left
+      exactly as it is — it is their build directory now;
+    * a directory that holds anything besides the lock file is left as
+      well, because something is in there that this call did not put
+      there and did not mean to remove;
+    * otherwise the lock file goes and the directory with it, in that
+      order and with nothing in between.
+
+    Answers whether the directory is gone. A directory that was not
+    there counts as gone; anything this refuses to remove answers False
+    rather than raising, because the work it belongs to is finished and
+    a leftover empty directory is not worth failing over.
+    """
+    directory = Path(out_dir)
+    if not directory.exists():
+        return True
+    if not directory.is_dir():
+        return False
+    with _COUNTS_LOCK:
+        if _COUNTS.get(directory.resolve()):
+            # Still held by this process — a nested caller is working in
+            # there, and the outermost one owns the release.
+            return False
+    path = directory / BUILD_LOCK_FILE
+    if fcntl is None:  # pragma: no cover - no POSIX locks on this platform
+        return _discard_emptied(directory, path)
+    try:
+        handle = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:  # pragma: no cover - defensive
+        return False
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return _discard_emptied(directory, path)
+    finally:
+        os.close(handle)
+
+
+def _discard_emptied(directory: Path, lock_file: Path) -> bool:
+    """Remove *directory* if the lock file is the only thing left in it."""
+    try:
+        if any(entry.name != lock_file.name for entry in directory.iterdir()):
+            return False
+        lock_file.unlink(missing_ok=True)
+        directory.rmdir()
+    except OSError:
+        return False
+    return True
 
 
 @contextmanager

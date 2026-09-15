@@ -45,7 +45,14 @@ under the ``rename`` and ``delete`` operations of
 :data:`~mcuhome.workbench.buildlock.LOCK_OPERATIONS`. A build, a
 signature or a flash that is running there refuses this one in words
 (:class:`~mcuhome.workbench.buildlock.BuildDirectoryBusy`) instead of
-finding its directory gone half-way through.
+finding its directory gone half-way through. Which is why the directory
+is *emptied* under the lock and only removed after it is released
+(:func:`_empty_build_dir`,
+:func:`~mcuhome.workbench.buildlock.discard_build_directory`): the lock
+file is what the exclusion rests on, and removing it along with the
+build output would leave the path free for a second process to create
+another one under the same name and start working — in the build
+directory of a device this call is still moving.
 
 **What the order of operations promises.** Everything that can be
 refused is refused before the first file is touched, and the new device
@@ -71,7 +78,11 @@ from pathlib import Path
 from mcuhome.model.errors import ConfigError, Location
 
 from mcuhome.workbench import schema
-from mcuhome.workbench.buildlock import open_build_lock
+from mcuhome.workbench.buildlock import (
+    BUILD_LOCK_FILE,
+    discard_build_directory,
+    open_build_lock,
+)
 from mcuhome.workbench.loader import editing_yaml, read_editable_yaml
 from mcuhome.workbench.project import DEVICE_FILE, Project, refuse_unknown_device
 
@@ -173,6 +184,29 @@ def _remove_tree(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def _empty_build_dir(directory: Path) -> None:
+    """Remove everything a build left in *directory*, the lock file apart.
+
+    The lock file is what holds the directory against everybody else
+    while this runs, so it is the one thing that must not go here:
+    unlink it and a second process opening the same path creates a
+    second inode and is granted a second "exclusive" lock under one name
+    — which is how a build starts in a directory somebody is half-way
+    through renaming. The emptied directory itself goes afterwards, once
+    the lock is released
+    (:func:`~mcuhome.workbench.buildlock.discard_build_directory`).
+    """
+    if directory.is_symlink() or not directory.is_dir():
+        return
+    for entry in directory.iterdir():
+        if entry.name == BUILD_LOCK_FILE:
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
 def _refuse_unremovable(what: str, path: Path, error: OSError) -> ConfigError:
     return ConfigError(
         f"MCUHome cannot remove the {what} {path}: {error.strerror or error}.",
@@ -236,11 +270,11 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
         open_build_lock(build_dir, device=name, operation="rename"),
         open_build_lock(new_build_dir, device=to, operation="rename"),
     ):
-        try:
-            _remove_tree(build_dir)
-            _remove_tree(new_build_dir)
-        except OSError as error:
-            raise _refuse_unremovable("build directory", build_dir, error) from error
+        for directory in (build_dir, new_build_dir):
+            try:
+                _empty_build_dir(directory)
+            except OSError as error:
+                raise _refuse_unremovable("build directory", directory, error) from error
         if had_build:
             changed.append(build_dir)
 
@@ -267,6 +301,8 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
                 raise _refuse_secrets_left(secrets, new_secrets, error) from error
             changed.append(new_secrets)
 
+    discard_build_directory(build_dir)
+    discard_build_directory(new_build_dir)
     return tuple(changed)
 
 
@@ -338,7 +374,7 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
 
     with open_build_lock(build_dir, device=name, operation="delete"):
         try:
-            _remove_tree(build_dir)
+            _empty_build_dir(build_dir)
         except OSError as error:
             raise _refuse_unremovable("build directory", build_dir, error) from error
         if had_build:
@@ -357,4 +393,5 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
                 raise _refuse_unremovable("secrets file", secrets, error) from error
             removed.append(secrets)
 
+    discard_build_directory(build_dir)
     return tuple(removed)
