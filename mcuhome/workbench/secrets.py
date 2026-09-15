@@ -77,8 +77,11 @@ are held to, and ``tests/python/test_secrets.py`` holds them to it.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import stat
+import tempfile
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -122,6 +125,12 @@ _PROJECT_OWN_KINDS = ("main", "signing")
 #: character or the shape of what it hides would put part of the secret
 #: into every document that shows it.
 MASKED_VALUE = "********"
+
+#: What a secrets file this package creates is created with. The
+#: directories on the way to it are 0700
+#: (:func:`~mcuhome.workbench.project.ensure_secrets_dir`); an existing
+#: file keeps the mode its owner gave it.
+_NEW_FILE_MODE = 0o600
 
 #: The header a secrets file this package creates starts with. A user
 #: who opens the file afterwards has to be able to tell what it is and
@@ -590,26 +599,78 @@ def reveal_secret(project: Project, *, kind: str, name: str = "", key: str) -> s
 
 
 def _write(project: Project, scope: SecretScope, data: Any, *, prefix: str = "") -> None:
-    """Write *prefix* and *data* back, owner-only where there is no file yet.
+    """Put *prefix* and *data* where the scope's file is — all of it or none.
 
-    A file that is already there is written through its own inode, so
-    whatever the user set on it stays; a file this call brings into
-    existence is created with mode 0600, and the directories on the way
-    to it with 0700, because the moment between creating a secrets file
-    and tightening it is a moment in which it is readable.
+    The whole file is written every time, so the old one has to survive
+    until the new one is complete: a truncate-and-write that is
+    interrupted — a full disk, a process killed, a machine losing power —
+    leaves half a secrets file, and half a secrets file is a project that
+    cannot build and credentials nobody can read out of it any more. So
+    the text goes into a temporary file in the same directory, created
+    owner-only, flushed to the disk, and then moved over the target in
+    one step: a reader sees either the file that was there or the file
+    that replaced it.
+
+    A file that is already there keeps the mode its owner gave it, and a
+    symlink somebody put in the layout is followed rather than replaced —
+    the file they pointed at is the file that gets written. A file this
+    call brings into existence is created with mode 0600, and the
+    directories on the way to it with 0700.
     """
     rendered = prefix + _render(editing_yaml(), data)
-    try:
-        if scope.file.is_file():
-            scope.file.write_text(rendered, encoding="utf-8")
-            return
+    target = scope.file
+    mode = _NEW_FILE_MODE
+    if target.is_file():
+        target = target.resolve()
+        mode = stat.S_IMODE(target.stat().st_mode)
+    else:
         parts = scope.file.parent.relative_to(project.secrets_dir).parts
         ensure_secrets_dir(project.root, *parts)
-        descriptor = os.open(scope.file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(rendered)
+    try:
+        _replace_atomically(target, rendered, mode)
     except OSError as error:
         raise _refuse_unwritable(scope.file, error.strerror or "cannot write") from error
+
+
+def _replace_atomically(target: Path, text: str, mode: int) -> None:
+    """Write *text* beside *target* and move it over, or leave *target* alone.
+
+    ``mkstemp`` creates the temporary file owner-only and exclusively, so
+    the content is never readable by anyone else even for the moment it
+    lies beside the real file; it is hidden and carries this package's
+    prefix, so a crash between the two steps leaves something a person
+    can recognize. The directory is flushed after the move, because a
+    rename that is not on the disk is a rename that did not happen.
+    """
+    descriptor, temporary = tempfile.mkstemp(
+        dir=target.parent, prefix=".mcuhome-secrets-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+    _flush_directory(target.parent)
+
+
+def _flush_directory(directory: Path) -> None:
+    """Make the move itself durable, where the platform allows saying so."""
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:  # pragma: no cover - a platform that will not open one
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:  # pragma: no cover - and one that will not flush one
+        pass
+    finally:
+        os.close(descriptor)
 
 
 def _ending_in_newline(file: Path) -> str:

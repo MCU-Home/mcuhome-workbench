@@ -31,7 +31,7 @@ import pytest
 from conftest import package_modules
 from mcuhome.model.errors import ConfigError
 
-from mcuhome.workbench import api
+from mcuhome.workbench import api, secrets
 from mcuhome.workbench.secrets import MASKED_VALUE
 
 #: The value planted wherever a test needs one that must never appear.
@@ -399,6 +399,63 @@ def test_setting_a_secret_leaves_the_rest_of_the_file_exactly_as_it_was(tmp_path
     assert mode_of(project.secrets_file) == 0o600
 
 
+def test_a_write_that_fails_leaves_the_file_that_was_there(monkeypatch, tmp_path: Path) -> None:
+    """All of the new file or none of it — never half of the old one.
+
+    The whole file is rewritten on every edit, so a write interrupted
+    half way through would leave half a secrets file: a project that
+    cannot build, and credentials nobody can read out of it any more.
+    Both halves of the order are provoked — a failure before anything is
+    written, and a failure in the move itself — and what the directory
+    holds afterwards is the assertion: the old bytes, the old mode, and
+    nothing lying beside them.
+    """
+    project = make_project(tmp_path)
+    original = "# mine\nwifi_password: x\n"
+    write_secrets(project.secrets_file, original)
+
+    def refuse(*args: object, **kwargs: object) -> str:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(secrets, "_render", refuse)
+    with pytest.raises(OSError):
+        api.set_secret(project, kind="main", key="api_token", value="t")
+    monkeypatch.undo()
+
+    monkeypatch.setattr(os, "replace", refuse)
+    with pytest.raises(ConfigError) as caught:
+        api.set_secret(project, kind="main", key="api_token", value="t")
+    assert "No space left on device" in caught.value.message
+    monkeypatch.undo()
+
+    assert project.secrets_file.read_text(encoding="utf-8") == original
+    assert mode_of(project.secrets_file) == 0o600
+    assert sorted(path.name for path in project.secrets_dir.iterdir()) == [
+        "main.yaml",
+        "trust-anchor",
+    ], "a failed write left something beside the file"
+
+
+def test_an_existing_file_keeps_the_mode_and_the_link_its_owner_gave_it(tmp_path: Path) -> None:
+    """A replace is not a chance to decide the file's permissions again.
+
+    And a symlink somebody put in the layout — a shared secrets file kept
+    elsewhere — is followed rather than replaced by a regular file: what
+    is written is the file they pointed at.
+    """
+    project = make_project(tmp_path)
+    elsewhere = write_secrets(tmp_path / "elsewhere" / "shared.yaml", "wifi_password: x\n")
+    elsewhere.chmod(0o400)
+    project.secrets_dir.mkdir(exist_ok=True)
+    project.secrets_file.symlink_to(elsewhere)
+
+    api.set_secret(project, kind="main", key="wifi_password", value="y")
+
+    assert project.secrets_file.is_symlink()
+    assert elsewhere.read_text(encoding="utf-8") == "wifi_password: y\n"
+    assert mode_of(elsewhere) == 0o400
+
+
 def test_unsetting_the_last_secret_leaves_an_empty_file(tmp_path: Path) -> None:
     """Not a deleted file, and not a ``{}`` the user would have to look up."""
     project = make_project(tmp_path)
@@ -615,7 +672,15 @@ WRITERS = {
 #: ``_render`` is in the list because it dumps — into a string buffer,
 #: which the check below cannot tell from a file, and a list that left it
 #: out would have to leave the dump out of the vocabulary instead.
-OWN_WRITERS = ("_render", "_write", "delete_secret_file", "set_secret", "unset_secret")
+OWN_WRITERS = (
+    "_flush_directory",
+    "_render",
+    "_replace_atomically",
+    "_write",
+    "delete_secret_file",
+    "set_secret",
+    "unset_secret",
+)
 
 #: How a path under ``secrets/`` is spelled anywhere in this package: the
 #: project's own accessors and the constant they are built from. A new
@@ -646,6 +711,7 @@ SECRETS_PATHS = frozenset(
 WRITE_CALLS = frozenset(
     {
         "_mkdir_private",
+        "_replace_atomically",
         "_write",
         "_write_owner_only",
         "chmod",

@@ -410,7 +410,14 @@ the key file on disk.
 lines, quoting and every other entry survive the edit, and a new key is
 appended. Removing the **last** entry leaves an empty file — not a
 deleted one and not a `{}` — because the file is the user's and the call
-was asked to remove one secret. `reveal_secret` answers a number or a
+was asked to remove one secret.
+
+Both write **all of the file or none of it**: the new text goes into a
+temporary file beside the old one, created owner-only, and is moved over
+it in one step, so a write that is interrupted leaves the file that was
+there rather than half of a secrets file. An existing file keeps the mode
+its owner gave it, and a symlink in the layout is followed rather than
+replaced; a file the call creates is 0600, its directories 0700. `reveal_secret` answers a number or a
 boolean as the file spells it, and an entry with no value at all as the
 empty string.
 
