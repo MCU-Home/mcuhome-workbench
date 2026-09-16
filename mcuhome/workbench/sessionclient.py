@@ -2742,9 +2742,9 @@ async def run_remote_build(
         )
     # The delivery directory is emptied first, exactly as `LocalBackend.run`
     # empties the invocation directory it is about to fill: an old
-    # `out/firmware.bin` that this build does not re-declare would survive
-    # here, be undeclared and therefore unchecked, and be what a host
-    # signer scanning this directory afterwards finds.
+    # `out/firmware.bin` would otherwise survive here unfetched and
+    # unchecked, and a build that declares that name again would deliver
+    # it as its own.
     out = Path(work_root) / "out"
     await asyncio.to_thread(shutil.rmtree, out, ignore_errors=True)
     stopping = _StopPoll(should_stop)

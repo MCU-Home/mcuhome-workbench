@@ -479,7 +479,7 @@ def test_a_signed_build_answers_the_signed_images_beside_the_unsigned(
     """Signing happens after the build, so only the directory can say.
 
     The record cannot carry them — it was written before the signature
-    existed — which is why ``signed`` is read off the delivery directory
+    existed — which is why ``signed`` is read off the build directory
     every time.
     """
     result = _built(tmp_path, model, monkeypatch)

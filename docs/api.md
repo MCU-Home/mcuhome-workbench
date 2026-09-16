@@ -2137,7 +2137,10 @@ container_image}` — `origin` is the layer that defined the entry and
 `SelectedBuilder.to_dict()`: `{target, builder, server, container_image}`
 — the token is a secret and is in no document.
 `RegistrySettings.to_dict()`: `{base_domain, untrusted, anchor, mirrors}`.
-`Artifact.to_dict()`: `{root, path, role, sha256}`.
+`Artifact.to_dict()`: `{root, path, role, sha256}` — `root` is the artifact root the build environment declared the file under (`out`),
+which is a name in its own vocabulary and not a path segment: `path` is
+relative to the directory the result names, and after a delivery that is
+the build directory itself.
 `BuildOptions.to_dict()`: `{target, mode, builder,
 container_repositories, container_program, cpus, memory, env_store,
 dev_workspace, python, sdk_sources, workspace_sources, tools_sources,
