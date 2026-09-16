@@ -2804,8 +2804,8 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
 
     The last assertion is the signing seam: what a build delivers is an
     unsigned image plus a build report the one host-side signer reads —
-    the same report name, in the same relationship to the same directory,
-    as the ``local`` target's delivery.
+    the same report name, at the top of the same build directory, as the
+    ``local`` target's delivery.
     """
     sources = tmp_path / "packages"
     write_sdk_package(sources)
@@ -2825,14 +2825,19 @@ def test_the_remote_target_builds_from_a_model_against_the_real_server(
     assert {entry.path for entry in outcome.artifacts} == {name for name, _ in ARTIFACTS}
     assert lines and any("build finished" in line for line in lines)
 
-    # The delivery, where the shared signing step looks for it.
+    # The delivery, where the shared signing step looks for it: the top of
+    # the build directory, the same place the `local` target delivers to.
     work_root = tmp_path / "build" / ".mcuhome-remote"
-    assert outcome.out_dir == work_root / "out"
-    assert sorted(path.name for path in outcome.out_dir.iterdir()) == [
+    assert outcome.out_dir == tmp_path / "build"
+    assert sorted(
+        path.name for path in outcome.out_dir.iterdir() if not path.name.startswith(".")
+    ) == [
         "build-report.json",
         "firmware.bin",
         "firmware.hex",
     ]
+    # Moved out of the directory it was fetched into, not copied.
+    assert not [path for path in (work_root / "out").iterdir() if path.is_file()]
     assert outcome.report == BUILD_REPORT_FILE
     report = imgtool.read_build_report(outcome.out_dir / outcome.report)
     assert report["signing"]["signature_type"] == "ecdsa-p256"

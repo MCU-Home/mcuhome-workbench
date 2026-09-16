@@ -128,9 +128,9 @@ Because a build runs in a worker thread, **cancelling the awaiting task
 does not stop it**. Stopping is `BuildRequest.should_stop`, a predicate
 polled on the same tick as the deadline: the build walks the ladder it
 walks for a deadline — a signal after the grace period, a kill ten
-seconds later, the container removed — releases the build lock, leaves
-`out_dir` with whatever was written before the stop, and answers
-`ok=False, stopped=True`. `UpgradeSession.apply` takes the same
+seconds later, the container removed — releases the build lock, delivers
+nothing (so the build directory holds what the last build that did
+deliver put there), and answers `ok=False, stopped=True`. `UpgradeSession.apply` takes the same
 predicate.
 
 It is asked while the build environment runs, and at the remote target
@@ -163,9 +163,9 @@ handshake of the socket underneath — the transport is dropped either
 way, and nothing a peer can stall is left outside the bound; a
 connection that dies while stopping is a stopped build rather than a
 transport failure. A verdict of `cancelled` is a stopped build as well,
-whichever side ended it. A stopped remote build answers `out_dir` `None`
-and no artifacts, whatever the verdict declared: what it produced is on
-the machine that ran it and is not fetched.
+whichever side ended it. A stopped remote build answers **no artifacts**,
+whatever the verdict declared: what it produced is on the machine that
+ran it and is not fetched, so there is nothing to deliver.
 
 Value objects on this surface are frozen and safe to share between
 threads: `Project`, `Settings`, `BuildOptions`, every `*Result`. Handles
@@ -798,6 +798,29 @@ request's builder and then `build.target`. The build directory is held
 for the duration, so a second build of it refuses in words instead of
 deleting this one's work.
 
+**Every target delivers into `BuildRequest.out_dir`.** A build
+environment writes into a directory of its own — an `out` under the work
+root, the directory a remote build fetched into — and the last act of a
+build is to move what it *declared* to the top of the build directory,
+under plain names: `firmware.bin`, `firmware.hex`, `build-report.json`.
+`BuildResult.out_dir` is that directory, and so is `BuildRecord.out_dir`,
+so `read_build` reads one directory and `clean_build` removes what one
+directory holds. What the build keeps for itself stays hidden inside it
+(the work root, `.mcuhome-build.lock`, `.mcuhome-build.json`), and no
+client copies a build's output out of a directory this package chose.
+
+A delivery **replaces the one before it**: the report, both firmware
+encodings, the signed names beside them and the `.ota` of the last build
+go first, so what lies at the top of a build directory always belongs to
+the build that is there now — an old `firmware.signed.bin` beside a fresh
+unsigned image is a flashable lookalike nothing mentions. Nothing
+undeclared travels: whatever else a build environment left in its output
+directory stays there and goes with the work root. A build that delivered
+**nothing** — one that failed, one somebody stopped — removes nothing
+either, exactly as a refusal changes nothing: what is in the directory is
+what the last build that delivered put there. A delivery that cannot be
+written raises `BuildError`.
+
 A build that ran and **failed** is not an exception: it answers with
 `BuildResult.ok` false, and a build that `should_stop` ended answers
 `ok=False, stopped=True`. Exceptions are the refusals before or around
@@ -846,15 +869,12 @@ signed: tuple[SignedArtifact, ...], container_image, busy)` with
 `to_dict()`. It states what is there and re-verifies nothing: the hashes
 in `artifacts` are the ones the build declared, so an artifact that was
 replaced afterwards still appears, under the hash it had when it was
-built. `out_dir` is where the build *delivered*: the report, the
-artifacts and the signed images are in it. That is the directory
-`read_build` was asked about wherever the build wrote there, and a
-directory inside it — the build environment's own output directory under
-the work root — where it did not, which is what a local build does.
-`signed` is looked for at the top of the build directory first — where a
-client copies a build's output up for the user — and then beside the
-unsigned images in `out_dir`, one entry per encoding. `busy` is
-`is_busy` at the moment of the read.
+built. `out_dir` is where the build *delivered*, which is the build
+directory itself — the directory `read_build` was asked about, restated
+in the document so that it says on its own which directory it describes.
+`signed` is read off that directory, beside the unsigned images, one
+entry per encoding: signing happens after the build, so no record can
+carry them. `busy` is `is_busy` at the moment of the read.
 
 Every build `build_firmware` ran leaves the record this is read from,
 a failed and a stopped one included (the build record under
@@ -873,21 +893,21 @@ to as the caller named it, which directory it was, and every path that
 went. Everything it removes is named, and nothing else is:
 
 - `.mcuhome-build.json`, the build record;
-- `build-report.json`, in `out_dir` and at the top of the build directory;
-- every artifact the record declares, under the directory the build
-  delivered into;
-- `firmware.bin`, `firmware.hex` and the `firmware.signed.*` beside them,
-  in both of those places;
+- `build-report.json`;
+- every artifact the record declares;
+- `firmware.bin`, `firmware.hex` and the `firmware.signed.*` beside them;
 - `.mcuhome-local` and `.mcuhome-remote`, the work roots a build creates
   when it was given no `work_root` of its own.
+
+All of them at the top of the build directory, which is where a build
+delivers; a path that would leave it (a hand-edited record) is skipped.
 
 A file that is not on that list is not a build's leftover, whatever it
 looks like: a work root the *caller* named is theirs, and so is anything
 else in the directory. The directory itself stays, and so does
 `.mcuhome-build.lock` — it is the lock this call is holding, and
 unlinking a file another process has opened would hand out two exclusive
-locks under one name. A path that would leave the build directory (a
-hand-edited record) is skipped.
+locks under one name.
 
 Raises `BuildDirectoryBusy` when something is running in the directory,
 and `BuildError` for a directory that is a **project root**
@@ -904,7 +924,7 @@ does not use is ignored rather than refused.
 | Field | Default | What it is |
 |---|---|---|
 | `model: DeviceModel` | — | what to build |
-| `out_dir: Path` | — | where the unsigned artifacts and the build report end up |
+| `out_dir: Path` | — | the build directory: where the unsigned artifacts and the build report end up, at the top and under plain names |
 | `env: Mapping[str, str]` | `{}` | the host facts to resolve tools and caches from |
 | `options: BuildOptions \| None` | `None` | this machine's `build` section; `None` resolves it from `env` and `project_root` |
 | `builder: SelectedBuilder \| None` | `None` | the selected destination: target, server, token, container image |
@@ -967,9 +987,11 @@ server to run without a container than it can ask it to run with one.
 
 ### BuildResult
 Frozen dataclass. Fields `ok`, `stopped`, `target`, `device`,
-`context_id`, `artifacts: tuple[Artifact, ...]`, `out_dir`, `report` (the
-report's file name in `out_dir`), `container_image` (the image that ran,
-empty where none did), `diagnostics: tuple[Diagnostic, ...]`, `detail`.
+`context_id`, `artifacts: tuple[Artifact, ...]`, `out_dir` (the build
+directory the request named — always, on every target, because that is
+where every build delivers), `report` (the report's file name in
+`out_dir`), `container_image` (the image that ran, empty where none did),
+`diagnostics: tuple[Diagnostic, ...]`, `detail`.
 Method `to_dict()` — see
 [Documents](#documents). There is no `status`: a firmware build either
 produced the artifacts or it did not, and a build environment that
@@ -1908,6 +1930,7 @@ workspace, and passed to that build alone.
 | build lock | `<build-dir>/.mcuhome-build.lock` | flock plus a JSON record |
 | build record | `<build-dir>/.mcuhome-build.json` | JSON |
 | build report | `<build-dir>/build-report.json` | JSON |
+| delivered firmware | `<build-dir>/firmware.bin`, `<build-dir>/firmware.hex` — what the build declared, moved to the top of the build directory when it ends | binary |
 | build context | `build-context.json`, `context.yaml`, `manifest.yaml`, `model/device-model.json`, `keys/signing.pub`, `patches/<layer>/NNNN-*.patch` | JSON, YAML, PEM, patch |
 | build environment store | `${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments/<package>-<version>/`, each entry marked by `.mcuhome-provisioned` | tree |
 | compiler cache tiers | `<cache root>/cache-local`, `<cache root>/cache-shared`, plus the session and project tiers where they are configured | directories |
@@ -1922,9 +1945,9 @@ plain name.
 The **build record** is bookkeeping of that kind: `build_firmware` writes
 it when a build ends — a failed and a stopped one included — and
 `read_build` reads it. Its keys are `build` (the record format version,
-`1`), `device`, `context_id`, `out_dir` (where the build delivered, or
-`null`), `report`, `container_image` and `artifacts` (the artifact
-documents the build declared). A record that is missing, unreadable or
+`1`), `device`, `context_id`, `out_dir` (where the build delivered: the
+build directory the record itself lies in), `report`, `container_image`
+and `artifacts` (the artifact documents the build declared). A record that is missing, unreadable or
 written under another format version is not an error: `read_build` falls
 back to the build report and the files beside it, and `clean_build`
 removes it with the rest.

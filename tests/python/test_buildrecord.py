@@ -247,15 +247,16 @@ def test_a_build_that_failed_records_that_there_is_nothing_here(
     assert record.context_id == "sha256:" + "f" * 64
 
 
-def test_a_stopped_build_that_delivered_nowhere_records_the_directory_it_held(
+def test_a_stopped_build_that_delivered_nothing_records_the_directory_it_held(
     tmp_path, model, monkeypatch
 ) -> None:
-    """A stopped remote build answers ``out_dir=None``, and is still a build.
+    """A stopped remote build delivered nothing, and is still a build.
 
-    Nothing was delivered, so there is no delivery directory to record —
-    and the record then names the directory it was asked to build in,
-    because a client that reads it is asking about *that* directory and
-    must not be handed a ``None`` to render.
+    The directory it was asked to build in is what the record names —
+    a client that reads it is asking about *that* directory and must not
+    be handed a ``None`` to render — and that the build put nothing into
+    it is said by the empty artifact list, not by a second answer to
+    "which directory".
     """
 
     async def stopped(context_dir, **kwargs):
@@ -279,12 +280,12 @@ def test_a_stopped_build_that_delivered_nowhere_records_the_directory_it_held(
     )
     result = asyncio.run(build.build_firmware(request, target="remote"))
     assert (result.ok, result.stopped) == (False, True)
-    assert result.out_dir is None
+    assert result.out_dir == tmp_path / "build"
 
     record = api.read_build(tmp_path / "build")
 
     assert record is not None
-    assert _record_document(tmp_path / "build")["out_dir"] is None
+    assert _record_document(tmp_path / "build")["out_dir"] == str(tmp_path / "build")
     assert record.out_dir == tmp_path / "build"
     assert record.device == model.device.name
     assert record.artifacts == ()
@@ -494,40 +495,23 @@ def test_a_signed_build_answers_the_signed_images_beside_the_unsigned(
     ]
 
 
-def test_the_signed_images_are_found_where_the_person_signing_left_them(
-    tmp_path, model, monkeypatch
-) -> None:
-    """Both places, and the one a person would be shown first.
+def test_one_entry_per_encoding_and_one_place_to_look(tmp_path, model, monkeypatch) -> None:
+    """Signing writes beside the unsigned images, and they are at the top.
 
-    A build delivers into a directory of its own and a client copies the
-    output up for the user; signing happens afterwards, in whichever of
-    the two the person was working. A record that looked in one of them
-    would tell half of the clients that nothing is signed.
+    There is one place a signed image can be, because there is one place
+    the unsigned one it was made from is: a record that looked in two
+    would be describing a delivery this package no longer produces.
     """
     result = _built(tmp_path, model, monkeypatch)
     out = tmp_path / "build"
-    (out / "firmware.signed.bin").write_bytes(b"SIGNED, copied up")
-    (result.out_dir / "firmware.signed.hex").write_text(":00000001FF\n", "utf-8")
+    assert result.out_dir == out
+    (out / "firmware.signed.bin").write_bytes(b"SIGNED")
 
     record = api.read_build(out)
 
-    assert record is not None
     assert [(signed.format, signed.path) for signed in record.signed] == [
-        ("bin", out / "firmware.signed.bin"),
-        ("hex", result.out_dir / "firmware.signed.hex"),
+        ("bin", out / "firmware.signed.bin")
     ]
-
-
-def test_one_entry_per_encoding_however_many_copies_there_are(tmp_path, model, monkeypatch) -> None:
-    """The same image in two places is one signed image, and the near one wins."""
-    result = _built(tmp_path, model, monkeypatch)
-    out = tmp_path / "build"
-    (result.out_dir / "firmware.signed.bin").write_bytes(b"SIGNED")
-    (out / "firmware.signed.bin").write_bytes(b"SIGNED, copied up")
-
-    record = api.read_build(out)
-
-    assert [signed.path for signed in record.signed] == [out / "firmware.signed.bin"]
 
 
 def test_a_directory_somebody_is_working_in_says_so(tmp_path, model, monkeypatch) -> None:
@@ -570,7 +554,8 @@ def test_clean_build_removes_what_a_build_wrote(tmp_path, model, monkeypatch) ->
     assert out.is_dir(), "the build directory itself is not the build's to remove"
     assert not (out / ".mcuhome-local").exists()
     assert not (out / buildrecord.BUILD_RECORD_FILE).exists()
-    assert not result.out_dir.exists()
+    assert not [artifact for artifact in result.artifacts if (out / artifact.path).exists()]
+    assert not (out / BUILD_REPORT_FILE).exists()
     assert out / ".mcuhome-local" in removed
     assert out / buildrecord.BUILD_RECORD_FILE in removed
     assert api.read_build(out) is None

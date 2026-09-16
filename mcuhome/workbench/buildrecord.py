@@ -37,12 +37,19 @@ somebody copied from a colleague — is read off the files themselves: the
 build report and the firmware beside it. What only the record knows
 (which device, which context, which image) is then empty rather than
 guessed, because a guess in a record reads exactly like a fact.
+
+**One directory, either way.** A build delivers into the directory it
+was given, at the top and under plain names, so reading one and cleaning
+one is reading and cleaning that directory — there is no second place a
+report or a firmware can be. What the build kept for itself is hidden
+inside it and is this module's business only when it removes it.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +74,7 @@ __all__ = [
     "BuildRecord",
     "CleanResult",
     "clean_build",
+    "clean_delivery",
     "read_build",
     "write_build_record",
 ]
@@ -97,11 +105,12 @@ WORK_DIRS = (LOCAL_WORK_DIR, REMOTE_WORK_DIR)
 class BuildRecord:
     """What a build directory holds, as far as anything can say without building.
 
-    :attr:`out_dir` is where the build *delivered*: the report, the
-    artifacts and anything signing wrote afterwards are in it. It is the
-    directory :func:`read_build` was asked about wherever the build wrote
-    there, and a directory inside it where a build environment delivered
-    into one of its own.
+    :attr:`out_dir` is where the build *delivered*, which is the build
+    directory itself: the report, the artifacts and anything signing
+    wrote afterwards have plain names at the top of it, and what the
+    build kept for itself is hidden inside. It is therefore the directory
+    :func:`read_build` was asked about, restated in the document so that
+    a client reading the record alone knows which directory it describes.
 
     :attr:`artifacts` carries the hashes the build measured, not hashes
     of the files that are there now — see the module docstring. A field
@@ -121,10 +130,9 @@ class BuildRecord:
     #: The build report's file name in :attr:`out_dir`.
     report: str
     #: The signed images, read off the directory: signing happens after
-    #: the build, so no record of the build can know about them. Looked
-    #: for at the top of the build directory first — where a client
-    #: copies a build's output up for the user — and then beside the
-    #: unsigned images in :attr:`out_dir`.
+    #: the build, so no record of the build can know about them. They lie
+    #: beside the unsigned ones, at the top of the build directory, which
+    #: is the one place a delivery ever puts them.
     signed: tuple[SignedArtifact, ...]
     #: The build environment that ran, where one did.
     container_image: str
@@ -166,10 +174,10 @@ def write_build_record(out_dir: Path, *, result: BuildResult) -> Path | None:
         "build": RECORD_VERSION,
         "device": result.device,
         "context_id": result.context_id,
-        # Where the files are, which is not always the directory this
-        # record lies in: a build environment delivers into an output
-        # directory of its own under the work root.
-        "out_dir": None if result.out_dir is None else str(result.out_dir),
+        # Where the files are: the build directory this record lies in,
+        # because that is where every build delivers. Stated anyway, so
+        # that the document says on its own which directory it describes.
+        "out_dir": str(result.out_dir),
         "report": result.report,
         "container_image": result.container_image,
         "artifacts": [artifact.to_dict() for artifact in result.artifacts],
@@ -207,24 +215,18 @@ def _text(data: dict[str, Any], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _signed_artifacts(*places: Path) -> tuple[SignedArtifact, ...]:
-    """The signed images, by the names signing gives them, in the first place that has one.
+def _signed_artifacts(directory: Path) -> tuple[SignedArtifact, ...]:
+    """The signed images, by the names signing gives them, in *directory*.
 
-    Two places, because signing happens after the build and its output
-    ends up wherever the person who signed was working: beside the
-    unsigned images in the delivery directory, or at the top of the build
-    directory, where a client that copies a build's output up for the
-    user keeps them. The order the caller states decides which one is
-    answered for an encoding that exists in both; one entry per encoding
-    either way, because they are the same image.
+    One place, because there is one: signing writes beside the unsigned
+    images, and the unsigned images are at the top of the build directory
+    — which is where a build delivers them. One entry per encoding.
     """
     found: list[SignedArtifact] = []
     for _unsigned, signed in SIGNED_FIRMWARE_NAMES:
-        for place in places:
-            path = place / signed
-            if path.is_file():
-                found.append(SignedArtifact(format=Path(signed).suffix.lstrip("."), path=path))
-                break
+        path = directory / signed
+        if path.is_file():
+            found.append(SignedArtifact(format=Path(signed).suffix.lstrip("."), path=path))
     return tuple(found)
 
 
@@ -267,18 +269,17 @@ def read_build(out_dir: Path) -> BuildRecord | None:
     busy = is_busy(directory)
     data = _recorded(directory)
     if data is not None:
-        delivery = _text(data, "out_dir")
-        into = Path(delivery) if delivery else directory
         return BuildRecord(
-            out_dir=into,
+            # The directory that was asked about, not the path in the
+            # record: a build delivers into the directory it was given,
+            # so this is the same answer read off the disk instead of out
+            # of a file somebody could have edited.
+            out_dir=directory,
             device=_text(data, "device"),
             context_id=_text(data, "context_id"),
             artifacts=artifacts_from_wire(data.get("artifacts") or ()),
             report=_text(data, "report"),
-            # The directory that was asked about first: what a client
-            # copied up for the user is the copy a person signs and
-            # flashes, and it is the one they would be shown.
-            signed=_signed_artifacts(directory, into),
+            signed=_signed_artifacts(directory),
             container_image=_text(data, "container_image"),
             busy=busy,
         )
@@ -304,11 +305,78 @@ def _inside(path: Path, directory: Path) -> bool:
     A record is a file, and a file can be edited: a path in one that
     climbs out of the build directory is answered with "not mine to
     remove" rather than with a deletion somewhere else on the disk.
+
+    The comparison is on the **normalised** spelling, because a plain one
+    is purely textual: ``<build>/../keepsake.txt`` starts with the build
+    directory and is not in it, and that is exactly the spelling a record
+    would carry if somebody wanted this call to delete something of
+    theirs. Normalised rather than resolved, so that a build directory
+    reached through a symlink still describes its own contents.
     """
+    candidate = Path(os.path.normpath(path))
+    base = Path(os.path.normpath(directory))
     try:
-        return path != directory and path.is_relative_to(directory)
+        return candidate != base and candidate.is_relative_to(base)
     except ValueError:  # pragma: no cover - is_relative_to answers False instead
         return False
+
+
+def _delivery(directory: Path) -> list[Path]:
+    """What a delivery puts at the top of *directory*, by name.
+
+    The build report and the firmware in both encodings, plus the signed
+    names beside them: what a build delivers and what signing then adds
+    to it. Named one by one rather than matched by a pattern, because
+    everything else in a build directory belongs to whoever put it there.
+    """
+    found: list[Path] = [directory / BUILD_REPORT_FILE]
+    for unsigned, signed in SIGNED_FIRMWARE_NAMES:
+        found += [directory / unsigned, directory / signed]
+    return found
+
+
+def _declared(directory: Path) -> list[Path]:
+    """The artifacts the record in *directory* declares, where it has one."""
+    data = _recorded(directory)
+    return [
+        directory / artifact.path
+        for artifact in artifacts_from_wire((data or {}).get("artifacts") or ())
+    ]
+
+
+def clean_delivery(out_dir: Path) -> None:
+    """Remove the delivery the build before this one left in *out_dir*.
+
+    A build delivers into a directory the user keeps, and that directory
+    is not emptied between builds — so the delivery is what replaces
+    itself: without this, a build that produces one encoding would leave
+    the other one's file from an older build beside it, and a build that
+    was not signed would leave the signature and the OTA image of the one
+    that was. Both are flashable lookalikes belonging to no build that is
+    there any more, and a person reading the directory cannot tell.
+
+    What goes is what a delivery puts there: the build report, the
+    firmware in both encodings and the signed names beside them, the
+    artifacts the previous record declared, and the ``.ota`` files. The
+    OTA image is the one entry taken by pattern rather than by name — its
+    name carries the device and the version it wraps, which this call
+    cannot know — and it is a pattern this package itself only ever
+    writes. Everything else in the directory stays, the build record and
+    the work roots included: this is the delivery, not a clean
+    (:func:`clean_build`).
+
+    Best effort per file, and never a directory: a delivery is files, and
+    a build that cannot remove one is not a build that failed — the move
+    that follows overwrites what it could not unlink.
+    """
+    directory = Path(out_dir)
+    if not directory.is_dir():
+        return
+    found = _delivery(directory) + _declared(directory) + sorted(directory.glob("*.ota"))
+    for path in found:
+        if _inside(path, directory) and path.is_file():
+            with contextlib.suppress(OSError):
+                path.unlink()
 
 
 def _removals(directory: Path) -> list[Path]:
@@ -321,20 +389,10 @@ def _removals(directory: Path) -> list[Path]:
     writes is a short, known list, and a list is the only thing that
     cannot grow teeth when a later version puts another file somewhere.
     """
-    found: list[Path] = [directory / BUILD_RECORD_FILE, directory / BUILD_REPORT_FILE]
+    found: list[Path] = [directory / BUILD_RECORD_FILE]
     found += [directory / name for name in WORK_DIRS]
-    data = _recorded(directory)
-    delivery = Path(_text(data, "out_dir") or directory) if data is not None else directory
-    for artifact in artifacts_from_wire((data or {}).get("artifacts") or ()):
-        found.append(delivery / artifact.path)
-    # Both places, because the report and the firmware are a build's
-    # output wherever they lie: the delivery directory the build wrote
-    # into, and the top of the build directory, where a client that
-    # copied them up for the user keeps them.
-    for where in (directory, delivery):
-        found += [where / BUILD_REPORT_FILE]
-        for unsigned, signed in SIGNED_FIRMWARE_NAMES:
-            found += [where / unsigned, where / signed]
+    found += _declared(directory)
+    found += _delivery(directory)
     return [path for path in found if _inside(path, directory)]
 
 
@@ -404,13 +462,13 @@ def clean_build(out_dir: Path, *, device: str = "") -> CleanResult:
     The build directory itself stays, and so does everything in it that a
     build did not write. What goes is named one by one and nothing else
     is: the build record, the build report, the artifacts the record
-    declares, the unsigned and signed firmware beside them — in the
-    delivery directory and at the top of the build directory, because a
-    client may have copied them up — and the two work roots a build
-    creates when it was not given one (``.mcuhome-local``,
-    ``.mcuhome-remote``). A file somebody put there themselves is not a
-    build's leftover, however much it looks like one, and neither is a
-    work root the *caller* named: that directory is theirs.
+    declares, the unsigned and signed firmware beside them — all at the
+    top of the build directory, which is where a build delivers — and the
+    two work roots a build creates when it was not given one
+    (``.mcuhome-local``, ``.mcuhome-remote``). A file somebody put there
+    themselves is not a build's leftover, however much it looks like one,
+    and neither is a work root the *caller* named: that directory is
+    theirs.
 
     The **lock file stays**, deliberately: it is the guard this call is
     holding, and unlinking a path another process has already opened

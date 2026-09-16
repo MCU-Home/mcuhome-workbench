@@ -441,7 +441,7 @@ def test_a_stopped_local_build_answers_stopped_and_releases_the_build_directory(
     assert result.ok is False
     assert result.stopped is True
     assert result.to_dict()["stopped"] is True
-    assert result.out_dir == tmp_path / "out"
+    assert result.out_dir == out_dir, "the build directory, whatever the build delivered into it"
     assert buildlock.is_busy(out_dir) is False
     # And it says nothing about the firmware. A stopped step is a failed
     # step by construction — the environment was ended before it could
