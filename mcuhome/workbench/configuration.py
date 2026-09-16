@@ -68,6 +68,17 @@ an option is declared under the area name alone, and what follows the
 area is data rather than further levels of this scheme — which is also
 why the two live in files only.
 
+One **entry** of such a map is written and removed key by key
+(``builder.attic.target``, ``registry.packages.mcuhome.org.mirrors.sdk``),
+so a builder and a registry are configurable without hand-editing YAML.
+:data:`MAP_ENTRY_OPTIONS` declares what an entry of each map carries,
+:func:`option` answers that declaration for the key a person typed, and
+:func:`set_config_value` parses the text through it. What one key cannot
+say is whether the *entry* is complete — a remote builder needs its
+server, and one ``config set`` writes one key — so an entry half-way
+through being written is a state a file passes through, and the next
+resolution is what says what is still missing.
+
 A derived flag splits back into its key without a table, because an area
 name is always one word: ``--build-sdk-sources`` is ``build`` and
 ``sdk_sources``, and a message may therefore offer either spelling of a
@@ -80,7 +91,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +123,7 @@ __all__ = [
     "CONFIG_FILE",
     "CONFIG_ORIGINS",
     "CONFIG_SCOPES",
+    "MAP_ENTRY_OPTIONS",
     "OPTION_KINDS",
     "Argument",
     "ProgramDefaults",
@@ -158,7 +170,10 @@ CONFIG_ORIGINS = (
 )
 
 #: Every kind an option may declare. The two map kinds parse and merge
-#: themselves and are named after the area they hold.
+#: themselves and are named after the area they hold; ``boolean`` is
+#: carried by the entry of a map rather than by an option of the
+#: registry, and is declared here because the entries are parsed by the
+#: same machinery.
 OPTION_KINDS = (
     "string",
     "path",
@@ -166,9 +181,15 @@ OPTION_KINDS = (
     "strings",
     "integer",
     "number",
+    "boolean",
     "builder",
     "registry",
 )
+
+#: How a boolean is written wherever it is written as a word: in a
+#: configuration file YAML answers with the value itself, and these are
+#: the two spellings ``mcuhome config set`` takes for one.
+_BOOLEANS = {"true": True, "false": False}
 
 
 @dataclass(frozen=True)
@@ -507,6 +528,133 @@ OPTIONS: tuple[Option, ...] = (
     ),
 )
 
+#: What one **entry** of a map option carries, by the kind of map: the
+#: key inside the entry, and the declaration its text is parsed through.
+#: The names here are the shape a person reads (``builder.<name>.target``);
+#: :func:`option` answers a copy named the way the caller asked, so a
+#: client shows the key that was typed. No entry has an environment
+#: variable or a flag, for the same reason the map itself has none: what
+#: follows the area is data, and a grammar for it in a variable would be
+#: a second one to specify and parse.
+#:
+#: What an entry key may *not* say is whether the entry is complete — a
+#: remote builder needs its server, and one ``config set`` writes one
+#: key. That is the resolution's to say, at the file, in the words that
+#: name what is missing.
+MAP_ENTRY_OPTIONS: dict[str, dict[str, Option]] = {
+    "builder": {
+        "target": Option(
+            "builder.<name>.target",
+            kind="string",
+            choices=BUILD_TARGETS,
+            environment=False,
+            arguments=False,
+            help="where a build at this builder runs",
+        ),
+        "server": Option(
+            "builder.<name>.server",
+            kind="string",
+            environment=False,
+            arguments=False,
+            help="a remote builder's build server, as host[:port]",
+        ),
+        "container_image": Option(
+            "builder.<name>.container_image",
+            kind="string",
+            environment=False,
+            arguments=False,
+            help="the build environment image a local builder builds in",
+        ),
+    },
+    "registry": {
+        "untrusted": Option(
+            "registry.<base-domain>.untrusted",
+            kind="boolean",
+            default=False,
+            environment=False,
+            arguments=False,
+            help="read this registry without checking any signature",
+        ),
+        "anchor": Option(
+            "registry.<base-domain>.anchor",
+            kind="path",
+            environment=False,
+            arguments=False,
+            help="the trust anchor file this registry's signatures are held against",
+        ),
+        "mirrors": Option(
+            "registry.<base-domain>.mirrors.<source>",
+            kind="strings",
+            environment=False,
+            arguments=False,
+            help="where one source of this registry is read from, in order",
+        ),
+    },
+}
+
+#: The one entry key that holds a map of its own, keyed by source name.
+_MIRRORS_KEY = "mirrors"
+
+
+@dataclass(frozen=True)
+class MapEntry:
+    """One key inside one entry of a map option, as a caller named it.
+
+    *map_option* is the map the key lives in (``builder``, ``registry``),
+    *name* the entry a person chose (the builder's name, the registry's
+    base domain — which carries dots of its own, so it is read from the
+    right), *keys* where the value sits below that entry, and
+    *declaration* what the text is parsed through.
+    """
+
+    map_option: Option
+    name: str
+    keys: tuple[str, ...]
+    declaration: Option
+
+
+def find_map_entry(name: str, registry: tuple[Option, ...] = OPTIONS) -> MapEntry | None:
+    """The map entry *name* names, or ``None`` where it names none.
+
+    A ``find_``: a name that is not one of these is not an error here —
+    it is an ordinary option key, or nothing, and whoever asked says so
+    in their own words.
+
+    Read from the **right**, because the entry's name is data and may
+    hold dots: the last component is the key inside the entry, unless
+    the one before it is ``mirrors``, which takes the source name with
+    it. Everything left of that is the entry.
+    """
+    parts = name.split(".")
+    if len(parts) < 3:  # noqa: PLR2004 - area, entry, key: the shortest entry key there is
+        return None
+    area, rest = parts[0], parts[1:]
+    declared = next((one for one in registry if one.name == area and not one.leaf), None)
+    if declared is None:
+        return None
+    entries = MAP_ENTRY_OPTIONS.get(declared.kind)
+    if entries is None:  # pragma: no cover - a test holds the table to the map kinds
+        return None
+    if len(rest) >= 3 and rest[-2] == _MIRRORS_KEY and _MIRRORS_KEY in entries:  # noqa: PLR2004
+        entry, keys = ".".join(rest[:-2]), (_MIRRORS_KEY, rest[-1])
+    else:
+        entry, keys = ".".join(rest[:-1]), (rest[-1],)
+    template = entries.get(keys[0])
+    if template is None or not entry:
+        return None
+    if keys == (_MIRRORS_KEY,):
+        # `registry.<domain>.mirrors` names the map of sources, not a
+        # value: which source is being pointed somewhere else is part of
+        # the key, because a registry's sources are mirrored one by one.
+        return None
+    return MapEntry(
+        map_option=declared,
+        name=entry,
+        keys=keys,
+        declaration=replace(template, name=name),
+    )
+
+
 #: Keys a configuration file used to carry, and the option each of them
 #: is today. A configuration file has no version and therefore no
 #: migration — what a project's layout gets, a file in
@@ -539,17 +687,27 @@ RETIRED_BUILDER_SECRETS_DIR = "build-server"
 
 
 def option(name: str, declared_options: tuple[Option, ...] = OPTIONS) -> Option:
-    """The declaration of *name*, or a ``ValueError`` for a name nobody declared.
+    """The declaration of *name*, or a refusal naming what is declared.
 
-    A programming error rather than a refusal in words: a tool asks for
-    an option it knows, and a name that reaches here without being one
-    came from code, not from a person. What a *person* mistyped is
-    refused where it was written — in a file, a variable or a flag.
+    *name* is an option key (``build.mode``) or one entry key of a map
+    option (``builder.attic.target``,
+    ``registry.packages.mcuhome.org.mirrors.sdk``); an entry is answered
+    with its own declaration, named the way it was asked for, so a client
+    can show the kind and the help of the key a person typed.
+
+    A name that is neither is refused in the words a configuration file
+    is refused with — the same sentence and the same hint, because this
+    is the lookup a person's typing reaches: a key that used to be an
+    option names its successor, and everything else is answered with what
+    a file may set.
     """
     for declared in declared_options:
         if declared.name == name:
             return declared
-    raise ValueError(f"{name!r} is not a declared option")
+    entry = find_map_entry(name, declared_options)
+    if entry is not None:
+        return entry.declaration
+    raise _refuse_undeclared(name, registry=declared_options)
 
 
 @dataclass(frozen=True)
@@ -739,6 +897,10 @@ def _parse_file_value(
         if opt.choices and value not in opt.choices:
             raise refuse("one of " + ", ".join(opt.choices))
         return value
+    if opt.kind == "boolean":
+        if not isinstance(value, bool):
+            raise refuse("true or false")
+        return value
     if opt.kind == "integer":
         if isinstance(value, bool) or not isinstance(value, int):
             raise refuse("a whole number")
@@ -821,6 +983,13 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
                 hint=opt.help or None,
             )
         return fraction
+    if opt.kind == "boolean":  # pragma: no cover - no declared option carries one yet
+        if value not in ("0", "1"):
+            raise ConfigError(
+                f"{opt.env_var} must be 1 or 0, not {value!r}.",
+                hint=opt.help or None,
+            )
+        return value == "1"
     if opt.kind == "path":
         return _resolve_path(value, env=env, base=None)
     if opt.kind == "strings":
@@ -1137,8 +1306,17 @@ def _retired_variable_warning(retired: str, successor: str) -> Diagnostic:
 
 
 def _settable(name: str, registry: tuple[Option, ...], *, channel: str) -> Option:
-    """The declaration of *name*, or a programming error naming the channel."""
-    opt = option(name, registry)
+    """The declaration of *name*, or a programming error naming the channel.
+
+    The lookup is done here rather than through :func:`option`, which
+    refuses in words: what arrives on these two channels was put there by
+    a tool — the arguments channel carries what a parser derived from
+    this very registry — so a name nobody declared is a defect in that
+    tool and not something to word for a user.
+    """
+    opt = next((one for one in registry if one.name == name), None)
+    if opt is None:
+        raise ValueError(f"{name!r} is not a declared option")
     if opt.bootstrap:
         raise ValueError(f"{name!r} is a bootstrap option; resolve_project consumed it already")
     if channel == "the command line" and not opt.arguments:
@@ -1324,16 +1502,39 @@ def resolve_config_file(
 
 
 def _declared_or_refuse(name: str, registry: tuple[Option, ...]) -> Option:
-    by_name = {opt.name: opt for opt in registry}
-    if name not in by_name:
-        if name in RETIRED_OPTIONS:
-            raise _refuse_retired_option(name, registry=registry)
-        settable = sorted(n for n, o in by_name.items() if o.files and not o.bootstrap)
-        raise ConfigError(
+    for declared in registry:
+        if declared.name == name:
+            return declared
+    raise _refuse_undeclared(name, registry=registry)
+
+
+def _refuse_undeclared(name: str, *, registry: tuple[Option, ...]) -> ConfigError:
+    """The one refusal for a key nobody declares, wherever it was typed.
+
+    A key that was an option once names its successor; a key inside one
+    of the maps is answered with the entry keys that map takes, because
+    "there is no option called builder.attic.typo" without them is a
+    list a person cannot guess.
+    """
+    if name in RETIRED_OPTIONS:
+        return _refuse_retired_option(name, registry=registry)
+    area = name.partition(".")[0]
+    declared = next((one for one in registry if one.name == area and not one.leaf), None)
+    entries = MAP_ENTRY_OPTIONS.get(declared.kind) if declared is not None else None
+    if entries is not None:
+        shown = ", ".join(sorted(entry.name for entry in entries.values()))
+        return ConfigError(
             f"There is no option called {name!r}.",
-            hint="options settable from a configuration file: " + ", ".join(settable),
+            hint=(
+                f"{area!r} is a map, written one entry key at a time — the keys an "
+                f"entry of it takes are: {shown}"
+            ),
         )
-    return by_name[name]
+    settable = sorted(one.name for one in registry if one.files and not one.bootstrap)
+    return ConfigError(
+        f"There is no option called {name!r}.",
+        hint="options settable from a configuration file: " + ", ".join(settable),
+    )
 
 
 def _value_to_write(opt: Option, text: str, location: Location) -> Any:
@@ -1350,24 +1551,24 @@ def _value_to_write(opt: Option, text: str, location: Location) -> Any:
             location=location,
             hint=f"to remove the option from the file: mcuhome config unset {opt.name}",
         )
-    if opt.kind == "builder":
-        raise ConfigError(
-            "'builder' is structured configuration and not settable as one value.",
-            location=location,
-            hint=(
-                "edit the `builder:` map in the file directly — one section per "
-                "builder, keyed by its name, with target: and what that target needs"
-            ),
+    if opt.kind in MAP_ENTRY_OPTIONS:
+        shown = "\n    ".join(
+            f"mcuhome config set {entry.name} <value>"
+            for entry in MAP_ENTRY_OPTIONS[opt.kind].values()
         )
-    if opt.kind == "registry":
         raise ConfigError(
-            "'registry' is structured configuration and not settable as one value.",
+            f"{opt.name!r} is a map of entries and not settable as one value.",
             location=location,
-            hint=(
-                "edit the `registry:` block in the file directly — one entry per "
-                "registry domain, each with untrusted:, anchor: and mirrors:"
-            ),
+            hint=f"set one entry key at a time:\n    {shown}",
         )
+    if opt.kind == "boolean":
+        if text not in _BOOLEANS:
+            raise ConfigError(
+                f"{opt.name} is either true or false, not {text!r}.",
+                location=location,
+                hint=opt.help or None,
+            )
+        return _BOOLEANS[text]
     if opt.kind == "integer":
         try:
             return int(text)
@@ -1440,9 +1641,23 @@ def set_config_value(
     per-invocation or bootstrap option is refused with the same words —
     and goes through the round-trip editor, so comments and ``!file``
     references elsewhere in the file survive the edit byte for byte.
+
+    *name* is an option key or one **entry key** of a map option
+    (``builder.attic.target``, ``registry.packages.mcuhome.org.untrusted``,
+    ``registry.packages.mcuhome.org.mirrors.sdk``). An entry key is
+    written into the map's section, under the entry a person named,
+    creating what is not there yet; the text is parsed through that
+    entry's own declaration, so a value the key cannot take is refused
+    here. Whether the **entry** is complete is not this call's to say —
+    one ``config set`` writes one key, and a remote builder that has not
+    got its server yet is a state the file passes through until the next
+    one; the resolution is what names what is missing.
     """
-    opt = _declared_or_refuse(name, declared_options)
     location = Location(file=file, key=name)
+    entry = find_map_entry(name, declared_options)
+    if entry is not None:
+        return _set_map_entry(entry, file, text, env=env, location=location)
+    opt = _declared_or_refuse(name, declared_options)
     if opt.bootstrap or not opt.files:
         raise _refuse_not_file_settable(opt, location)
     value = _value_to_write(opt, text, location)
@@ -1486,9 +1701,18 @@ def unset_config_value(
 ) -> bool:
     """Remove *name* from *file*; False when there was nothing to remove.
 
-    The name must be a declared option — ``unset`` with a typo saying
-    "nothing to remove" would confirm a removal that never happened.
+    The name must be a declared option or one entry key of a map option —
+    ``unset`` with a typo saying "nothing to remove" would confirm a
+    removal that never happened.
+
+    An entry key takes what it empties with it: the last key of an entry
+    removes the entry, and the last entry removes the map, because a
+    ``builder:`` with nothing under it configures nothing and reads as an
+    unfinished edit to whoever opens the file next.
     """
+    entry = find_map_entry(name, declared_options)
+    if entry is not None:
+        return _unset_map_entry(entry, file)
     opt = _declared_or_refuse(name, declared_options)
     yaml = editing_yaml()
     data = _load_for_editing(file, yaml)
@@ -1509,5 +1733,88 @@ def unset_config_value(
     if name not in data:
         return False
     del data[name]
+    _dump_config(file, data, yaml)
+    return True
+
+
+def _set_map_entry(
+    entry: MapEntry,
+    file: Path,
+    text: str,
+    *,
+    env: Mapping[str, str],
+    location: Location,
+) -> Any:
+    """Write one key of one map entry, creating the way down to it."""
+    value = _value_to_write(entry.declaration, text, location)
+    # The same proof a plain option's value goes through, against the
+    # entry key's own declaration: a `target` outside the vocabulary or
+    # an `untrusted` that is not a boolean is refused before the file is
+    # touched.
+    _parse_file_value(
+        entry.declaration, value, file=file, env=env, location=location, origin="edit"
+    )
+    yaml = editing_yaml()
+    data = _load_for_editing(file, yaml)
+    if data is None:
+        data = {}
+    holder: Any = _section_for(data, entry.map_option.name, entry, file)
+    holder = _section_for(holder, entry.name, entry, file)
+    for step in entry.keys[:-1]:
+        holder = _section_for(holder, step, entry, file)
+    holder[entry.keys[-1]] = value
+    _dump_config(file, data, yaml)
+    return value
+
+
+def _section_for(holder: Any, key: str, entry: MapEntry, file: Path) -> Any:
+    """The mapping under *key*, created where it is not there yet.
+
+    An existing one is written into rather than replaced: it may hold
+    other entries, other keys and their comments, and those are as much
+    somebody's work as the rest of the file.
+    """
+    found = holder.get(key)
+    if found is None:
+        found = {}
+        holder[key] = found
+    elif not isinstance(found, dict):
+        raise ConfigError(
+            f"{key!r} in {file.name} is not a mapping, and {entry.declaration.name} "
+            "is written inside one.",
+            location=Location(file=file, key=key),
+            hint=(
+                f"an entry of {entry.map_option.name!r} is a section with its keys "
+                f"below it:\n    {entry.map_option.name}:\n      {entry.name}:\n"
+                f"        {entry.keys[-1]}: <value>"
+            ),
+        )
+    return found
+
+
+def _unset_map_entry(entry: MapEntry, file: Path) -> bool:
+    """Remove one key of one map entry, and whatever it leaves empty."""
+    yaml = editing_yaml()
+    data = _load_for_editing(file, yaml)
+    if data is None:
+        return False
+    # The way down, kept so that what an edit empties can be removed on
+    # the way back up: the map, the entry, and for a mirror list the
+    # `mirrors` section between them.
+    path = [entry.map_option.name, entry.name, *entry.keys]
+    holders: list[Any] = [data]
+    for step in path[:-1]:
+        found = holders[-1].get(step) if isinstance(holders[-1], dict) else None
+        if not isinstance(found, dict):
+            return False
+        holders.append(found)
+    if path[-1] not in holders[-1]:
+        return False
+    del holders[-1][path[-1]]
+    for holder, step in zip(reversed(holders[:-1]), reversed(path[:-1]), strict=True):
+        if holders[-1]:
+            break
+        del holder[step]
+        holders.pop()
     _dump_config(file, data, yaml)
     return True

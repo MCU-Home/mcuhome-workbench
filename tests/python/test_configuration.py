@@ -88,9 +88,22 @@ def test_the_bootstrap_option_is_declared_but_stands_outside() -> None:
     assert declared.env_var == "MCUHOME_PROJECT_DIR"
 
 
-def test_an_undeclared_option_is_a_programming_error() -> None:
-    with pytest.raises(ValueError):
+def test_an_undeclared_option_is_refused_in_the_words_a_file_is_refused_with() -> None:
+    """This is the lookup a person's typing reaches — `mcuhome config get`.
+
+    So it refuses the way a configuration file carrying that key is
+    refused, with the same sentence and the same hint, rather than as a
+    programming error a client would have to word for the user itself.
+    """
+    with pytest.raises(ConfigError) as caught:
         option("does_not_exist")
+    assert caught.value.message == "There is no option called 'does_not_exist'."
+    assert "options settable from a configuration file" in (caught.value.hint or "")
+
+    # A key that was an option once names its successor here too.
+    with pytest.raises(ConfigError) as caught:
+        option("ccache_dir")
+    assert "build.cache_root" in (caught.value.hint or "")
 
 
 def test_every_option_kind_is_one_the_parsers_know() -> None:
@@ -569,11 +582,11 @@ def test_set_refuses_the_channels_a_file_may_not_carry(project: Project) -> None
     assert "'project.dir' cannot be set from a configuration file" in caught.value.message
 
 
-def test_set_refuses_a_map_option_toward_the_file_itself(project: Project) -> None:
+def test_set_refuses_a_map_option_toward_its_entry_keys(project: Project) -> None:
     with pytest.raises(ConfigError) as caught:
         configuration.set_config_value(project.config_file, "builder", "attic", env={})
-    assert "structured configuration" in caught.value.message
-    assert "builder:" in (caught.value.hint or "")
+    assert "is a map of entries and not settable as one value" in caught.value.message
+    assert "mcuhome config set builder.<name>.target <value>" in (caught.value.hint or "")
 
 
 def test_set_refuses_an_empty_value_toward_unset(project: Project) -> None:
@@ -668,3 +681,195 @@ def test_a_derived_fallback_is_not_a_declared_default(name: str, project: Projec
     assert settings.origin(name) == "default"
     entry = settings.to_dict()[name]
     assert entry == {"value": None, "origin": "default", "source": None}
+
+
+# --- one entry of a map, key by key -----------------------------------
+#
+# A builder and a package registry are maps, and until they could be
+# written key by key the only way to configure one was to open the YAML
+# and type it. What these hold is the whole round trip: the key a person
+# names is the key the resolution answers, the entry keys carry their own
+# declaration, and removing the last of anything takes the empty section
+# with it.
+
+
+def test_an_entry_key_answers_its_own_declaration() -> None:
+    """`option()` is what a client shows the kind and the help from."""
+    declared = option("builder.attic.target")
+    assert declared.name == "builder.attic.target", "named the way it was asked for"
+    assert declared.kind == "string"
+    assert declared.choices == ("local", "remote")
+    assert declared.help
+    # No channel but the file, like the map it lives in.
+    assert declared.env_var == ""
+    assert declared.flag == ""
+
+    mirrors = option("registry.packages.mcuhome.org.mirrors.sdk")
+    assert mirrors.name == "registry.packages.mcuhome.org.mirrors.sdk"
+    assert mirrors.kind == "strings"
+    assert option("registry.packages.mcuhome.org.untrusted").kind == "boolean"
+
+
+def test_a_builder_is_written_and_read_back_key_by_key(project: Project) -> None:
+    """The round trip: what `config set` writes is what a build resolves."""
+    configuration.set_config_value(project.config_file, "builder.attic.target", "remote", env={})
+    configuration.set_config_value(
+        project.config_file, "builder.attic.server", "10.0.0.5:8291", env={}
+    )
+
+    builders = resolve_settings(project=project, env={}).value("builder")
+    assert [(one.name, one.target, one.server) for one in builders] == [
+        ("attic", "remote", "10.0.0.5:8291")
+    ]
+    assert [one.origin for one in builders] == ["project"]
+
+
+def test_a_registry_is_written_key_by_key_including_its_mirrors(project: Project) -> None:
+    domain = "packages.example.org"
+    configuration.set_config_value(
+        project.config_file, f"registry.{domain}.untrusted", "true", env={}
+    )
+    configuration.set_config_value(
+        project.config_file,
+        f"registry.{domain}.mirrors.sdk",
+        "https://mirror.example/sdk/,mirrors/sdk",
+        env={},
+    )
+
+    registries = resolve_settings(project=project, env={}).value("registry")
+    assert len(registries) == 1
+    assert registries[0].base_domain == domain
+    assert registries[0].untrusted is True
+    # A relative mirror is resolved against the file that named it, like
+    # every other path in a configuration file; a URL is left alone.
+    assert registries[0].mirrors["sdk"] == (
+        "https://mirror.example/sdk/",
+        str(project.root / "mirrors" / "sdk"),
+    )
+
+
+def test_writing_an_entry_key_leaves_the_rest_of_the_file_alone(project: Project) -> None:
+    write_project(
+        project,
+        "# what this project builds like\nbuild:\n  mode: subprocess\n"
+        "builder:\n  # the machine in the attic\n  attic:\n    target: local\n",
+    )
+
+    configuration.set_config_value(
+        project.config_file, "builder.attic.container_image", "ghcr.io/mcu-home/x:1", env={}
+    )
+    configuration.set_config_value(project.config_file, "builder.bench.target", "local", env={})
+
+    text = project.config_file.read_text(encoding="utf-8")
+    assert "# what this project builds like" in text
+    assert "# the machine in the attic" in text
+    assert resolve_settings(project=project, env={}).value("build.mode") == "subprocess"
+    written = resolve_settings(project=project, env={}).value("builder")
+    assert [one.name for one in written] == ["attic", "bench"]
+    assert written[0].container_image == "ghcr.io/mcu-home/x:1"
+
+
+def test_an_entry_value_is_parsed_through_the_entry_s_declaration(project: Project) -> None:
+    """A word outside the vocabulary is refused here, not at the next build."""
+    before = project.config_file.read_text(encoding="utf-8")
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(
+            project.config_file, "builder.attic.target", "somewhere", env={}
+        )
+    assert "must be one of local, remote" in caught.value.message
+    assert project.config_file.read_text(encoding="utf-8") == before
+
+    with pytest.raises(ConfigError) as caught:
+        configuration.set_config_value(
+            project.config_file, "registry.packages.example.org.untrusted", "yes", env={}
+        )
+    assert "either true or false" in caught.value.message
+    assert project.config_file.read_text(encoding="utf-8") == before
+
+
+def test_a_key_no_entry_takes_is_refused_with_the_ones_it_does(project: Project) -> None:
+    for name in ("builder.attic.typo", "registry.packages.example.org.mirrors"):
+        with pytest.raises(ConfigError) as caught:
+            configuration.set_config_value(project.config_file, name, "x", env={})
+        assert caught.value.message == f"There is no option called {name!r}."
+        hint = caught.value.hint or ""
+        assert "is a map, written one entry key at a time" in hint
+        assert "builder.<name>.target" in hint or "registry.<base-domain>.mirrors.<source>" in hint
+
+
+def test_unset_takes_the_entry_and_the_map_with_the_last_key(project: Project) -> None:
+    """A `builder:` with nothing under it reads as an unfinished edit."""
+    write_project(project, "build:\n  mode: subprocess\n")
+    configuration.set_config_value(project.config_file, "builder.attic.target", "remote", env={})
+    configuration.set_config_value(
+        project.config_file, "builder.attic.server", "10.0.0.5:8291", env={}
+    )
+
+    assert configuration.unset_config_value(project.config_file, "builder.attic.server")
+    text = project.config_file.read_text(encoding="utf-8")
+    assert "server:" not in text
+    assert "attic:" in text, "the entry stays while it still holds a key"
+
+    assert configuration.unset_config_value(project.config_file, "builder.attic.target")
+    text = project.config_file.read_text(encoding="utf-8")
+    assert "attic" not in text
+    assert "builder" not in text, "the map goes with its last entry"
+    assert "mode: subprocess" in text, "and nothing else moved"
+    assert resolve_settings(project=project, env={}).value("builder") == ()
+
+
+def test_unset_takes_the_mirrors_section_with_its_last_source(project: Project) -> None:
+    domain = "packages.example.org"
+    configuration.set_config_value(
+        project.config_file, f"registry.{domain}.mirrors.sdk", "https://a.example/sdk/", env={}
+    )
+    configuration.set_config_value(
+        project.config_file,
+        f"registry.{domain}.mirrors.build-workspace",
+        "https://a.example/build-workspace/",
+        env={},
+    )
+    configuration.set_config_value(
+        project.config_file, f"registry.{domain}.untrusted", "true", env={}
+    )
+
+    assert configuration.unset_config_value(project.config_file, f"registry.{domain}.mirrors.sdk")
+    assert "sdk:" not in project.config_file.read_text(encoding="utf-8")
+    assert configuration.unset_config_value(
+        project.config_file, f"registry.{domain}.mirrors.build-workspace"
+    )
+    text = project.config_file.read_text(encoding="utf-8")
+    assert "mirrors" not in text, "the section goes with its last source"
+    assert domain in text, "the entry stays: it still says untrusted"
+
+    assert configuration.unset_config_value(project.config_file, f"registry.{domain}.untrusted")
+    assert "registry" not in project.config_file.read_text(encoding="utf-8")
+
+
+def test_unset_answers_false_for_an_entry_that_was_never_there(project: Project) -> None:
+    write_project(project, "build:\n  mode: subprocess\n")
+    assert not configuration.unset_config_value(project.config_file, "builder.attic.target")
+    assert not configuration.unset_config_value(
+        project.config_file, "registry.packages.example.org.mirrors.sdk"
+    )
+    assert project.config_file.read_text(encoding="utf-8") == "build:\n  mode: subprocess\n"
+
+
+def test_an_entry_key_says_nothing_about_the_entry_being_complete(project: Project) -> None:
+    """One `config set` writes one key, and a remote builder needs two.
+
+    So a half-written entry is a state the file passes through, and what
+    says what is missing is the resolution — at the file, in the words
+    that name the key. The next `config set` still works on it, which is
+    what makes the state a passage rather than a trap.
+    """
+    configuration.set_config_value(project.config_file, "builder.attic.target", "remote", env={})
+
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={})
+    assert 'The builder "attic" is missing its server' in caught.value.message
+
+    configuration.set_config_value(
+        project.config_file, "builder.attic.server", "10.0.0.5:8291", env={}
+    )
+    assert resolve_settings(project=project, env={}).value("builder")[0].server == "10.0.0.5:8291"

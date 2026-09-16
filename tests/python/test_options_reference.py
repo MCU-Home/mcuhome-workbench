@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from mcuhome.workbench.configuration import OPTION_KINDS, OPTIONS, RETIRED_VARIABLES
+from mcuhome.workbench.configuration import (
+    MAP_ENTRY_OPTIONS,
+    OPTION_KINDS,
+    OPTIONS,
+    RETIRED_VARIABLES,
+    option,
+)
 
 REFERENCE = Path(__file__).resolve().parents[2] / "docs" / "api.md"
 
@@ -136,6 +142,49 @@ def test_every_map_option_is_documented_by_its_keys(documented):
         for key in inside:
             assert _stated(documented[key]["variable"]) == ""
             assert _stated(documented[key]["flag"]) == ""
+
+
+def test_the_documented_map_keys_are_the_declared_entry_keys(documented):
+    """The table and `MAP_ENTRY_OPTIONS` are one list, in both directions.
+
+    These six keys are what `mcuhome config set` writes a builder and a
+    registry with, so a key the table carries and nothing declares is a
+    promise nothing keeps — and one that is declared and undocumented is
+    a spelling a person can only find by reading the source.
+    """
+    for opt in OPTIONS:
+        if opt.leaf:
+            continue
+        declared = {entry.name for entry in MAP_ENTRY_OPTIONS[opt.kind].values()}
+        assert {key for key in documented if key.startswith(f"{opt.name}.")} == declared
+
+
+def test_every_entry_key_has_the_documented_kind_and_no_channel_but_the_file(documented):
+    for entries in MAP_ENTRY_OPTIONS.values():
+        for entry in entries.values():
+            row = documented[entry.name]
+            assert row["kind"].split()[0] == entry.kind, entry.name
+            assert set(entry.choices) <= set(re.findall(r"`([a-z_-]+)`", row["kind"])), entry.name
+            assert (row["files"], row["environment"], row["arguments"]) == ("y", "n", "n")
+            assert entry.env_var == "" and entry.flag == ""
+            assert entry.help, f"{entry.name} is shown to a person without a word about it"
+
+
+def test_every_entry_key_is_answered_by_the_lookup_a_person_reaches(documented):
+    """`option()` answers an entry key, named the way it was asked for."""
+    for area, entries in MAP_ENTRY_OPTIONS.items():
+        for key, entry in entries.items():
+            asked = entry.name.replace("<name>", "attic").replace(
+                "<base-domain>", "packages.example.org"
+            )
+            answered = option(asked)
+            assert answered.name == asked
+            assert (answered.kind, answered.choices, answered.help) == (
+                entry.kind,
+                entry.choices,
+                entry.help,
+            )
+            assert answered.name.startswith(f"{area}.") and key in answered.name
 
 
 def test_every_kind_is_one_the_reference_knows(documented):

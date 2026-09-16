@@ -746,12 +746,37 @@ def unset_config_value(
 `resolve_config_file` answers the file a scope (`system`, `user`,
 `project`) is edited in. `set_config_value` parses *text* through the
 option's declaration, writes it, and answers the parsed value;
-`unset_config_value` answers whether anything was removed. Both raise
-`ConfigError` — for a name nobody declared, listing the ones a file may
-set, and for a value the declaration rejects: what they are given came
-from a person editing configuration, so it is refused in words rather
-than as a programming error. `option()` is the other way round and
-raises `ValueError`: a tool asks for an option it knows.
+`unset_config_value` answers whether anything was removed.
+
+All three take an option key **or one entry key of a map option** —
+`builder.<name>.target`, `builder.<name>.server`,
+`builder.<name>.container_image`, `registry.<base-domain>.untrusted`,
+`registry.<base-domain>.anchor`,
+`registry.<base-domain>.mirrors.<source>` (see
+[Options](#options)) — so a builder and a registry are configured from a
+command line rather than by hand-editing YAML. The entry's name is data
+and may carry dots of its own, which is why the key is read from the
+right. `option()` answers the entry's declaration, named the way it was
+asked for; `set_config_value` parses the text through it and creates the
+map, the entry and a `mirrors` section on the way down;
+`unset_config_value` removes the key and whatever that empties — the
+last key takes the entry, the last entry takes the map.
+
+All three raise `ConfigError` for a name that is neither: the sentence
+and the hint are the ones a configuration file is refused with, because
+this is the lookup a person's typing reaches — a key that used to be an
+option names its successor, a key under one of the maps is answered with
+the entry keys that map takes, and anything else with the options a file
+may set. `set_config_value` raises it too for a value the declaration
+rejects, and for the map option itself (`builder`), which is a map of
+entries rather than one value and says which entry keys to set instead.
+
+What `set_config_value` does **not** promise for an entry key is that
+the entry as a whole resolves: one call writes one key, so
+`builder.attic.target remote` leaves a builder without a server until
+the next call gives it one, and until then every resolution refuses that
+file naming what is missing. For a plain option the guarantee stands —
+the written form is proven to read back before the file is touched.
 
 ### Option
 Frozen dataclass — the single source of every spelling of one option.
@@ -1904,8 +1929,9 @@ there is.
 | `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
 | `HOST_CHECKS` | `("runtime", "image", "store", "python", "workspace", "imgtool", "cache", "project", "configuration", "builder", "secrets")` — what a `HostFinding.check` may be, append-only |
 | `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry", "retired_environment_variable")` — the kinds a warning's `kind` may carry, append-only |
-| `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
+| `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "boolean", "builder", "registry")` — `boolean` is carried by a map entry rather than by an option of the registry |
 | `OPTIONS` | the declared option registry |
+| `MAP_ENTRY_OPTIONS` | what one entry of each map option carries, by the map's kind: the key inside an entry and its declaration |
 | `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET` | where a build runs |
 | `BUILD_MODES`, `MODE_CONTAINER`, `MODE_SUBPROCESS`, `DEFAULT_BUILD_MODE` | how a local build executes |
 | `LOCK_OPERATIONS` | `("build", "sign", "flash", "clean", "rename", "delete")` — append-only: a word an older version does not know is rendered by the generic refusal |
@@ -1987,8 +2013,8 @@ keyed on — `builder` by builder name, `registry` by base domain.
 | `builder.<name>.target` | string (`local`, `remote`) | – | – | y/n/n | – | – |
 | `builder.<name>.server` | string | – | – | y/n/n | – | – |
 | `builder.<name>.container_image` | string | – | – | y/n/n | – | – |
-| `registry.<base-domain>.untrusted` | bool | `false` | – | y/n/n | – | – |
-| `registry.<base-domain>.mirrors.<source>` | list | – | the mirror list the source serves | y/n/n | – | – |
+| `registry.<base-domain>.untrusted` | boolean (`true`, `false`) | `false` | – | y/n/n | – | – |
+| `registry.<base-domain>.mirrors.<source>` | strings | – | the mirror list the source serves | y/n/n | – | – |
 | `registry.<base-domain>.anchor` | path | – | the project's `secrets/trust-anchor/<base-domain>.json` | y/n/n | – | – |
 
 `project.dir` is the bootstrap option: it is resolved before the merge,
@@ -1999,6 +2025,21 @@ a value nobody sets per invocation — and **`builder` is a reserved
 area**: no option in it ever has an environment channel, so that
 `MCUHOME_BUILDER_*` stays what this package sets for a build environment
 it starts.
+
+The six keys below the two maps are **entry keys**, and they are written
+and removed like any other key: `option`, `set_config_value` and
+`unset_config_value` take one, with the entry's own name in the middle
+(`builder.attic.target`,
+`registry.packages.mcuhome.org.mirrors.sdk`). `MAP_ENTRY_OPTIONS`
+declares them — the key inside an entry, its kind and its help — and
+`option()` answers that declaration named the way it was asked for, so a
+client shows the key a person typed. Writing one creates what is not
+there yet (the map, the entry, a `mirrors` section) and removing one
+takes with it whatever it empties: the last key removes the entry, the
+last entry removes the map. What an entry key cannot say is whether the
+**entry** is complete — one `config set` writes one key, so a remote
+builder without its server yet is a state the file passes through, and
+the next resolution is what names what is missing.
 
 The three package-source keys are one rule: each names the directories
 searched for packages of **its own kind**, and a kind is never looked for
@@ -2498,6 +2539,7 @@ this package is public.
 `BUILD_REPORT_FILE`, `SIGNING_KEY_FILE`, `PUBLIC_KEY_FILE`,
 `CONFIG_SCOPES`, `CONFIG_ORIGINS`, `SEVERITIES`, `SEVERITY_ERROR`,
 `SEVERITY_WARNING`, `WARNING_KINDS`, `HOST_CHECKS`, `OPTION_KINDS`, `OPTIONS`,
+`MAP_ENTRY_OPTIONS`,
 `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET`,
 `BUILD_MODES`, `MODE_CONTAINER`, `MODE_SUBPROCESS`, `DEFAULT_BUILD_MODE`,
 `LOCK_OPERATIONS`, `SECRET_KINDS`, `BUILD_STEPS`, `STEP_STATUSES`,
