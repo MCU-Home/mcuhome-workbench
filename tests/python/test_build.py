@@ -1405,18 +1405,19 @@ def test_a_stopped_build_leaves_the_delivery_of_the_last_one_that_worked(
     assert _files(out) == before
 
 
-def test_an_artifact_that_climbs_out_of_the_build_directory_is_refused(
-    model, tmp_path, monkeypatch
+@pytest.mark.parametrize("name", ["../evil.bin", "/etc/evil.bin", "a/../../evil.bin", "./evil.bin"])
+def test_an_artifact_that_is_not_a_relative_path_is_refused(
+    model, tmp_path, monkeypatch, name
 ) -> None:
     """The names a build environment chose meet a directory the user keeps.
 
     Nothing reachable produces such a name — the declaration is checked
     where the artifacts are verified, and a tar is unpacked contained —
     but this is the place where the least trusted component's own words
-    become paths in somebody's project, so the check is here too, in the
-    same words. Nothing is written and nothing is removed.
+    become paths in somebody's project, so the rule is stated here too,
+    in the same words. Nothing is written and nothing is removed.
     """
-    outside = (Artifact(root="out", path="../evil.bin", role="firmware", sha256="0" * 64),)
+    outside = (Artifact(root="out", path=name, role="firmware", sha256="0" * 64),)
     _delivering(tmp_path, monkeypatch, execution="container", artifacts=outside)
     out = _with_a_delivery(tmp_path / "build", model)
     before = _files(out)
@@ -1424,9 +1425,46 @@ def test_an_artifact_that_climbs_out_of_the_build_directory_is_refused(
     with pytest.raises(BuildError) as caught:
         _delivered_build(model, tmp_path, execution="container")
 
-    assert "../evil.bin" in caught.value.message
+    assert name in caught.value.message
     assert not (tmp_path / "evil.bin").exists()
     assert _files(out) == before
+
+
+def test_an_artifact_below_the_top_is_delivered_where_it_says(model, tmp_path, monkeypatch) -> None:
+    """A name below the top of the output directory is a path, not an escape.
+
+    A build environment may declare ``extra/firmware.bin`` — the layer
+    that verifies artifacts accepts it and the build server serves it —
+    so the delivery carries it under that same relative path, directories
+    and all, rather than refusing a build that succeeded or flattening a
+    name that is the environment's to choose.
+    """
+    nested = (
+        Artifact(root="out", path="extra/firmware.bin", role="firmware", sha256="0" * 64),
+        _artifacts()[1],
+    )
+    delivery = _delivering(tmp_path, monkeypatch, execution="container", artifacts=nested)
+    (delivery / "extra").mkdir()
+    (delivery / "extra" / "firmware.bin").write_bytes(b"below the top")
+
+    result = _delivered_build(model, tmp_path, execution="container")
+
+    out = tmp_path / "build"
+    assert result.ok and result.out_dir == out
+    assert [artifact.path for artifact in result.artifacts] == [
+        "extra/firmware.bin",
+        BUILD_REPORT_FILE,
+    ]
+    assert (out / "extra" / "firmware.bin").read_bytes() == b"below the top"
+    assert not (delivery / "extra" / "firmware.bin").exists()
+    # And the build ended the way a build ends: a record naming what it
+    # delivered, under the paths it declared.
+    record = api.read_build(out)
+    assert record is not None
+    assert [artifact.path for artifact in record.artifacts] == [
+        "extra/firmware.bin",
+        BUILD_REPORT_FILE,
+    ]
 
 
 def test_what_the_build_delivered_is_what_signing_then_works_on(

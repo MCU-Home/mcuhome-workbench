@@ -816,11 +816,18 @@ go first, so what lies at the top of a build directory always belongs to
 the build that is there now — an old `firmware.signed.bin` beside a fresh
 unsigned image is a flashable lookalike nothing mentions. Nothing
 undeclared travels: whatever else a build environment left in its output
-directory stays there and goes with the work root. A declared name is
-held against the build directory with the same containment check the
-artifacts were verified under, before anything is removed or moved: one
-that would leave the directory is a `BuildError` and nothing happens at
-all. A delivery that cannot be written is a `BuildError` too.
+directory stays there and goes with the work root. A declared name may
+lie **below** the top of that directory (`extra/firmware.bin`) and is
+delivered under the same relative path, its directories created — the
+name is the environment's and is not rewritten, and `BuildResult.artifacts`
+keeps it as declared.
+
+What is refused is a declared name that is not a relative path at all: an
+empty, `.` or `..` segment, a leading slash, a backslash or a NUL — the
+rule the session client applies to a tar member it unpacks. It is checked
+for every artifact before anything is removed or moved, so such a name is
+a `BuildError` and nothing happens at all. A delivery that cannot be
+written is a `BuildError` too.
 
 **Only a build that succeeded delivers.** A step that failed may still
 have declared artifacts — a half-linked image, the report of a build that

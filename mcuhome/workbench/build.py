@@ -106,7 +106,6 @@ from mcuhome.workbench.buildenvsession import (
     EnvironmentUnavailable,
     EnvironmentUnusable,
     StepResult,
-    contained,
     parse_memory,
     resolve_cache_tiers,
     resolve_host_limits,
@@ -1092,6 +1091,38 @@ class _Delivery:
     artifacts: tuple[Artifact, ...]
 
 
+def _delivery_path(directory: Path, name: str) -> Path | None:
+    """Where the declared artifact *name* goes under *directory*, or ``None``.
+
+    ``None`` for a name that is not a relative path: an empty, ``.`` or
+    ``..`` segment, a leading slash, a backslash or a NUL. The same rule
+    the session client applies to a tar member it unpacks and the build
+    server to one it receives, re-stated here because this is a third
+    place where somebody else's names become paths of ours — and refused
+    rather than repaired, because a ``..`` that is normalised away
+    silently delivers whatever it pointed at.
+
+    A name **below** the top is a path and not an escape
+    (``extra/firmware.bin``): a build environment may declare one, and it
+    is delivered under that relative path with its directories created.
+    So the check is textual: the destination does not exist yet, and a
+    walk over what is there would refuse exactly the nested name that is
+    legal.
+    """
+    cleaned = name.rstrip("/")
+    usable = (
+        cleaned
+        and "\\" not in cleaned
+        and "\x00" not in cleaned
+        and not cleaned.startswith("/")
+        and not Path(cleaned).is_absolute()
+        and all(part not in ("", ".", "..") for part in cleaned.split("/"))
+    )
+    if not usable:
+        return None
+    return directory.joinpath(*cleaned.split("/"))
+
+
 def _deliver(
     request: BuildRequest,
     *,
@@ -1124,15 +1155,24 @@ def _deliver(
     was, as after a refusal.
 
     Only the **declared** artifacts travel; whatever else a build
-    environment left in its output directory stays there. Their names are
-    held against the build directory with the containment check the
-    artifacts were declared under
-    (:func:`~mcuhome.workbench.buildenvsession.contained`) — the same
-    check, not a second one — before anything is removed or moved: a
-    build environment is the least trusted component in the system, and
-    this is where the names it chose meet a directory the user keeps.
-    A name that leaves the directory is a
+    environment left in its output directory stays there. A declared name
+    may name a file below the top of the output directory
+    (``extra/firmware.bin``) and is delivered under that same relative
+    path, directories and all: it is the environment's name for its own
+    file and this does not rewrite it.
+
+    What is refused is a name that is not relative at all
+    (:func:`_delivery_path`: an empty, ``.`` or ``..`` segment, a leading
+    slash, a backslash or a NUL), checked for every artifact **before**
+    anything is removed or moved — a build environment is the least
+    trusted component in the system, and this is where the names it chose
+    become paths in a directory the user keeps. Such a name is a
     :class:`~mcuhome.model.errors.BuildError` and nothing happens at all.
+    The check is on the name rather than on the resolved path, because
+    the path does not exist yet: whether the *source* was a real file
+    under a real directory, with no link anywhere in it, is what
+    :func:`~mcuhome.workbench.buildenvsession.verify_step_artifacts`
+    established when the artifact was declared.
 
     Nothing is hashed on the way — the step that declared the artifacts
     checked their bytes — and a declared file that is not there is
@@ -1152,16 +1192,17 @@ def _deliver(
         return _Delivery(out_dir=directory, artifacts=kept)
     moves: list[tuple[Path, Path]] = []
     for artifact in kept:
-        destination = contained(directory, artifact.path)
+        destination = _delivery_path(directory, artifact.path)
         if destination is None:
             raise BuildError(
                 f"The build declared an artifact MCUHome will not write: {artifact.path!r} "
-                f"does not stay inside {directory}.",
+                f"is not a path inside {directory}.",
                 hint=(
-                    "a build environment states the files it produced as names under its "
-                    "own output directory, and a name that climbs out of the build "
-                    "directory is not one. Nothing was written. Build in a container "
-                    "delivered by an image you trust."
+                    "a build environment states the files it produced as relative paths "
+                    "under its own output directory — forward slashes, no empty, . or .. "
+                    "segment — and anything else names a file outside the build "
+                    "directory. Nothing was written. Build in a container delivered by "
+                    "an image you trust."
                 ),
             )
         moves.append((Path(delivered) / artifact.path, destination))
