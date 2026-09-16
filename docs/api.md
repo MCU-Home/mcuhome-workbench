@@ -1433,6 +1433,7 @@ over the curve's order rather than biased by a modulo.
 
 ```python
 def read_build_report(path: Path) -> dict[str, Any]
+def memory_footprint(report: Mapping[str, Any]) -> tuple[MemoryRegion, ...]
 def plan_signing(
     out_dir: Path, *, env: Mapping[str, str], key: Path | str | None = None,
     project: Project | None = None, imgtool: str | None = None,
@@ -1442,9 +1443,17 @@ def sign_firmware(
     project: Project | None = None, imgtool: str | None = None,
 ) -> SigningResult
 ```
-`read_build_report` accepts a build directory or the report file inside
-one and raises `BuildError` for a missing, unreadable or unknown report
-version. `plan_signing` answers every command signing will run, decided
+`read_build_report` reads the report **file** and raises `BuildError` for
+a missing, unreadable or unknown report version; it is `plan_signing` and
+`sign_firmware` that take the build directory or the report inside it. `memory_footprint` answers the memory figures that report
+states, in the order it states them: `MemoryRegion` (frozen): `image`,
+`region`, `used`, `total`, `to_dict()`, the keys in the report's own
+spelling because the report is the build-environment specification's
+document. It is a plain noun because it derives from its argument alone.
+`memory` is optional in a report — a build that relinked nothing states
+none — and an entry whose numbers are not numbers is left out rather
+than answered as zero. The percentage a report also carries is not in
+the answer: it is the two numbers divided. `plan_signing` answers every command signing will run, decided
 before any of them, so a caller can show them, and raises everything the
 run itself would raise — a missing signing program, an unreadable key,
 an artifact the report names and the directory does not hold — so that
@@ -2014,6 +2023,8 @@ started, name}`.
 argv, output}]}` — the imgtool parameters are in every `argv` already,
 so the document does not state them a second time.
 `SignedArtifact.to_dict()`: `{format, path}`.
+`MemoryRegion.to_dict()`: `{image, region, used, total}` — what one
+image's one memory region cost, as the build report measured it.
 `Builder.to_dict()`: `{name, target, origin, source, server,
 container_image}` — `origin` is the layer that defined the entry and
 `source` the file it came from, the same pair `Setting` uses.
@@ -2217,6 +2228,7 @@ this package is public.
 **Signing, reports and OTA** — `resolve_signing_key`,
 `create_signing_key`, `generate_key_pem`, `public_key_pem`,
 `is_p256_private_key`, `is_p256_public_key`, `read_build_report`,
+`memory_footprint`, `MemoryRegion`,
 `plan_signing`, `sign_firmware`, `write_ota_image`, `ota_file_name`,
 `ota_parameters`, `SigningKey`, `SignPlan`, `SignedArtifact`,
 `SigningResult`, `OtaImage`, `OtaIdentity`, `Pairing`, `random_pairing`,

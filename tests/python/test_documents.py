@@ -205,6 +205,9 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         detail="MCUHome compiles in a container and cannot find docker on your PATH.",
         hint="install Docker…",
     ),
+    "MemoryRegion": lambda: api.MemoryRegion(
+        image="mcuhome", region="FLASH", used=748960, total=933888
+    ),
     "Migration": lambda: api.plan_upgrade(0)[0],
     "NewDevice": lambda: api.NewDevice(
         project=_sample_project(),

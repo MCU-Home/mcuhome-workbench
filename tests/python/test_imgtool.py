@@ -400,6 +400,48 @@ def test_read_build_report_refuses_a_wrong_signature_type(tmp_path) -> None:
     assert SIGNATURE_TYPE in caught.value.message
 
 
+def test_the_memory_footprint_is_read_out_of_the_report(tmp_path) -> None:
+    """The figures a build measured, typed, in the report's own spelling.
+
+    Every client that showed them used to parse the list itself, so the
+    same measurement had a different shape in each of them.
+    """
+    report = imgtool.read_build_report(_report_dir(tmp_path) / imgtool.BUILD_REPORT_FILE)
+
+    (region,) = imgtool.memory_footprint(report)
+
+    assert (region.image, region.region, region.used, region.total) == ("app", "FLASH", 1, 2)
+    document = region.to_dict()
+    assert document == {"image": "app", "region": "FLASH", "used": 1, "total": 2}
+    assert "percent" not in document, "a derived value stated twice can contradict itself"
+    assert json.dumps(document)
+
+
+def test_a_report_that_measured_nothing_has_no_footprint(tmp_path) -> None:
+    """``memory`` is optional: a build that relinked nothing states none."""
+    report = _report()
+    del report["memory"]
+
+    assert imgtool.memory_footprint(report) == ()
+    assert imgtool.memory_footprint({"memory": "not a list"}) == ()
+
+
+def test_an_entry_without_numbers_is_left_out_rather_than_zeroed(tmp_path) -> None:
+    """A figure this package invented would be read as one a build measured."""
+    regions = imgtool.memory_footprint(
+        {
+            "memory": [
+                {"image": "app", "region": "FLASH", "used": "lots", "total": 2},
+                {"image": "app", "region": "RAM"},
+                "not an object",
+                {"image": "app", "region": "RAM", "used": 3, "total": 4},
+            ]
+        }
+    )
+
+    assert [(region.region, region.used) for region in regions] == [("RAM", 3)]
+
+
 def test_plan_signing_signs_both_firmware_encodings(tmp_path) -> None:
     """The build actions document's report-shape parameters apply to every
     firmware artifact: bin and hex.

@@ -76,11 +76,13 @@ __all__ = [
     "BUILD_REPORT_FILE",
     "REPORT_VERSION",
     "SIGNED_FIRMWARE_NAMES",
+    "MemoryRegion",
     "SigningRunner",
     "SignPlan",
     "SignedArtifact",
     "SigningResult",
     "find_imgtool",
+    "memory_footprint",
     "plan_signing",
     "read_build_report",
     "require_imgtool",
@@ -370,6 +372,73 @@ def read_build_report(path: Path) -> dict:
             ),
         )
     return data
+
+
+@dataclass(frozen=True)
+class MemoryRegion:
+    """How much of one image's one memory region a build used.
+
+    What a build environment measured when it relinked, read back out of
+    the build report it delivered. The keys keep the report's own
+    spelling, because the report is that specification's document and
+    this package reads it rather than renaming it.
+    """
+
+    #: The image the figure is about, as the report names it.
+    image: str
+    #: The region, as the report names it (``FLASH``, ``RAM``, …).
+    region: str
+    #: Bytes used.
+    used: int
+    #: Bytes the region holds.
+    total: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """One region as a document, JSON-ready and complete."""
+        return {
+            "image": self.image,
+            "region": self.region,
+            "used": self.used,
+            "total": self.total,
+        }
+
+
+def memory_footprint(report: Mapping[str, Any]) -> tuple[MemoryRegion, ...]:
+    """The memory figures *report* states, typed, in the order it states them.
+
+    A plain noun, because it derives from its argument alone and touches
+    nothing: :func:`read_build_report` reads the document, this reads the
+    one part of it that is written for a person rather than for the
+    signer. Without it every client parses the same list itself, and the
+    figures a build measured would be shaped differently in each of them.
+
+    ``memory`` is **optional** in the report (a build that relinked
+    nothing states none), and an entry that is not an object or whose
+    numbers are not numbers is left out rather than answered as zero: a
+    figure this package invented would be read as one a build measured.
+    The percentage the report also carries is not here — it is the two
+    numbers divided, and a document that states a derived value twice
+    can contradict itself.
+    """
+    entries = report.get("memory")
+    if not isinstance(entries, list):
+        return ()
+    found: list[MemoryRegion] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        used, total = entry.get("used"), entry.get("total")
+        if not isinstance(used, int) or not isinstance(total, int):
+            continue
+        found.append(
+            MemoryRegion(
+                image=str(entry.get("image", "")),
+                region=str(entry.get("region", "")),
+                used=used,
+                total=total,
+            )
+        )
+    return tuple(found)
 
 
 def plan_signing(
