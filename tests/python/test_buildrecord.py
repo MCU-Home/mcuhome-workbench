@@ -548,6 +548,14 @@ def test_clean_build_removes_what_a_build_wrote(tmp_path, model, monkeypatch) ->
     result = _built(tmp_path, model, monkeypatch)
     out = tmp_path / "build"
     assert (out / ".mcuhome-local").is_dir()
+    # What signing adds to a delivery afterwards: the signed images and
+    # the Matter OTA image wrapped around one of them. They are the
+    # build's output as much as the unsigned firmware is — a clean that
+    # left them would leave the flashable half behind.
+    signed = out / "firmware.signed.bin"
+    signed.write_bytes(b"SIGNED")
+    image = out / f"{model.device.name}-{model.device.version}.ota"
+    image.write_bytes(b"wrapped around it")
 
     removed = api.clean_build(out, device=model.device.name).removed
 
@@ -556,8 +564,10 @@ def test_clean_build_removes_what_a_build_wrote(tmp_path, model, monkeypatch) ->
     assert not (out / buildrecord.BUILD_RECORD_FILE).exists()
     assert not [artifact for artifact in result.artifacts if (out / artifact.path).exists()]
     assert not (out / BUILD_REPORT_FILE).exists()
-    assert out / ".mcuhome-local" in removed
-    assert out / buildrecord.BUILD_RECORD_FILE in removed
+    assert not signed.exists() and not image.exists()
+    assert {out / ".mcuhome-local", out / buildrecord.BUILD_RECORD_FILE, signed, image} <= set(
+        removed
+    )
     assert api.read_build(out) is None
 
 
@@ -573,6 +583,7 @@ def test_clean_build_leaves_the_files_that_are_not_a_builds(tmp_path, model, mon
     out = tmp_path / "build"
     (out / "notes.txt").write_text("this is the one that worked\n", "utf-8")
     (out / "firmware.bin.keep").write_bytes(b"a copy somebody made")
+    (out / "ota-notes.md").write_text("what I sent the controller\n", "utf-8")
     (out / "logs").mkdir()
     (out / "logs" / "yesterday.log").write_text("...\n", "utf-8")
 
@@ -580,6 +591,7 @@ def test_clean_build_leaves_the_files_that_are_not_a_builds(tmp_path, model, mon
 
     assert (out / "notes.txt").is_file()
     assert (out / "firmware.bin.keep").is_file()
+    assert (out / "ota-notes.md").is_file(), "the one pattern is *.ota and nothing else"
     assert (out / "logs" / "yesterday.log").is_file()
     assert not [path for path in removed if path.name in {"notes.txt", "firmware.bin.keep", "logs"}]
     # The lock file is the guard this call is holding, not a leftover.

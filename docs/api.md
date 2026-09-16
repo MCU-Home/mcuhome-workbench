@@ -909,6 +909,10 @@ went. Everything it removes is named, and nothing else is:
 - `build-report.json`;
 - every artifact the record declares;
 - `firmware.bin`, `firmware.hex` and the `firmware.signed.*` beside them;
+- `*.ota`, the Matter OTA image signing wrote — the one entry taken by
+  pattern rather than by name, because its name carries the device and
+  the version it wraps; nothing but this package writes one into a build
+  directory;
 - `.mcuhome-local` and `.mcuhome-remote`, the work roots a build creates
   when it was given no `work_root` of its own.
 

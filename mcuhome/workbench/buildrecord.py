@@ -322,16 +322,24 @@ def _inside(path: Path, directory: Path) -> bool:
 
 
 def _delivery(directory: Path) -> list[Path]:
-    """What a delivery puts at the top of *directory*, by name.
+    """What a delivery puts at the top of *directory*.
 
-    The build report and the firmware in both encodings, plus the signed
-    names beside them: what a build delivers and what signing then adds
-    to it. Named one by one rather than matched by a pattern, because
-    everything else in a build directory belongs to whoever put it there.
+    The build report and the firmware in both encodings, the signed names
+    beside them, and the Matter OTA image signing wraps around one of
+    them: what a build delivers and what signing then adds to it.
+
+    All of it by name except the OTA image, which is by pattern because
+    its name carries the device and the version it wraps — neither of
+    which this call knows, and both of which change between two builds of
+    one device. ``*.ota`` in a build directory is written by this package
+    and by nothing else, which is what makes the one pattern safe;
+    everything else in a build directory belongs to whoever put it there
+    and is named one by one.
     """
     found: list[Path] = [directory / BUILD_REPORT_FILE]
     for unsigned, signed in SIGNED_FIRMWARE_NAMES:
         found += [directory / unsigned, directory / signed]
+    found += sorted(directory.glob("*.ota"))
     return found
 
 
@@ -355,14 +363,11 @@ def clean_delivery(out_dir: Path) -> None:
     that was. Both are flashable lookalikes belonging to no build that is
     there any more, and a person reading the directory cannot tell.
 
-    What goes is what a delivery puts there: the build report, the
-    firmware in both encodings and the signed names beside them, the
-    artifacts the previous record declared, and the ``.ota`` files. The
-    OTA image is the one entry taken by pattern rather than by name — its
-    name carries the device and the version it wraps, which this call
-    cannot know — and it is a pattern this package itself only ever
-    writes. Everything else in the directory stays, the build record and
-    the work roots included: this is the delivery, not a clean
+    What goes is what a delivery puts there (:func:`_delivery`: the build
+    report, the firmware in both encodings, the signed names beside them
+    and the OTA image) plus the artifacts the previous record declared.
+    Everything else in the directory stays, the build record and the work
+    roots included: this is the delivery, not a clean
     (:func:`clean_build`).
 
     Best effort per file, and never a directory: a delivery is files, and
@@ -372,7 +377,7 @@ def clean_delivery(out_dir: Path) -> None:
     directory = Path(out_dir)
     if not directory.is_dir():
         return
-    found = _delivery(directory) + _declared(directory) + sorted(directory.glob("*.ota"))
+    found = _delivery(directory) + _declared(directory)
     for path in found:
         if _inside(path, directory) and path.is_file():
             with contextlib.suppress(OSError):
@@ -462,8 +467,9 @@ def clean_build(out_dir: Path, *, device: str = "") -> CleanResult:
     The build directory itself stays, and so does everything in it that a
     build did not write. What goes is named one by one and nothing else
     is: the build record, the build report, the artifacts the record
-    declares, the unsigned and signed firmware beside them — all at the
-    top of the build directory, which is where a build delivers — and the
+    declares, the unsigned and signed firmware beside them, the Matter
+    OTA image signing wrote — all at the top of the build directory,
+    which is where a build delivers — and the
     two work roots a build creates when it was not given one
     (``.mcuhome-local``, ``.mcuhome-remote``). A file somebody put there
     themselves is not a build's leftover, however much it looks like one,
