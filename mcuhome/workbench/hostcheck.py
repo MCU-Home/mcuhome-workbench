@@ -24,6 +24,16 @@ container runtime is examined through
 :func:`~mcuhome.workbench.containerbuild.require_container_runtime` and
 reported by catching its refusal, so the words a person reads here and
 the words they read when a build stops are the same words.
+
+**What the caller hands over decides what can be examined.** Four of the
+checks are about the setup a build runs in rather than about the machine:
+the project, the resolved configuration, the builders that configuration
+defines, and the permissions of the project's secrets. Each of them needs
+something only the caller has — a :class:`~mcuhome.workbench.project.Project`,
+a :class:`~mcuhome.workbench.configuration.Settings` — and where it is
+not handed over the check is **left out rather than guessed at**: a
+finding invented from a configuration this call resolved itself would be
+a second resolution beside the one the build uses.
 """
 
 from __future__ import annotations
@@ -42,17 +52,20 @@ from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
 from mcuhome.workbench import buildenvstore, devworkspace
 from mcuhome.workbench.build import BuildOptions
-from mcuhome.workbench.buildtarget import MODE_CONTAINER
-from mcuhome.workbench.configuration import option
+from mcuhome.workbench.builders import SelectedBuilder
+from mcuhome.workbench.buildtarget import MODE_CONTAINER, TARGET_REMOTE
+from mcuhome.workbench.configuration import Settings, option, resolve_builder
 from mcuhome.workbench.containerbuild import (
     ContainerRuntime,
     require_container_runtime,
     resolve_cache_root,
     resolve_container_program,
 )
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.imgtool import find_imgtool
 from mcuhome.workbench.ociregistry import ImageRegistry
-from mcuhome.workbench.project import Project
+from mcuhome.workbench.project import Project, require_secret_file
+from mcuhome.workbench.projectfile import require_current
 from mcuhome.workbench.subprocessbuild import BUILDER_INTERPRETER, DEV_WORKSPACE_OPTION
 
 __all__ = [
@@ -63,10 +76,10 @@ __all__ = [
 ]
 
 #: What a finding's :attr:`HostFinding.check` may be. A fixed value set,
-#: published because a client switches on it: a renderer that knows the
-#: seven can order them, group them and say more about one than the
-#: finding's own words do. Append-only, and each name is the option or
-#: the thing that was examined.
+#: published because a client switches on it: a renderer that knows them
+#: can order them, group them and say more about one than the finding's
+#: own words do. Append-only, and each name is the option or the thing
+#: that was examined.
 HOST_CHECKS = (
     "runtime",
     "image",
@@ -75,6 +88,10 @@ HOST_CHECKS = (
     "workspace",
     "imgtool",
     "cache",
+    "project",
+    "configuration",
+    "builder",
+    "secrets",
 )
 
 #: The configured values a probe here reads itself, named off the
@@ -141,13 +158,18 @@ def check_build_host(
     env: Mapping[str, str],
     project: Project | None = None,
     imgtool: str | None = None,
+    settings: Settings | None = None,
 ) -> HostCheckResult:
     """Examine what a build with these *options* needs of this machine.
 
-    The container checks run for ``build.mode = container`` and the
-    store and interpreter checks for ``subprocess``; the signing tool and
-    the compiler cache are examined either way, because a build needs
-    them whichever profile runs it.
+    The project is examined first — there is one or there is not, and an
+    older layout is what refuses every other command — then, where
+    *settings* was handed over, the resolved configuration and the
+    builders it defines. The container checks run for
+    ``build.mode = container`` and the store and interpreter checks for
+    ``subprocess``; the signing tool and the compiler cache are examined
+    either way, because a build needs them whichever profile runs it;
+    and the permissions of the project's secrets close the list.
 
     *imgtool* is the resolved ``signing.imgtool``, exactly as
     :func:`~mcuhome.workbench.imgtool.plan_signing` takes it: nothing
@@ -155,14 +177,22 @@ def check_build_host(
     host whose signing tool is configured has to be told about it or the
     check would report on a program that build never runs.
 
-    *project*, where a caller has one, is what paths inside it are
-    reported relative to. No check needs more of it: everything else a
-    build reads has been resolved into *options* already.
+    *project* is the project a build would run in: what paths inside it
+    are reported relative to, whose layout version is examined and whose
+    ``secrets/`` permissions are. Without one, the project check says so
+    and the secrets check is not reported — there is nothing to look at.
+
+    *settings* is the resolved configuration those two further checks
+    examine, and without it neither is reported rather than answered
+    from a resolution of this call's own.
 
     It raises nothing. A probe that could not be run is a finding that
     says so.
     """
-    findings: list[HostFinding] = []
+    findings: list[HostFinding] = [_project_layout(project)]
+    if settings is not None:
+        findings.append(_configuration(settings))
+        findings.append(_builders(settings, options=options, project=project, env=env))
     if options.mode == MODE_CONTAINER:
         findings.append(_container_runtime(options, env))
         findings.append(_container_image(options))
@@ -174,7 +204,199 @@ def check_build_host(
         findings.append(_python(options, env))
     findings.append(_signing_imgtool(env, imgtool))
     findings.append(_cache_root(options, env, project=project))
+    if project is not None:
+        findings.append(_secrets(project))
     return HostCheckResult(findings=tuple(findings))
+
+
+# --------------------------------------------------------------------------
+# The setup a build runs in
+# --------------------------------------------------------------------------
+
+
+def _project_layout(project: Project | None) -> HostFinding:
+    """Is there a project here, which one, and does this MCUHome speak it?
+
+    A machine without a project is not a broken machine — an embedder
+    drives a bare device file and never has one — so the absence is a
+    finding that says where a project would come from rather than a
+    failure. A project whose layout is older than this MCUHome *is* a
+    failure: it is what every other command refuses over, in the words
+    that refusal uses.
+    """
+    if project is None:
+        return HostFinding(
+            check="project",
+            ok=True,
+            detail="this is not a project directory",
+            hint=(
+                "a project holds the devices, the secrets and the signing key a "
+                "build uses — mcuhome project init creates one"
+            ),
+        )
+    file = project.file
+    if file is None:
+        # The stand-in root of a device file that lies outside any
+        # project: there is no marker to read a version out of.
+        return HostFinding(
+            check="project",
+            ok=True,
+            detail=f"{project.root} stands in for a project; it carries no project marker",
+        )
+    try:
+        require_current(file)
+    except MCUHomeError as refusal:
+        return _refused("project", refusal)
+    identity = f", id {file.short_id}" if file.short_id else ""
+    return HostFinding(
+        check="project",
+        ok=True,
+        detail=f"{project.root} (project version {file.version}{identity})",
+    )
+
+
+def _configuration(settings: Settings) -> HostFinding:
+    """That the configuration resolved, and what of it is not a default.
+
+    The value of this line is the second half: a machine that behaves
+    unexpectedly is usually a machine with a setting somebody forgot,
+    and the layer that supplied it is what says where to go and change
+    it. The bootstrap option is not in a resolution and is therefore not
+    here either.
+    """
+    entries = settings.to_dict()
+    beyond = [
+        f"{name} ({entry['origin']})"
+        for name, entry in entries.items()
+        if entry["origin"] != "default"
+    ]
+    if not beyond:
+        return HostFinding(
+            check="configuration",
+            ok=True,
+            detail=f"resolves; all {len(entries)} options are at their default",
+        )
+    return HostFinding(
+        check="configuration",
+        ok=True,
+        detail=f"resolves; {len(beyond)} option(s) set beyond the defaults: " + ", ".join(beyond),
+    )
+
+
+def _builders(
+    settings: Settings,
+    *,
+    options: BuildOptions,
+    project: Project | None,
+    env: Mapping[str, str],
+) -> HostFinding:
+    """The configured builders, and what a plain build does with them.
+
+    Selection is run rather than described — the same call a build makes
+    (:func:`~mcuhome.workbench.configuration.resolve_builder`), so a
+    ``build.builder`` naming a builder nobody defined is found here
+    instead of at the next build. What that selection reads on the way
+    is a remote builder's credentials file, whose permissions are warned
+    about like every other secret's; a warning is a finding that is not
+    ``ok``, because it is something the person has to go and fix.
+    """
+    complaints: list[Diagnostic] = []
+    try:
+        selected = resolve_builder(
+            settings, name=None, project=project, env=env, on_warning=complaints.append
+        )
+    except MCUHomeError as refusal:
+        return _refused("builder", refusal)
+    defined = settings.value("builder")
+    listed = (
+        ", ".join(
+            f"{builder.name} ({builder.target}, from the {builder.origin} layer)"
+            for builder in defined
+        )
+        if defined
+        else "none configured"
+    )
+    plainly = _what_a_plain_build_does(selected, options)
+    if complaints:
+        return HostFinding(
+            check="builder",
+            ok=False,
+            detail="\n".join(
+                [f"{listed}; {plainly}", *(finding.message for finding in complaints)]
+            ),
+            hint="\n".join(finding.hint for finding in complaints if finding.hint),
+        )
+    return HostFinding(check="builder", ok=True, detail=f"{listed}; {plainly}")
+
+
+def _what_a_plain_build_does(selected: SelectedBuilder, options: BuildOptions) -> str:
+    """The one sentence a person runs this check to read.
+
+    Both axes, in the two words the configuration spells them with:
+    where a plain ``mcuhome device build`` runs, and — where that is this
+    machine — how it executes the work.
+    """
+    named = "" if selected.builder is None else f"{selected.builder.name} takes it: "
+    if selected.target == TARGET_REMOTE:
+        where = selected.server or "a build server"
+        return f"{named}a plain build runs on {where}"
+    how = "in a build container" if options.mode == MODE_CONTAINER else "as a child process"
+    return f"{named}a plain build runs on this machine, {how}"
+
+
+def _secrets(project: Project) -> HostFinding:
+    """Whether anything under ``secrets/`` is readable by other users.
+
+    Every file, through the guard every reader of a secrets file runs
+    (:func:`~mcuhome.workbench.project.require_secret_file`), so what is
+    reported here is what a build would warn about — and a key file
+    would refuse over. A project that keeps no secrets yet has nothing
+    to examine and says so.
+    """
+    directory = project.secrets_dir
+    shown = _shown(directory, project)
+    if not directory.is_dir():
+        return HostFinding(
+            check="secrets",
+            ok=True,
+            detail=f"{shown} is not there; this project keeps no secrets yet",
+            hint=(
+                "the directory is part of a project's layout and is created with it — "
+                "mcuhome project init --force restores what is missing"
+            ),
+        )
+    if not os.access(directory, os.R_OK | os.X_OK):
+        # Asked rather than walked: the path library swallows the error
+        # of a directory it may not enter, so a walk would answer "no
+        # secrets in there" for a directory nobody can look into.
+        return HostFinding(
+            check="secrets",
+            ok=False,
+            detail=f"{shown} belongs to somebody else and cannot be read",
+            hint="the project's secrets live here — the directory is the owner's, at mode 700",
+        )
+    files = sorted(path for path in directory.rglob("*") if path.is_file())
+    if not files:
+        return HostFinding(
+            check="secrets",
+            ok=True,
+            detail=f"{shown} holds no secrets yet",
+        )
+    complaints: list[Diagnostic] = []
+    for file in files:
+        require_secret_file(file, key_material=False, on_warning=complaints.append)
+    if complaints:
+        return HostFinding(
+            check="secrets",
+            ok=False,
+            detail="\n".join(finding.message for finding in complaints),
+            hint="\n".join(finding.hint for finding in complaints if finding.hint),
+        )
+    return HostFinding(
+        check="secrets",
+        ok=True,
+        detail=f"{shown} holds {len(files)} file(s), each of them owner-only",
+    )
 
 
 # --------------------------------------------------------------------------

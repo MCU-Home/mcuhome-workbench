@@ -1613,6 +1613,7 @@ def check_build_host(
     env: Mapping[str, str],
     project: Project | None = None,
     imgtool: str | None = None,
+    settings: Settings | None = None,
 ) -> HostCheckResult
 ```
 What a build on this machine would need, reported rather than raised.
@@ -1628,28 +1629,51 @@ runs the builder. The signing tool and the compiler cache are examined
 either way. A finding is not a promise that a build will succeed: it is
 what could be established without one.
 
+**Four checks are about the setup rather than the machine**, and what the
+caller hands over decides whether they can run: the `project` (there is
+one, which layout version and id it carries, or the refusal an older one
+draws), the resolved `configuration` (it resolves, and which options are
+set beyond their defaults, each with the layer that set it), the
+`builder` map (what it defines, and what a plain build does — selection
+is *run*, through `resolve_builder`, so a `build.builder` naming nothing
+is found here) and the permissions of the project's `secrets` (every file
+under `secrets/`, through `require_secret_file`). Without *settings* the
+configuration and builder checks are **not reported** rather than
+answered from a resolution of this call's own, and without *project* the
+secrets check is not reported and the project check says there is none —
+which is a statement, not a failure, because an embedder driving a bare
+device file has no project.
+
 `HostCheckResult` carries `findings` and the verdict `ok`, which is true
 when every finding is; `HostFinding(check, ok, detail, hint)` is one
 thing examined, with the fix where there is one. `check` is one of
 `HOST_CHECKS` — `runtime`, `image`, `store`, `python`, `workspace`,
-`imgtool`, `cache` — one word each, naming the thing that was examined. Both have `to_dict()`.
+`imgtool`, `cache`, `project`, `configuration`, `builder`, `secrets`
+— one word each, naming the thing that was examined. Both have `to_dict()`.
+A **warning** is a finding that is not `ok`: a secrets file other users
+can read has one verdict to be reported under, and it is the one that
+says somebody has to go and change it.
 
 *imgtool* is the resolved `signing.imgtool`, taken for the same reason
 `plan_signing` takes it: nothing under this surface reads a
 configuration channel of its own, so a host whose signing program is
 configured has to be told which one, or the check reports on a program
-that build never runs. *project*, where a caller has one, is what paths
-inside it are reported relative to; everything else a build reads is
-resolved into *options* already.
+that build never runs. *project* is the project a build would run in:
+what paths inside it are reported relative to, whose layout version is
+examined and whose `secrets/` is. *settings* is the resolved
+configuration the two configuration-side checks examine; everything a
+build reads of it is in *options* already.
 
 It raises nothing: a host that cannot build is the answer, not an
 exception — a configured path naming an account this machine has not
-got, or a `build.container_repositories` entry that is not a repository
-name, is a finding naming the key that holds it. What it does do is talk
+got, a `build.container_repositories` entry that is not a repository
+name, a project that needs upgrading and a `build.builder` naming no
+builder are findings naming the key or the command that holds the fix.
+What it does do is talk
 to this machine — it runs the
 container runtime's version command, asks the configured container
-repositories what they publish, and asks the interpreter its version —
-so it costs what those cost.
+repositories what they publish, asks the interpreter its version, and
+stats every file under `secrets/` — so it costs what those cost.
 
 ## Upgrading a project
 ```python
@@ -1836,7 +1860,7 @@ there is.
 | `CONFIG_SCOPES` | `("system", "user", "project")` |
 | `CONFIG_ORIGINS` | `("default", "program", "system", "user", "project", "environment", "arguments")` — ascending; `program` is a value an embedding program states for a shared key |
 | `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
-| `HOST_CHECKS` | `("runtime", "image", "store", "python", "workspace", "imgtool", "cache")` — what a `HostFinding.check` may be, append-only |
+| `HOST_CHECKS` | `("runtime", "image", "store", "python", "workspace", "imgtool", "cache", "project", "configuration", "builder", "secrets")` — what a `HostFinding.check` may be, append-only |
 | `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry", "retired_environment_variable")` — the kinds a warning's `kind` may carry, append-only |
 | `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "builder", "registry")` |
 | `OPTIONS` | the declared option registry |

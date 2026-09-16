@@ -28,14 +28,20 @@ from mcuhome.model.errors import BuildError
 from mcuhome.workbench import hostcheck
 from mcuhome.workbench.api import (
     HOST_CHECKS,
+    PROJECT_MARKER_FILE,
+    PROJECT_VERSION,
     BuildOptions,
     HostCheckResult,
     HostFinding,
     Project,
+    ProjectFile,
     check_build_host,
+    read_project,
+    resolve_settings,
 )
 from mcuhome.workbench.buildprocess import Completed
 from mcuhome.workbench.imgtool import find_imgtool
+from mcuhome.workbench.projectfile import new_project_id, write_project_file
 
 
 class RecordingRuntime:
@@ -129,7 +135,7 @@ def test_the_container_mode_examines_the_runtime_and_the_image_search(tmp_path: 
     """What a container build needs, and only that."""
     result = check_build_host(options=_options(mode="container"), env=_env(tmp_path))
 
-    assert _checks(result) == ["runtime", "image", "imgtool", "cache"]
+    assert _checks(result) == ["project", "runtime", "image", "imgtool", "cache"]
     assert result.ok
     assert RecordingRuntime.made[0].argvs, "the runtime was never asked anything"
     assert RecordingRegistry.made[0].asked == ["ghcr.io/mcu-home/build-environment"]
@@ -143,7 +149,7 @@ def test_the_subprocess_mode_asks_a_container_runtime_nothing(tmp_path: Path) ->
     """
     result = check_build_host(options=_options(mode="subprocess"), env=_env(tmp_path))
 
-    assert _checks(result) == ["store", "python", "imgtool", "cache"]
+    assert _checks(result) == ["project", "store", "python", "imgtool", "cache"]
     assert RecordingRuntime.made == []
     assert RecordingRegistry.made == []
 
@@ -167,7 +173,7 @@ def test_a_development_workspace_replaces_the_store_and_the_interpreter(
         options=_options(mode="subprocess", dev_workspace=workspace), env=_env(tmp_path)
     )
 
-    assert _checks(result) == ["workspace", "python", "imgtool", "cache"]
+    assert _checks(result) == ["project", "workspace", "python", "imgtool", "cache"]
     assert result.ok
     assert str(workspace) in _finding(result, "workspace").detail
 
@@ -601,3 +607,233 @@ def test_a_development_build_does_not_need_a_venv_module(
 
     assert _finding(developing, "python").ok
     assert not _finding(provisioning, "python").ok
+
+
+# --------------------------------------------------------------------------
+# The setup a build runs in: the project, the configuration, the builders
+# --------------------------------------------------------------------------
+
+
+def _project(tmp_path: Path, *, version: int = PROJECT_VERSION, config: str = "") -> Project:
+    """A project directory on disk, with its marker and its secrets folder."""
+    root = tmp_path / "project"
+    (root / "secrets").mkdir(parents=True)
+    os.chmod(root / "secrets", 0o700)
+    write_project_file(
+        root / PROJECT_MARKER_FILE, ProjectFile(root=root, version=version, id=new_project_id())
+    )
+    if config:
+        (root / "mcuhome.yaml").write_text(config, encoding="utf-8")
+    return read_project(root, require_version=False)
+
+
+def test_a_host_outside_a_project_says_where_one_would_come_from(tmp_path: Path) -> None:
+    """Not a failure: an embedder drives a bare device file and has none."""
+    result = check_build_host(options=_options(mode="subprocess"), env=_env(tmp_path))
+
+    finding = _finding(result, "project")
+    assert finding.ok
+    assert finding.detail == "this is not a project directory"
+    assert "mcuhome project init" in finding.hint
+
+
+def test_a_project_is_reported_with_its_layout_version_and_id(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), project=project
+    )
+
+    finding = _finding(result, "project")
+    assert finding.ok
+    assert str(project.root) in finding.detail
+    assert f"project version {PROJECT_VERSION}" in finding.detail
+    assert project.file is not None
+    assert project.file.short_id is not None
+    assert project.file.short_id in finding.detail
+
+
+def test_a_project_of_an_older_layout_is_the_refusal_every_command_gives(
+    tmp_path: Path,
+) -> None:
+    """The check reports what the next command would refuse with, verbatim."""
+    project = _project(tmp_path, version=PROJECT_VERSION - 1)
+
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), project=project
+    )
+
+    finding = _finding(result, "project")
+    assert not finding.ok
+    assert not result.ok
+    assert "needs an upgrade" in finding.detail
+    assert "mcuhome project upgrade" in finding.hint
+
+
+def test_without_settings_the_configuration_and_builder_checks_are_left_out(
+    tmp_path: Path,
+) -> None:
+    """Not guessed at: a second resolution would be a second configuration."""
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), project=_project(tmp_path)
+    )
+
+    assert "configuration" not in _checks(result)
+    assert "builder" not in _checks(result)
+
+
+def test_the_configuration_check_names_what_is_set_beyond_the_defaults(
+    tmp_path: Path,
+) -> None:
+    """The line a person reads to find the setting they forgot."""
+    env = _env(tmp_path) | {"MCUHOME_BUILD_MODE": "subprocess"}
+    settings = resolve_settings(project=None, env=env)
+
+    result = check_build_host(options=_options(mode="subprocess"), env=env, settings=settings)
+
+    finding = _finding(result, "configuration")
+    assert finding.ok
+    assert "build.mode (environment)" in finding.detail
+    assert "build.target" not in finding.detail, "a default is not something somebody set"
+
+
+def test_a_configuration_with_nothing_set_says_so(tmp_path: Path) -> None:
+    settings = resolve_settings(project=None, env=_env(tmp_path))
+
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), settings=settings
+    )
+
+    assert "at their default" in _finding(result, "configuration").detail
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("container", "in a build container"), ("subprocess", "as a child process")],
+)
+def test_the_builder_check_says_what_a_plain_build_does(
+    tmp_path: Path, mode: str, expected: str
+) -> None:
+    """Both axes in one sentence: where a build runs, and how."""
+    settings = resolve_settings(project=None, env=_env(tmp_path))
+
+    result = check_build_host(options=_options(mode=mode), env=_env(tmp_path), settings=settings)
+
+    finding = _finding(result, "builder")
+    assert finding.ok
+    assert "none configured" in finding.detail
+    assert f"a plain build runs on this machine, {expected}" in finding.detail
+
+
+def test_a_configured_builder_is_listed_with_the_layer_that_defined_it(
+    tmp_path: Path,
+) -> None:
+    project = _project(
+        tmp_path,
+        config=(
+            "builder:\n"
+            "  attic:\n"
+            "    target: remote\n"
+            "    server: 10.0.0.5:8291\n"
+            "build:\n"
+            "  builder: attic\n"
+        ),
+    )
+    settings = resolve_settings(project=project, env=_env(tmp_path))
+
+    result = check_build_host(
+        options=_options(mode="container"),
+        env=_env(tmp_path),
+        project=project,
+        settings=settings,
+    )
+
+    finding = _finding(result, "builder")
+    assert finding.ok
+    assert "attic (remote, from the project layer)" in finding.detail
+    assert "attic takes it: a plain build runs on 10.0.0.5:8291" in finding.detail
+
+
+def test_a_builder_nobody_defined_is_the_selection_s_own_refusal(tmp_path: Path) -> None:
+    """`build.builder` naming nothing is found here, not at the next build."""
+    project = _project(tmp_path, config="build:\n  builder: nowhere\n")
+    settings = resolve_settings(project=project, env=_env(tmp_path))
+
+    result = check_build_host(
+        options=_options(mode="container"),
+        env=_env(tmp_path),
+        project=project,
+        settings=settings,
+    )
+
+    finding = _finding(result, "builder")
+    assert not finding.ok
+    assert not result.ok
+    assert "names no configured builder" in finding.detail
+    assert "--build-target" in finding.hint
+
+
+# --------------------------------------------------------------------------
+# The permissions of the project's secrets
+# --------------------------------------------------------------------------
+
+
+def test_the_secrets_check_needs_a_project(tmp_path: Path) -> None:
+    result = check_build_host(options=_options(mode="subprocess"), env=_env(tmp_path))
+
+    assert "secrets" not in _checks(result)
+
+
+def test_a_project_that_keeps_no_secrets_yet_has_nothing_to_report(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), project=project
+    )
+
+    finding = _finding(result, "secrets")
+    assert finding.ok
+    assert "no secrets yet" in finding.detail
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_owner_only_secrets_are_reported_as_such(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    main = project.secrets_file
+    main.write_text("wifi_password: hunter2\n", encoding="utf-8")
+    main.chmod(0o600)
+
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), project=project
+    )
+
+    finding = _finding(result, "secrets")
+    assert finding.ok
+    assert "1 file(s)" in finding.detail
+    assert "secrets" in finding.detail
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_a_secrets_file_other_users_can_read_is_a_failing_finding(tmp_path: Path) -> None:
+    """The guard every reader runs, over every file, reported as data.
+
+    It is not `ok`: a secrets file the whole machine can read is
+    something the person has to go and fix, and the fix is the one the
+    warning itself carries.
+    """
+    project = _project(tmp_path)
+    (project.secrets_dir / "device").mkdir()
+    exposed = project.device_secrets_file("thermostat")
+    exposed.write_text("matter_passcode: 12345678\n", encoding="utf-8")
+    exposed.chmod(0o644)
+
+    result = check_build_host(
+        options=_options(mode="subprocess"), env=_env(tmp_path), project=project
+    )
+
+    finding = _finding(result, "secrets")
+    assert not finding.ok
+    assert not result.ok
+    assert str(exposed) in finding.detail
+    assert "mode 644" in finding.detail
+    assert f"chmod 600 {exposed}" in finding.hint
