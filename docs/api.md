@@ -1702,7 +1702,10 @@ set beyond their defaults, each with the layer that set it), the
 `builder` map (what it defines, and what a plain build does — selection
 is *run*, through `resolve_builder`, so a `build.builder` naming nothing
 is found here) and the permissions of the project's `secrets` (every file
-under `secrets/`, through `require_secret_file`). Without *settings* the
+under `secrets/`, through `require_secret_file`). One problem is worded
+once: a builder's credentials file lies under `secrets/`, so what is
+readable there is the secrets check's verdict alone and never the
+builder check's as well. Without *settings* the
 configuration and builder checks are **not reported** rather than
 answered from a resolution of this call's own, and without *project* the
 secrets check is not reported and the project check says there is none —

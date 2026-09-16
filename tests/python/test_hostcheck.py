@@ -755,6 +755,44 @@ def test_a_configured_builder_is_listed_with_the_layer_that_defined_it(
     assert "attic takes it: a plain build runs on 10.0.0.5:8291" in finding.detail
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_an_exposed_credentials_file_is_one_finding_and_it_is_the_secrets_one(
+    tmp_path: Path,
+) -> None:
+    """One problem, one finding — and the verdict on a file mode is secrets'.
+
+    A remote builder's credentials live under `secrets/`, and selecting
+    that builder reads them. Reporting the mode under `builder` as well
+    would word one problem twice and let a file mode decide whether the
+    builders are configured, which are two different questions.
+    """
+    project = _project(
+        tmp_path,
+        config=(
+            "builder:\n  attic:\n    target: remote\n    server: 10.0.0.5:8291\n"
+            "build:\n  builder: attic\n"
+        ),
+    )
+    (project.secrets_dir / "builder").mkdir()
+    credentials = project.builder_secrets_file("attic")
+    credentials.write_text("token: s3cret\n", encoding="utf-8")
+    credentials.chmod(0o644)
+    settings = resolve_settings(project=project, env=_env(tmp_path))
+
+    result = check_build_host(
+        options=_options(mode="container"),
+        env=_env(tmp_path),
+        project=project,
+        settings=settings,
+    )
+
+    failing = [finding for finding in result.findings if not finding.ok]
+    assert [finding.check for finding in failing] == ["secrets"]
+    assert str(credentials) in failing[0].detail
+    assert _finding(result, "builder").ok
+    assert "attic (remote, from the project layer)" in _finding(result, "builder").detail
+
+
 def test_a_builder_nobody_defined_is_the_selection_s_own_refusal(tmp_path: Path) -> None:
     """`build.builder` naming nothing is found here, not at the next build."""
     project = _project(tmp_path, config="build:\n  builder: nowhere\n")

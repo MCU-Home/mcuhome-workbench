@@ -381,16 +381,18 @@ def _builders(
     Selection is run rather than described — the same call a build makes
     (:func:`~mcuhome.workbench.configuration.resolve_builder`), so a
     ``build.builder`` naming a builder nobody defined is found here
-    instead of at the next build. What that selection reads on the way
-    is a remote builder's credentials file, whose permissions are warned
-    about like every other secret's; a warning is a finding that is not
-    ``ok``, because it is something the person has to go and fix.
+    instead of at the next build.
+
+    Selection reads a remote builder's credentials file on the way, and
+    the **permission** warning it draws over one is deliberately not
+    taken here: that file lies under ``secrets/``, and the secrets check
+    is the one verdict on what is readable there. Two findings wording
+    one problem would be two problems to the person reading them, and a
+    file mode is not a statement about whether the builders are
+    configured.
     """
-    complaints: list[Diagnostic] = []
     try:
-        selected = resolve_builder(
-            settings, name=None, project=project, env=env, on_warning=complaints.append
-        )
+        selected = resolve_builder(settings, name=None, project=project, env=env)
     except MCUHomeError as refusal:
         return _refused("builder", refusal)
     defined = settings.value("builder")
@@ -402,17 +404,9 @@ def _builders(
         if defined
         else "none configured"
     )
-    plainly = _what_a_plain_build_does(selected, options)
-    if complaints:
-        return HostFinding(
-            check="builder",
-            ok=False,
-            detail="\n".join(
-                [f"{listed}; {plainly}", *(finding.message for finding in complaints)]
-            ),
-            hint="\n".join(finding.hint for finding in complaints if finding.hint),
-        )
-    return HostFinding(check="builder", ok=True, detail=f"{listed}; {plainly}")
+    return HostFinding(
+        check="builder", ok=True, detail=f"{listed}; {_what_a_plain_build_does(selected, options)}"
+    )
 
 
 def _what_a_plain_build_does(selected: SelectedBuilder, options: BuildOptions) -> str:
