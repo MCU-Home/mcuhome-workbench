@@ -172,6 +172,11 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         signed=True,
         busy=False,
     ),
+    "DeleteResult": lambda: api.DeleteResult(
+        device="thermostat",
+        kept_secrets=True,
+        removed=(ROOT / "devices" / "thermostat",),
+    ),
     "Diagnostic": lambda: api.Diagnostic.warning(
         "secrets/main.yaml is readable by other users",
         kind="exposed_secret_file",
@@ -217,6 +222,11 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         untrusted=False,
         mirrors={"sdk": ("https://mirror.example/sdk/",)},
         anchor=ROOT / "secrets" / "trust-anchor" / "packages.mcuhome.org.json",
+    ),
+    "RenameResult": lambda: api.RenameResult(
+        device="thermostat",
+        to="attic",
+        changed=(ROOT / "devices" / "attic",),
     ),
     "RunningBuild": lambda: api.RunningBuild(
         directory=ROOT / "build" / "thermostat",

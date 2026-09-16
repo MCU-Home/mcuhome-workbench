@@ -83,8 +83,10 @@ import os
 import shutil
 import stat
 import tempfile
+from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.errors import ConfigError, Location
 
@@ -98,9 +100,63 @@ from mcuhome.workbench.loader import editing_yaml, read_editable_yaml
 from mcuhome.workbench.project import BUILD_DIR, DEVICE_FILE, Project, refuse_unknown_device
 
 __all__ = [
+    "DeleteResult",
+    "RenameResult",
     "delete_device",
     "rename_device",
 ]
+
+
+@dataclass(frozen=True)
+class RenameResult:
+    """What one rename moved, and what the device is called now.
+
+    A bare list of paths said nothing about the act it came out of, so
+    every client that printed a rename had to state the two names
+    itself. They are what the call was given; carrying them back is what
+    lets one document describe the whole thing.
+    """
+
+    #: The name the device had.
+    device: str
+    #: The name it has now.
+    to: str
+    #: Every path this changed, in the order it changed them.
+    changed: tuple[Path, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """This rename as a document, JSON-ready and complete."""
+        return {
+            "device": self.device,
+            "to": self.to,
+            "changed": [str(path) for path in self.changed],
+        }
+
+
+@dataclass(frozen=True)
+class DeleteResult:
+    """What one delete removed, and whether the credentials stayed.
+
+    :attr:`kept_secrets` is the caller's own statement read back, and it
+    is in the document because it is the one thing about a delete that
+    cannot be seen from what went: a device whose secrets file was kept
+    and one that never had it answer the same list of paths.
+    """
+
+    #: The device that is gone.
+    device: str
+    #: Whether its commissioning credentials were kept, as asked.
+    kept_secrets: bool
+    #: Every path this removed, in the order it removed them.
+    removed: tuple[Path, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """This delete as a document, JSON-ready and complete."""
+        return {
+            "device": self.device,
+            "kept_secrets": self.kept_secrets,
+            "removed": [str(path) for path in self.removed],
+        }
 
 
 def _require_device(project: Project, name: str) -> Path:
@@ -300,7 +356,7 @@ def _refuse_unremovable(what: str, path: Path, error: OSError) -> ConfigError:
     )
 
 
-def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
+def rename_device(name: str, *, project: Project, to: str) -> RenameResult:
     """Rename the device *name* of *project* to *to*, or change nothing.
 
     Moves ``devices/<name>/`` to ``devices/<to>/`` — the patches, the
@@ -311,7 +367,8 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
     output goes rather than moves, and in which order all of this
     happens.
 
-    Answers every path it changed, in the order it changed them: the
+    Answers a :class:`RenameResult`: the two names, and every path it
+    changed in the order it changed them — the
     build directory that was removed (only when the device had one), the
     device folder under its new name, the device file where the name was
     rewritten (only when the file stated one), and the device's secrets
@@ -399,7 +456,7 @@ def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]:
         # next call — renaming back, most likely — would refuse it as a
         # name that is taken.
         _discard(project, build_dir, new_build_dir, build_root=made_build_root)
-    return tuple(changed)
+    return RenameResult(device=name, to=to, changed=tuple(changed))
 
 
 def _refuse_unmovable_folder(folder: Path, target: Path, error: OSError) -> ConfigError:
@@ -470,7 +527,7 @@ def _refuse_secrets_left(secrets: Path, new_secrets: Path, error: OSError) -> Co
     )
 
 
-def delete_device(name: str, *, project: Project, keep_secrets: bool = False) -> tuple[Path, ...]:
+def delete_device(name: str, *, project: Project, keep_secrets: bool = False) -> DeleteResult:
     """Delete the device *name* of *project*, or change nothing.
 
     Removes the device's build directory, then ``devices/<name>/`` with
@@ -479,9 +536,11 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
     credentials a controller already knows and that cannot be drawn
     again.
 
-    Answers every path it removed, in the order it removed them: the
-    build directory (only when the device had one), the device folder,
-    and the secrets file (only when there was one and it was not kept).
+    Answers a :class:`DeleteResult`: the device, whether its credentials
+    were kept, and every path it removed in the order it removed them —
+    the build directory (only when the device had one), the device
+    folder, and the secrets file (only when there was one and it was not
+    kept).
 
     Raises :class:`~mcuhome.model.errors.ConfigError` for a device the
     project does not have and for a build directory that is not a
@@ -520,4 +579,4 @@ def delete_device(name: str, *, project: Project, keep_secrets: bool = False) ->
                 removed.append(secrets)
     finally:
         _discard(project, build_dir, build_root=made_build_root)
-    return tuple(removed)
+    return DeleteResult(device=name, kept_secrets=keep_secrets, removed=tuple(removed))

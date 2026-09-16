@@ -263,7 +263,12 @@ from mcuhome.workbench.contextdir import (
     read_generator_chain,
     verify_context,
 )
-from mcuhome.workbench.device import delete_device, rename_device
+from mcuhome.workbench.device import (
+    DeleteResult,
+    RenameResult,
+    delete_device,
+    rename_device,
+)
 from mcuhome.workbench.devworkspace import WORKSPACE_LAYERS
 from mcuhome.workbench.diagnostics import (
     SEVERITIES,
@@ -490,6 +495,7 @@ __all__ = [
     "DEVICE_FILE",
     "DOCKER_HUB",
     "Declaration",
+    "DeleteResult",
     "DeveloperEnvironment",
     "DeviceModel",
     "DeviceOutline",
@@ -572,6 +578,7 @@ __all__ = [
     "RemoteError",
     "RemoteNotConfigured",
     "RemoteTransportError",
+    "RenameResult",
     "ResolvedPackage",
     "RunningBuild",
     "SDK_PACKAGE_NAME",

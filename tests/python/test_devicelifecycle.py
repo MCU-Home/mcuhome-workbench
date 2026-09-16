@@ -124,7 +124,7 @@ def test_a_rename_moves_the_folder_the_secrets_and_the_patches(tmp_path: Path) -
     make_device(project, "bench-node")
     make_patch(project, "bench-node")
 
-    changed = api.rename_device("bench-node", project=project, to="kitchen")
+    changed = api.rename_device("bench-node", project=project, to="kitchen").changed
 
     assert project.device_file("kitchen").is_file()
     assert (project.device_patches_dir("kitchen") / "zephyr" / "0001-fix-uart.patch").is_file()
@@ -198,7 +198,7 @@ def test_a_rename_leaves_a_file_that_states_no_name_alone(tmp_path: Path) -> Non
     entry.write_text("# a device that never got around to it\nnetwork: {}\n", encoding="utf-8")
     before = entry.read_text(encoding="utf-8")
 
-    changed = api.rename_device("bench-node", project=project, to="kitchen")
+    changed = api.rename_device("bench-node", project=project, to="kitchen").changed
 
     assert changed == (project.devices_dir / "kitchen",)
     assert project.device_file("kitchen").read_text(encoding="utf-8") == before
@@ -229,7 +229,7 @@ def test_a_rename_removes_the_build_directory(tmp_path: Path) -> None:
     make_device(project, "bench-node")
     build_dir = make_build_output(project, "bench-node")
 
-    changed = api.rename_device("bench-node", project=project, to="kitchen")
+    changed = api.rename_device("bench-node", project=project, to="kitchen").changed
 
     assert not build_dir.exists()
     assert changed[0] == build_dir
@@ -245,7 +245,7 @@ def test_a_rename_of_a_device_that_was_never_built_names_no_build_directory(
     project = make_project(tmp_path)
     make_device(project, "bench-node")
 
-    changed = api.rename_device("bench-node", project=project, to="kitchen")
+    changed = api.rename_device("bench-node", project=project, to="kitchen").changed
 
     assert project.device_build_dir("bench-node") not in changed
     assert not project.device_build_dir("bench-node").exists()
@@ -384,7 +384,7 @@ def test_a_delete_removes_the_device_its_output_and_its_secrets(tmp_path: Path) 
     make_patch(project, "bench-node")
     build_dir = make_build_output(project, "bench-node")
 
-    removed = api.delete_device("bench-node", project=project)
+    removed = api.delete_device("bench-node", project=project).removed
 
     assert removed == (
         build_dir,
@@ -403,7 +403,7 @@ def test_a_delete_keeps_the_secrets_when_it_is_asked_to(tmp_path: Path) -> None:
     secrets = project.device_secrets_file("bench-node")
     before = secrets.read_text(encoding="utf-8")
 
-    removed = api.delete_device("bench-node", project=project, keep_secrets=True)
+    removed = api.delete_device("bench-node", project=project, keep_secrets=True).removed
 
     assert removed == (project.devices_dir / "bench-node",)
     assert secrets.read_text(encoding="utf-8") == before
@@ -416,7 +416,7 @@ def test_a_delete_of_a_device_without_secrets_names_only_the_folder(tmp_path: Pa
     project = make_project(tmp_path)
     api.create_device("bench-node", project=project, board=BOARD)
 
-    removed = api.delete_device("bench-node", project=project)
+    removed = api.delete_device("bench-node", project=project).removed
 
     assert removed == (project.devices_dir / "bench-node",)
 
@@ -447,6 +447,49 @@ def test_a_delete_refuses_while_somebody_is_in_the_build_directory(tmp_path: Pat
     assert "bench-node is being signed" in str(caught.value)
     assert project.device_file("bench-node").is_file()
     assert project.device_secrets_file("bench-node").is_file()
+
+
+# --------------------------------------------------------------------------
+# What the two acts answer
+# --------------------------------------------------------------------------
+
+
+def test_the_rename_result_names_both_names(tmp_path: Path) -> None:
+    """The document a client prints: what the device was called, and is now."""
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+
+    result = api.rename_device("bench-node", project=project, to="kitchen")
+
+    assert result.device == "bench-node"
+    assert result.to == "kitchen"
+    document = result.to_dict()
+    assert sorted(document) == ["changed", "device", "to"]
+    assert document["changed"] == [str(path) for path in result.changed]
+    assert json.dumps(document)
+
+
+def test_the_delete_result_says_whether_the_credentials_stayed(tmp_path: Path) -> None:
+    """The one fact about a delete that the list of paths cannot show.
+
+    A device whose secrets file was kept and one that never had a file
+    remove the same paths, so the caller's own statement travels back
+    rather than being inferred from what went.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    make_device(project, "porch")
+
+    kept = api.delete_device("bench-node", project=project, keep_secrets=True)
+    taken = api.delete_device("porch", project=project)
+
+    assert kept.device == "bench-node"
+    assert kept.kept_secrets
+    assert not taken.kept_secrets
+    document = kept.to_dict()
+    assert sorted(document) == ["device", "kept_secrets", "removed"]
+    assert document["removed"] == [str(path) for path in kept.removed]
+    assert json.dumps(document)
 
 
 # --------------------------------------------------------------------------

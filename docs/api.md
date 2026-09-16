@@ -327,13 +327,19 @@ def random_pairing() -> Pairing
 ```
 
 ```python
-def rename_device(name: str, *, project: Project, to: str) -> tuple[Path, ...]
+def rename_device(name: str, *, project: Project, to: str) -> RenameResult
 def delete_device(
     name: str, *, project: Project, keep_secrets: bool = False
-) -> tuple[Path, ...]
+) -> DeleteResult
 ```
-Both answer every path they changed, in the order they changed it, and
-both hold the device's build directory for the duration (the `rename`
+`RenameResult` (frozen): `device`, `to`, `changed`, `to_dict()`.
+`DeleteResult` (frozen): `device`, `kept_secrets`, `removed`,
+`to_dict()`. Both name the device the act was about and every path they
+changed, in the order they changed it, so a client renders the whole act
+instead of writing the sentence around a list of paths; `kept_secrets`
+is the caller's own statement read back, because a device whose
+credentials were kept and one that never had a file remove the same
+paths. Both hold the device's build directory for the duration (the `rename`
 and `delete` lock operations), so a run in flight refuses in words —
 `BuildDirectoryBusy` — instead of losing its output. The directory is
 **emptied** while the lock is held and removed once it is released: the
@@ -350,7 +356,7 @@ itself, so the two move together — moves `secrets/device/<name>.yaml`,
 and **removes** `build/<name>/`: build output names the device inside
 its own report, so a moved build directory would describe a device that
 no longer exists. The device file is replaced in one step and only the
-name changes; comments, order, quoting and tags survive. It answers the
+name changes; comments, order, quoting and tags survive. Its `changed` holds the
 build directory that was removed (when the device had one), the device
 folder, the device file (when it stated a name) and the secrets file
 (when there was one), the last three under the new name. The *target's*
@@ -359,8 +365,8 @@ it is created by taking the lock and removed again.
 
 `delete_device` removes the device's build directory, the device folder
 and the device's secrets file unless *keep_secrets* — commissioning
-credentials a controller already knows cannot be drawn again — and
-answers them in that order.
+credentials a controller already knows cannot be drawn again — and its
+`removed` holds them in that order.
 
 Holding a build directory creates it, so a device that was never built
 has one for the length of the call and not afterwards; the project's
@@ -1933,6 +1939,11 @@ report, signed, container_image, busy}`.
 build directory belongs to, the directory, and every path the clean
 removed. It states no verdict: a clean that found nothing to remove did
 what it was asked, and one that could not is a refusal.
+`RenameResult.to_dict()`: `{device, to, changed}` — the name the device
+had, the one it has now, and every path that moved or was removed.
+`DeleteResult.to_dict()`: `{device, kept_secrets, removed}` — the device
+that is gone, whether its credentials were kept, and every path that
+went.
 `DeviceRecord.to_dict()`: `{ok, name, file, board, problems, built,
 signed, busy}` — one device of a project as a listing shows it. `ok` is
 the verdict of the device's *configuration*, which is why it is first:
@@ -2112,8 +2123,8 @@ this package is public.
 **Projects and devices** — `resolve_project`, `read_project`,
 `create_project`, `find_project_root`, `is_project_root`, `is_upgrading`,
 `resolve_device`, `find_devices`, `create_device`, `render_device_file`,
-`create_pairing`, `read_pairing`, `rename_device`, `delete_device`,
-`require_secret_file`,
+`create_pairing`, `read_pairing`, `rename_device`, `RenameResult`,
+`delete_device`, `DeleteResult`, `require_secret_file`,
 `read_yaml_file`, `find_secret_scopes`, `read_secrets`, `reveal_secret`,
 `set_secret`, `unset_secret`, `delete_secret_file`, `SecretScope`,
 `SecretKey`, `SecretFile`, `Project`,
