@@ -1014,7 +1014,8 @@ know is a caller's own context: a build given a `context_dir` has had
 its first step done for it and reports no `context`.
 
 `on_wait(SeatWait)` is called each time a build server refuses a turn.
-`SeatWait` (frozen): `retry_after`, `waited`, `attempt`. It is
+`SeatWait` (frozen): `retry_after`, `waited`, `attempt`, `to_dict()` —
+the document a client's wait message carries. It is
 deliberately not a step: the build has not started and may never start.
 
 ## Build contexts
@@ -1424,7 +1425,11 @@ wants one generated says so — `create_signing_key` writes the pair
 loud: a device only accepts images signed with the key its bootloader
 carries. Asked again it answers the key that is there, with `created`
 false: generating over existing key material is the one thing it never
-does. `SigningKey` (frozen): `path`, `pem`, `in_secrets`, `created`.
+does. `SigningKey` (frozen): `path`, `pem`, `in_secrets`, `created`,
+`to_dict()` — the document carries the **public** half, derived with
+`public_key_pem`, and never `pem`: that is the only reason the method
+can exist, and it is what keeps a client from composing the same
+document out of a key object and a second call.
 
 *scalar* is `generate_key_pem`'s injection seam and exists for MCUHome's
 own tests, which need one known key to compare bytes against. Left out —
@@ -2045,6 +2050,11 @@ started, name}`.
 argv, output}]}` — the imgtool parameters are in every `argv` already,
 so the document does not state them a second time.
 `SignedArtifact.to_dict()`: `{format, path}`.
+`SigningKey.to_dict()`: `{path, in_secrets, created, public_key}` — the
+key file, whether it is the project's own, whether this call drew it,
+and the **public** half as PEM. The private half is in no document.
+`SeatWait.to_dict()`: `{retry_after, waited, attempt}` — one refused
+turn at a build server, as a client's wait message carries it.
 `MemoryRegion.to_dict()`: `{image, region, used, total}` — what one
 image's one memory region cost, as the build report measured it.
 `Builder.to_dict()`: `{name, target, origin, source, server,

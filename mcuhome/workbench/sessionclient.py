@@ -352,6 +352,19 @@ class SeatWait:
     #: How many times this client has been refused, starting at 1.
     attempt: int
 
+    def to_dict(self) -> dict[str, Any]:
+        """This wait as a document, JSON-ready and complete.
+
+        What a client's ``wait`` message carries: the three facts a
+        person watching a build that has not started needs, and nothing
+        derived from them.
+        """
+        return {
+            "retry_after": self.retry_after,
+            "waited": self.waited,
+            "attempt": self.attempt,
+        }
+
 
 class WaitedTooLong(RemoteError):
     """The wait bound ran out before a turn came free."""

@@ -73,6 +73,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model import p256
 from mcuhome.model.errors import BuildError
@@ -358,6 +359,26 @@ class SigningKey:
     #: firmware signed with a new key is not accepted by a device that
     #: was bootstrapped with an older one.
     created: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """This key as a document — the **public** half and nothing else.
+
+        The document a client shows after resolving or drawing a key:
+        where the file is, whether it is the project's own, whether this
+        call made it, and the public half a bootloader is compiled with.
+
+        :attr:`pem` is in no document, which is the only reason this
+        method can exist at all: a result object that serialized the
+        private key would put it into every log a client writes. The
+        public half is derived here rather than stored, so a client never
+        composes one document out of a key object and a second call.
+        """
+        return {
+            "path": str(self.path),
+            "in_secrets": self.in_secrets,
+            "created": self.created,
+            "public_key": public_key_pem(self.pem),
+        }
 
 
 def _refuse_unreadable(path: Path, reason: str) -> BuildError:

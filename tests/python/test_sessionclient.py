@@ -3037,6 +3037,9 @@ def test_this_client_waits_for_its_turn_and_then_takes_it(tmp_path: Path) -> Non
         assert [wait.attempt for wait in seen] == [1]
         assert seen[0].retry_after == 1
         assert seen[0].waited == 0
+        # And what a client puts in its wait message is the whole value,
+        # as a document rather than three fields it read off the object.
+        assert seen[0].to_dict() == {"retry_after": 1, "waited": 0, "attempt": 1}
 
     run(scenario())
 

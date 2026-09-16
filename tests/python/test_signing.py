@@ -23,6 +23,7 @@ checked here against the whole secrets tree rather than assumed.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from pathlib import Path
@@ -176,6 +177,28 @@ def test_creating_the_project_key_draws_it_and_says_so(project: Project) -> None
     assert key.path.read_text(encoding="utf-8") == key.pem
     assert is_p256_private_key(key.pem)
     assert public_key_pem(key.pem).startswith("-----BEGIN PUBLIC KEY-----")
+
+
+def test_the_key_document_carries_the_public_half_and_never_the_private(
+    project: Project,
+) -> None:
+    """The one reason this document may exist at all.
+
+    A client shows where the key is and what its public half is; the
+    private half is in no document, so it cannot end up in a log some
+    client writes.
+    """
+    key = create_signing_key(env={}, project=project)
+
+    document = key.to_dict()
+
+    assert list(document) == ["path", "in_secrets", "created", "public_key"]
+    assert document["path"] == str(key.path)
+    assert document["in_secrets"] is True
+    assert document["created"] is True
+    assert document["public_key"] == public_key_pem(key.pem)
+    assert "PRIVATE KEY" not in json.dumps(document)
+    assert key.pem not in json.dumps(document)
 
 
 def test_the_generated_files_are_readable_by_nobody_else(project: Project) -> None:

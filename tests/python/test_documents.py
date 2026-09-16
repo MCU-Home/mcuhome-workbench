@@ -257,6 +257,7 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         token="s3cret",
         container_image=None,
     ),
+    "SeatWait": lambda: api.SeatWait(retry_after=2.5, waited=12.5, attempt=3),
     "SecretChange": lambda: api.SecretChange(
         scope=SAMPLES["SecretScope"](), key="wifi_password", changed=True
     ),
@@ -285,6 +286,12 @@ SAMPLES: dict[str, Callable[[], Any]] = {
     ),
     "SignedArtifact": lambda: api.SignedArtifact(
         format="bin", path=ROOT / "build" / "thermostat" / "firmware.signed.bin"
+    ),
+    "SigningKey": lambda: api.SigningKey(
+        path=ROOT / "secrets" / "signing" / "key.pem",
+        pem=api.generate_key_pem(scalar=0x2B),
+        in_secrets=True,
+        created=False,
     ),
     "SigningResult": lambda: api.SigningResult(
         ok=True,
