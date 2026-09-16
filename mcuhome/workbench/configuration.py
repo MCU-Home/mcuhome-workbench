@@ -780,12 +780,65 @@ class Settings:
         self._settings = settings
 
     def __contains__(self, name: str) -> bool:
-        return name in self._settings
+        """Whether :meth:`setting` would answer for *name*.
+
+        An entry key is in a resolution exactly while the entry it names
+        is configured, which is the question a caller asks before it
+        shows a value.
+        """
+        if name in self._settings:
+            return True
+        entry = self._entry(name)
+        return entry is not None and self._entry_of(entry) is not None
 
     def setting(self, name: str) -> Setting:
-        if name not in self._settings:
+        """The resolved value of one option key or one **map entry key**.
+
+        ``builder.attic.target``, ``registry.packages.mcuhome.org.anchor``
+        and ``registry.packages.mcuhome.org.mirrors.sdk`` are answered
+        like any other key: the value the entry states, and the origin
+        and source of the **entry** — the layer that defined it and the
+        file inside that layer, which the map carries per entry because
+        the layers merge by the name an entry is keyed on. A key the
+        entry does not state answers ``None``, the way an option nobody
+        set answers its default; an entry nothing configured is a
+        refusal in words, because there is no value to answer and no
+        default to fall back on.
+
+        A name that is neither is a ``ValueError``: a tool asks for a key
+        it knows, and what a *person* typed reached :func:`option` first.
+        """
+        if name in self._settings:
+            return self._settings[name]
+        entry = self._entry(name)
+        if entry is None:
             raise ValueError(f"{name!r} is not a declared option")
-        return self._settings[name]
+        configured = self._entry_of(entry)
+        if configured is None:
+            raise _refuse_unconfigured_entry(entry, self._entry_names(entry.map_option))
+        return Setting(
+            option=entry.declaration,
+            value=_entry_value(configured, entry.keys),
+            origin=configured.origin,
+            source=configured.source,
+        )
+
+    def _entry(self, name: str) -> MapEntry | None:
+        """The map entry *name* names, against this resolution's registry."""
+        return find_map_entry(name, tuple(one.option for one in self._settings.values()))
+
+    def _entry_of(self, entry: MapEntry) -> Any | None:
+        """The resolved entry *entry* names, or ``None`` where none is."""
+        keyed_by = _MAP_ENTRIES_KEYED_BY[entry.map_option.kind]
+        for configured in self._settings[entry.map_option.name].value:
+            if getattr(configured, keyed_by) == entry.name:
+                return configured
+        return None
+
+    def _entry_names(self, map_option: Option) -> tuple[str, ...]:
+        """Every entry this resolution holds under *map_option*, in order."""
+        keyed_by = _MAP_ENTRIES_KEYED_BY[map_option.kind]
+        return tuple(getattr(one, keyed_by) for one in self._settings[map_option.name].value)
 
     def value(self, name: str) -> Any:
         return self.setting(name).value
@@ -802,6 +855,38 @@ class Settings:
         meets a Python object where it asked for data.
         """
         return {name: setting.to_dict() for name, setting in self._settings.items()}
+
+
+#: What an entry of each map is keyed on — the builder's name, the
+#: registry's base domain. The one place a resolved entry is matched
+#: against the name a person wrote in an entry key.
+_MAP_ENTRIES_KEYED_BY = {"builder": "name", "registry": "base_domain"}
+
+
+def _entry_value(configured: Any, keys: Sequence[str]) -> Any:
+    """What *configured* states under *keys*, or ``None`` where it states none.
+
+    The first key is an attribute of the entry, and a further one — the
+    source of a mirror list — is read out of the mapping it answers.
+    """
+    value = getattr(configured, keys[0], None)
+    for key in keys[1:]:
+        if value is None:
+            return None
+        value = value.get(key)
+    return value
+
+
+def _refuse_unconfigured_entry(entry: MapEntry, configured: Sequence[str]) -> ConfigError:
+    """No entry of that name — with the ones there are, and how to write one."""
+    known = ", ".join(configured) or "none are configured"
+    return ConfigError(
+        f"Nothing is configured under {entry.map_option.name}.{entry.name}.",
+        hint=(
+            f"configured under {entry.map_option.name}: {known}. Write one with:\n"
+            f"    mcuhome config set {entry.declaration.name} <value>"
+        ),
+    )
 
 
 def _jsonable(value: Any) -> Any:

@@ -388,6 +388,15 @@ class RegistrySettings:
     anchor at once would move MCUHome's own along with the private one,
     and that is a decision nobody meant to make while configuring their
     own registry.
+
+    :attr:`origin` and :attr:`source` are resolution facts in the words
+    every other resolved value uses — the layer, and the file inside it —
+    and they are carried on the value itself for the reason a builder
+    carries them: the layers merge **by base domain**, so two registries
+    of one resolved configuration may come from two different files, and
+    a reader that asks where this one is configured owes an answer per
+    registry. Neither is a key a file may write: a file that could state
+    its own layer could forge its own precedence.
     """
 
     base_domain: str
@@ -396,6 +405,13 @@ class RegistrySettings:
     #: The anchor file to hold this registry's signatures against, or
     #: ``None`` for the project's own ``secrets/trust-anchor/`` copy.
     anchor: Path | None = None
+    #: The configuration layer that defined this registry (after the
+    #: merge: the nearest one that did), empty where no layer did —
+    #: which is what :func:`settings_for` answers for a domain nobody
+    #: configured.
+    origin: str = ""
+    #: The file it was defined in, empty for the same case.
+    source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready, every declared key present.
@@ -406,6 +422,8 @@ class RegistrySettings:
         """
         return {
             "base_domain": self.base_domain,
+            "origin": self.origin,
+            "source": self.source,
             "untrusted": self.untrusted,
             "mirrors": {name: list(values) for name, values in self.mirrors.items()},
             "anchor": None if self.anchor is None else str(self.anchor),
@@ -433,8 +451,12 @@ def parse_registries(
     are relative to the file that names them, like every other path in a
     configuration file: the file's author can see where the file is, and
     the reading process cannot — and ``anchor`` follows the same rule.
+
+    *origin* is the layer being read, and it is carried into every entry
+    parsed here together with the file that named it, because the merge
+    keeps whole entries and a reader asks where **this** registry was
+    configured.
     """
-    del origin
 
     def refuse(message: str, key: str | None = None) -> ConfigError:
         return ConfigError(message, location=Location(file=file, key=key))
@@ -509,6 +531,8 @@ def parse_registries(
                 untrusted=untrusted,
                 mirrors=mirrors,
                 anchor=anchor,
+                origin=origin,
+                source=str(file),
             )
         )
     return tuple(parsed)

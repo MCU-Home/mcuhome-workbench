@@ -873,3 +873,83 @@ def test_an_entry_key_says_nothing_about_the_entry_being_complete(project: Proje
         project.config_file, "builder.attic.server", "10.0.0.5:8291", env={}
     )
     assert resolve_settings(project=project, env={}).value("builder")[0].server == "10.0.0.5:8291"
+
+
+def test_an_entry_key_is_read_back_with_the_layer_its_entry_came_from(
+    project: Project, tmp_path: Path
+) -> None:
+    """The other half of writing one: `mcuhome config get builder.attic.target`.
+
+    The value is the entry's, and so are the origin and the source — the
+    layers merge by the name an entry is keyed on, so two builders of one
+    resolution may come from two different files and each owes its own
+    answer.
+    """
+    env = user_env(tmp_path)
+    write_user(tmp_path, "builder:\n  bench:\n    target: local\n")
+    write_project(
+        project,
+        "builder:\n  attic:\n    target: remote\n    server: 10.0.0.5:8291\n"
+        "registry:\n  packages.example.org:\n    untrusted: true\n"
+        "    mirrors:\n      sdk:\n        - https://mirror.example/sdk/\n",
+    )
+    settings = resolve_settings(project=project, env=env)
+
+    attic = settings.setting("builder.attic.target")
+    assert attic.value == "remote"
+    assert (attic.origin, attic.source) == ("project", str(project.config_file))
+    assert attic.option.name == "builder.attic.target", "the key that was asked for"
+
+    bench = settings.setting("builder.bench.target")
+    assert (bench.value, bench.origin) == ("local", "user")
+    assert bench.source == str(tmp_path / "xdg" / "mcuhome" / CONFIG_FILE)
+
+    assert settings.value("registry.packages.example.org.untrusted") is True
+    assert settings.value("registry.packages.example.org.mirrors.sdk") == (
+        "https://mirror.example/sdk/",
+    )
+    assert settings.origin("registry.packages.example.org.mirrors.sdk") == "project"
+    assert settings.setting("registry.packages.example.org.mirrors.sdk").to_dict() == {
+        "value": ["https://mirror.example/sdk/"],
+        "origin": "project",
+        "source": str(project.config_file),
+    }
+
+
+def test_a_key_an_entry_does_not_state_reads_as_nothing(project: Project) -> None:
+    """Like an option nobody set: the entry is there, the key is unset."""
+    write_project(project, "builder:\n  bench:\n    target: local\n")
+    settings = resolve_settings(project=project, env={})
+
+    assert settings.value("builder.bench.container_image") is None
+    assert settings.value("builder.bench.server") is None
+    assert settings.origin("builder.bench.server") == "project", "the entry's layer"
+    assert "builder.bench.server" in settings
+
+
+def test_an_entry_nothing_configured_is_refused_with_the_ones_there_are(
+    project: Project,
+) -> None:
+    """No value to answer and no default to fall back on."""
+    write_project(project, "builder:\n  bench:\n    target: local\n")
+    settings = resolve_settings(project=project, env={})
+
+    with pytest.raises(ConfigError) as caught:
+        settings.setting("builder.attic.target")
+    assert "Nothing is configured under builder.attic" in caught.value.message
+    assert "configured under builder: bench" in (caught.value.hint or "")
+    assert "mcuhome config set builder.attic.target <value>" in (caught.value.hint or "")
+    assert "builder.attic.target" not in settings
+
+    with pytest.raises(ConfigError) as caught:
+        settings.setting("registry.packages.example.org.anchor")
+    assert "none are configured" in (caught.value.hint or "")
+
+
+def test_a_name_that_is_neither_key_stays_a_programming_error(project: Project) -> None:
+    """`Settings` is asked by a tool; what a person typed reached `option` first."""
+    settings = resolve_settings(project=project, env={})
+    with pytest.raises(ValueError):
+        settings.setting("build.nonsense")
+    with pytest.raises(ValueError):
+        settings.setting("builder.attic")

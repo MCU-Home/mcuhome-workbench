@@ -240,6 +240,8 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         untrusted=False,
         mirrors={"sdk": ("https://mirror.example/sdk/",)},
         anchor=ROOT / "secrets" / "trust-anchor" / "packages.mcuhome.org.json",
+        origin="project",
+        source=str(ROOT / "mcuhome.yaml"),
     ),
     "RenameResult": lambda: api.RenameResult(
         device="thermostat",

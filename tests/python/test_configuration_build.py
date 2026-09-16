@@ -505,6 +505,11 @@ def test_a_registrys_configured_anchor_is_printed_as_a_string(project: Project) 
     assert printed == [
         {
             "base_domain": "packages.example.org",
+            # The layer that defined this registry, like a builder's:
+            # the layers merge by base domain, so it is a fact per
+            # registry and not one of the resolution as a whole.
+            "origin": "project",
+            "source": str(project.config_file),
             "untrusted": False,
             "anchor": str((project.root / "anchors" / "private.json").resolve()),
             "mirrors": {},

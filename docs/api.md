@@ -760,7 +760,9 @@ right. `option()` answers the entry's declaration, named the way it was
 asked for; `set_config_value` parses the text through it and creates the
 map, the entry and a `mirrors` section on the way down;
 `unset_config_value` removes the key and whatever that empties — the
-last key takes the entry, the last entry takes the map.
+last key takes the entry, the last entry takes the map; and
+`Settings.setting()` reads one back with the layer its entry came from
+(see [Setting, Settings](#setting-settings)).
 
 All three raise `ConfigError` for a name that is neither: the sentence
 and the hint are the ones a configuration file is refused with, because
@@ -797,6 +799,21 @@ for the environment, the flag for an argument, `None` for a default), and
 {value, origin, source}}` for every declared option **except the
 bootstrap one**, in declaration order — `project.dir` is resolved before
 the merge and is in no resolution (see [Options](#options)).
+
+The first four take an option key **or one entry key of a map option**,
+so reading one is the same call as reading any other value: the `value`
+is what the entry states — `null` for a key it does not state, the way
+an option nobody set answers its default — and the `origin` and `source`
+are the **entry's**, the layer that defined it and the file inside it,
+which the map carries per entry because the layers merge by the name an
+entry is keyed on. An entry nothing configured is a `ConfigError` naming
+the entries there are and the `config set` that writes one: there is no
+value to answer and no default to fall back on. `__contains__` is that
+question without the refusal. A name that is neither key is a
+`ValueError` here — a tool asks for a key it knows, and what a person
+typed reached `option()` first. `to_dict()` is unchanged: it answers one
+entry per declared option, and the two maps render through their own
+documents.
 
 ## Builders
 A builder is a named place a build may run at, configured under the
@@ -1505,7 +1522,12 @@ the other what the tree is once it is here. `RegistrySource` is a type alias —
 callable that builds one on first use.
 
 `RegistrySettings` (frozen): `base_domain`, `untrusted`, `mirrors`,
-`anchor`, `to_dict()`.
+`anchor`, `origin`, `source`, `to_dict()`. The last two are resolution
+facts and never keys a file writes — the layer that defined this
+registry and the file inside it, carried per registry because the layers
+merge by base domain, exactly as `Builder` carries them. They are empty
+for a registry no layer defined, which is what `settings_for` answers
+for a domain nobody configured.
 
 *opener* and *now* are the two injection seams of this function — an
 HTTP opener and a clock — and they exist for MCUHome's own tests, which
@@ -2292,7 +2314,9 @@ container_image}` — `origin` is the layer that defined the entry and
 `source` the file it came from, the same pair `Setting` uses.
 `SelectedBuilder.to_dict()`: `{target, builder, server, container_image}`
 — the token is a secret and is in no document.
-`RegistrySettings.to_dict()`: `{base_domain, untrusted, anchor, mirrors}`.
+`RegistrySettings.to_dict()`: `{base_domain, origin, source, untrusted,
+anchor, mirrors}` — `origin` and `source` are empty for a registry no
+layer defined.
 `Artifact.to_dict()`: `{root, path, role, sha256}` — `root` is the
 artifact root the build environment declared the file under (`out`),
 which is a name in its own vocabulary and not a path segment: `path` is
