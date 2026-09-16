@@ -801,7 +801,7 @@ Raises `BuildDirectoryBusy`, which names the holder.
 ```python
 def is_busy(out_dir: Path) -> bool
 def read_build(out_dir: Path) -> BuildRecord | None
-def clean_build(out_dir: Path, *, device: str = "") -> tuple[Path, ...]
+def clean_build(out_dir: Path, *, device: str = "") -> CleanResult
 ```
 `is_busy` answers whether someone is working in *out_dir* right now,
 without taking it — the question a caller asks when it wants to wait
@@ -837,8 +837,10 @@ directory that is not there, holds nothing, or holds a record this
 version cannot read is an answer, not a refusal.
 
 `clean_build` removes what a build produced, holding the directory under
-the `clean` operation, and answers what it removed. Everything it removes
-is named, and nothing else is:
+the `clean` operation, and answers a `CleanResult` (frozen): `device`,
+`out_dir`, `removed`, `to_dict()` — which device the directory belongs
+to as the caller named it, which directory it was, and every path that
+went. Everything it removes is named, and nothing else is:
 
 - `.mcuhome-build.json`, the build record;
 - `build-report.json`, in `out_dir` and at the top of the build directory;
@@ -862,7 +864,7 @@ and `BuildError` for a directory that is a **project root**
 (`.mcuhome-project-root`, `.mcuhome-project-root.upgrade`) or a **device
 folder** (`main.yaml`) — both are a caller that meant a build directory,
 and nothing is removed before that refusal. A directory that does not
-exist is an empty answer and is not created.
+exist is a result that removed nothing, and is not created.
 
 ### BuildRequest
 Frozen dataclass — everything a build may be given, whichever target runs
@@ -1927,6 +1929,10 @@ hint, kind}` — the error document's keys plus the severity, so the two
 are one shape.
 `BuildRecord.to_dict()`: `{out_dir, device, context_id, artifacts,
 report, signed, container_image, busy}`.
+`CleanResult.to_dict()`: `{device, out_dir, removed}` — the device the
+build directory belongs to, the directory, and every path the clean
+removed. It states no verdict: a clean that found nothing to remove did
+what it was asked, and one that could not is a refusal.
 `DeviceRecord.to_dict()`: `{ok, name, file, board, problems, built,
 signed, busy}` — one device of a project as a listing shows it. `ok` is
 the verdict of the device's *configuration*, which is why it is first:
@@ -2131,6 +2137,7 @@ this package is public.
 **Building firmware** — `build_firmware`, `resolve_build_target`,
 `resolve_build_mode`, `open_build_lock`, `is_busy`, `read_build`,
 `clean_build`, `check_build_host`, `build_steps`, `BuildRequest`, `BuildResult`,
+`CleanResult`,
 `BuildRecord`, `BuildTarget`, `LocalBuild`, `RemoteBuild`, `Execution`,
 `ContainerExecution`, `SubprocessExecution`, `HostFinding`,
 `HostCheckResult`, `SeatWait`, `Artifact`, `BuildLimits`.

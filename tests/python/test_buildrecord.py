@@ -565,7 +565,7 @@ def test_clean_build_removes_what_a_build_wrote(tmp_path, model, monkeypatch) ->
     out = tmp_path / "build"
     assert (out / ".mcuhome-local").is_dir()
 
-    removed = api.clean_build(out, device=model.device.name)
+    removed = api.clean_build(out, device=model.device.name).removed
 
     assert out.is_dir(), "the build directory itself is not the build's to remove"
     assert not (out / ".mcuhome-local").exists()
@@ -591,7 +591,7 @@ def test_clean_build_leaves_the_files_that_are_not_a_builds(tmp_path, model, mon
     (out / "logs").mkdir()
     (out / "logs" / "yesterday.log").write_text("...\n", "utf-8")
 
-    removed = api.clean_build(out)
+    removed = api.clean_build(out).removed
 
     assert (out / "notes.txt").is_file()
     assert (out / "firmware.bin.keep").is_file()
@@ -615,7 +615,7 @@ def test_clean_build_removes_the_artifacts_a_client_copied_up(tmp_path) -> None:
     (out / "firmware.signed.bin").write_bytes(b"SIGNED")
     (out / "firmware.hex").write_text(":00000001FF\n", "utf-8")
 
-    removed = api.clean_build(out)
+    removed = api.clean_build(out).removed
 
     assert sorted(path.name for path in removed) == [
         BUILD_REPORT_FILE,
@@ -639,7 +639,7 @@ def test_clean_build_leaves_a_hidden_file_it_does_not_know(tmp_path, model, monk
     (out / ".mcuhome-something-else").write_text("not this call's\n", "utf-8")
     (out / ".mcuhome-signing.pub").write_text("-----BEGIN PUBLIC KEY-----\n", "utf-8")
 
-    removed = api.clean_build(out)
+    removed = api.clean_build(out).removed
 
     assert (out / ".mcuhome-something-else").is_file()
     assert (out / ".mcuhome-signing.pub").is_file()
@@ -735,11 +735,43 @@ def test_a_clean_is_itself_refused_while_it_runs(tmp_path, model) -> None:
     assert "being deleted" in str(caught.value)
 
 
+def test_the_clean_result_names_the_device_and_the_directory(tmp_path, model, monkeypatch) -> None:
+    """The document a client prints, whole, instead of a bare list of paths.
+
+    Which device was cleaned and which directory it was are what the
+    call already knows; a client that had to state them itself would be
+    composing the document the workbench owns.
+    """
+    _built(tmp_path, model, monkeypatch)
+    out = tmp_path / "build"
+
+    result = api.clean_build(out, device=model.device.name)
+
+    assert result.device == model.device.name
+    assert result.out_dir == out
+    document = result.to_dict()
+    assert sorted(document) == ["device", "out_dir", "removed"]
+    assert document["out_dir"] == str(out)
+    assert document["removed"] == [str(path) for path in result.removed]
+    assert json.dumps(document)
+
+
+def test_a_clean_of_a_directory_that_holds_nothing_still_names_it(tmp_path) -> None:
+    """A result, never a bare empty tuple: the answer is about a directory."""
+    missing = tmp_path / "never-built"
+
+    result = api.clean_build(missing, device="thermostat")
+
+    assert result.device == "thermostat"
+    assert result.out_dir == missing
+    assert result.removed == ()
+
+
 def test_cleaning_a_directory_that_is_not_there_creates_nothing(tmp_path) -> None:
     """A clean that leaves a new empty directory behind has done the opposite."""
     missing = tmp_path / "never-built"
 
-    assert api.clean_build(missing) == ()
+    assert api.clean_build(missing).removed == ()
     assert not missing.exists()
 
 
@@ -781,7 +813,7 @@ def test_clean_build_never_follows_a_record_out_of_the_directory(tmp_path) -> No
         "utf-8",
     )
 
-    removed = api.clean_build(out)
+    removed = api.clean_build(out).removed
 
     assert (elsewhere / "firmware.bin").is_file()
     assert keepsake.is_file()

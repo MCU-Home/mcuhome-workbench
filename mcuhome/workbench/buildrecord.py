@@ -65,6 +65,7 @@ __all__ = [
     "LOCAL_WORK_DIR",
     "REMOTE_WORK_DIR",
     "BuildRecord",
+    "CleanResult",
     "clean_build",
     "read_build",
     "write_build_record",
@@ -368,7 +369,36 @@ def _refuse_a_directory_of_theirs(directory: Path) -> None:
         )
 
 
-def clean_build(out_dir: Path, *, device: str = "") -> tuple[Path, ...]:
+@dataclass(frozen=True)
+class CleanResult:
+    """What one clean removed, and which directory it was.
+
+    The bare list of paths :func:`clean_build` used to answer said
+    nothing about *what* was cleaned, so every client that printed the
+    act had to write the sentence around it — which device, which
+    directory — and two clients would have written two. It carries what
+    the call already knows and nothing else.
+    """
+
+    #: The device the directory belongs to, as the caller named it;
+    #: empty for a directory that was cleaned by path alone.
+    device: str
+    #: The build directory this cleaned.
+    out_dir: Path
+    #: Every path that went, sorted, and empty where there was nothing
+    #: to remove.
+    removed: tuple[Path, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """This clean as a document, JSON-ready and complete."""
+        return {
+            "device": self.device,
+            "out_dir": str(self.out_dir),
+            "removed": [str(path) for path in self.removed],
+        }
+
+
+def clean_build(out_dir: Path, *, device: str = "") -> CleanResult:
     """Remove what a build wrote into *out_dir*, and answer what went.
 
     The build directory itself stays, and so does everything in it that a
@@ -391,21 +421,24 @@ def clean_build(out_dir: Path, *, device: str = "") -> tuple[Path, ...]:
     operation, so a build or a signature that is running there refuses
     this one in words (:class:`~mcuhome.workbench.buildlock.BuildDirectoryBusy`)
     rather than losing its output half-way through. *device* is what the
-    refusal calls the thing being cleaned, for whoever meets it.
+    refusal calls the thing being cleaned, for whoever meets it, and it
+    travels on into the :class:`CleanResult` this answers: a client that
+    prints the act says which device and which directory without
+    composing the sentence out of its own arguments.
 
     A **project root or a device folder is refused** with a
     :class:`~mcuhome.model.errors.BuildError` before anything is removed:
     both hold files this package knows by name, and a caller that hands
     one over meant a build directory.
 
-    A directory that does not exist is answered with an empty tuple and
-    is **not** created: there was nothing there to remove, and a clean
-    that leaves a new empty directory behind has done the opposite of its
-    job.
+    A directory that does not exist is answered with a result that
+    removed nothing, and is **not** created: there was nothing there to
+    remove, and a clean that leaves a new empty directory behind has done
+    the opposite of its job.
     """
     directory = Path(out_dir)
     if not directory.is_dir():
-        return ()
+        return CleanResult(device=device, out_dir=directory, removed=())
     _refuse_a_directory_of_theirs(directory)
     removed: list[Path] = []
     with open_build_lock(directory, device=device, operation="clean"):
@@ -419,4 +452,4 @@ def clean_build(out_dir: Path, *, device: str = "") -> tuple[Path, ...]:
                 continue
             if not path.exists():
                 removed.append(path)
-    return tuple(sorted(set(removed)))
+    return CleanResult(device=device, out_dir=directory, removed=tuple(sorted(set(removed))))

@@ -141,6 +141,11 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         container_image="ghcr.io/mcu-home/build-environment@sha256:" + "d" * 64,
         detail=object(),
     ),
+    "CleanResult": lambda: api.CleanResult(
+        device="thermostat",
+        out_dir=ROOT / "build" / "thermostat",
+        removed=(ROOT / "build" / "thermostat" / "firmware.bin",),
+    ),
     "ContainerImageMatch": lambda: api.ContainerImageMatch(
         reference=api.parse_container_reference(
             f"ghcr.io/mcu-home/build-environment:0.1.0-r1@sha256:{'d' * 64}",

@@ -200,6 +200,7 @@ from mcuhome.workbench.buildprocess import (
 )
 from mcuhome.workbench.buildrecord import (
     BuildRecord,
+    CleanResult,
     clean_build,
     read_build,
 )
@@ -459,6 +460,7 @@ __all__ = [
     "CONFIG_SCOPES",
     "CONTEXT_FILE",
     "CacheTier",
+    "CleanResult",
     "ClusterChoice",
     "ClusterDef",
     "CompilerUnavailable",
