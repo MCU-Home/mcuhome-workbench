@@ -267,13 +267,19 @@ way `validate_device` validates it, the build directory is read the way
 `DeviceRecord` (frozen): `name`, `file`, `board`, `ok`, `problems`,
 `built`, `signed`, `busy`, `to_dict()`.
 
-It **raises nothing**: a device file this package cannot parse is a row
-with `ok` false and its problems counted, not a refusal that hides every
-other device of the project. `board` comes off the device file itself, so
-a device that does not validate still says what it is for, and is empty
-where the file names none or cannot be read at all. `built` is true where
-the build directory holds a build's artifacts and `signed` where signed
-images lie beside them, both as `read_build` states them. Warnings are
+It **raises nothing over a device**: a device file this package cannot
+read or parse is a row with `ok` false and its problems counted, not a
+refusal that hides every other device of the project. The project's own
+directories are a different matter: a `devices/` this process may not
+list raises the operating system's error, the way `Project.device_names`
+and `find_secret_scopes` let it through — a project whose layout cannot
+be read is not a listing with a missing row.
+
+`board` comes off the device file itself, so a device that does not
+validate still says what it is for, and is empty where the file names
+none or cannot be read at all. `built` is true where the build directory
+holds a build's artifacts and `signed` where signed images lie beside
+them, both as `read_build` states them. Warnings are
 not part of a row — a listing has nowhere to put a located finding — so a
 caller that wants them asks `validate_device` for the one device it is
 showing. A device is a folder under `devices/`; a bare device file

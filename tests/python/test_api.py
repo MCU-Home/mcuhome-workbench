@@ -636,6 +636,41 @@ def test_a_device_file_nothing_can_parse_is_a_row_with_no_board(tmp_path) -> Non
     assert row.board == ""
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_a_device_file_nobody_may_read_is_a_row_and_an_unlistable_project_is_not(
+    tmp_path,
+) -> None:
+    """Where the promise ends, in both directions.
+
+    A device this call cannot read is a row, because the listing is
+    about every device and one of them being unreadable is a fact about
+    that device. A project whose ``devices/`` cannot be listed is not a
+    listing with a missing row — it is a project nothing here can answer
+    about — so the operating system's error travels, exactly as it does
+    out of ``Project.device_names``.
+    """
+    project = _listed_project(tmp_path, locked=VALID_CONFIG.replace("bench-node", "locked"))
+    entry = project.device_file("locked")
+    entry.chmod(0o000)
+    try:
+        (row,) = api.find_devices(project)
+        assert not row.ok
+        assert row.problems >= 1
+        assert row.board == ""
+    finally:
+        entry.chmod(0o600)
+
+    devices = tmp_path / "devices"
+    devices.chmod(0o000)
+    try:
+        with pytest.raises(OSError):
+            api.find_devices(project)
+        with pytest.raises(OSError):
+            project.device_names()
+    finally:
+        devices.chmod(0o700)
+
+
 def test_a_project_with_no_devices_is_an_empty_listing(tmp_path) -> None:
     assert api.find_devices(_listed_project(tmp_path)) == ()
 

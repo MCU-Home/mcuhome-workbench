@@ -1036,11 +1036,20 @@ def find_devices(project: Project) -> tuple[DeviceRecord, ...]:
     :func:`is_busy` asks it. What comes back is the whole listing, so a
     client renders rows instead of composing them.
 
-    **It raises nothing**, which is what the verb promises: a device file
-    this package cannot parse is a row with :attr:`~DeviceRecord.ok`
-    false and its problems counted, not a refusal that hides every other
-    device of the project. Warnings are not part of a row — a listing has
-    nowhere to put a located finding — so a caller that wants them asks
+    **It raises nothing over a device**, which is what the verb promises:
+    a device file this package cannot read or parse is a row with
+    :attr:`~DeviceRecord.ok` false and its problems counted, not a
+    refusal that hides every other device of the project. The project's
+    own directories are a different matter and are not caught here: a
+    ``devices/`` this process may not list raises the operating system's
+    error, exactly as
+    :meth:`~mcuhome.workbench.project.Project.device_names` and
+    :func:`~mcuhome.workbench.secrets.find_secret_scopes` let it through —
+    a project whose layout cannot be read is not a listing with a
+    missing row, it is a project nothing here can answer about.
+
+    Warnings are not part of a row — a listing has nowhere to put a
+    located finding — so a caller that wants them asks
     :func:`validate_device` for the one device it is showing.
 
     A device is a folder under ``devices/`` with a ``main.yaml`` in it. A
