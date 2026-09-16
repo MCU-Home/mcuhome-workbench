@@ -233,7 +233,7 @@ def _write_image(
     except OSError as error:
         raise BuildError(
             f"The Matter OTA file {output} cannot be written: {error.strerror}.",
-            hint="pick a writable location with --build-dir",
+            hint="pick a writable location with --out-dir",
         ) from error
 
     return OtaImage(

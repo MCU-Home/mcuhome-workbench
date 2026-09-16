@@ -41,7 +41,7 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_validate.py` | every v0.1 scope gate and cross-reference check, message **and** location |
 | `test_examples.py` | the example configurations in `data/examples/` (copies of the SDK's design examples) |
 | `test_model_golden.py` | the cross-repo contract: stages 1-3 still produce the golden `device-model.json` the SDK's suite consumes |
-| `test_scaffold.py` | `mcuhome new`: the starter configuration and its refusals |
+| `test_scaffold.py` | `mcuhome device new`: the starter configuration and its refusals |
 | `test_api.py` | the supported surface: exports, `validate_device`, `error_dicts`, the version |
 | `test_build.py` | the two build targets behind `build_firmware`; the call-time compiler edge |
 | `test_localbuild.py` | the container execution's composition (`compose_container_build`) against a scripted container runtime |
@@ -54,6 +54,6 @@ so a bare `pytest` from the repo root does the right thing.
 | `test_context_workbench.py` | context creation/locking, the frozen context-ID rule |
 | `test_export_workbench.py` | registry data and the `main.yaml` JSON schema as data |
 | `test_ota_workbench.py` | the Matter OTA image wrap around a freshly signed image |
-| `test_pairing_workbench.py` | `matter-pairing` plus the identity-symbol invariant (no workbench module spells `CONFIG_CHIP_DEVICE_SPAKE2_*`) |
+| `test_pairing_workbench.py` | `create-matter-pairing`/`print-matter-pairing` plus the identity-symbol invariant (no workbench module spells `CONFIG_CHIP_DEVICE_SPAKE2_*`) |
 | `test_userpaths_workbench.py` | the process-boundary invariant: no module reads `$HOME`/`os.environ` outside the seam |
 | `test_packaging_workbench.py` | the root `pyproject.toml`: name, version source, dependency arrows, extras |

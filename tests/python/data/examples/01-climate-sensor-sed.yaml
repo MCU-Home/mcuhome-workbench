@@ -18,7 +18,7 @@ network:
   matter:
     enabled: true        # default when a transport exists; shown for clarity
     # Bench credentials: the pairing code published with the Matter SDK.
-    # A real device draws its own with `mcuhome init-pairing <device>`.
+    # A real device draws its own with `mcuhome device create-matter-pairing <device>`.
     use_test_pairing: true
 
 hardware:

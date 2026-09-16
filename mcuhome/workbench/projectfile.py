@@ -155,7 +155,7 @@ class ProjectFile:
 
     @property
     def token(self) -> str:
-        """What ``--confirm-upgrade`` expects for this project.
+        """What ``--confirm`` expects for this project.
 
         The short id, or — for a version-0 project, which has no id yet
         because the first migration is what draws it — the project

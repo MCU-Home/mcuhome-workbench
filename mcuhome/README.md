@@ -47,8 +47,8 @@ pytest                           # the suite in ../tests/python/
 | `workbench/validate.py` | 2b | cross-references, v0.1 scope gates, Matter conformance |
 | `workbench/resolve.py` | 3 | defaults, device-type completion, endpoint numbering, unit conversion |
 | `workbench/configschema.py` | — | the `main.yaml` schema as data (JSON Schema) |
-| `workbench/scaffold.py` | — | `mcuhome new`: a starter device configuration |
-| `workbench/provision.py` | — | `matter-pairing`: drawing a device's commissioning credentials |
+| `workbench/scaffold.py` | — | `mcuhome device new`: a starter device configuration |
+| `workbench/provision.py` | — | `create-matter-pairing`: drawing a device's commissioning credentials |
 | `workbench/contextdir.py` | — | build-context creation and locking |
 | `workbench/resolve_pins.py` | — | the pin chain — SDK, then the build workspace and build tools its meta files require — resolved against an index or a directory |
 | `workbench/build.py` | — | the two build targets behind `build_firmware` |

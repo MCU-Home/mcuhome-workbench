@@ -181,9 +181,9 @@ from mcuhome.workbench.packageregistry import (  # noqa: E402
 
 #: The SDK constraint a build resolves with when the caller states none:
 #: "the newest the configured sources offer". A device configuration can
-#: pin the SDK as a PEP 440 constraint, but a plain ``mcuhome
+#: pin the SDK as a PEP 440 constraint, but a plain ``mcuhome device
 #: build`` has no such intent — it takes whatever SDK package the
-#: ``--sdk-sources`` directories hold, exactly as the empty
+#: ``--build-sdk-sources`` directories hold, exactly as the empty
 #: :class:`~packaging.specifiers.SpecifierSet` matches every version.
 SDK_ANY = ""
 
@@ -767,8 +767,8 @@ def resolve_sdk(
             "The build needs the MCUHome SDK package, and no SDK source is configured.",
             hint=(
                 "point at a directory holding one:\n"
-                "    mcuhome config set build.sdk_sources <dir> --user\n"
-                "or pass --sdk-sources <dir> for a single build."
+                "    mcuhome config set build.sdk_sources <dir> --scope user\n"
+                "or pass --build-sdk-sources <dir> for a single build."
             ),
         )
     searched: list[str] = []
@@ -792,7 +792,7 @@ def resolve_sdk(
                 hint=(
                     "the index is what scripts/build_sdk_archive.py writes next to "
                     "the archive — regenerate it, or drop the source from "
-                    "--sdk-sources/MCUHOME_BUILD_SDK_SOURCES"
+                    "--build-sdk-sources/MCUHOME_BUILD_SDK_SOURCES"
                 ),
             ) from broken
         try:

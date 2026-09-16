@@ -102,7 +102,7 @@ def test_a_planned_board_says_why_it_is_not_there_yet(tmp_path) -> None:
 def test_the_starter_names_the_next_step_rather_than_taking_it() -> None:
     """Credentials are drawn once, by their own command, on purpose."""
     text = scaffold.render_device_file("bench-node", board=BOARD)
-    assert "mcuhome device matter-pairing --new bench-node" in text
+    assert "mcuhome device create-matter-pairing bench-node" in text
     assert "discriminator:" not in text
     assert "passcode:" not in text
 
@@ -147,7 +147,7 @@ def test_the_scaffold_is_deterministic() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_new_then_init_pairing_then_validate(tmp_path) -> None:
+def test_new_then_create_matter_pairing_then_validate(tmp_path) -> None:
     """The three commands the scaffold's own header names, in that order."""
     project = create_project(tmp_path).project
     created = scaffold.create_device("bench-node", project=project, board=BOARD)
@@ -157,7 +157,7 @@ def test_new_then_init_pairing_then_validate(tmp_path) -> None:
     # writes them — which is what makes the scaffold's next step honest.
     result = validate_device(created.entry, project=project)
     assert not result.ok
-    assert any("matter-pairing --new bench-node" in (error.hint or "") for error in result.errors)
+    assert any("create-matter-pairing bench-node" in (error.hint or "") for error in result.errors)
 
     provision.create_pairing(created.entry, project=project)
 
@@ -169,7 +169,7 @@ def test_new_then_init_pairing_then_validate(tmp_path) -> None:
 
 
 def test_the_starter_takes_a_friendly_name_and_quotes_it() -> None:
-    """`device new --name`: the human name for the Matter identity."""
+    """`device new --friendly-name`: the human name for the Matter identity."""
     text = scaffold.render_device_file("bench-node", board=BOARD, friendly_name='Bench: "A"')
     assert 'friendly_name: "Bench: \\"A\\""' in text
     plain = scaffold.render_device_file("bench-node", board=BOARD)

@@ -6,7 +6,7 @@
 # The friendly name comes from secrets.yaml so the fixture tree exercises
 # !secret as well, and so do the commissioning credentials — this fixture
 # is the "real device" shape, with a passcode and a salt of its own,
-# exactly as `mcuhome init-pairing --secrets` writes them.
+# exactly as `mcuhome device create-matter-pairing` writes them.
 
 device:
   name: bench-node

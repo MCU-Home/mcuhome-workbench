@@ -325,7 +325,7 @@ def write_context(
             hint=(
                 "keys/signing.pub carries the public half of your MCUboot signing key "
                 "— never the private half, which must never reach "
-                "a build. `mcuhome public-key` writes exactly this file."
+                "a build. `mcuhome signing print-public-key` writes exactly this file."
             ),
         )
 

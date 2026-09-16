@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome device matter-pairing --new``: :mod:`mcuhome.workbench.provision`.
+"""``mcuhome device create-matter-pairing``: :mod:`mcuhome.workbench.provision`.
 
 The workbench half of the commissioning credentials. The math, the CHIP
 vectors and the atomic Kconfig group are :mod:`mcuhome.model.pairing` and
@@ -54,7 +54,7 @@ def _init(path: Path, **kwargs) -> provision.NewPairing:
     return provision.create_pairing(path, project=_project(path), draw=lambda: FIXED, **kwargs)
 
 
-def test_init_pairing_writes_credentials_the_builder_then_accepts(write_config) -> None:
+def test_create_matter_pairing_writes_credentials_the_builder_then_accepts(write_config) -> None:
     path = write_config(WITHOUT_CREDENTIALS)
     result = _init(path)
 
@@ -70,7 +70,7 @@ def test_init_pairing_writes_credentials_the_builder_then_accepts(write_config) 
     assert not model.network.pairing.test_credentials
 
 
-def test_init_pairing_only_adds_lines(write_config) -> None:
+def test_create_matter_pairing_only_adds_lines(write_config) -> None:
     """Everything the user typed is still there, byte for byte.
 
     The file is edited by line, not re-serialized, precisely so that a
@@ -94,7 +94,7 @@ def test_init_pairing_only_adds_lines(write_config) -> None:
     ]
 
 
-def test_init_pairing_refuses_to_overwrite_without_being_told(write_config) -> None:
+def test_create_matter_pairing_refuses_to_overwrite_without_being_told(write_config) -> None:
     path = write_config(WITHOUT_CREDENTIALS)
     _init(path)
     untouched = path.read_text(encoding="utf-8")

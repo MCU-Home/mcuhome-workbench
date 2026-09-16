@@ -392,7 +392,7 @@ def device_secrets_file(secrets_file: Path, data: Any, entry: Path) -> Path:
     """``secrets/device/<device>.yaml``, next to the project's main secrets file.
 
     The per-device secrets file of the project layout —
-    where ``mcuhome device matter-pairing`` puts a device's commissioning
+    where ``mcuhome device create-matter-pairing`` puts a device's commissioning
     values. For a device inside the project layout the name is the
     device *folder's*, never the configuration's own ``device.name``
     claim: the folder is the identity every project surface keys on, and

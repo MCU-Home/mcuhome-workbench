@@ -2772,7 +2772,7 @@ def _refuse_developer_context(context_dir: Path) -> None:
         "a build server.",
         hint=(
             "it names no build environment, because it compiles a workspace you "
-            "maintain on this machine — build it here (mcuhome build), or create a "
+            "maintain on this machine — build it here (mcuhome device build), or create a "
             "context against MCUHome's own build environment and send that"
         ),
     )

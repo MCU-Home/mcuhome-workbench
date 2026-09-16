@@ -193,7 +193,7 @@ def _no_real_system_layer(monkeypatch, tmp_path_factory):
 def _no_docker(monkeypatch):
     """Nothing in this suite is allowed to reach a container runtime.
 
-    A safety net, not a convenience: `mcuhome build` now defaults to the
+    A safety net, not a convenience: `mcuhome device build` now defaults to the
     container, so a test that forgets to stub the runtime would otherwise
     quietly start a real Matter build on the machine running pytest —
     minutes of CPU and gigabytes of build directory, from a suite whose

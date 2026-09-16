@@ -38,7 +38,7 @@ network:
     # discriminator 0xF00) — the codes the DK on the bench was actually
     # commissioned with, which is why this example asks for them by name.
     # A real device draws its own instead:
-    #     mcuhome init-pairing <device>
+    #     mcuhome device create-matter-pairing <device>
     # writes a random passcode, discriminator and salt into its
     # configuration. Without either, the builder refuses to build: a
     # passcode everyone knows is a device anyone can commission.

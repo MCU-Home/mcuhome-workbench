@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome new`` — the first file of a new device.
+"""``mcuhome device new`` — the first file of a new device.
 
 A device is a folder with a ``main.yaml`` in it (builder-pipeline.md §2),
 and writing that first file from memory means knowing the board target
@@ -36,7 +36,7 @@ missing a mandatory cluster, an address out of range — belongs to stages
 1-3, which say it with a line and column in the file that now exists.
 Two authorities on what a valid configuration is would be one too many.
 
-**It does not draw commissioning credentials.** ``mcuhome device matter-pairing --new``
+**It does not draw commissioning credentials.** ``mcuhome device create-matter-pairing``
 does that, in its own command, because those are per-device secrets that
 are drawn once and then never again (yaml-schema.md §4.1) — a scaffold
 that produced them as a side effect would make ``new`` an operation with
@@ -73,7 +73,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class NewDevice:
-    """What ``mcuhome new`` created."""
+    """What ``mcuhome device new`` created."""
 
     project: Project
     entry: Path
@@ -168,14 +168,14 @@ def _refuse_unknown_board(board: str) -> ConfigError:
     if planned is not None:
         return ConfigError(
             f'MCUHome does not support the board "{board}" yet: {planned}.',
-            hint=f"boards MCUHome supports today: {known} — mcuhome device boards lists them",
+            hint=f"boards MCUHome supports today: {known} — mcuhome device list-boards lists them",
         )
     return ConfigError(
         f'"{board}" is not a board MCUHome knows.',
         hint=(
             f"use one of the boards MCUHome supports today: {known}\n"
             "The board name is the Zephyr board target, verbatim, qualifiers "
-            "included; mcuhome device boards lists the supported and planned ones."
+            "included; mcuhome device list-boards lists the supported and planned ones."
         ),
     )
 
@@ -393,7 +393,7 @@ def render_device_file(
     Pure, so the test suite reads it without touching a filesystem and the
     dashboard's new-device wizard can show it before anything is written.
     *friendly_name* is the human-readable name destined for the device's
-    Matter identity (``device new --name``); left unset, a
+    Matter identity (``device new --friendly-name``); left unset, a
     title-cased spelling of *name* stands in.
 
     *outline* is what the caller already knows about the device's
@@ -414,7 +414,7 @@ def render_device_file(
         "# the one command that writes the commissioning credentials below.",
         "#",
         "# Next step:",
-        f"#   mcuhome device matter-pairing --new {name}    # draw its commissioning codes",
+        f"#   mcuhome device create-matter-pairing {name}    # draw its commissioning codes",
         f"#   mcuhome device validate {name}        # see what it resolves to",
         f"#   mcuhome device build {name}           # compile it",
         "",
@@ -434,7 +434,7 @@ def render_device_file(
         "  matter:",
         "    enabled: true",
         "    # The three keys below are this device's commissioning identity.",
-        "    # They are drawn once, by mcuhome device matter-pairing --new, and",
+        "    # They are drawn once, by mcuhome device create-matter-pairing, and",
         "    # rebuilding never changes them — a device whose identity moved has",
         "    # to be commissioned again. Do not write them by hand.",
         "",

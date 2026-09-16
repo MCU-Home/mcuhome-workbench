@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Detached signing, and the proof that it is the same signature.
 
-The claim is that ``mcuhome sign`` produces what
+The claim is that ``mcuhome device sign-firmware`` produces what
 the build would have produced, so that a private key never has to be on
 the machine that compiles. This module holds the evidence:
 

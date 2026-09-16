@@ -323,7 +323,7 @@ def _busy(out_dir: Path, device: str, operation: str) -> BuildDirectoryBusy:
     what = running.format(device=who) if running and who else "Another MCUHome run is working"
     since = f", started {holder['started']}" if holder.get("started") else ""
     which = f" (process {holder['pid']}{since})" if holder.get("pid") else ""
-    escape = "\n    mcuhome device build <device> --build-dir <dir>" if operation == "build" else ""
+    escape = "\n    mcuhome device build <device> --out-dir <dir>" if operation == "build" else ""
     return BuildDirectoryBusy(
         f"{what} in {out_dir}{which}.",
         hint=(

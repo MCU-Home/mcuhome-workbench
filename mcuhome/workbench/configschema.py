@@ -253,7 +253,8 @@ def device_schema() -> dict[str, Any]:
                     "matter": {
                         "type": "object",
                         "description": (
-                            "Commissioning identity. Written by mcuhome device matter-pairing "
+                            "Commissioning identity. Written by "
+                            "mcuhome device create-matter-pairing "
                             "— drawn once, so that every build of this device is "
                             "byte-identical."
                         ),

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""``mcuhome device matter-pairing --new``: draw commissioning credentials, once.
+"""``mcuhome device create-matter-pairing``: draw commissioning credentials, once.
 
 This is the one place in the builder where randomness enters, and it
 enters *into the user's configuration* rather than into a build. That is
@@ -64,7 +64,7 @@ __all__ = [
 #: replaces them so that repeated runs do not stack up comment blocks.
 #: Matched by exact text — a comment the user wrote is never touched.
 CREDENTIAL_COMMENT = (
-    "# Commissioning credentials, written by `mcuhome device matter-pairing`.",
+    "# Commissioning credentials, written by `mcuhome device create-matter-pairing`.",
     "# They are this device's identity: replacing them means every controller",
     "# has to commission it again.",
 )
@@ -73,12 +73,13 @@ CREDENTIAL_COMMENT = (
 #: when replacing so that a pre-rename file does not stack comments up.
 _KNOWN_COMMENT_LINES = frozenset(CREDENTIAL_COMMENT) | {
     "# Commissioning credentials, written by `mcuhome device init-pairing`.",
+    "# Commissioning credentials, written by `mcuhome device matter-pairing`.",
 }
 
 
 @dataclass(frozen=True)
 class NewPairing:
-    """What ``matter-pairing --new`` wrote, and where."""
+    """What ``mcuhome device create-matter-pairing`` wrote, and where."""
 
     entry: Path
     #: Where the values themselves went: the device's own secrets file.
@@ -321,7 +322,7 @@ def create_pairing(
             entry,
             f"{names} would be replaced, and every controller that already knows this "
             "device would have to commission it again — so say it in so many words:\n"
-            "    mcuhome device matter-pairing --new … --force",
+            "    mcuhome device create-matter-pairing … --force",
             line=min(anchor.occupied.values()),
         )
 

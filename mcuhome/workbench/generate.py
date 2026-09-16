@@ -9,7 +9,7 @@ keeps the private signing key and the toolchain on opposite sides of one
 boundary.
 
 What needs it is the caller who wants the generated tree and nothing
-else: ``mcuhome device build --generate-only``, and any embedder asking
+else: ``mcuhome device generate-application``, and any embedder asking
 the same question. So this is a seam and not a build step — one function,
 resolved at call time against a distribution this package deliberately
 does not depend on.

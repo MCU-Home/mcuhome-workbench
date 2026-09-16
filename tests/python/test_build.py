@@ -1559,7 +1559,7 @@ def test_remote_refuses_over_a_pin_only_when_nothing_can_resolve_one(model, tmp_
         )
     assert not isinstance(refusal.value, build.RemoteNotConfigured)
     rendered = str(refusal.value)
-    assert "--sdk-sources" in rendered
+    assert "--build-sdk-sources" in rendered
     assert "build.sdk_sources" in rendered
 
 
@@ -2069,7 +2069,7 @@ def test_a_development_context_is_not_sent_to_a_build_server(model, tmp_path) ->
                 target=build.RemoteBuild(server="build.example.org"),
             )
         )
-    assert "mcuhome build" in refused.value.hint
+    assert "mcuhome device build" in refused.value.hint
 
 
 def test_a_package_pinned_context_is_sent_as_before(model, tmp_path, monkeypatch) -> None:

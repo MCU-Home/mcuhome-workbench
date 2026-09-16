@@ -53,7 +53,7 @@ each kind says where its file is and who names it:
     ``secrets/main.yaml``, the project's shared values. One file, no
     name.
 ``device``
-    one file per device, written by ``mcuhome device matter-pairing``
+    one file per device, written by ``mcuhome device create-matter-pairing``
     and read by ``!secret`` before the shared file.
 ``builder``
     one file per named builder, holding the ``token`` a build server

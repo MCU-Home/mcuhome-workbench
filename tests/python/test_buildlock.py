@@ -129,7 +129,7 @@ def test_a_second_build_of_the_same_directory_is_refused(tmp_path) -> None:
         refusal = _refused(tmp_path)
     assert "A build of bmp180-node is already running" in refusal
     assert "process " in refusal  # which build, so the user can find it
-    assert "--build-dir" in refusal  # and how to build in parallel anyway
+    assert "--out-dir" in refusal  # and how to build in parallel anyway
 
 
 def test_a_flash_is_refused_while_a_build_runs_and_says_which(tmp_path) -> None:
@@ -143,7 +143,7 @@ def test_a_flash_is_refused_while_a_build_runs_and_says_which(tmp_path) -> None:
     assert "A build of bmp180-node is already running" in refusal
     # The escape hatch belongs to builds — a flash cannot go to another
     # directory, so it is not offered one.
-    assert "--build-dir" not in refusal
+    assert "--out-dir" not in refusal
 
 
 def test_a_build_is_refused_while_the_device_is_being_flashed(tmp_path) -> None:

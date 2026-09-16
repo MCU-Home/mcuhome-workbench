@@ -168,7 +168,7 @@ One declaration produces every spelling: `build.mode` is `MCUHOME_BUILD_MODE`
 in the environment and `--build-mode` on a command line, and because an area is
 always one word the flag splits back into its key without a table. `mcuhome
 config print` shows every option with the layer it came from, and `mcuhome
-config set build.mode subprocess --user` writes the section for you.
+config set build.mode subprocess --scope user` writes the section for you.
 
 Named builders are a map under `builder`, keyed by the builder's name, and
 `build.builder` names the one a plain build uses:
