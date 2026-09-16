@@ -473,6 +473,44 @@ def test_an_artifact_that_is_gone_is_still_what_the_build_declared(
     assert "firmware.bin" in [artifact.path for artifact in record.artifacts]
 
 
+def test_a_record_that_names_another_directory_is_not_followed(tmp_path, model) -> None:
+    """One directory, and the record does not get to pick a second one.
+
+    A build delivers into the directory it was given, so where its output
+    is, is not a question the record answers — it restates it. A record
+    is a file and a file can be edited, and a reader that followed it
+    would describe some other directory's contents under this
+    directory's name, or read a path that is not there any more.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "firmware.signed.bin").write_bytes(b"not this build's")
+    out = tmp_path / "build"
+    out.mkdir()
+    (out / BUILD_REPORT_FILE).write_text('{"report": 1}', "utf-8")
+    (out / buildrecord.BUILD_RECORD_FILE).write_text(
+        json.dumps(
+            {
+                "build": buildrecord.RECORD_VERSION,
+                "device": model.device.name,
+                "context_id": "",
+                "out_dir": str(elsewhere),
+                "report": BUILD_REPORT_FILE,
+                "container_image": "",
+                "artifacts": [],
+            }
+        ),
+        "utf-8",
+    )
+
+    record = api.read_build(out)
+
+    assert record is not None
+    assert record.out_dir == out
+    assert record.to_dict()["out_dir"] == str(out)
+    assert record.signed == (), "the signed image over there belongs to no build in here"
+
+
 def test_a_signed_build_answers_the_signed_images_beside_the_unsigned(
     tmp_path, model, monkeypatch
 ) -> None:

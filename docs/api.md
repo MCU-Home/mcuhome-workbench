@@ -130,8 +130,8 @@ polled on the same tick as the deadline: the build walks the ladder it
 walks for a deadline — a signal after the grace period, a kill ten
 seconds later, the container removed — releases the build lock, delivers
 nothing (so the build directory holds what the last build that did
-deliver put there), and answers `ok=False, stopped=True`. `UpgradeSession.apply` takes the same
-predicate.
+deliver put there), and answers `ok=False, stopped=True`.
+`UpgradeSession.apply` takes the same predicate.
 
 It is asked while the build environment runs, and at the remote target
 also while the build waits for a turn; the phases before that — creating
@@ -2155,7 +2155,8 @@ container_image}` — `origin` is the layer that defined the entry and
 `SelectedBuilder.to_dict()`: `{target, builder, server, container_image}`
 — the token is a secret and is in no document.
 `RegistrySettings.to_dict()`: `{base_domain, untrusted, anchor, mirrors}`.
-`Artifact.to_dict()`: `{root, path, role, sha256}` — `root` is the artifact root the build environment declared the file under (`out`),
+`Artifact.to_dict()`: `{root, path, role, sha256}` — `root` is the
+artifact root the build environment declared the file under (`out`),
 which is a name in its own vocabulary and not a path segment: `path` is
 relative to the directory the result names, and after a delivery that is
 the build directory itself.
