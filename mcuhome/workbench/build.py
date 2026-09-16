@@ -105,6 +105,7 @@ from mcuhome.workbench.buildenvsession import (
     BuildLimits,
     EnvironmentUnavailable,
     EnvironmentUnusable,
+    StepResult,
     parse_memory,
     resolve_cache_tiers,
     resolve_host_limits,
@@ -963,7 +964,7 @@ def _reported(limits: BuildLimits) -> dict[str, Any]:
     return {"cpus": limits.cpus, "memory_bytes": limits.memory_bytes}
 
 
-def _step_findings(outcome: Any) -> tuple[Diagnostic, ...]:
+def _step_findings(outcome: StepResult) -> tuple[Diagnostic, ...]:
     """What a local build's step says about a build that did not deliver.
 
     Two voices, and both are the orchestrator's own: the delivery
