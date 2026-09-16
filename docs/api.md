@@ -977,8 +977,12 @@ findings list every result that can carry them answers: the delivery
 conditions the step failed and the specification violation an
 environment committed at a local target — both with `kind` `BuildError`
 — and the words a build server refused with at the remote one, `kind`
-`ServerRefusal`, its refusal envelope's details included. It is empty
-for a build that produced its artifacts. A build reports its warnings
+`ServerRefusal`, its refusal envelope's details included. A build that
+failed and put **nothing** into words — a step that judged it without a
+sentence, a server that sent no envelope — still states one finding,
+naming the verdict that was answered and `kind` `BuildError`: an empty
+list beside `ok: false` is what would make a client narrate the failure
+itself. It is empty for a build that produced its artifacts. A build reports its warnings
 through `on_line` while it runs, because that is where the person
 watching a build is looking, so what arrives here are errors; the list
 is the same shape either way. A client renders it and never unwraps

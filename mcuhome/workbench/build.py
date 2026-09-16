@@ -982,12 +982,22 @@ def _step_findings(outcome: StepResult) -> tuple[Diagnostic, ...]:
     same list a caller that renders a stopped one does. ``kind`` is
     ``BuildError`` — the class a build's failure is raised as everywhere
     else on this surface, and therefore the word a client switches on.
+
+    **A build that failed always says something.** A step that judged a
+    build and put nothing into words is the one case where a client would
+    have to invent the sentence again, so the orchestrator states what it
+    observed instead: the word the step answered, and that there was
+    nothing beside it.
     """
     if outcome.ok:
         return ()
     said = [*outcome.problems]
     if outcome.violation:
         said.append(outcome.violation)
+    if not said:
+        said.append(
+            f"the build environment reported status {outcome.status!r} and no usable result"
+        )
     return tuple(
         Diagnostic(severity=SEVERITY_ERROR, message=message, kind="BuildError") for message in said
     )
@@ -2717,6 +2727,18 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
     # rather than one that failed, and the verdict is the server's own
     # word for it.
     ended = stop.stopped or result.status == sessionclient.STATUS_CANCELLED
+    findings = _refusal_findings(result.error) if not result.ok else ()
+    if not result.ok and not findings and not ended:
+        # A build that failed on the far side and arrived without a word
+        # is the one case a client would have to narrate itself. What
+        # this side observed is the verdict, so that is what it states.
+        findings = (
+            Diagnostic(
+                severity=SEVERITY_ERROR,
+                message=f"The build server reported {result.status!r} without stating a reason.",
+                kind="BuildError",
+            ),
+        )
     return BuildResult(
         ok=result.ok,
         target=TARGET_REMOTE,
@@ -2732,6 +2754,6 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         container_image=result.container_image,
         # A verdict of success is neither, however late the stop came.
         stopped=ended and not result.ok,
-        diagnostics=() if result.ok else _refusal_findings(result.error),
+        diagnostics=findings,
         detail=result,
     )

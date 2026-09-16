@@ -762,6 +762,143 @@ def test_a_failed_local_build_states_its_findings(model, tmp_path, monkeypatch) 
     assert json.loads(json.dumps(document)) == document
 
 
+def test_a_failed_subprocess_build_states_its_findings(model, tmp_path, monkeypatch) -> None:
+    """The other local execution answers the same list.
+
+    A build that runs as a child process fails in the same shape as one
+    that runs in a container, and a client must not have to tell the two
+    apart to find out why.
+    """
+
+    def fake(device_model, **kwargs):
+        del device_model, kwargs
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=StepResult(
+                action="build",
+                context_id="sha256:" + "2" * 64,
+                exit_code=2,
+                status="failure",
+                problems=("west exited 2",),
+                out_dir=tmp_path / "delivery",
+            ),
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            environment=None,
+        )
+
+    # The composition the subprocess execution offloads to, replaced at
+    # the seam the target dispatch actually goes through.
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    outcome = _run(
+        build.BuildRequest(model=model, out_dir=tmp_path, mode=build.MODE_SUBPROCESS),
+        build.TARGET_LOCAL,
+    )
+
+    assert not outcome.ok
+    assert [finding.message for finding in outcome.diagnostics] == ["west exited 2"]
+    assert outcome.to_dict()["diagnostics"][0]["kind"] == "BuildError"
+
+
+def test_a_build_that_failed_without_a_word_still_says_something(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The one case a client would otherwise narrate itself.
+
+    A step that judged the build and put nothing into words leaves the
+    orchestrator to state what it observed — the word the step answered
+    — rather than a client to invent a sentence around an empty list.
+    """
+
+    def fake(device_model, **kwargs):
+        del device_model, kwargs
+        return containerbuild.ContainerBuildResult(
+            outcome=StepResult(
+                action="build",
+                context_id="sha256:" + "1" * 64,
+                exit_code=None,
+                status="failure",
+                out_dir=None,
+            ),
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            container_image="registry.example.test/other/environment:test",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    outcome = _run(build.BuildRequest(model=model, out_dir=tmp_path), build.TARGET_LOCAL)
+
+    assert not outcome.ok
+    (finding,) = outcome.diagnostics
+    assert "failure" in finding.message
+    assert finding.kind == "BuildError"
+
+
+def test_a_remote_failure_without_an_envelope_states_the_verdict(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The far side said no and sent no words: this side states what it saw."""
+
+    async def remote(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status="failure",
+            artifacts=(),
+            out_dir=None,
+            invocation_id="inv-2",
+        )
+
+    context = tmp_path / "context"
+    context.mkdir()
+    monkeypatch.setattr(sessionclient, "run_remote_build", remote)
+    outcome = _run(
+        build.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            context_dir=context,
+            builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
+        ),
+        build.TARGET_REMOTE,
+    )
+
+    assert not outcome.ok and not outcome.stopped
+    (finding,) = outcome.diagnostics
+    assert "failure" in finding.message
+    assert finding.kind == "BuildError"
+
+
+def test_a_stopped_remote_build_invents_no_finding(model, tmp_path, monkeypatch) -> None:
+    """Stopping is not a failure, so there is nothing to report about it."""
+
+    async def remote(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status=sessionclient.STATUS_CANCELLED,
+            artifacts=(),
+            out_dir=None,
+            invocation_id="inv-3",
+        )
+
+    context = tmp_path / "context"
+    context.mkdir()
+    monkeypatch.setattr(sessionclient, "run_remote_build", remote)
+    outcome = _run(
+        build.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            context_dir=context,
+            builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
+        ),
+        build.TARGET_REMOTE,
+    )
+
+    assert not outcome.ok and outcome.stopped
+    assert outcome.diagnostics == ()
+
+
 def test_a_remote_refusal_travels_in_the_findings(model, tmp_path, monkeypatch) -> None:
     """The far side is the only one that saw the build, so its words are it.
 
