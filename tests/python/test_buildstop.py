@@ -443,6 +443,13 @@ def test_a_stopped_local_build_answers_stopped_and_releases_the_build_directory(
     assert result.to_dict()["stopped"] is True
     assert result.out_dir == tmp_path / "out"
     assert buildlock.is_busy(out_dir) is False
+    # And it says nothing about the firmware. A stopped step is a failed
+    # step by construction — the environment was ended before it could
+    # write a result document — so every finding about it would describe
+    # the stop, and a client rendering them beside `stopped` would tell a
+    # person their build is broken because they pressed the stop button.
+    assert result.diagnostics == ()
+    assert result.to_dict()["diagnostics"] == []
 
 
 def test_a_build_that_failed_without_being_stopped_says_so(model, tmp_path, monkeypatch) -> None:
@@ -472,6 +479,11 @@ def test_a_build_that_failed_without_being_stopped_says_so(model, tmp_path, monk
     assert asked.calls == 1
     assert result.ok is False
     assert result.stopped is False
+    # The other side of the rule above: this one failed, so it says what
+    # the step found — the same step, a different verdict about it.
+    assert [finding.message for finding in result.diagnostics] == [
+        "the build environment wrote no readable result document"
+    ]
 
 
 def test_a_build_without_a_predicate_hands_none_down(model, tmp_path, monkeypatch) -> None:

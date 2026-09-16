@@ -964,7 +964,7 @@ def _reported(limits: BuildLimits) -> dict[str, Any]:
     return {"cpus": limits.cpus, "memory_bytes": limits.memory_bytes}
 
 
-def _step_findings(outcome: StepResult) -> tuple[Diagnostic, ...]:
+def _step_findings(outcome: StepResult, *, stopped: bool) -> tuple[Diagnostic, ...]:
     """What a local build's step says about a build that did not deliver.
 
     Two voices, and both are the orchestrator's own: the delivery
@@ -988,8 +988,16 @@ def _step_findings(outcome: StepResult) -> tuple[Diagnostic, ...]:
     have to invent the sentence again, so the orchestrator states what it
     observed instead: the word the step answered, and that there was
     nothing beside it.
+
+    **A build somebody stopped says nothing**, on this path as on the
+    remote one. A stopped step is a failed step by construction — the
+    environment was ended before it could write a result document — so
+    every sentence about it would describe the stop rather than the
+    firmware, and a client that renders ``stopped`` beside a list of
+    findings would be telling a person their build is broken because
+    they pressed the stop button.
     """
-    if outcome.ok:
+    if outcome.ok or stopped:
         return ()
     said = [*outcome.problems]
     if outcome.violation:
@@ -2493,7 +2501,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         # stopped. A predicate that turned true while the last step was
         # already succeeding stopped nothing.
         stopped=stop.stopped and not outcome.ok,
-        diagnostics=_step_findings(outcome),
+        diagnostics=_step_findings(outcome, stopped=stop.stopped),
         detail=result,
     )
 
@@ -2540,7 +2548,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         # See the subprocess execution above: a build that produced its
         # artifacts was not stopped, whenever the predicate turned.
         stopped=stop.stopped and not outcome.ok,
-        diagnostics=_step_findings(outcome),
+        diagnostics=_step_findings(outcome, stopped=stop.stopped),
         detail=result,
     )
 
@@ -2727,12 +2735,13 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
     # rather than one that failed, and the verdict is the server's own
     # word for it.
     ended = stop.stopped or result.status == sessionclient.STATUS_CANCELLED
-    findings = _refusal_findings(result.error) if not result.ok else ()
-    if not result.ok and not findings and not ended:
-        # A build that failed on the far side and arrived without a word
-        # is the one case a client would have to narrate itself. What
-        # this side observed is the verdict, so that is what it states.
-        findings = (
+    # The same rule the local paths follow: a build that produced its
+    # artifacts has nothing to report, a build somebody stopped has
+    # nothing to report about the firmware, and a build that failed says
+    # something even where the far side sent no words.
+    findings: tuple[Diagnostic, ...] = ()
+    if not result.ok and not ended:
+        findings = _refusal_findings(result.error) or (
             Diagnostic(
                 severity=SEVERITY_ERROR,
                 message=f"The build server reported {result.status!r} without stating a reason.",

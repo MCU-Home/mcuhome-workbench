@@ -982,7 +982,12 @@ failed and put **nothing** into words — a step that judged it without a
 sentence, a server that sent no envelope — still states one finding,
 naming the verdict that was answered and `kind` `BuildError`: an empty
 list beside `ok: false` is what would make a client narrate the failure
-itself. It is empty for a build that produced its artifacts. A build reports its warnings
+itself. It is empty for a build that produced its artifacts, and empty
+for a build somebody **stopped** — on every target: a stopped build did
+not produce artifacts either, and a step that was ended before it could
+write its result document has nothing to say about the firmware, so
+`ok: false, stopped: true` arrives with `diagnostics: []` and a client
+renders the stop rather than a failure. A build reports its warnings
 through `on_line` while it runs, because that is where the person
 watching a build is looking, so what arrives here are errors; the list
 is the same shape either way. A client renders it and never unwraps
