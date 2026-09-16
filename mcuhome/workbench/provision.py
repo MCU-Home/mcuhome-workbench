@@ -69,13 +69,6 @@ CREDENTIAL_COMMENT = (
     "# has to commission it again.",
 )
 
-#: Comment lines earlier versions of this command wrote, still recognized
-#: when replacing so that a pre-rename file does not stack comments up.
-_KNOWN_COMMENT_LINES = frozenset(CREDENTIAL_COMMENT) | {
-    "# Commissioning credentials, written by `mcuhome device init-pairing`.",
-    "# Commissioning credentials, written by `mcuhome device matter-pairing`.",
-}
-
 
 @dataclass(frozen=True)
 class NewPairing:
@@ -280,7 +273,7 @@ def _lines_to_drop(text: _Text, occupied: dict[str, int]) -> set[int]:
         for number in range(line_number, text.block_end(line_number, column) + 1):
             drop.add(number)
     for number in range(min(occupied.values()) - 1, 0, -1):
-        if text.lines[number - 1].strip() not in _KNOWN_COMMENT_LINES:
+        if text.lines[number - 1].strip() not in CREDENTIAL_COMMENT:
             break
         drop.add(number)
     return drop
