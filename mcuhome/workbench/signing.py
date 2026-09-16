@@ -3,8 +3,9 @@
 """The firmware signing key.
 
 Every MCUHome image is signed, and **each MCUHome user is their own
-firmware vendor**: the builder draws one ECDSA P-256 key pair on first
-need and stores it outside every repository and every build directory.
+firmware vendor**: one ECDSA P-256 key pair is drawn for the project when
+somebody asks for one, and it is stored outside every repository and
+every build directory.
 There is no central MCUHome key, no key in CI, and **MCUboot's demo key
 is never used** — its private half is published in the MCUboot tree, so
 signing with it verifies against a key the whole world holds. That is
@@ -387,9 +388,9 @@ def _refuse_unreadable(path: Path, reason: str) -> BuildError:
         hint=(
             "every MCUHome image is signed with your own key. Point "
             "--signing-key at the right file, or move the unreadable one aside "
-            "and let MCUHome generate a new one — but note that a device already "
-            "running firmware signed with the old key will refuse the new one "
-            "until it is bootstrapped again.\n"
+            "and draw a new one with `mcuhome signing create-key` — but note that a "
+            "device already running firmware signed with the old key will refuse the "
+            "new one until it is bootstrapped again.\n"
             "The option signing.key selects the file too."
         ),
     )
@@ -401,8 +402,8 @@ def _refuse_not_a_key(path: Path) -> BuildError:
         hint=(
             "MCUHome signs with ECDSA P-256 and will not "
             "overwrite a file it does not recognize. Either point --signing-key "
-            "at the right file, or move this one aside so MCUHome can generate a "
-            "key of its own.\n"
+            "at the right file, or move this one aside and draw a key of your own "
+            "with `mcuhome signing create-key`.\n"
             "An existing key from elsewhere is fine as long as it is P-256: "
             "`imgtool keygen -t ecdsa-p256 -k <file>` writes exactly this format."
         ),
@@ -427,7 +428,7 @@ def _refuse_no_project() -> BuildError:
         "inside a project, and no key file is named.",
         hint=(
             "the project's key lives in its secrets directory under "
-            f"{FIRMWARE_KEY} and is drawn when MCUHome first needs one. "
+            f"{FIRMWARE_KEY}, and `mcuhome signing create-key` is what draws it. "
             "Run inside a project (or create one with `mcuhome project init`), point "
             "--signing-key at a PEM key file, or set the option signing.key."
         ),
@@ -439,8 +440,8 @@ def _refuse_no_project_key(reason: str) -> BuildError:
     return BuildError(
         f"This project has no firmware signing key yet: {reason}.",
         hint=(
-            "MCUHome draws one the first time it signs an image for this project, "
-            "and every device of the project is then signed with it.\n"
+            "draw one, and every device of the project is signed with it:\n"
+            "    mcuhome signing create-key\n"
             "To sign with a key you already have instead, point --signing-key at its "
             "PEM file or set the option signing.key."
         ),

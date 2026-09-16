@@ -500,11 +500,12 @@ The **signing** scope is the key file's YAML reference, and key material
 is neither printed nor typed in: `read_secrets` lists the entry that
 points at the key (no `!file` reference is ever followed, so not a byte
 of the key is read), `reveal_secret` refuses it, and `set_secret` refuses
-the scope outright: its refusal says that MCUHome draws the key the first
-time it signs an image for the project, and that a key you already have
-is named with `--signing-key` or the option `signing.key` — the call that
-draws one is `create_signing_key`. `unset_secret` removes the reference
-like any other entry and leaves the key file on disk.
+the scope outright: its refusal names `mcuhome signing create-key` as the
+command that draws the key — `create_signing_key` is the call behind it,
+and nothing draws one on the way past — and says that a key you already
+have is named with `--signing-key` or the option `signing.key`.
+`unset_secret` removes the reference like any other entry and leaves the
+key file on disk.
 
 `set_secret` and `unset_secret` are round trips: comments, order, blank
 lines, quoting and every other entry survive the edit, and a new key is
@@ -1481,7 +1482,10 @@ however its user stated it; nothing here reads a configuration channel of
 its own — then the project's `secrets/signing/key.yaml` reference.
 `resolve_signing_key` **never writes**: it raises `BuildError` when there
 is no key, when the file cannot be read, when it is not a P-256 key, and
-`ConfigError` when the file is exposed to other users. A caller that
+`ConfigError` when the file is exposed to other users. The no-key
+refusals name `mcuhome signing create-key`, the command that draws one,
+because a project without a key is something a person fixes with one
+command rather than a state a call quietly resolves. A caller that
 wants one generated says so — `create_signing_key` writes the pair
 (mode 0600) and answers it with `created` true, which is worth saying out
 loud: a device only accepts images signed with the key its bootloader

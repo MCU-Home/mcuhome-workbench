@@ -334,11 +334,10 @@ def _refuse_signing_write(scope: SecretScope, key: str) -> ConfigError:
         f"MCUHome does not set {key} in {scope.file}.",
         location=Location(file=scope.file, key=key),
         hint=(
-            "the firmware signing key is a file, not a value typed into one: MCUHome "
-            "draws it the first time it signs an image for this project, and an entry "
-            "written here by hand would be refused by the next signature. To sign with "
-            "a key you already have, point --signing-key at its PEM file or set the "
-            "option signing.key"
+            "the firmware signing key is a file, not a value typed into one: "
+            "`mcuhome signing create-key` draws it, and an entry written here by hand "
+            "would be refused by the next signature. To sign with a key you already "
+            "have, point --signing-key at its PEM file or set the option signing.key"
         ),
     )
 

@@ -90,6 +90,7 @@ def test_no_project_and_no_override_is_a_refusal_in_words() -> None:
         hint = caught.value.hint or ""
         assert FIRMWARE_KEY in hint
         assert "mcuhome project init" in hint
+        assert "mcuhome signing create-key" in hint
         assert "--signing-key" in hint
         assert "signing.key" in hint
 
@@ -127,6 +128,10 @@ def test_a_project_without_a_key_is_refused_rather_than_given_one(project: Proje
     with pytest.raises(BuildError) as caught:
         resolve_signing_key(env={}, project=project)
     assert "no firmware signing key yet" in caught.value.message
+    # The refusal names the one command that draws a key: nothing here
+    # draws one on the way past, so what fixes this is a command a person
+    # runs rather than a state a call resolves for them.
+    assert "mcuhome signing create-key" in (caught.value.hint or "")
     assert "--signing-key" in (caught.value.hint or "")
     assert not project.signing_secrets_file.exists()
     assert snapshot(project.secrets_dir) == before

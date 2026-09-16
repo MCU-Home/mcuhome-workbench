@@ -623,6 +623,7 @@ def test_key_material_is_drawn_and_not_typed_in(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as caught:
         api.set_secret(project, kind="signing", key="firmware_signing_key", value="-----BEGIN…")
 
+    assert "mcuhome signing create-key" in (caught.value.hint or "")
     assert "--signing-key" in (caught.value.hint or "")
     assert project.signing_secrets_file.read_text(encoding="utf-8") == before
 
