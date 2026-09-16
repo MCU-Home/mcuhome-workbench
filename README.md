@@ -77,8 +77,9 @@ directory, because build output names the device inside its own report.
 `delete_device` removes the device, its build output and its secrets, and
 `keep_secrets` holds on to commissioning credentials that cannot be drawn
 again. Both hold the device's build directory while they work, so a build in
-flight refuses them instead of losing its output, and both answer every path
-they changed.
+flight refuses them instead of losing its output, and both answer a result
+naming the device, the two names or whether the secrets were kept, and every
+path they changed.
 
 Install the `remote` extra for the build-server client, or `generate` for writing
 a device's Zephyr application tree on this machine without building it.
