@@ -1155,14 +1155,49 @@ def test_the_remote_target_answers_in_the_same_shape(model, tmp_path, monkeypatc
 # --------------------------------------------------------------------------
 # The delivery: what is at the top of the build directory
 # --------------------------------------------------------------------------
+#
+# Three executions and one rule, so each of them is driven here: the two
+# local ones through `compose_local_build`, the remote one through
+# `run_remote_build`. What is faked is the build environment; what runs
+# is everything above it, including the delivery itself.
+
+#: The three ways a build reaches a build environment, by the name this
+#: section calls them.
+DELIVERIES = ("container", "subprocess", "remote")
 
 
-def _delivering(tmp_path: Path, monkeypatch, *, target: str) -> Path:
-    """The composition of *target*, faked, delivering two real files.
+def _composition_result(tmp_path: Path, *, execution: str, ok: bool, artifacts):
+    """What the faked composition of *execution* answers."""
+    outcome = StepResult(
+        action="build",
+        context_id="sha256:" + "1" * 64,
+        exit_code=0 if ok else 1,
+        status="success" if ok else "failure",
+        problems=() if ok else ("the build failed",),
+        artifacts=artifacts,
+        out_dir=tmp_path / "delivery",
+    )
+    if execution == "subprocess":
+        return subprocessbuild.SubprocessBuildResult(
+            outcome=outcome,
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            environment=None,
+        )
+    return containerbuild.ContainerBuildResult(
+        outcome=outcome,
+        out_dir=tmp_path / "delivery",
+        context_dir=tmp_path / "context",
+        container_image="registry.example.test/other/environment:test",
+    )
+
+
+def _delivering(tmp_path: Path, monkeypatch, *, execution: str, ok: bool = True, artifacts=None):
+    """The composition of *execution*, faked, with two real files in its output.
 
     What a build environment does, in the one property this section is
-    about: it writes the artifacts it declares into a directory of its
-    own and says where that is. The files are real, because moving a file
+    about: it writes the files it declares into a directory of its own
+    and says where that is. The files are real, because moving a file
     that is not there proves nothing — and one of them is undeclared, so
     that "only what the build declared travels" is checked rather than
     assumed.
@@ -1175,59 +1210,83 @@ def _delivering(tmp_path: Path, monkeypatch, *, target: str) -> Path:
     # below walks both halves in one directory.
     (delivery / BUILD_REPORT_FILE).write_text(json.dumps(_report()), "utf-8")
     (delivery / "west.log").write_bytes(b"lines nobody declared")
+    declared = _artifacts() if artifacts is None else artifacts
 
-    if target == build.TARGET_REMOTE:
+    if execution == "remote":
 
         async def remote(context_dir, **kwargs):
-            del context_dir, kwargs
+            del context_dir
+            stopped = _asked_to_stop(kwargs)
             return sessionclient.RemoteBuildResult(
                 action="build",
                 context_id="sha256:" + "2" * 64,
-                status="success",
-                artifacts=_artifacts(),
-                out_dir=delivery,
+                status="cancelled" if stopped else ("success" if ok else "failure"),
+                artifacts=() if stopped else declared,
+                out_dir=None if stopped else delivery,
             )
 
         monkeypatch.setattr(sessionclient, "run_remote_build", remote)
     else:
 
         def local(device_model, **kwargs):
-            del device_model, kwargs
-            return containerbuild.ContainerBuildResult(
-                outcome=StepResult(
-                    action="build",
-                    context_id="sha256:" + "1" * 64,
-                    exit_code=0,
-                    status="success",
-                    artifacts=_artifacts(),
-                    out_dir=delivery,
-                ),
-                out_dir=delivery,
-                context_dir=tmp_path / "context",
-                container_image="registry.example.test/other/environment:test",
+            del device_model
+            stopped = _asked_to_stop(kwargs)
+            return _composition_result(
+                tmp_path,
+                execution=execution,
+                ok=ok and not stopped,
+                artifacts=() if stopped else declared,
             )
 
         monkeypatch.setattr(build, "compose_local_build", local)
     return delivery
 
 
-def _delivered_build(model, tmp_path: Path, *, target: str) -> build.BuildResult:
+def _asked_to_stop(kwargs) -> bool:
+    """Ask the caller's stop predicate, as every composition does."""
+    predicate = kwargs.get("should_stop")
+    return bool(predicate is not None and predicate())
+
+
+def _files(directory: Path) -> dict[str, bytes]:
+    """What a person sees in a build directory: the files that are theirs."""
+    return {
+        path.name: path.read_bytes()
+        for path in directory.iterdir()
+        if path.is_file() and not path.name.startswith(".")
+    }
+
+
+def _delivered_build(model, tmp_path: Path, *, execution: str) -> build.BuildResult:
     context = tmp_path / "context"
     context.mkdir(exist_ok=True)
-    return _run(
+    remote = execution == "remote"
+    target = (
+        build.RemoteBuild(server="ws://build.example/session")
+        if remote
+        else build.LocalBuild(
+            execution=build.SubprocessExecution()
+            if execution == "subprocess"
+            else build.ContainerExecution()
+        )
+    )
+    return _run_target(
         build.BuildRequest(
             model=model,
             out_dir=tmp_path / "build",
-            builder=SelectedBuilder(target=target, server="ws://build.example/session"),
-            context_dir=context if target == build.TARGET_REMOTE else None,
+            context_dir=context if remote else None,
         ),
         target,
     )
 
 
-@pytest.mark.parametrize("target", build.BUILD_TARGETS)
+def _run_target(request: build.BuildRequest, target) -> build.BuildResult:
+    return asyncio.run(build.build_firmware(request, target=target))
+
+
+@pytest.mark.parametrize("execution", DELIVERIES)
 def test_every_target_delivers_to_the_top_of_the_build_directory(
-    model, tmp_path, monkeypatch, target
+    model, tmp_path, monkeypatch, execution
 ) -> None:
     """The artifacts and the report end up where the user looks.
 
@@ -1238,12 +1297,13 @@ def test_every_target_delivers_to_the_top_of_the_build_directory(
     under the plain names the signing step and the user both expect,
     and answers that directory.
     """
-    delivery = _delivering(tmp_path, monkeypatch, target=target)
+    delivery = _delivering(tmp_path, monkeypatch, execution=execution)
 
-    result = _delivered_build(model, tmp_path, target=target)
+    result = _delivered_build(model, tmp_path, execution=execution)
 
     out = tmp_path / "build"
     assert result.ok and result.out_dir == out
+    assert result.artifacts == _artifacts()
     assert (out / "firmware.bin").read_bytes() == b"\x00\x01\x02\x03"
     assert json.loads((out / BUILD_REPORT_FILE).read_text("utf-8")) == _report()
     # Moved, not copied: one file, in the place the answer names.
@@ -1254,8 +1314,8 @@ def test_every_target_delivers_to_the_top_of_the_build_directory(
     assert (delivery / "west.log").is_file()
 
 
-@pytest.mark.parametrize("target", build.BUILD_TARGETS)
-def test_a_delivery_replaces_the_one_before_it(model, tmp_path, monkeypatch, target) -> None:
+@pytest.mark.parametrize("execution", DELIVERIES)
+def test_a_delivery_replaces_the_one_before_it(model, tmp_path, monkeypatch, execution) -> None:
     """What lies at the top belongs to the build that is there now.
 
     A build directory is not emptied between builds, so a delivery has to
@@ -1265,79 +1325,108 @@ def test_a_delivery_replaces_the_one_before_it(model, tmp_path, monkeypatch, tar
     a build that is gone, which is how a device ends up running an image
     nobody meant to ship.
     """
-    _delivering(tmp_path, monkeypatch, target=target)
-    out = tmp_path / "build"
-    out.mkdir(parents=True)
-    for name in ("firmware.hex", "firmware.signed.bin", "firmware.signed.hex"):
-        (out / name).write_bytes(b"from the build before this one")
-    (out / "bmp180-node-0.1.0.ota").write_bytes(b"wrapped around yesterday's signature")
+    _delivering(tmp_path, monkeypatch, execution=execution)
+    out = _with_a_delivery(tmp_path / "build", model)
     (out / "notes.txt").write_text("mine\n", "utf-8")
 
-    _delivered_build(model, tmp_path, target=target)
+    _delivered_build(model, tmp_path, execution=execution)
 
-    assert sorted(path.name for path in out.iterdir() if path.is_file()) == [
-        ".mcuhome-build.json",
-        ".mcuhome-build.lock",
-        BUILD_REPORT_FILE,
-        "firmware.bin",
-        "notes.txt",
-    ]
+    assert sorted(_files(out)) == [BUILD_REPORT_FILE, "firmware.bin", "notes.txt"]
 
 
-@pytest.mark.parametrize("target", build.BUILD_TARGETS)
-def test_a_build_that_delivered_nothing_leaves_the_directory_as_it_was(
-    model, tmp_path, monkeypatch, target
-) -> None:
-    """A failed build is not a clean: what was there is still there.
-
-    The delivery of the last build that produced one is what a person
-    still has, and taking it away because a later build failed would
-    leave them with nothing at exactly the moment they need something to
-    fall back to.
-    """
-    if target == build.TARGET_REMOTE:
-
-        async def remote(context_dir, **kwargs):
-            del context_dir, kwargs
-            return sessionclient.RemoteBuildResult(
-                action="build",
-                context_id="",
-                status="failure",
-                artifacts=(),
-                out_dir=None,
-            )
-
-        monkeypatch.setattr(sessionclient, "run_remote_build", remote)
-    else:
-
-        def local(device_model, **kwargs):
-            del device_model, kwargs
-            return containerbuild.ContainerBuildResult(
-                outcome=StepResult(
-                    action="build",
-                    context_id="",
-                    exit_code=1,
-                    status="failure",
-                    problems=("the build failed",),
-                    out_dir=tmp_path / "delivery",
-                ),
-                out_dir=tmp_path / "delivery",
-                context_dir=tmp_path / "context",
-                container_image="",
-            )
-
-        monkeypatch.setattr(build, "compose_local_build", local)
-    out = tmp_path / "build"
-    out.mkdir(parents=True)
+def _with_a_delivery(out: Path, model) -> Path:
+    """A build directory as a build that succeeded yesterday left it."""
+    out.mkdir(parents=True, exist_ok=True)
     (out / "firmware.bin").write_bytes(b"the build that worked")
-    (out / BUILD_REPORT_FILE).write_bytes(b'{"report": 1}')
+    (out / "firmware.hex").write_text(":00000001FF\n", "utf-8")
+    (out / BUILD_REPORT_FILE).write_text(json.dumps(_report()), "utf-8")
+    (out / "firmware.signed.bin").write_bytes(b"yesterday's signature")
+    (out / f"{model.device.name}-0.0.9.ota").write_bytes(b"wrapped around it")
+    return out
 
-    result = _delivered_build(model, tmp_path, target=target)
+
+@pytest.mark.parametrize("execution", DELIVERIES)
+def test_a_build_that_failed_delivers_nothing_even_where_it_declared_something(
+    model, tmp_path, monkeypatch, execution
+) -> None:
+    """A failed build is not a clean, and its wreckage is not a delivery.
+
+    A step that failed may still declare artifacts — a half-linked image,
+    the report of a build that then failed to link — and they are
+    verified like any other, so the output directory holding something
+    says nothing about whether it is firmware. Delivering it would
+    replace a good build's output with the wreckage of the next attempt,
+    at the one moment a person needs the old one most. So nothing moves,
+    nothing is removed, and the result lists no artifacts: what the step
+    left is in the work root.
+    """
+    delivery = _delivering(tmp_path, monkeypatch, execution=execution, ok=False)
+    out = _with_a_delivery(tmp_path / "build", model)
+    before = _files(out)
+
+    result = _delivered_build(model, tmp_path, execution=execution)
 
     assert result.ok is False
     assert result.out_dir == out, "the directory the build was asked about, whatever it delivered"
-    assert (out / "firmware.bin").read_bytes() == b"the build that worked"
-    assert (out / BUILD_REPORT_FILE).is_file()
+    assert result.artifacts == (), "a build that did not deliver declares no delivery"
+    assert result.to_dict()["artifacts"] == []
+    assert _files(out) == before
+    # The step's own output is still where the step wrote it.
+    assert (delivery / "firmware.bin").is_file()
+
+
+@pytest.mark.parametrize("execution", DELIVERIES)
+def test_a_stopped_build_leaves_the_delivery_of_the_last_one_that_worked(
+    model, tmp_path, monkeypatch, execution
+) -> None:
+    """Pressing stop must not cost a person the firmware they already had."""
+    _delivering(tmp_path, monkeypatch, execution=execution)
+    out = _with_a_delivery(tmp_path / "build", model)
+    before = _files(out)
+
+    result = _run_target(
+        build.BuildRequest(
+            model=model,
+            out_dir=out,
+            context_dir=tmp_path / "context" if execution == "remote" else None,
+            should_stop=lambda: True,
+        ),
+        build.RemoteBuild(server="ws://build.example/session")
+        if execution == "remote"
+        else build.LocalBuild(
+            execution=build.SubprocessExecution()
+            if execution == "subprocess"
+            else build.ContainerExecution()
+        ),
+    )
+
+    assert (result.ok, result.stopped) == (False, True)
+    assert result.artifacts == ()
+    assert _files(out) == before
+
+
+def test_an_artifact_that_climbs_out_of_the_build_directory_is_refused(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The names a build environment chose meet a directory the user keeps.
+
+    Nothing reachable produces such a name — the declaration is checked
+    where the artifacts are verified, and a tar is unpacked contained —
+    but this is the place where the least trusted component's own words
+    become paths in somebody's project, so the check is here too, in the
+    same words. Nothing is written and nothing is removed.
+    """
+    outside = (Artifact(root="out", path="../evil.bin", role="firmware", sha256="0" * 64),)
+    _delivering(tmp_path, monkeypatch, execution="container", artifacts=outside)
+    out = _with_a_delivery(tmp_path / "build", model)
+    before = _files(out)
+
+    with pytest.raises(BuildError) as caught:
+        _delivered_build(model, tmp_path, execution="container")
+
+    assert "../evil.bin" in caught.value.message
+    assert not (tmp_path / "evil.bin").exists()
+    assert _files(out) == before
 
 
 def test_what_the_build_delivered_is_what_signing_then_works_on(
@@ -1351,10 +1440,10 @@ def test_what_the_build_delivered_is_what_signing_then_works_on(
     and wraps the signed binary in the image the device updates to. No
     client copies anything, and no client decides what an OTA image is.
     """
-    _delivering(tmp_path, monkeypatch, target=build.TARGET_LOCAL)
+    _delivering(tmp_path, monkeypatch, execution="container")
     program, _calls = _fake_imgtool(tmp_path)
 
-    result = _delivered_build(model, tmp_path, target=build.TARGET_LOCAL)
+    result = _delivered_build(model, tmp_path, execution="container")
     signed = sign_firmware(
         result.out_dir, env={}, key=_key(tmp_path), imgtool=str(program), model=model
     )

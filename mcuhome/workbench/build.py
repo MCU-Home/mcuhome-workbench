@@ -106,6 +106,7 @@ from mcuhome.workbench.buildenvsession import (
     EnvironmentUnavailable,
     EnvironmentUnusable,
     StepResult,
+    contained,
     parse_memory,
     resolve_cache_tiers,
     resolve_host_limits,
@@ -796,9 +797,12 @@ class BuildResult:
     it — a caller looking for another environment needs a refusal, not a
     third word in a document.
 
-    :attr:`artifacts` is the declared artifact set, in
+    :attr:`artifacts` is what the build **delivered**, in
     :class:`~mcuhome.model.artifacts.Artifact` — the same type whichever
-    target produced it.
+    target produced it, and every path in it relative to
+    :attr:`out_dir`. It is empty for a build that did not deliver: a
+    failed step may well have declared files, and they stay in the work
+    root rather than being listed as a delivery that did not happen.
     """
 
     #: Whether this build produced what it was asked for.
@@ -809,6 +813,8 @@ class BuildResult:
     device: str
     #: The identity the work is attributed to: the build context's ID.
     context_id: str
+    #: What the build delivered, by name, relative to :attr:`out_dir`.
+    #: Empty for a build that delivered nothing.
     artifacts: tuple[Artifact, ...]
     #: Where the unsigned artifacts and the report are: the build
     #: directory the request named, always, because that is where every
@@ -1073,12 +1079,29 @@ def _move(source: Path, destination: Path) -> None:
         ) from error
 
 
-def _deliver(
-    request: BuildRequest, *, delivered: Path | None, artifacts: Sequence[Artifact]
-) -> Path:
-    """Move what the build declared to the top of the build directory.
+@dataclass(frozen=True)
+class _Delivery:
+    """Where a build's output is, and what of it is there.
 
-    Every target delivers into a directory of its own — a build
+    The two travel together because one decides the other: a build
+    delivers only what it produced, and it produces something only when
+    it succeeded.
+    """
+
+    out_dir: Path
+    artifacts: tuple[Artifact, ...]
+
+
+def _deliver(
+    request: BuildRequest,
+    *,
+    ok: bool,
+    delivered: Path | None,
+    artifacts: Sequence[Artifact],
+) -> _Delivery:
+    """Move what the build produced to the top of the build directory.
+
+    Every target builds into a directory of its own — a build
     environment's ``out`` under the work root, the directory a remote
     build fetched into — and none of those is a place to leave the
     result: they are rebuilt on the next build, hidden by name, and a
@@ -1086,31 +1109,67 @@ def _deliver(
     the delivery. So the last act of a build is to put what it declared
     where the user looks, under the plain names
     :func:`~mcuhome.workbench.imgtool.plan_signing` and everything after
-    it expect, and the answer is that directory.
+    it expect.
+
+    **Only a build that succeeded delivers.** A step that failed may
+    still have declared artifacts — a half-linked image, the report of a
+    build that then failed to link — and they are verified like any
+    other, so "there is something in the output directory" says nothing
+    about whether it is firmware. Delivering it would replace a good
+    build's output with the wreckage of the next attempt, which is the
+    one moment a person needs the old one most. So a failed or stopped
+    build delivers nothing, removes nothing, and answers **no**
+    artifacts: what its step left lies in the work root, where the next
+    build rebuilds over it. The previous delivery stays exactly as it
+    was, as after a refusal.
 
     Only the **declared** artifacts travel; whatever else a build
-    environment left in its output directory stays there and goes with
-    the work root. Nothing is verified on the way — the step that
-    declared them checked their hashes — and a declared file that is not
-    there is skipped rather than raised over, because a build that ran is
-    not turned into an exception by a missing byte at the end of it.
+    environment left in its output directory stays there. Their names are
+    held against the build directory with the containment check the
+    artifacts were declared under
+    (:func:`~mcuhome.workbench.buildenvsession.contained`) — the same
+    check, not a second one — before anything is removed or moved: a
+    build environment is the least trusted component in the system, and
+    this is where the names it chose meet a directory the user keeps.
+    A name that leaves the directory is a
+    :class:`~mcuhome.model.errors.BuildError` and nothing happens at all.
+
+    Nothing is hashed on the way — the step that declared the artifacts
+    checked their bytes — and a declared file that is not there is
+    skipped rather than raised over, because a build that ran is not
+    turned into an exception by a missing byte at the end of it.
 
     The previous delivery is removed first
     (:func:`~mcuhome.workbench.buildrecord.clean_delivery`), so what lies
     at the top of a build directory always belongs to one build: the last
-    one that delivered. A build that delivered **nothing** — one that
-    failed, one somebody stopped — leaves the directory as it found it,
-    for the same reason a refusal does.
+    one that succeeded.
     """
     directory = Path(request.out_dir)
-    if not artifacts or delivered is None or Path(delivered) == directory:
-        return directory
+    if not ok or delivered is None or not artifacts:
+        return _Delivery(out_dir=directory, artifacts=())
+    kept = tuple(artifacts)
+    if Path(delivered) == directory:
+        return _Delivery(out_dir=directory, artifacts=kept)
+    moves: list[tuple[Path, Path]] = []
+    for artifact in kept:
+        destination = contained(directory, artifact.path)
+        if destination is None:
+            raise BuildError(
+                f"The build declared an artifact MCUHome will not write: {artifact.path!r} "
+                f"does not stay inside {directory}.",
+                hint=(
+                    "a build environment states the files it produced as names under its "
+                    "own output directory, and a name that climbs out of the build "
+                    "directory is not one. Nothing was written. Build in a container "
+                    "delivered by an image you trust."
+                ),
+            )
+        moves.append((Path(delivered) / artifact.path, destination))
     clean_delivery(directory)
-    for artifact in artifacts:
-        source = Path(delivered) / artifact.path
+    for source, destination in moves:
         if source.is_file():
-            _move(source, directory / artifact.path)
-    return directory
+            _move(source, destination)
+    return _Delivery(out_dir=directory, artifacts=kept)
 
 
 def _into_the_log(on_line: LineSink | None) -> Callable[[Diagnostic], None] | None:
@@ -1977,14 +2036,17 @@ async def build_firmware(
     line or a dashboard.
 
     **Every target delivers into** :attr:`BuildRequest.out_dir`
-    (:func:`_deliver`): the artifacts a build declared, the build report
-    among them, are moved to the top of that directory under their plain
-    names, replacing the delivery of the build before this one, and
-    :attr:`BuildResult.out_dir` is that directory. What a build keeps for
-    itself stays hidden inside it — the work root, the lock, the record —
-    so that what a user takes away is the only thing in there without a
-    dot in front of it, and so that no client has to copy a build's
-    output out of a directory this package chose.
+    (:func:`_deliver`): a build that **succeeded** moves what it declared
+    — the build report among it — to the top of that directory under
+    plain names, replacing the delivery of the build before it, and
+    :attr:`BuildResult.out_dir` is that directory. A build that failed or
+    was stopped delivers nothing and removes nothing: the previous
+    delivery stays, and :attr:`BuildResult.artifacts` is empty. What a
+    build keeps for itself stays hidden inside the directory — the work
+    root, the lock, the record — so that what a user takes away is the
+    only thing in there without a dot in front of it, and so that no
+    client has to copy a build's output out of a directory this package
+    chose.
 
     **Every build that ran leaves a record behind**
     (:func:`~mcuhome.workbench.buildrecord.write_build_record`), a failed
@@ -2571,13 +2633,16 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
     )
     outcome = result.outcome
     _refuse_unsupported(outcome.status, ran=MODE_SUBPROCESS)
+    delivery = _deliver(
+        request, ok=outcome.ok, delivered=result.out_dir, artifacts=outcome.artifacts
+    )
     return BuildResult(
         ok=outcome.ok,
         target=TARGET_LOCAL,
         device=request.model.device.name,
         context_id=outcome.context_id,
-        artifacts=tuple(outcome.artifacts),
-        out_dir=_deliver(request, delivered=result.out_dir, artifacts=outcome.artifacts),
+        artifacts=delivery.artifacts,
+        out_dir=delivery.out_dir,
         report=BUILD_REPORT_FILE,
         # No image ran, and an empty reference is the honest answer: the
         # environment is named by its packages, which travel on the
@@ -2622,13 +2687,16 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
     )
     outcome = result.outcome
     _refuse_unsupported(outcome.status, ran=MODE_CONTAINER)
+    delivery = _deliver(
+        request, ok=outcome.ok, delivered=result.out_dir, artifacts=outcome.artifacts
+    )
     return BuildResult(
         ok=outcome.ok,
         target=TARGET_LOCAL,
         device=request.model.device.name,
         context_id=outcome.context_id,
-        artifacts=tuple(outcome.artifacts),
-        out_dir=_deliver(request, delivered=result.out_dir, artifacts=outcome.artifacts),
+        artifacts=delivery.artifacts,
+        out_dir=delivery.out_dir,
         report=BUILD_REPORT_FILE,
         container_image=result.container_image,
         # See the subprocess execution above: a build that produced its
@@ -2834,13 +2902,14 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
                 kind="BuildError",
             ),
         )
+    delivery = _deliver(request, ok=result.ok, delivered=result.out_dir, artifacts=result.artifacts)
     return BuildResult(
         ok=result.ok,
         target=TARGET_REMOTE,
         device=request.model.device.name,
         context_id=result.context_id,
-        artifacts=tuple(result.artifacts),
-        out_dir=_deliver(request, delivered=result.out_dir, artifacts=result.artifacts),
+        artifacts=delivery.artifacts,
+        out_dir=delivery.out_dir,
         report=BUILD_REPORT_FILE,
         # What actually built it, in the same form a local container
         # build records: the server chose the delivery and is the only

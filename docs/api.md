@@ -801,13 +801,14 @@ deleting this one's work.
 **Every target delivers into `BuildRequest.out_dir`.** A build
 environment writes into a directory of its own — an `out` under the work
 root, the directory a remote build fetched into — and the last act of a
-build is to move what it *declared* to the top of the build directory,
-under plain names: `firmware.bin`, `firmware.hex`, `build-report.json`.
-`BuildResult.out_dir` is that directory, and so is `BuildRecord.out_dir`,
-so `read_build` reads one directory and `clean_build` removes what one
-directory holds. What the build keeps for itself stays hidden inside it
-(the work root, `.mcuhome-build.lock`, `.mcuhome-build.json`), and no
-client copies a build's output out of a directory this package chose.
+build **that succeeded** is to move what it *declared* to the top of the
+build directory, under plain names: `firmware.bin`, `firmware.hex`,
+`build-report.json`. `BuildResult.out_dir` is that directory, and so is
+`BuildRecord.out_dir`, so `read_build` reads one directory and
+`clean_build` removes what one directory holds. What the build keeps for
+itself stays hidden inside it (the work root, `.mcuhome-build.lock`,
+`.mcuhome-build.json`), and no client copies a build's output out of a
+directory this package chose.
 
 A delivery **replaces the one before it**: the report, both firmware
 encodings, the signed names beside them and the `.ota` of the last build
@@ -815,11 +816,23 @@ go first, so what lies at the top of a build directory always belongs to
 the build that is there now — an old `firmware.signed.bin` beside a fresh
 unsigned image is a flashable lookalike nothing mentions. Nothing
 undeclared travels: whatever else a build environment left in its output
-directory stays there and goes with the work root. A build that delivered
-**nothing** — one that failed, one somebody stopped — removes nothing
-either, exactly as a refusal changes nothing: what is in the directory is
-what the last build that delivered put there. A delivery that cannot be
-written raises `BuildError`.
+directory stays there and goes with the work root. A declared name is
+held against the build directory with the same containment check the
+artifacts were verified under, before anything is removed or moved: one
+that would leave the directory is a `BuildError` and nothing happens at
+all. A delivery that cannot be written is a `BuildError` too.
+
+**Only a build that succeeded delivers.** A step that failed may still
+have declared artifacts — a half-linked image, the report of a build that
+then failed to link — and they are verified like any other, so something
+in the output directory says nothing about whether it is firmware. A
+failed or stopped build therefore moves nothing, removes nothing, and
+answers **`artifacts: []`**: what its step left stays in the work root,
+where the next build rebuilds over it, and the delivery of the last build
+that succeeded is still at the top of the directory, exactly as after a
+refusal. `BuildResult.artifacts` is what was *delivered*, with every path
+relative to `BuildResult.out_dir` — never a list of files a caller would
+look for at the top of the build directory and not find.
 
 A build that ran and **failed** is not an exception: it answers with
 `BuildResult.ok` false, and a build that `should_stop` ended answers
@@ -987,7 +1000,8 @@ server to run without a container than it can ask it to run with one.
 
 ### BuildResult
 Frozen dataclass. Fields `ok`, `stopped`, `target`, `device`,
-`context_id`, `artifacts: tuple[Artifact, ...]`, `out_dir` (the build
+`context_id`, `artifacts: tuple[Artifact, ...]` (what the build
+delivered, empty where it delivered nothing), `out_dir` (the build
 directory the request named — always, on every target, because that is
 where every build delivers), `report` (the report's file name in
 `out_dir`), `container_image` (the image that ran, empty where none did),
