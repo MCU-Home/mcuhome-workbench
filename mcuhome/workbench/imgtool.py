@@ -594,13 +594,11 @@ def plan_signing(
     # The OTA image wraps the signed *binary*: a directory that only
     # holds a hex image has nothing to wrap, and a device that takes no
     # over-the-air update has nowhere to send one.
-    identity = None if model is None else ota_parameters(model)
-    signs_a_binary = any(form == "bin" for form, _argv, _output in commands)
-    ota = (
-        out_dir / ota_file_name(model.device.name, identity.version)
-        if identity is not None and model is not None and signs_a_binary
-        else None
-    )
+    ota = None
+    if model is not None and any(form == "bin" for form, _argv, _output in commands):
+        identity = ota_parameters(model)
+        if identity is not None:
+            ota = out_dir / ota_file_name(model.device.name, identity.version)
     return SignPlan(
         out_dir=out_dir,
         report_path=report_path,
@@ -628,7 +626,8 @@ def sign_firmware(
     ago, because everything it needs is in the directory and the key is
     wherever the user keeps it. A caller that wants to show the commands
     beforehand asks for the plan and calls this afterwards — the plan is
-    then decided twice, and it is the same plan both times.
+    then decided twice, over a directory nothing touched in between, and
+    it is the same plan both times.
 
     **The previous signature goes first.** What this directory was signed
     to last — the signed images, the OTA image wrapped around one of them
