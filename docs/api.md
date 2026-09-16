@@ -1451,15 +1451,19 @@ def sign_firmware(
 ```
 `read_build_report` reads the report **file** and raises `BuildError` for
 a missing, unreadable or unknown report version; it is `plan_signing` and
-`sign_firmware` that take the build directory or the report inside it. `memory_footprint` answers the memory figures that report
-states, in the order it states them: `MemoryRegion` (frozen): `image`,
-`region`, `used`, `total`, `to_dict()`, the keys in the report's own
-spelling because the report is the build-environment specification's
-document. It is a plain noun because it derives from its argument alone.
+`sign_firmware` that take the build directory or the report inside it.
+
+`memory_footprint` answers the memory figures that report states, in the
+order it states them. `MemoryRegion` (frozen): `image`, `region`, `used`,
+`total`, `to_dict()` — the keys in the report's own spelling, because the
+report is the build-environment specification's document. It is a plain
+noun because it derives from its argument alone.
 `memory` is optional in a report — a build that relinked nothing states
 none — and an entry whose numbers are not numbers is left out rather
 than answered as zero. The percentage a report also carries is not in
-the answer: it is the two numbers divided. `plan_signing` answers every command signing will run, decided
+the answer: it is the two numbers divided.
+
+`plan_signing` answers every command signing will run, decided
 before any of them, so a caller can show them, and raises everything the
 run itself would raise — a missing signing program, an unreadable key,
 an artifact the report names and the directory does not hold — so that
