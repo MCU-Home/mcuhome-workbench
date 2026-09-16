@@ -1063,7 +1063,9 @@ def find_devices(project: Project) -> tuple[DeviceRecord, ...]:
                 problems=len(result.errors),
                 built=record is not None and bool(record.artifacts),
                 signed=record is not None and bool(record.signed),
-                busy=is_busy(build_dir),
+                # The record already asked the lock; a directory that
+                # holds no build has none of its own to answer with.
+                busy=record.busy if record is not None else is_busy(build_dir),
             )
         )
     return tuple(rows)
