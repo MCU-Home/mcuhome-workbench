@@ -32,12 +32,23 @@ test suite asserts exactly that: same image, same digest, different
 signature, both verifying.
 
 **Deciding, then running.** :func:`plan_signing` answers every command
-signing will run and raises everything the run itself could raise, so a
-caller can show the commands to a user first and so that
+signing will run, every file it will write and every file it will delete
+first, and raises everything the run itself could raise — so a caller can
+show all of that to a user before anything happens, and so that
 :func:`sign_firmware`'s own failure mode is "the signing program said
 no". What the run answers is a :class:`SigningResult`: the key it used
 and the files it produced, which is what a client prints — it does not
 assemble that out of the plan and a directory listing of its own.
+
+**The whole act lives here, not half of it.** Signing a build directory
+is three things and a client does none of them itself: the previous
+signature of that directory is removed, the images are signed, and — for
+a device that takes updates over the air, which this package decides from
+the device model — the signed binary is wrapped in the Matter OTA image
+(:mod:`mcuhome.workbench.otafile`). Splitting that between a library and
+its clients is how a stale ``firmware.signed.bin`` survives beside a
+fresh unsigned one, and how two clients end up disagreeing about which
+devices can be updated at all.
 
 **Where imgtool comes from.** It is a **declared dependency** of
 ``mcuhome-workbench`` — the package MCUboot publishes itself, pinned in
@@ -65,11 +76,14 @@ from pathlib import Path
 from typing import Any
 
 from mcuhome.model.errors import BuildError
+from mcuhome.model.model import DeviceModel
+from mcuhome.model.ota import ota_parameters
 from mcuhome.model.registry import SIGNATURE_TYPE
 from mcuhome.model.signing import SigningParameters
 from mcuhome.model.userpaths import expand
 
 from mcuhome.workbench import signing
+from mcuhome.workbench.otafile import ota_file_name, write_ota_image
 from mcuhome.workbench.project import Project
 
 __all__ = [
@@ -229,17 +243,35 @@ class SignPlan:
     #: One entry per artifact format, in a stable order: format, command,
     #: and the file it produces.
     commands: tuple[tuple[str, tuple[str, ...], Path], ...]
+    #: The Matter OTA image this signature will be wrapped in, or ``None``
+    #: — for a caller that stated no device model, and for a device that
+    #: takes no over-the-air update. It is in :attr:`outputs` as well: it
+    #: is a file signing writes.
+    ota: Path | None = None
+    #: What signing removes **before** it writes, because it is there
+    #: now: the signed images and the OTA image of whatever was signed in
+    #: this directory last. A file that is not there is not in the list —
+    #: this is what a person is shown before the act, not a list of names
+    #: this package knows.
+    removes: tuple[Path, ...] = ()
 
     @property
     def outputs(self) -> list[Path]:
-        return [path for _, _, path in self.commands]
+        """Every file signing will write, the OTA image last."""
+        written = [path for _, _, path in self.commands]
+        return written if self.ota is None else [*written, self.ota]
 
     def to_dict(self) -> dict[str, Any]:
         """What a caller shows before it signs: the commands themselves.
 
         The imgtool parameters are in every command already — printing
         them twice would be two places to read one fact — so the document
-        carries the argv as it will be run.
+        carries the argv as it will be run. ``outputs`` and ``removes``
+        are the two facts the commands do *not* carry: the OTA image is
+        written by this package rather than by imgtool, and what signing
+        deletes first appears in no command line at all — which made the
+        one destructive part of the act the one part a preview could not
+        show.
         """
         return {
             "out_dir": str(self.out_dir),
@@ -249,6 +281,8 @@ class SignPlan:
                 {"format": form, "argv": list(argv), "output": str(output)}
                 for form, argv, output in self.commands
             ],
+            "outputs": [str(path) for path in self.outputs],
+            "removes": [str(path) for path in self.removes],
         }
 
 
@@ -274,8 +308,13 @@ class SigningResult:
     too-small slot that message is the actionable part and MCUHome has
     nothing to add to it. :attr:`ok` is therefore not a second way of
     reporting failure — it states that every file the plan named is
-    there, which is the one thing a caller would otherwise have to go and
-    check itself.
+    there, the OTA image included, which is the one thing a caller would
+    otherwise have to go and check itself.
+
+    What is **not** in here is what signing removed: that is the plan's
+    (:attr:`SignPlan.removes`), because it is a statement about the act
+    somebody is about to authorise rather than about its result, and
+    because after the act the files are gone either way.
     """
 
     ok: bool
@@ -285,6 +324,12 @@ class SigningResult:
     #: one a caller can still show a user afterwards.
     key: Path
     signed: tuple[SignedArtifact, ...]
+    #: The Matter OTA image wrapped around the signed binary, or ``None``
+    #: for a device that takes no over-the-air update and for a caller
+    #: that stated no model. Whether a device can take one is this
+    #: package's answer (:func:`~mcuhome.model.ota.ota_parameters`), not
+    #: a rule a client is left to implement.
+    ota: Path | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -293,6 +338,7 @@ class SigningResult:
             "report_path": str(self.report_path),
             "key": str(self.key),
             "signed": [artifact.to_dict() for artifact in self.signed],
+            "ota": None if self.ota is None else str(self.ota),
         }
 
 
@@ -449,6 +495,20 @@ def memory_footprint(report: Mapping[str, Any]) -> tuple[MemoryRegion, ...]:
     return tuple(found)
 
 
+def _removable(out_dir: Path) -> tuple[Path, ...]:
+    """What a previous signature of *out_dir* left, and this one replaces.
+
+    The signed images by name and the OTA images by pattern — an ``.ota``
+    carries the device and the version it wraps in its own name, so it
+    cannot be named here, and nothing but this package writes one into a
+    build directory. Only what is actually there: a plan states what will
+    happen, not what might have.
+    """
+    found = [out_dir / signed for _unsigned, signed in SIGNED_FIRMWARE_NAMES]
+    found += sorted(out_dir.glob("*.ota"))
+    return tuple(path for path in found if path.is_file())
+
+
 def plan_signing(
     out_dir: Path,
     *,
@@ -456,6 +516,7 @@ def plan_signing(
     key: Path | str | None = None,
     project: Project | None = None,
     imgtool: str | None = None,
+    model: DeviceModel | None = None,
 ) -> SignPlan:
     """Every command signing *out_dir* will run, decided before any of them.
 
@@ -475,6 +536,23 @@ def plan_signing(
     a file either way, and imgtool gets exactly that file. *imgtool* is
     the resolved ``signing.imgtool``, stated for the same reason as the
     key: this module reads no configuration channel of its own.
+
+    *model* is the device this build is of, and what it adds is the
+    over-the-air half of the act: given it, the plan carries the Matter
+    OTA image the signed binary will be wrapped in
+    (:attr:`SignPlan.ota`), for a device that can take one at all.
+    Whether it can is a property of the board and of the device's own
+    stack and therefore this package's answer
+    (:func:`~mcuhome.model.ota.ota_parameters`) — a client that decided
+    it would be implementing a product rule of its own. Without a model
+    there is no identity to put in the header and no name to give the
+    file, and signing wraps nothing.
+
+    :attr:`SignPlan.removes` is what a **previous** signature of this
+    directory left and this one replaces — the signed images and the OTA
+    image beside them. It is part of the plan because it is part of the
+    act, and because a preview that showed the commands but not the
+    deletions would hide the one destructive thing signing does.
     """
     resolved = signing.resolve_signing_key(key, env=env, project=project)
     report_path = _resolve_report(out_dir)
@@ -513,12 +591,24 @@ def plan_signing(
                 "that holds a report but no firmware.bin/firmware.hex has to be built again."
             ),
         )
+    # The OTA image wraps the signed *binary*: a directory that only
+    # holds a hex image has nothing to wrap, and a device that takes no
+    # over-the-air update has nowhere to send one.
+    identity = None if model is None else ota_parameters(model)
+    signs_a_binary = any(form == "bin" for form, _argv, _output in commands)
+    ota = (
+        out_dir / ota_file_name(model.device.name, identity.version)
+        if identity is not None and model is not None and signs_a_binary
+        else None
+    )
     return SignPlan(
         out_dir=out_dir,
         report_path=report_path,
         key=resolved.path,
         parameters=parameters,
         commands=tuple(commands),
+        ota=ota,
+        removes=_removable(out_dir),
     )
 
 
@@ -529,6 +619,7 @@ def sign_firmware(
     key: Path | str | None = None,
     project: Project | None = None,
     imgtool: str | None = None,
+    model: DeviceModel | None = None,
 ) -> SigningResult:
     """Sign the firmware a build delivered, from its §2.2 build report.
 
@@ -538,19 +629,63 @@ def sign_firmware(
     wherever the user keeps it. A caller that wants to show the commands
     beforehand asks for the plan and calls this afterwards — the plan is
     then decided twice, and it is the same plan both times.
+
+    **The previous signature goes first.** What this directory was signed
+    to last — the signed images, the OTA image wrapped around one of them
+    — is removed before anything is written, because otherwise a run that
+    signs one encoding, or a build of another version, leaves an image
+    from an earlier signature beside the fresh one. That image is
+    flashable, looks current, and belongs to no build that is there any
+    more; the hygiene therefore belongs to the act that creates such
+    files and not to whoever happens to call it.
+
+    **The over-the-air image is part of signing**, given *model*: a
+    Matter device takes updates as an ``.ota`` wrapped around the
+    **signed** binary, which only exists here — signing may happen on a
+    machine that has no compiler and no build. So this writes it, names
+    it after the device and its version, and answers it in
+    :attr:`SigningResult.ota`; for a device that takes no over-the-air
+    update, and for a caller that stated no model, the answer is
+    ``None``. A payload that is missing or empty is a
+    :class:`~mcuhome.model.errors.BuildError` from the writer, not a
+    quiet ``None``.
     """
-    plan = plan_signing(out_dir, env=env, key=key, project=project, imgtool=imgtool)
+    plan = plan_signing(out_dir, env=env, key=key, project=project, imgtool=imgtool, model=model)
+    for path in plan.removes:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            raise BuildError(
+                f"MCUHome cannot replace the earlier signature {path}: {error.strerror}.",
+                hint=(
+                    "signing removes what a previous run of this build directory signed "
+                    "before it writes, so nothing flashable is left over from an image "
+                    "that is no longer there. Remove the file yourself, or sign in a "
+                    "directory you can write in."
+                ),
+            ) from error
     written = run_signing(plan)
     signed = tuple(
         SignedArtifact(format=form, path=path)
         for (form, _argv, _output), path in zip(plan.commands, written, strict=True)
     )
+    ota = None
+    binary = next((artifact.path for artifact in signed if artifact.format == "bin"), None)
+    if plan.ota is not None and model is not None and binary is not None and binary.is_file():
+        # Only over an image that is really there: a signing program that
+        # wrote nothing is answered with `ok` false below, not with a
+        # refusal about a payload the caller never asked about.
+        image = write_ota_image(model, payload=binary, out_dir=plan.out_dir)
+        ota = None if image is None else image.path
     return SigningResult(
-        ok=all(artifact.path.is_file() for artifact in signed),
+        # Every file the plan named, which is the one thing a caller
+        # would otherwise have to go and check itself.
+        ok=all(path.is_file() for path in plan.outputs),
         out_dir=plan.out_dir,
         report_path=plan.report_path,
         key=plan.key,
         signed=signed,
+        ota=ota,
     )
 
 

@@ -1480,10 +1480,12 @@ def memory_footprint(report: Mapping[str, Any]) -> tuple[MemoryRegion, ...]
 def plan_signing(
     out_dir: Path, *, env: Mapping[str, str], key: Path | str | None = None,
     project: Project | None = None, imgtool: str | None = None,
+    model: DeviceModel | None = None,
 ) -> SignPlan
 def sign_firmware(
     out_dir: Path, *, env: Mapping[str, str], key: Path | str | None = None,
     project: Project | None = None, imgtool: str | None = None,
+    model: DeviceModel | None = None,
 ) -> SigningResult
 ```
 `read_build_report` reads the report **file** and raises `BuildError` for
@@ -1512,13 +1514,35 @@ device's bootloader already carries. *key* and *imgtool* are the
 resolved `signing.key` and `signing.imgtool`, stated by the caller for
 the same reason every other option is — nothing under this surface reads
 a configuration channel of its own.
+**Signing is the whole act, on both calls.** Given *model* — the device
+this directory was built for — signing wraps the signed binary in the
+Matter OTA image that device takes its updates as
+(`ota_parameters`, then `write_ota_image`) and answers it in
+`SigningResult.ota`; whether a device can take one at all is this
+package's answer, from the board's update scheme and the device's own
+stack, and never a rule a client implements. Without a *model* there is
+no identity for the header and no name for the file, and `ota` is `None`
+— as it is for a device that takes no over-the-air update, and for a
+directory holding no `firmware.bin` to wrap.
+
+And signing **removes the previous signature of that directory first**:
+the `firmware.signed.*` and the `*.ota` that are there now, listed in
+`SignPlan.removes` before any of it happens. Otherwise a run that signs
+one encoding, or a build of another version, leaves an image from an
+earlier signature beside the fresh one — flashable, apparently current,
+belonging to no build that is there any more. A file that cannot be
+removed is a `BuildError`; a directory with nothing to replace has an
+empty `removes`.
+
 `SignPlan` (frozen): `out_dir`, `report_path`, `key`, `parameters`,
-`commands`, `outputs`, `to_dict()`. `SigningResult` (frozen): `ok`,
-`out_dir`, `report_path`, `key`, `signed: tuple[SignedArtifact, ...]`,
-`to_dict()`; `ok` states that every file the plan named is there, not a
-second way of reporting a failure — a signing program that says no is a
-refusal carrying its own words. `SignedArtifact` (frozen): `format`
-(`bin` or `hex`), `path`, `to_dict()`.
+`commands`, `ota`, `removes`, the property `outputs` (every file signing
+will write, the OTA image last), `to_dict()`. `SigningResult` (frozen):
+`ok`, `out_dir`, `report_path`, `key`, `signed: tuple[SignedArtifact,
+...]`, `ota`, `to_dict()`; `ok` states that every file the plan named is
+there, the OTA image included, not a second way of reporting a failure —
+a signing program that says no is a refusal carrying its own words.
+`SignedArtifact` (frozen): `format` (`bin` or `hex`), `path`,
+`to_dict()`.
 
 ```python
 def write_ota_image(model: DeviceModel, *, payload: Path, out_dir: Path) -> OtaImage | None
@@ -1931,6 +1955,8 @@ workspace, and passed to that build alone.
 | build record | `<build-dir>/.mcuhome-build.json` | JSON |
 | build report | `<build-dir>/build-report.json` | JSON |
 | delivered firmware | `<build-dir>/firmware.bin`, `<build-dir>/firmware.hex` — what the build declared, moved to the top of the build directory when it ends | binary |
+| signed firmware | `<build-dir>/firmware.signed.bin`, `<build-dir>/firmware.signed.hex`, beside the unsigned images signing read | binary |
+| Matter OTA image | `<build-dir>/<device>-<version>.ota`, written by signing for a device that takes updates over the air | Matter OTA |
 | build context | `build-context.json`, `context.yaml`, `manifest.yaml`, `model/device-model.json`, `keys/signing.pub`, `patches/<layer>/NNNN-*.patch` | JSON, YAML, PEM, patch |
 | build environment store | `${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments/<package>-<version>/`, each entry marked by `.mcuhome-provisioned` | tree |
 | compiler cache tiers | `<cache root>/cache-local`, `<cache root>/cache-shared`, plus the session and project tiers where they are configured | directories |
@@ -2007,7 +2033,8 @@ it is empty for a build that delivered:
   "ok": true, "out_dir": "/…/build/thermostat",
   "report_path": "/…/build/thermostat/build-report.json",
   "key": "/…/secrets/signing/key.pem",
-  "signed": [{"format": "bin", "path": "/…/firmware.signed.bin"}]
+  "signed": [{"format": "bin", "path": "/…/firmware.signed.bin"}],
+  "ota": "/…/build/thermostat/thermostat-0.1.0.ota"
 }
 ```
 
@@ -2090,8 +2117,12 @@ remaining}`, with `applied` and `remaining` holding migration documents.
 started, name}`.
 `UpgradeRecord.to_dict()`: `{started, process, host, running}`.
 `SignPlan.to_dict()`: `{out_dir, report_path, key, commands: [{format,
-argv, output}]}` — the imgtool parameters are in every `argv` already,
-so the document does not state them a second time.
+argv, output}], outputs, removes}` — the imgtool parameters are in every
+`argv` already, so the document does not state them a second time.
+`outputs` is every file signing will write, the OTA image last, and
+`removes` every file it will delete first: neither appears in a command
+line, and a preview that showed only the commands could not show the one
+destructive part of the act.
 `SignedArtifact.to_dict()`: `{format, path}`.
 `SigningKey.to_dict()`: `{path, in_secrets, created, public_key}` — the
 key file, whether it is the project's own, whether this call drew it,

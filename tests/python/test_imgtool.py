@@ -23,6 +23,7 @@ and it is exactly the one a verifier cares about.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import struct
@@ -31,7 +32,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import EXAMPLES_DIR, resolve_file
 from mcuhome.model.errors import BuildError
+from mcuhome.model.model import DeviceModel
 from mcuhome.model.registry import SIGNATURE_TYPE
 from mcuhome.model.signing import SigningParameters
 
@@ -512,7 +515,8 @@ def test_the_signing_document_is_what_a_client_prints(tmp_path) -> None:
     program, _calls = _fake_imgtool(tmp_path)
     result = imgtool.sign_firmware(out, env={}, key=_key(tmp_path), imgtool=str(program))
     document = result.to_dict()
-    assert list(document) == ["ok", "out_dir", "report_path", "key", "signed"]
+    assert list(document) == ["ok", "out_dir", "report_path", "key", "signed", "ota"]
+    assert document["ota"] is None, "no model was stated, so nothing was wrapped"
     assert document["signed"] == [
         {"format": "bin", "path": str(out / "firmware.signed.bin")},
         {"format": "hex", "path": str(out / "firmware.signed.hex")},
@@ -595,7 +599,9 @@ def test_the_plan_document_shows_the_commands_before_they_run(tmp_path) -> None:
     key = _key(tmp_path)
     plan = imgtool.plan_signing(out, env={}, key=key, imgtool="imgtool")
     document = plan.to_dict()
-    assert list(document) == ["out_dir", "report_path", "key", "commands"]
+    assert list(document) == ["out_dir", "report_path", "key", "commands", "outputs", "removes"]
+    assert document["outputs"] == [str(path) for path in plan.outputs]
+    assert document["removes"] == [], "nothing was signed in this directory before"
     assert document["key"] == str(key)
     formats = [command["format"] for command in document["commands"]]
     assert formats == ["bin", "hex"]
@@ -613,3 +619,120 @@ def test_the_runner_seam_reports_what_the_program_printed(tmp_path) -> None:
     with pytest.raises(BuildError) as caught:
         imgtool.run_signing(plan, runner=lambda command: (2, "Slot size too small"))
     assert "Slot size too small" in caught.value.hint
+
+
+# --------------------------------------------------------------------------
+# The whole act: the previous signature, and the image the device updates to
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def model() -> DeviceModel:
+    """The reference device: a Matter device that takes updates over the air."""
+    return resolve_file(EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml")
+
+
+def _signed(tmp_path: Path, model: DeviceModel | None, **overrides):
+    """One signing run over a fresh report directory, with a real program."""
+    out = _report_dir(tmp_path)
+    program, _calls = _fake_imgtool(tmp_path)
+    return out, imgtool.sign_firmware(
+        out, env={}, key=_key(tmp_path), imgtool=str(program), model=model, **overrides
+    )
+
+
+def test_signing_wraps_the_signed_binary_in_the_image_the_device_updates_to(
+    tmp_path, model
+) -> None:
+    """The OTA image is signing's, not a client's.
+
+    It wraps the **signed** binary, which only exists here — signing may
+    happen on a machine that has no compiler and never saw the build — so
+    the one place that can write it is the one that just made it. Whether
+    this device can take one at all is read off the device model, which
+    is why no client has to implement that rule.
+    """
+    out, result = _signed(tmp_path, model)
+
+    expected = out / f"{model.device.name}-{model.device.version}.ota"
+    assert result.ota == expected
+    assert expected.is_file()
+    assert result.to_dict()["ota"] == str(expected)
+    assert result.ok
+    # The payload is the signed image, never the unsigned one: MCUboot's
+    # signature is the only trust anchor in the update path.
+    assert (out / "firmware.signed.bin").read_bytes() in expected.read_bytes()
+
+
+def test_the_plan_names_the_ota_image_among_the_files_it_will_write(tmp_path, model) -> None:
+    """A preview shows the whole act, and the OTA image is part of it."""
+    out = _report_dir(tmp_path)
+
+    plan = imgtool.plan_signing(out, env={}, key=_key(tmp_path), imgtool="imgtool", model=model)
+
+    expected = out / f"{model.device.name}-{model.device.version}.ota"
+    assert plan.ota == expected
+    assert plan.outputs[-1] == expected, "the images first, the wrapper around one of them last"
+    assert plan.to_dict()["outputs"][-1] == str(expected)
+    assert not expected.exists(), "a plan writes nothing"
+
+
+def test_a_device_that_takes_no_update_over_the_air_gets_no_image(tmp_path, model) -> None:
+    """``None``, and no file: an .ota for such a device is a file nothing delivers.
+
+    The device is the same one, with its Matter stack turned off — the
+    other half of the answer ``ota_parameters`` gives, and the reason
+    this is the workbench's decision rather than a client's.
+    """
+    without_matter = dataclasses.replace(
+        model, network=dataclasses.replace(model.network, matter_enabled=False)
+    )
+
+    out, result = _signed(tmp_path, without_matter)
+
+    assert result.ota is None
+    assert result.ok, "the images were signed; this device just takes no OTA image"
+    assert not list(out.glob("*.ota"))
+
+
+def test_signing_removes_what_the_previous_signature_left(tmp_path, model) -> None:
+    """A stale signed image beside a fresh one is what flashes yesterday's firmware.
+
+    The names of a signature are fixed, so a second run overwrites most
+    of them — but not the encoding this run does not produce, and not the
+    OTA image of another version, whose name carries that version. Those
+    are the files a person cannot tell apart from the current ones.
+    """
+    out = _report_dir(tmp_path)
+    (out / "firmware.hex").unlink()  # this run signs the binary alone
+    stale = {
+        out / "firmware.signed.bin": b"yesterday's signature",
+        out / "firmware.signed.hex": b"yesterday's signature, hex",
+        out / f"{model.device.name}-0.0.9.ota": b"wrapped around yesterday's signature",
+    }
+    for path, content in stale.items():
+        path.write_bytes(content)
+    program, _calls = _fake_imgtool(tmp_path)
+
+    plan = imgtool.plan_signing(out, env={}, key=_key(tmp_path), imgtool=str(program), model=model)
+    assert set(plan.removes) == set(stale)
+    assert all(path.is_file() for path in stale), "a plan removes nothing either"
+
+    result = imgtool.sign_firmware(
+        out, env={}, key=_key(tmp_path), imgtool=str(program), model=model
+    )
+
+    assert not (out / "firmware.signed.hex").exists()
+    assert not (out / f"{model.device.name}-0.0.9.ota").exists()
+    assert (out / "firmware.signed.bin").read_bytes() != b"yesterday's signature"
+    assert result.ota == out / f"{model.device.name}-{model.device.version}.ota"
+    assert sorted(path.name for path in out.glob("*.ota")) == [result.ota.name]
+
+
+def test_a_directory_with_nothing_to_replace_removes_nothing(tmp_path, model) -> None:
+    """``removes`` is what is there, not the names this package knows."""
+    out = _report_dir(tmp_path)
+
+    plan = imgtool.plan_signing(out, env={}, key=_key(tmp_path), imgtool="imgtool", model=model)
+
+    assert plan.removes == ()

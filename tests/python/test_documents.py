@@ -283,6 +283,8 @@ SAMPLES: dict[str, Callable[[], Any]] = {
                 ROOT / "build" / "thermostat" / "firmware.signed.bin",
             ),
         ),
+        ota=ROOT / "build" / "thermostat" / "thermostat-0.1.0.ota",
+        removes=(ROOT / "build" / "thermostat" / "firmware.signed.bin",),
     ),
     "SignedArtifact": lambda: api.SignedArtifact(
         format="bin", path=ROOT / "build" / "thermostat" / "firmware.signed.bin"
@@ -299,6 +301,7 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         report_path=ROOT / "build" / "thermostat" / "build-report.json",
         key=ROOT / "secrets" / "signing" / "key.pem",
         signed=(SAMPLES["SignedArtifact"](),),
+        ota=ROOT / "build" / "thermostat" / "thermostat-0.1.0.ota",
     ),
     "Settings": lambda: SETTINGS,
     "StepResult": lambda: api.StepResult(
