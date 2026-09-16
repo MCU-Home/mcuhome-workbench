@@ -279,6 +279,7 @@ from mcuhome.workbench.diagnostics import (
 )
 from mcuhome.workbench.generate import (
     CompilerUnavailable,
+    GenerationResult,
     generate_application,
 )
 from mcuhome.workbench.hostcheck import (
@@ -509,6 +510,7 @@ __all__ = [
     "Execution",
     "FileMismatch",
     "GenerationError",
+    "GenerationResult",
     "GeneratorEntry",
     "HOST_CHECKS",
     "HostCheckResult",

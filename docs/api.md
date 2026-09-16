@@ -577,10 +577,13 @@ def read_model(path: Path) -> DeviceModel
 A canonical model back from JSON — the other end of the wire.
 
 ```python
-def generate_application(model: DeviceModel, *, out_dir: Path) -> tuple[Path, ...]
+def generate_application(model: DeviceModel, *, out_dir: Path) -> GenerationResult
 ```
 Writes the standalone Zephyr application the model describes into
-*out_dir* and answers every file written, in the order they were written.
+*out_dir* and answers a `GenerationResult` (frozen): `device`,
+`out_dir`, `files`, `to_dict()` — the device the tree belongs to, the
+directory it went into, and every file written, in the order they were
+written.
 A build does not take this path — a build environment generates from the
 model its context carries — so this is the caller who wants the tree for
 its own sake. Raises `CompilerUnavailable` where the generator package is
@@ -1939,6 +1942,8 @@ report, signed, container_image, busy}`.
 build directory belongs to, the directory, and every path the clean
 removed. It states no verdict: a clean that found nothing to remove did
 what it was asked, and one that could not is a refusal.
+`GenerationResult.to_dict()`: `{device, out_dir, files}` — which device
+the generated tree describes, where it was written and what is in it.
 `RenameResult.to_dict()`: `{device, to, changed}` — the name the device
 had, the one it has now, and every path that moved or was removed.
 `DeleteResult.to_dict()`: `{device, kept_secrets, removed}` — the device
@@ -2134,7 +2139,8 @@ this package is public.
 `ClusterChoice`.
 
 **Device models** — `load_model`, `validate_device`, `read_model`,
-`generate_application`, `device_schema`, `device_registry`, `to_json`,
+`generate_application`, `GenerationResult`, `device_schema`,
+`device_registry`, `to_json`,
 `error_dicts`, `expand_user_path`, `ValidationResult`, `Diagnostic`,
 `DeviceModel`, `Location`.
 

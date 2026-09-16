@@ -26,12 +26,40 @@ when the distribution is absent, the same shape
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.model.errors import BuildError
 from mcuhome.model.model import DeviceModel
 
-__all__ = ["CompilerUnavailable", "generate_application"]
+__all__ = ["CompilerUnavailable", "GenerationResult", "generate_application"]
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    """What one generation wrote, and for which device.
+
+    The bare tuple of paths this call used to answer left the client to
+    say which device the tree belongs to and where it went — which it
+    knew only from the arguments it had passed in. Both are facts of the
+    act, so they travel with it.
+    """
+
+    #: The device the tree was generated for, by its own name.
+    device: str
+    #: The directory it was written into.
+    out_dir: Path
+    #: Every file written, in the order it was written.
+    files: tuple[Path, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """This generation as a document, JSON-ready and complete."""
+        return {
+            "device": self.device,
+            "out_dir": str(self.out_dir),
+            "files": [str(path) for path in self.files],
+        }
 
 
 class CompilerUnavailable(BuildError):
@@ -80,10 +108,11 @@ def _compiler(module: str):
         ) from error
 
 
-def generate_application(model: DeviceModel, *, out_dir: Path) -> tuple[Path, ...]:
+def generate_application(model: DeviceModel, *, out_dir: Path) -> GenerationResult:
     """Write *model*'s standalone Zephyr application into *out_dir*.
 
-    Answers with every file written, in the order they were written.
+    Answers a :class:`GenerationResult`: the device, the directory, and
+    every file written in the order they were written.
 
     The configuration file's name the generated headers state comes out
     of the model (``model.device.source``) rather than out of a path the
@@ -92,4 +121,6 @@ def generate_application(model: DeviceModel, *, out_dir: Path) -> tuple[Path, ..
     byte for byte.
     """
     generate = _compiler("generate")
-    return tuple(generate.write_tree(model, out_dir=Path(out_dir), config_name=model.device.source))
+    directory = Path(out_dir)
+    written = generate.write_tree(model, out_dir=directory, config_name=model.device.source)
+    return GenerationResult(device=model.device.name, out_dir=directory, files=tuple(written))

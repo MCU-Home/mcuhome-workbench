@@ -186,6 +186,11 @@ SAMPLES: dict[str, Callable[[], Any]] = {
     "FileMismatch": lambda: api.FileMismatch(
         path="model.json", declared_sha256="b" * 64, actual_sha256="f" * 64
     ),
+    "GenerationResult": lambda: api.GenerationResult(
+        device="thermostat",
+        out_dir=ROOT / "generated" / "thermostat",
+        files=(ROOT / "generated" / "thermostat" / "CMakeLists.txt",),
+    ),
     "HostCheckResult": lambda: api.HostCheckResult(findings=(SAMPLES["HostFinding"](),)),
     "HostFinding": lambda: api.HostFinding(
         check="runtime",

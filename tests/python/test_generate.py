@@ -16,6 +16,8 @@ and must travel on with its own name in it.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import EXAMPLES_DIR, resolve_file
 
@@ -42,10 +44,28 @@ def _failing_import(monkeypatch, error: ImportError) -> None:
 
 
 def test_the_generated_tree_is_written_and_every_file_named(model, tmp_path) -> None:
-    written = generate.generate_application(model, out_dir=tmp_path)
-    assert written
-    assert all(path.is_file() for path in written)
-    assert all(path.is_relative_to(tmp_path) for path in written)
+    result = generate.generate_application(model, out_dir=tmp_path)
+    assert result.files
+    assert all(path.is_file() for path in result.files)
+    assert all(path.is_relative_to(tmp_path) for path in result.files)
+
+
+def test_the_generation_result_names_the_device_and_the_directory(model, tmp_path) -> None:
+    """The document a client prints, rather than the paths alone.
+
+    Which device the tree belongs to and where it went are facts of the
+    act; a client that stated them itself would be repeating the
+    arguments it passed in.
+    """
+    result = generate.generate_application(model, out_dir=tmp_path)
+
+    assert result.device == model.device.name
+    assert result.out_dir == tmp_path
+    document = result.to_dict()
+    assert sorted(document) == ["device", "files", "out_dir"]
+    assert document["out_dir"] == str(tmp_path)
+    assert document["files"] == [str(path) for path in result.files]
+    assert json.dumps(document)
 
 
 def test_a_missing_compiler_distribution_is_the_named_refusal(model, tmp_path, monkeypatch):
