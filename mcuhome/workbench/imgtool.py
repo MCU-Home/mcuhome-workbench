@@ -374,6 +374,11 @@ def read_build_report(path: Path) -> dict:
     return data
 
 
+def _is_count(value: Any) -> bool:
+    """Whether *value* is a byte count the report actually measured."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 @dataclass(frozen=True)
 class MemoryRegion:
     """How much of one image's one memory region a build used.
@@ -414,7 +419,8 @@ def memory_footprint(report: Mapping[str, Any]) -> tuple[MemoryRegion, ...]:
 
     ``memory`` is **optional** in the report (a build that relinked
     nothing states none), and an entry that is not an object or whose
-    numbers are not numbers is left out rather than answered as zero: a
+    ``used`` and ``total`` are not whole numbers — the specification's
+    own type for them — is left out rather than answered as zero: a
     figure this package invented would be read as one a build measured.
     The percentage the report also carries is not here — it is the two
     numbers divided, and a document that states a derived value twice
@@ -428,7 +434,9 @@ def memory_footprint(report: Mapping[str, Any]) -> tuple[MemoryRegion, ...]:
         if not isinstance(entry, Mapping):
             continue
         used, total = entry.get("used"), entry.get("total")
-        if not isinstance(used, int) or not isinstance(total, int):
+        # ``bool`` is an ``int`` in Python and is not a byte count
+        # anywhere: a report that states one is malformed, not measured.
+        if not _is_count(used) or not _is_count(total):
             continue
         found.append(
             MemoryRegion(

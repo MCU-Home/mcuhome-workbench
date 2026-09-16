@@ -417,7 +417,7 @@ def test_the_memory_footprint_is_read_out_of_the_report(tmp_path) -> None:
     assert json.dumps(document)
 
 
-def test_a_report_that_measured_nothing_has_no_footprint(tmp_path) -> None:
+def test_a_report_that_measured_nothing_has_no_footprint() -> None:
     """``memory`` is optional: a build that relinked nothing states none."""
     report = _report()
     del report["memory"]
@@ -426,7 +426,7 @@ def test_a_report_that_measured_nothing_has_no_footprint(tmp_path) -> None:
     assert imgtool.memory_footprint({"memory": "not a list"}) == ()
 
 
-def test_an_entry_without_numbers_is_left_out_rather_than_zeroed(tmp_path) -> None:
+def test_an_entry_without_numbers_is_left_out_rather_than_zeroed() -> None:
     """A figure this package invented would be read as one a build measured."""
     regions = imgtool.memory_footprint(
         {
@@ -434,6 +434,8 @@ def test_an_entry_without_numbers_is_left_out_rather_than_zeroed(tmp_path) -> No
                 {"image": "app", "region": "FLASH", "used": "lots", "total": 2},
                 {"image": "app", "region": "RAM"},
                 "not an object",
+                # A bool is an int in Python and is a byte count nowhere.
+                {"image": "app", "region": "RAM", "used": True, "total": 4},
                 {"image": "app", "region": "RAM", "used": 3, "total": 4},
             ]
         }

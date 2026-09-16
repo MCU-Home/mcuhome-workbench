@@ -1463,8 +1463,9 @@ order it states them. `MemoryRegion` (frozen): `image`, `region`, `used`,
 report is the build-environment specification's document. It is a plain
 noun because it derives from its argument alone.
 `memory` is optional in a report — a build that relinked nothing states
-none — and an entry whose numbers are not numbers is left out rather
-than answered as zero. The percentage a report also carries is not in
+none — and an entry whose `used` and `total` are not whole numbers (the
+specification's own type for them) is left out rather than answered as
+zero. The percentage a report also carries is not in
 the answer: it is the two numbers divided.
 
 `plan_signing` answers every command signing will run, decided
