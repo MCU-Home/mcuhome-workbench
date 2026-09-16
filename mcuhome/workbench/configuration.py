@@ -173,7 +173,10 @@ CONFIG_ORIGINS = (
 #: themselves and are named after the area they hold; ``boolean`` is
 #: carried by the entry of a map rather than by an option of the
 #: registry, and is declared here because the entries are parsed by the
-#: same machinery.
+#: same machinery. It has **no environment form**: the maps are
+#: file-level only, so nothing reads a boolean out of a variable, and a
+#: spelling for one is invented when an option needs it rather than
+#: before.
 OPTION_KINDS = (
     "string",
     "path",
@@ -1068,13 +1071,6 @@ def _parse_env_value(opt: Option, value: str, env: Mapping[str, str]) -> Any:
                 hint=opt.help or None,
             )
         return fraction
-    if opt.kind == "boolean":  # pragma: no cover - no declared option carries one yet
-        if value not in ("0", "1"):
-            raise ConfigError(
-                f"{opt.env_var} must be 1 or 0, not {value!r}.",
-                hint=opt.help or None,
-            )
-        return value == "1"
     if opt.kind == "path":
         return _resolve_path(value, env=env, base=None)
     if opt.kind == "strings":

@@ -1954,7 +1954,7 @@ there is.
 | `SEVERITIES`, `SEVERITY_ERROR`, `SEVERITY_WARNING` | `("error", "warning")` — what a finding's `severity` is |
 | `HOST_CHECKS` | `("runtime", "image", "store", "python", "workspace", "imgtool", "cache", "project", "configuration", "builder", "secrets")` — what a `HostFinding.check` may be, append-only |
 | `WARNING_KINDS` | `("exposed_secret_file", "unverified_registry", "retired_environment_variable")` — the kinds a warning's `kind` may carry, append-only |
-| `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "boolean", "builder", "registry")` — `boolean` is carried by a map entry rather than by an option of the registry |
+| `OPTION_KINDS` | `("string", "path", "paths", "strings", "integer", "number", "boolean", "builder", "registry")` — `boolean` is carried by a map entry rather than by an option of the registry, and has no environment form today: the maps are file-level only |
 | `OPTIONS` | the declared option registry |
 | `MAP_ENTRY_OPTIONS` | what one entry of each map option carries, by the map's kind: the key inside an entry and its declaration |
 | `BUILD_TARGETS`, `TARGET_LOCAL`, `TARGET_REMOTE`, `DEFAULT_BUILD_TARGET` | where a build runs |
