@@ -157,6 +157,16 @@ SAMPLES: dict[str, Callable[[], Any]] = {
             api.FileMismatch(path="model.json", declared_sha256="b" * 64, actual_sha256=None),
         ),
     ),
+    "DeviceRecord": lambda: api.DeviceRecord(
+        name="thermostat",
+        file=ROOT / "devices" / "thermostat" / "main.yaml",
+        board="nrf7002dk/nrf5340/cpuapp",
+        ok=False,
+        problems=2,
+        built=True,
+        signed=True,
+        busy=False,
+    ),
     "Diagnostic": lambda: api.Diagnostic.warning(
         "secrets/main.yaml is readable by other users",
         kind="exposed_secret_file",

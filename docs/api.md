@@ -257,6 +257,29 @@ For a device whose project is already in hand, `Project.device_file(name)`
 answers the path without touching the disk.
 
 ```python
+def find_devices(project: Project) -> tuple[DeviceRecord, ...]
+```
+Every device of the project with its state, in name order — the listing
+a client shows. One pass per device: the configuration is validated the
+way `validate_device` validates it, the build directory is read the way
+`read_build` reads it, and the lock is asked the way `is_busy` asks it.
+`DeviceRecord` (frozen): `name`, `file`, `board`, `ok`, `problems`,
+`built`, `signed`, `busy`, `to_dict()`.
+
+It **raises nothing**: a device file this package cannot parse is a row
+with `ok` false and its problems counted, not a refusal that hides every
+other device of the project. `board` comes off the device file itself, so
+a device that does not validate still says what it is for, and is empty
+where the file names none or cannot be read at all. `built` is true where
+the build directory holds a build's artifacts and `signed` where signed
+images lie beside them, both as `read_build` states them. Warnings are
+not part of a row — a listing has nowhere to put a located finding — so a
+caller that wants them asks `validate_device` for the one device it is
+showing. A device is a folder under `devices/`; a bare device file
+somewhere else is buildable by path and is not a device of the project,
+so it is not listed.
+
+```python
 def create_device(
     name: str,
     *,
@@ -1904,6 +1927,11 @@ hint, kind}` — the error document's keys plus the severity, so the two
 are one shape.
 `BuildRecord.to_dict()`: `{out_dir, device, context_id, artifacts,
 report, signed, container_image, busy}`.
+`DeviceRecord.to_dict()`: `{ok, name, file, board, problems, built,
+signed, busy}` — one device of a project as a listing shows it. `ok` is
+the verdict of the device's *configuration*, which is why it is first:
+a row with problems is still a row, and the listing that carries it is
+not a failed call.
 `ContextVerification.to_dict()`: `{ok, root, context_id, actual_id,
 mismatches}` — `context_id` is the identity the manifest declares and
 `actual_id` what the bytes present hash to.
@@ -2077,12 +2105,14 @@ this package is public.
 
 **Projects and devices** — `resolve_project`, `read_project`,
 `create_project`, `find_project_root`, `is_project_root`, `is_upgrading`,
-`resolve_device`, `create_device`, `render_device_file`, `create_pairing`,
-`read_pairing`, `rename_device`, `delete_device`, `require_secret_file`,
+`resolve_device`, `find_devices`, `create_device`, `render_device_file`,
+`create_pairing`, `read_pairing`, `rename_device`, `delete_device`,
+`require_secret_file`,
 `read_yaml_file`, `find_secret_scopes`, `read_secrets`, `reveal_secret`,
 `set_secret`, `unset_secret`, `delete_secret_file`, `SecretScope`,
 `SecretKey`, `SecretFile`, `Project`,
-`ProjectFile`, `UpgradeRecord`, `NewProject`, `NewDevice`, `NewPairing`,
+`ProjectFile`, `UpgradeRecord`, `DeviceRecord`, `NewProject`, `NewDevice`,
+`NewPairing`,
 `DeviceOutline`, `BusChoice`, `PeripheralChoice`, `EndpointChoice`,
 `ClusterChoice`.
 

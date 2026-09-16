@@ -491,6 +491,7 @@ __all__ = [
     "DeveloperEnvironment",
     "DeviceModel",
     "DeviceOutline",
+    "DeviceRecord",
     "Diagnostic",
     "ENVIRONMENT_IMAGE_REPOSITORY",
     "EndpointChoice",
@@ -640,6 +641,7 @@ __all__ = [
     "error_dicts",
     "expand_user_path",
     "fetch_sdk_package",
+    "find_devices",
     "find_project_root",
     "find_running_builds",
     "find_secret_scopes",
@@ -893,3 +895,115 @@ def validate_device(
     return ValidationResult(
         entry=entry, project=project, model=model, errors=(), warnings=tuple(findings)
     )
+
+
+@dataclass(frozen=True)
+class DeviceRecord:
+    """One device of a project, as a listing shows it.
+
+    The row behind ``mcuhome device list``: what the device is called,
+    where its configuration is, which board it names, whether that
+    configuration is valid, and what its build directory holds. It is
+    assembled by :func:`find_devices` and by nothing else — a client that
+    built this row itself would be reading fields off a
+    :class:`ValidationResult` and off a directory, and the second client
+    to do it would arrive at a different shape.
+
+    :attr:`ok` is the verdict of the *configuration*, not of the listing:
+    a device with problems is a row, never a failed call.
+    :attr:`problems` counts them, so a listing can say "3 problems"
+    without rendering them.
+    """
+
+    #: The device's own name, which is its folder under ``devices/``.
+    name: str
+    #: Its configuration file, ``devices/<name>/main.yaml``.
+    file: Path
+    #: The board the configuration names, read off the file itself, so a
+    #: device that does not validate still says what it is for. Empty
+    #: where the file does not name one or cannot be read at all.
+    board: str
+    #: Whether the configuration validates.
+    ok: bool
+    #: How many problems validation found; ``0`` exactly when :attr:`ok`.
+    problems: int
+    #: Whether the device's build directory holds a build.
+    built: bool
+    #: Whether signed images lie beside it.
+    signed: bool
+    #: Whether somebody is working in that directory right now.
+    busy: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """This row as a document, JSON-ready and complete."""
+        return {
+            "ok": self.ok,
+            "name": self.name,
+            "file": str(self.file),
+            "board": self.board,
+            "problems": self.problems,
+            "built": self.built,
+            "signed": self.signed,
+            "busy": self.busy,
+        }
+
+
+def _stated_board(entry: Path) -> str:
+    """The board straight out of the device file, or the empty string.
+
+    Read from the YAML rather than from the resolved model, because a
+    configuration can be one drawn credential away from valid and still
+    name its board perfectly well — and a listing that left the column
+    empty for every device with a problem would be hiding what it knows.
+    Anything unreadable here is the empty string: the row already says
+    the device has problems.
+    """
+    try:
+        data = read_yaml_file(entry)
+    except MCUHomeError:
+        return ""
+    device = data.get("device") if isinstance(data, dict) else None
+    board = device.get("board") if isinstance(device, dict) else None
+    return board if isinstance(board, str) else ""
+
+
+def find_devices(project: Project) -> tuple[DeviceRecord, ...]:
+    """Every device of *project*, each with its state, in name order.
+
+    One pass per device: the configuration is validated the way
+    :func:`validate_device` validates it, the build directory is read the
+    way :func:`read_build` reads it, and the lock is asked the way
+    :func:`is_busy` asks it. What comes back is the whole listing, so a
+    client renders rows instead of composing them.
+
+    **It raises nothing**, which is what the verb promises: a device file
+    this package cannot parse is a row with :attr:`~DeviceRecord.ok`
+    false and its problems counted, not a refusal that hides every other
+    device of the project. Warnings are not part of a row — a listing has
+    nowhere to put a located finding — so a caller that wants them asks
+    :func:`validate_device` for the one device it is showing.
+
+    A device is a folder under ``devices/`` with a ``main.yaml`` in it. A
+    bare device file somewhere else is buildable by path and is not a
+    device of the project, so it is not listed.
+    """
+    rows: list[DeviceRecord] = []
+    for name in project.device_names():
+        entry = project.device_file(name)
+        result = validate_device(entry, project=project)
+        board = _stated_board(entry) if result.model is None else result.model.device.board
+        build_dir = project.device_build_dir(name)
+        record = read_build(build_dir)
+        rows.append(
+            DeviceRecord(
+                name=name,
+                file=entry,
+                board=board,
+                ok=result.ok,
+                problems=len(result.errors),
+                built=record is not None and bool(record.artifacts),
+                signed=record is not None and bool(record.signed),
+                busy=is_busy(build_dir),
+            )
+        )
+    return tuple(rows)

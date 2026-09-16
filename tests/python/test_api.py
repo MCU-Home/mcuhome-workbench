@@ -34,6 +34,7 @@ from mcuhome.model.errors import (
     MCUHomeError,
     error_dicts,
 )
+from test_buildlock import held_elsewhere
 
 from mcuhome.workbench import api
 
@@ -537,6 +538,110 @@ def test_the_findings_are_in_file_order(tmp_path) -> None:
         "late",
         "nowhere in particular",
     ]
+
+
+# --------------------------------------------------------------------------
+# find_devices: the listing, as one call answers it
+# --------------------------------------------------------------------------
+
+
+def _listed_project(root: Path, **devices: str) -> api.Project:
+    """A project with one device folder per entry of *devices*."""
+    project = api.create_project(root, force=True).project
+    for name, text in devices.items():
+        folder = root / "devices" / name
+        folder.mkdir(parents=True)
+        (folder / "main.yaml").write_text(text, "utf-8")
+    return project
+
+
+def test_find_devices_answers_one_row_per_device_in_name_order(tmp_path) -> None:
+    project = _listed_project(
+        tmp_path,
+        thermostat=VALID_CONFIG.replace("bench-node", "thermostat"),
+        attic=VALID_CONFIG.replace("bench-node", "attic"),
+    )
+    rows = api.find_devices(project)
+
+    assert [row.name for row in rows] == ["attic", "thermostat"]
+    assert [row.file for row in rows] == [
+        tmp_path / "devices" / "attic" / "main.yaml",
+        tmp_path / "devices" / "thermostat" / "main.yaml",
+    ]
+    assert all(row.ok and row.problems == 0 for row in rows)
+    assert {row.board for row in rows} == {"nrf7002dk/nrf5340/cpuapp"}
+    assert not any(row.built or row.signed or row.busy for row in rows)
+
+
+def test_a_device_that_does_not_validate_is_a_row_and_not_a_refusal(tmp_path) -> None:
+    """The listing is about every device, so one broken file cannot end it."""
+    project = _listed_project(
+        tmp_path,
+        good=VALID_CONFIG.replace("bench-node", "good"),
+        broken=VALID_CONFIG.replace("bench-node", "broken").replace("baro.temp", "no.such"),
+    )
+    rows = {row.name: row for row in api.find_devices(project)}
+
+    assert rows["good"].ok
+    assert not rows["broken"].ok
+    assert rows["broken"].problems >= 1
+    # And it still says what the device is for: the board is read off the
+    # file, not off a model that was never resolved.
+    assert rows["broken"].board == "nrf7002dk/nrf5340/cpuapp"
+
+
+def test_a_device_file_nothing_can_parse_is_a_row_with_no_board(tmp_path) -> None:
+    project = _listed_project(tmp_path, wrecked="device: [\n")
+    (row,) = api.find_devices(project)
+
+    assert row.name == "wrecked"
+    assert not row.ok
+    assert row.problems >= 1
+    assert row.board == ""
+
+
+def test_a_project_with_no_devices_is_an_empty_listing(tmp_path) -> None:
+    assert api.find_devices(_listed_project(tmp_path)) == ()
+
+
+def test_the_row_states_what_the_build_directory_holds(tmp_path) -> None:
+    project = _listed_project(tmp_path, thermostat=VALID_CONFIG.replace("bench-node", "thermostat"))
+    build_dir = project.device_build_dir("thermostat")
+    build_dir.mkdir(parents=True)
+
+    (row,) = api.find_devices(project)
+    assert not row.built and not row.signed
+
+    (build_dir / api.BUILD_REPORT_FILE).write_text("{}", "utf-8")
+    (row,) = api.find_devices(project)
+    assert row.built and not row.signed
+
+    (build_dir / "firmware.signed.bin").write_bytes(b"\x00")
+    (row,) = api.find_devices(project)
+    assert row.built and row.signed
+
+
+def test_the_row_says_when_somebody_is_working_in_the_build_directory(tmp_path) -> None:
+    project = _listed_project(tmp_path, thermostat=VALID_CONFIG.replace("bench-node", "thermostat"))
+    build_dir = project.device_build_dir("thermostat")
+
+    with held_elsewhere(build_dir, device="thermostat", operation="build"):
+        (row,) = api.find_devices(project)
+        assert row.busy
+
+    (row,) = api.find_devices(project)
+    assert not row.busy
+
+
+def test_the_row_is_a_document_with_its_verdict_first(tmp_path) -> None:
+    project = _listed_project(tmp_path, thermostat=VALID_CONFIG.replace("bench-node", "thermostat"))
+    (row,) = api.find_devices(project)
+    document = row.to_dict()
+
+    assert next(iter(document)) == "ok"
+    assert document["name"] == "thermostat"
+    assert document["file"] == str(tmp_path / "devices" / "thermostat" / "main.yaml")
+    assert json.dumps(document)
 
 
 # --------------------------------------------------------------------------
