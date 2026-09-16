@@ -1675,6 +1675,30 @@ container runtime's version command, asks the configured container
 repositories what they publish, asks the interpreter its version, and
 stats every file under `secrets/` — so it costs what those cost.
 
+```python
+def read_cache_usage(
+    *, options: BuildOptions, env: Mapping[str, str]
+) -> tuple[CacheUsage, ...]
+```
+What the compiler cache holds. `resolve_cache_tiers` answers where the
+tiers are; this answers what is in them, which is the number a person
+wants when a build takes twenty minutes or a disk is full. One entry per
+**configured** tier, in the order `CACHE_TIERS` states them — a tier this
+machine does not configure is absent rather than reported as empty,
+because "no session cache" and "an empty session cache" are different
+answers.
+
+`CacheUsage` (frozen): `tier` (one of `CACHE_TIERS`), `path`, `size` in
+bytes, `files`, `to_dict()`. A directory that is not there yet is `size`
+0 and `files` 0 rather than a refusal: a cache a build would create is
+not an error. Symbolic links are not followed and not counted, so a
+cache that links one entry to another is not measured twice. Like the
+host check it raises nothing — a subtree this account may not enter
+contributes nothing and the rest is still counted, and a **stated**
+`build.cache_shared` that is not a directory is reported as empty here
+while a build still refuses it: this call reports, and the build is
+where a machine configured to start warm and standing cold has to stop.
+
 ## Upgrading a project
 ```python
 @contextmanager
@@ -2124,6 +2148,10 @@ one check, what was found, and the fix where there is one. `detail` and
 `hint` are the words of the refusal a build would have raised, wherever
 there is one, so the two channels do not word the same problem twice.
 
+`CacheUsage.to_dict()`: `{tier, path, size, files}` — one compiler cache
+tier, where it is and what is in it. `size` is bytes; a tier that has
+never been written to is `0` and `0`.
+
 `Settings.to_dict()` answers one entry per declared option except the
 bootstrap one, in declaration order — the key is the option's name, the
 value the setting document below. `project.dir` is absent because it is
@@ -2383,11 +2411,12 @@ this package is public.
 
 **Building firmware** — `build_firmware`, `resolve_build_target`,
 `resolve_build_mode`, `open_build_lock`, `is_busy`, `read_build`,
-`clean_build`, `check_build_host`, `build_steps`, `BuildRequest`, `BuildResult`,
+`clean_build`, `check_build_host`, `read_cache_usage`, `build_steps`,
+`BuildRequest`, `BuildResult`,
 `CleanResult`,
 `BuildRecord`, `BuildTarget`, `LocalBuild`, `RemoteBuild`, `Execution`,
 `ContainerExecution`, `SubprocessExecution`, `HostFinding`,
-`HostCheckResult`, `SeatWait`, `Artifact`, `BuildLimits`.
+`HostCheckResult`, `CacheUsage`, `SeatWait`, `Artifact`, `BuildLimits`.
 
 **Build contexts** — `create_context`, `lock_context`, `verify_context`,
 `read_context_manifest`, `read_generator_chain`, `read_context_facts`,

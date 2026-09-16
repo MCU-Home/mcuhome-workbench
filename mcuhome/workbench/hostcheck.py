@@ -52,6 +52,7 @@ from mcuhome.model.imageref import DOCKER_HUB, parse_reference
 
 from mcuhome.workbench import buildenvstore, devworkspace
 from mcuhome.workbench.build import BuildOptions
+from mcuhome.workbench.buildenvsession import CACHE_TIERS, CacheTier, resolve_cache_tiers
 from mcuhome.workbench.builders import SelectedBuilder
 from mcuhome.workbench.buildtarget import MODE_CONTAINER, TARGET_REMOTE
 from mcuhome.workbench.configuration import Settings, option, resolve_builder
@@ -70,9 +71,11 @@ from mcuhome.workbench.subprocessbuild import BUILDER_INTERPRETER, DEV_WORKSPACE
 
 __all__ = [
     "HOST_CHECKS",
+    "CacheUsage",
     "HostCheckResult",
     "HostFinding",
     "check_build_host",
+    "read_cache_usage",
 ]
 
 #: What a finding's :attr:`HostFinding.check` may be. A fixed value set,
@@ -150,6 +153,89 @@ class HostCheckResult:
     def to_dict(self) -> dict[str, Any]:
         """The host check document."""
         return {"ok": self.ok, "findings": [finding.to_dict() for finding in self.findings]}
+
+
+@dataclass(frozen=True)
+class CacheUsage:
+    """What one compiler cache tier holds on this machine.
+
+    *tier* is one of :data:`~mcuhome.workbench.buildenvsession.CACHE_TIERS`,
+    *path* the directory it is laid out in, and *size* and *files* what is
+    in there: the bytes of every regular file below it, and how many there
+    are. A tier that has never been written to is `0` and `0` — the
+    directory a build would create is not there yet, which is a state and
+    not an error.
+    """
+
+    tier: str
+    path: Path
+    #: Bytes, summed over the regular files below :attr:`path`.
+    size: int
+    files: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-ready, every declared key present."""
+        return {
+            "tier": self.tier,
+            "path": str(self.path),
+            "size": self.size,
+            "files": self.files,
+        }
+
+
+def read_cache_usage(*, options: BuildOptions, env: Mapping[str, str]) -> tuple[CacheUsage, ...]:
+    """What the compiler cache holds, one entry per configured tier.
+
+    :func:`~mcuhome.workbench.buildenvsession.resolve_cache_tiers`
+    answers *where* the tiers are, and this answers what is in them — the
+    number a person wants when a build takes twenty minutes, or when a
+    disk is full. The tiers are the ones a build would be given, in the
+    order :data:`~mcuhome.workbench.buildenvsession.CACHE_TIERS` states
+    them; a tier this machine does not configure is **absent** rather
+    than reported as empty, because "no session cache" and "an empty
+    session cache" are different answers.
+
+    It walks directories and raises nothing over what it finds there: a
+    directory that is not there yet, a file that vanished between the
+    listing and the stat, a subtree this account may not enter — each of
+    them contributes nothing and the rest is still counted. A **stated**
+    shared tier that is not a directory is reported as empty here rather
+    than refused the way a build refuses it: this call reports, and the
+    build is where a machine configured to start warm and standing cold
+    has to stop.
+
+    Symbolic links are not followed and not counted, so a cache that
+    links one entry to another is not measured twice.
+    """
+    root = resolve_cache_root(options=options, env=dict(env))
+    tiers = resolve_cache_tiers(
+        cache_root=root,
+        local=options.cache_local,
+        session=options.cache_session,
+        project=options.cache_project,
+    )
+    if options.cache_shared is not None:
+        # Stated outright, so it replaces whatever the layout under the
+        # cache root offers — and it is put in here rather than passed
+        # to the resolution above, which refuses a stated shared tier
+        # that is not there. A reading answers what is there instead.
+        tiers["shared"] = CacheTier(path=Path(options.cache_shared), writable=False)
+    return tuple(_usage_of(name, tiers[name].path) for name in CACHE_TIERS if name in tiers)
+
+
+def _usage_of(tier: str, path: Path) -> CacheUsage:
+    """The bytes and the file count below *path*, whatever is readable."""
+    size = 0
+    files = 0
+    for entry in path.rglob("*"):
+        try:
+            if entry.is_symlink() or not entry.is_file():
+                continue
+            size += entry.stat().st_size
+        except OSError:
+            continue
+        files += 1
+    return CacheUsage(tier=tier, path=path, size=size, files=files)
 
 
 def check_build_host(

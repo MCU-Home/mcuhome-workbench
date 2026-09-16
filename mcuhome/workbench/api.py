@@ -284,9 +284,11 @@ from mcuhome.workbench.generate import (
 )
 from mcuhome.workbench.hostcheck import (
     HOST_CHECKS,
+    CacheUsage,
     HostCheckResult,
     HostFinding,
     check_build_host,
+    read_cache_usage,
 )
 from mcuhome.workbench.imgtool import (
     BUILD_REPORT_FILE,
@@ -469,6 +471,7 @@ __all__ = [
     "CONFIG_SCOPES",
     "CONTEXT_FILE",
     "CacheTier",
+    "CacheUsage",
     "CleanResult",
     "ClusterChoice",
     "ClusterDef",
@@ -689,6 +692,7 @@ __all__ = [
     "random_pairing",
     "read_build",
     "read_build_report",
+    "read_cache_usage",
     "read_context_facts",
     "read_context_manifest",
     "read_generator_chain",

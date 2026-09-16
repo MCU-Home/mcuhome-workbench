@@ -36,6 +36,7 @@ from mcuhome.workbench.api import (
     Project,
     ProjectFile,
     check_build_host,
+    read_cache_usage,
     read_project,
     resolve_settings,
 )
@@ -837,3 +838,103 @@ def test_a_secrets_file_other_users_can_read_is_a_failing_finding(tmp_path: Path
     assert str(exposed) in finding.detail
     assert "mode 644" in finding.detail
     assert f"chmod 600 {exposed}" in finding.hint
+
+
+# --------------------------------------------------------------------------
+# What the compiler cache holds
+# --------------------------------------------------------------------------
+
+
+def _fill(directory: Path, name: str, payload: bytes) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_bytes(payload)
+    return path
+
+
+def test_the_cache_usage_is_one_entry_per_configured_tier(tmp_path: Path) -> None:
+    """Configured, not possible: an absent tier is absent from the answer.
+
+    "no session cache" and "an empty session cache" are different
+    answers, and a client that renders a table of tiers shows the second
+    as a row of zeroes and the first not at all.
+    """
+    root = tmp_path / "cache"
+    _fill(root / "cache-local", "one", b"0123456789")
+    _fill(root / "cache-local" / "deeper", "two", b"01234")
+    session = _fill(tmp_path / "session", "three", b"012").parent
+
+    usage = read_cache_usage(
+        options=_options(cache_root=root, cache_session=session), env=_env(tmp_path)
+    )
+
+    assert [entry.tier for entry in usage] == ["local", "session"]
+    assert [entry.to_dict() for entry in usage] == [
+        {"tier": "local", "path": str(root / "cache-local"), "size": 15, "files": 2},
+        {"tier": "session", "path": str(session), "size": 3, "files": 1},
+    ]
+
+
+def test_a_tier_that_was_never_written_to_is_zero_rather_than_a_refusal(
+    tmp_path: Path,
+) -> None:
+    """A build creates the directory; a reading before that is not an error."""
+    root = tmp_path / "cache"
+
+    usage = read_cache_usage(options=_options(cache_root=root), env=_env(tmp_path))
+
+    assert [(entry.tier, entry.size, entry.files) for entry in usage] == [("local", 0, 0)]
+    assert not root.exists(), "reading what a cache holds creates nothing"
+
+
+def test_a_machine_with_nowhere_to_put_a_cache_holds_nothing(tmp_path: Path) -> None:
+    """No cache root, no tiers — the same answer `resolve_cache_root` gives."""
+    assert read_cache_usage(options=_options(), env={"PATH": ""}) == ()
+
+
+def test_a_shared_tier_stated_but_absent_is_reported_rather_than_refused(
+    tmp_path: Path,
+) -> None:
+    """The reading answers what is there; the build is what refuses.
+
+    `resolve_cache_tiers` refuses a shared cache somebody named and that
+    is not there — a machine meant to start warm must not build cold in
+    silence. That refusal belongs to the build: a host check that raised
+    it would stop reporting halfway through the answer it exists to give.
+    """
+    absent = tmp_path / "not-mounted"
+
+    usage = read_cache_usage(
+        options=_options(cache_root=tmp_path / "cache", cache_shared=absent),
+        env=_env(tmp_path),
+    )
+
+    assert [entry.tier for entry in usage] == ["local", "shared"]
+    shared = next(entry for entry in usage if entry.tier == "shared")
+    assert (shared.path, shared.size, shared.files) == (absent, 0, 0)
+
+
+def test_a_stated_shared_tier_replaces_the_one_under_the_cache_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cache"
+    _fill(root / "cache-shared", "derived", b"0" * 100)
+    elsewhere = _fill(tmp_path / "mounted", "stated", b"0" * 7).parent
+
+    usage = read_cache_usage(
+        options=_options(cache_root=root, cache_shared=elsewhere), env=_env(tmp_path)
+    )
+
+    shared = next(entry for entry in usage if entry.tier == "shared")
+    assert (shared.path, shared.size) == (elsewhere, 7)
+
+
+def test_a_link_is_not_counted_a_second_time(tmp_path: Path) -> None:
+    """A cache that links one entry to another is not measured twice."""
+    root = tmp_path / "cache"
+    target = _fill(root / "cache-local", "object", b"0" * 64)
+    (root / "cache-local" / "link").symlink_to(target)
+
+    usage = read_cache_usage(options=_options(cache_root=root), env=_env(tmp_path))
+
+    assert [(entry.size, entry.files) for entry in usage] == [(64, 1)]

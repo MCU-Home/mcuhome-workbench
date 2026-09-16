@@ -148,6 +148,9 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         ),
         detail=object(),
     ),
+    "CacheUsage": lambda: api.CacheUsage(
+        tier="local", path=ROOT / ".cache" / "cache-local", size=110592, files=12
+    ),
     "CleanResult": lambda: api.CleanResult(
         device="thermostat",
         out_dir=ROOT / "build" / "thermostat",
