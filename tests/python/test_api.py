@@ -240,7 +240,7 @@ def test_the_version_is_the_package_version() -> None:
     assert "from mcuhome.workbench import __version__" in Path(api.__file__).read_text("utf-8")
 
 
-def test_the_stack_is_answered_by_package_name(monkeypatch) -> None:
+def test_the_stack_is_answered_by_package_name() -> None:
     """One call for the first line of every bug report.
 
     Keyed by distribution name, the two imported packages answering with
