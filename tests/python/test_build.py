@@ -51,7 +51,12 @@ from mcuhome.model.artifacts import Artifact
 from mcuhome.model.context import DeveloperEnvironment
 from mcuhome.model.errors import BuildError, ConfigError
 
-from mcuhome.workbench import build, containerbuild, sessionclient, subprocessbuild
+# The signing fixtures live with the signing tests: a real signing
+# program in a real process, a key with a known scalar, and the build
+# report a build environment delivers.
+from test_imgtool import _fake_imgtool, _key, _report
+
+from mcuhome.workbench import api, build, containerbuild, sessionclient, subprocessbuild
 from mcuhome.workbench.api import WARNING_KINDS, Diagnostic, SelectedBuilder
 from mcuhome.workbench.buildenvsession import (
     EnvironmentUnavailable,
@@ -64,7 +69,7 @@ from mcuhome.workbench.contextdir import (
     read_context_manifest,
     read_context_request,
 )
-from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
+from mcuhome.workbench.imgtool import BUILD_REPORT_FILE, sign_firmware
 from mcuhome.workbench.packageregistry import OFFICIAL_BASE_DOMAIN, RegistrySettings
 from mcuhome.workbench.resolve_pins import (
     KIND_SDK,
@@ -1165,7 +1170,10 @@ def _delivering(tmp_path: Path, monkeypatch, *, target: str) -> Path:
     delivery = tmp_path / "delivery"
     delivery.mkdir(parents=True, exist_ok=True)
     (delivery / "firmware.bin").write_bytes(b"\x00\x01\x02\x03")
-    (delivery / BUILD_REPORT_FILE).write_bytes(b'{"report": 1}')
+    # The build environment's own report, in the shape the host-side
+    # signer reads: the delivery ends where signing begins, and the test
+    # below walks both halves in one directory.
+    (delivery / BUILD_REPORT_FILE).write_text(json.dumps(_report()), "utf-8")
     (delivery / "west.log").write_bytes(b"lines nobody declared")
 
     if target == build.TARGET_REMOTE:
@@ -1237,7 +1245,7 @@ def test_every_target_delivers_to_the_top_of_the_build_directory(
     out = tmp_path / "build"
     assert result.ok and result.out_dir == out
     assert (out / "firmware.bin").read_bytes() == b"\x00\x01\x02\x03"
-    assert (out / BUILD_REPORT_FILE).read_bytes() == b'{"report": 1}'
+    assert json.loads((out / BUILD_REPORT_FILE).read_text("utf-8")) == _report()
     # Moved, not copied: one file, in the place the answer names.
     assert not (delivery / "firmware.bin").exists()
     assert not (delivery / BUILD_REPORT_FILE).exists()
@@ -1330,6 +1338,36 @@ def test_a_build_that_delivered_nothing_leaves_the_directory_as_it_was(
     assert result.out_dir == out, "the directory the build was asked about, whatever it delivered"
     assert (out / "firmware.bin").read_bytes() == b"the build that worked"
     assert (out / BUILD_REPORT_FILE).is_file()
+
+
+def test_what_the_build_delivered_is_what_signing_then_works_on(
+    model, tmp_path, monkeypatch
+) -> None:
+    """The two halves meet in one directory, and nothing carries files between them.
+
+    This is the whole point of delivering into the build directory: the
+    build puts the unsigned images and the report at the top of it, and
+    the one host-side signing step reads them there, signs beside them
+    and wraps the signed binary in the image the device updates to. No
+    client copies anything, and no client decides what an OTA image is.
+    """
+    _delivering(tmp_path, monkeypatch, target=build.TARGET_LOCAL)
+    program, _calls = _fake_imgtool(tmp_path)
+
+    result = _delivered_build(model, tmp_path, target=build.TARGET_LOCAL)
+    signed = sign_firmware(
+        result.out_dir, env={}, key=_key(tmp_path), imgtool=str(program), model=model
+    )
+
+    out = tmp_path / "build"
+    assert signed.ok and signed.out_dir == out
+    assert signed.report_path == out / BUILD_REPORT_FILE
+    assert [artifact.path for artifact in signed.signed] == [out / "firmware.signed.bin"]
+    assert signed.ota == out / f"{model.device.name}-{model.device.version}.ota"
+    assert signed.ota.is_file()
+    # And the record of that build now reads the signature back out of
+    # the same directory it was written into.
+    assert [entry.path for entry in api.read_build(out).signed] == [out / "firmware.signed.bin"]
 
 
 # --------------------------------------------------------------------------
