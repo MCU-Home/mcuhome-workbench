@@ -2109,6 +2109,14 @@ too: they are part of the device's configuration, and a build compiles
 them into the firmware. Where a client shows them and where it masks
 them is the client's decision — these documents do not decide it.
 
+Those seven keys are the credentials document in their own right, and
+`read_pairing` answers a value carrying them. That value comes from the
+device-model package and answers no `to_dict()` of its own, so a client
+that shows credentials it did not just draw is the one place on this
+surface where it reads a document off an object's fields. It is stated
+here so that both ways of showing a device's codes render the same seven
+keys.
+
 On-disk records this package writes and reads:
 - project marker (TOML): `version`, `id`, and `[upgrade]` with `started`,
   `process`, `host`, `running`.
