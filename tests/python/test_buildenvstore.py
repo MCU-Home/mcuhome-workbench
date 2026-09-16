@@ -39,7 +39,13 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.hashes import sha256_file
 
 from mcuhome.workbench import buildenvstore as store
-from mcuhome.workbench.api import BuildOptions, provision_environment
+from mcuhome.workbench.api import (
+    OFFICIAL_BASE_DOMAIN,
+    BuildOptions,
+    Project,
+    RegistrySettings,
+    provision_environment,
+)
 from mcuhome.workbench.packageregistry import host_platform
 
 VERSION = "1.2.3"
@@ -1154,3 +1160,126 @@ def test_the_registry_is_asked_for_the_shelf_a_package_is_published_on(env, stor
     provision_from()
     provision_from(source_name="house-workspaces")
     assert asked == [store.KIND_WORKSPACE, "house-workspaces"]
+
+
+# --------------------------------------------------------------------------
+# The registry a project configures
+# --------------------------------------------------------------------------
+
+
+class OpenedRegistry:
+    """A registry double that records what it was asked for.
+
+    It stands in for the client `provision_environment` opens from a
+    project, so "the project's registry was asked" is checked by what
+    this recorded rather than by a network.
+    """
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def index(self, source: str):
+        self.asked.append(source)
+        raise BuildError("nothing is served here", hint="this is a test double")
+
+
+@pytest.fixture
+def opened(monkeypatch):
+    """Records every registry `provision_environment` opens for itself."""
+    calls: list[dict] = []
+    client = OpenedRegistry()
+
+    def open_package_registry(base_domain: str, **arguments):
+        calls.append(
+            {"base_domain": base_domain, "existed": Path(arguments["into"]).is_dir(), **arguments}
+        )
+        return lambda: client
+
+    monkeypatch.setattr(store, "open_package_registry", open_package_registry)
+    return calls, client
+
+
+def test_a_project_is_enough_to_reach_the_registry(tmp_path, options, env, opened) -> None:
+    """The composition a client would otherwise have to write itself.
+
+    Without this, a caller that wants a package the operator directories
+    do not hold has to build a registry client, choose a directory to
+    read it into and find the trust anchor — which this package already
+    knows how to do for a build.
+    """
+    calls, client = opened
+    project = Project(root=tmp_path / "project", discovered=True)
+    configured = RegistrySettings(
+        base_domain="packages.mcuhome.org",
+        mirrors={"build-workspace": ("https://mirror.example/build-workspace/",)},
+    )
+
+    with pytest.raises(BuildError) as caught:
+        provision_environment(
+            WORKSPACE, options=options, env=env, project=project, registries=(configured,)
+        )
+
+    assert "nothing is served here" in str(caught.value)
+    assert client.asked == [store.KIND_WORKSPACE], "the opened registry is the one asked"
+    assert len(calls) == 1
+    assert calls[0]["base_domain"] == OFFICIAL_BASE_DOMAIN
+    assert calls[0]["project_root"] == project.root
+    assert calls[0]["settings"] == (configured,)
+    # The verified documents are read into a directory of this call's
+    # own, which exists while the call runs and is gone with it: they are
+    # checked on every read and are worth nothing afterwards.
+    assert calls[0]["existed"]
+    assert not Path(calls[0]["into"]).exists()
+
+
+def test_a_stated_registry_wins_over_the_project(tmp_path, options, env, opened) -> None:
+    """The more explicit of the two: a caller that built one meant it."""
+    calls, project_client = opened
+    stated = OpenedRegistry()
+
+    with pytest.raises(BuildError):
+        provision_environment(
+            WORKSPACE,
+            options=options,
+            env=env,
+            registry=lambda: stated,
+            project=Project(root=tmp_path / "project", discovered=True),
+        )
+
+    assert stated.asked == [store.KIND_WORKSPACE]
+    assert calls == [], "nothing was opened beside the registry the caller stated"
+    assert project_client.asked == []
+
+
+def test_a_package_file_opens_no_registry_even_inside_a_project(
+    tmp_path, options, env, opened
+) -> None:
+    """Nothing is looked up, so there is nothing to ask anybody."""
+    calls, client = opened
+    directory = tmp_path / "built"
+    put_package(directory, WORKSPACE, VERSION, workspace_members())
+
+    entry = provision_environment(
+        directory / f"{WORKSPACE}-{VERSION}.tar.zst",
+        options=options,
+        env=env,
+        project=Project(root=tmp_path / "project", discovered=True),
+    )
+
+    assert entry.name == WORKSPACE
+    assert calls == []
+    assert client.asked == []
+
+
+def test_without_a_project_the_directories_are_the_only_source(
+    published, options, env, opened
+) -> None:
+    """The offline case, unchanged: no project, no registry, no network."""
+    calls, client = opened
+    directory, sha256 = published()
+
+    entry = provision_environment(WORKSPACE, options=options, env=env, sources=[directory])
+
+    assert entry.sha256 == sha256
+    assert calls == []
+    assert client.asked == []

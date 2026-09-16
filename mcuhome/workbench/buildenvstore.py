@@ -62,6 +62,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
 
 from mcuhome.model.buildenvironment import ARCH_SEPARATOR, family_of
@@ -70,8 +71,14 @@ from mcuhome.model.hashes import sha256_file
 from mcuhome.model.userpaths import expand, home
 from packaging.version import InvalidVersion, Version
 
+from mcuhome.workbench.diagnostics import Diagnostic
 from mcuhome.workbench.packagefetch import PACKAGE_SUFFIX, SDK_MAX_BYTES, acquire_package
-from mcuhome.workbench.packageregistry import RegistrySource
+from mcuhome.workbench.packageregistry import (
+    RegistrySettings,
+    RegistrySource,
+    open_package_registry,
+)
+from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import (
     KIND_SDK,
     KIND_TOOLS,
@@ -79,6 +86,7 @@ from mcuhome.workbench.resolve_pins import (
     SDK_STAGE,
     TOOLS_STAGE,
     WORKSPACE_STAGE,
+    PackageReference,
     PackageStage,
     package_reference,
     resolve_from_sources,
@@ -543,6 +551,8 @@ def provision_environment(
     env: Mapping[str, str],
     sources: Sequence[Path] = (),
     registry: RegistrySource | None = None,
+    project: Project | None = None,
+    registries: Sequence[RegistrySettings] = (),
     on_line: Callable[[str], None] | None = None,
 ) -> StoreEntry:
     """One build environment package in the store, ready to run.
@@ -587,6 +597,19 @@ def provision_environment(
     configured directories of that kind and no other kind's are searched
     at all — a directory holding one kind of package is not a statement
     about where another lives.
+
+    **The registry comes from the project where the caller states none.**
+    Given a *project* and no *registry*, this opens the package registry
+    itself — the base domain of the reference, the project's trust
+    anchor, and the mirror overrides *registries* carries for that
+    domain — exactly the way a build opens one. Otherwise a client that
+    wants a package the operator directories do not hold would have to
+    build a registry client, pick a directory to read it into and find
+    the anchor, which is a composition this package already owns and no
+    caller should own twice. A *registry* stated outright wins: it is the
+    more explicit of the two, and a caller that built one meant it. A
+    package named as a **file** opens nothing either way, because nothing
+    is looked up.
     """
     file = _package_file(package)
     if file is not None:
@@ -635,6 +658,71 @@ def provision_environment(
         )
     kind = _kind_of(reference.name)
     searched = tuple(Path(one) for one in sources) + _configured_sources(options, kind)
+    if registry is None and project is not None:
+        # The registry this package would come from, opened the way a
+        # build opens one: the base domain the reference names (the
+        # official one, since a reference naming another was refused
+        # above), the project's trust anchor, and the mirrors this
+        # project configured for it. Its documents are laid down in a
+        # directory of their own for the length of the call — they are
+        # verified on every read and are worth nothing afterwards, so
+        # nothing keeps them.
+        with TemporaryDirectory(prefix="mcuhome-registry-") as scratch:
+            return _provision_reference(
+                reference,
+                kind=kind,
+                searched=searched,
+                options=options,
+                env=env,
+                registry=open_package_registry(
+                    reference.base_domain,
+                    project_root=project.root,
+                    settings=tuple(registries),
+                    into=Path(scratch),
+                    on_warning=_into_the_log(on_line),
+                ),
+                on_line=on_line,
+            )
+    return _provision_reference(
+        reference,
+        kind=kind,
+        searched=searched,
+        options=options,
+        env=env,
+        registry=registry,
+        on_line=on_line,
+    )
+
+
+def _into_the_log(on_line: Callable[[str], None] | None) -> Callable[[Diagnostic], None] | None:
+    """A warning channel for a caller that has only a log.
+
+    What a registry has to say — an unverified source above all — belongs
+    where the person watching the provisioning is looking, and that is
+    the same stream the unpacking writes to.
+    """
+    if on_line is None:
+        return None
+
+    def report(finding: Diagnostic) -> None:
+        for text in (finding.message, finding.hint or ""):
+            for line in text.splitlines():
+                on_line(line)
+
+    return report
+
+
+def _provision_reference(
+    reference: PackageReference,
+    *,
+    kind: str,
+    searched: Sequence[Path],
+    options: BuildOptions,
+    env: Mapping[str, str],
+    registry: RegistrySource | None,
+    on_line: Callable[[str], None] | None,
+) -> StoreEntry:
+    """The package a *reference* names, resolved and provisioned."""
     name, version, sha256 = reference.name, reference.version, reference.sha256
     if reference.pinned:
         # A version and a hash together are the whole answer and ask no

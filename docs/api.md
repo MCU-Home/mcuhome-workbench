@@ -1188,6 +1188,8 @@ def provision_environment(
     env: Mapping[str, str],
     sources: Sequence[Path] = (),
     registry: RegistrySource | None = None,
+    project: Project | None = None,
+    registries: Sequence[RegistrySettings] = (),
     on_line: Callable[[str], None] | None = None,
 ) -> StoreEntry
 ```
@@ -1231,6 +1233,22 @@ asked for is the one that kind of package is published on, and a
 reference that names a shelf or a registry of its own — the spelling a
 device file uses, `build-workspace/mcuhome-build-workspace` — is refused
 rather than resolved somewhere else.
+
+**Given a *project* and no *registry*, the registry is opened here**, the
+way `create_context` opens one for a build: the reference's base domain,
+the project's trust anchor in `secrets/trust-anchor/`, and the mirror
+overrides *registries* states for that domain (`RegistrySettings`, as
+`resolve_settings` answers them under the key `registry`). The
+documents it verifies are read into a directory of this call's own and
+are gone with it. A *registry* stated outright wins over the project —
+it is the more explicit of the two — and a package named as a **file**
+opens none at all, because nothing is looked up. Without either, the
+operator directories are the only source there is, which is the offline
+case. The anchor is read at the first question actually asked of the
+registry, so a package a directory offers needs none; a missing one is
+then `TrustAnchorMissing`, naming the file to save, and what an
+`untrusted` registry has to say arrives through *on_line*, where
+whoever is watching the provisioning is looking.
 
 `StoreEntry` (frozen): `kind`, `name`, `version`, `sha256`, `path`,
 `to_dict()`. `provision_environment` takes `should_stop` nowhere: it is
