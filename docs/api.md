@@ -227,8 +227,24 @@ def create_project(root: Path, *, force: bool = False) -> NewProject
 ```
 Creates the durable part of a project: the marker, `mcuhome.yaml`,
 `devices/`, `secrets/` (mode 0700), the bundled trust anchor and a
-`.gitignore`. Raises `ProjectFileError` over an existing project unless
-*force*, and `ConfigError` when the directory cannot be written.
+`.gitignore`. `NewProject.created` holds every path it wrote, in the
+order it wrote them.
+
+It refuses **any** non-empty directory unless *force* — a project that is
+already there is one of them, because its marker makes the directory
+non-empty — with a `ConfigError` listing what is in the way; a project is
+expected to be made in an empty directory so that creating one cannot
+damage work that is there. A caller that wants "create it unless it
+exists" asks `is_project_root` first, which is what a command line does.
+Under *force* the directory is written into as it stands and the durable
+parts are completed rather than replaced: an existing marker is left
+exactly as it is, whatever version it states (making an old project
+current is `open_upgrade_session`'s job), an existing `mcuhome.yaml` is
+the user's configuration and is left alone, a `.gitignore` gets the
+missing lines appended, and a trust anchor that is already there is kept.
+`ConfigError` too for a *root* that is not a directory or cannot be
+written, and `UpgradeInProgress` / `UpgradeInterrupted` for a directory
+whose project an upgrade has renamed.
 
 ```python
 def find_project_root(start: Path) -> Path | None

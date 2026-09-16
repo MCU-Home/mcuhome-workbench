@@ -321,6 +321,34 @@ def test_init_twice_with_force_changes_nothing_more(tmp_path: Path) -> None:
     assert result.created == ()
 
 
+def test_init_refuses_a_directory_that_is_already_a_project(tmp_path: Path) -> None:
+    """A project is a non-empty directory like any other.
+
+    There is no "already a project" case here: the marker makes the
+    directory non-empty, so creating one over it is refused with what is
+    in the way. A caller that wants "create it unless it exists" asks
+    `is_project_root` first — which is what a command line does, and why
+    this call does not have to decide it for everybody.
+    """
+    create_project(tmp_path)
+    with pytest.raises(ConfigError) as caught:
+        create_project(tmp_path)
+    assert "is not empty" in caught.value.message
+    assert PROJECT_MARKER_FILE in caught.value.message
+
+
+def test_init_force_keeps_the_marker_an_older_project_states(tmp_path: Path) -> None:
+    """Making an old project current is the upgrade's job, never this one."""
+    write_project_file(
+        tmp_path / PROJECT_MARKER_FILE, ProjectFile(root=tmp_path, version=1, id=None)
+    )
+    result = create_project(tmp_path, force=True)
+
+    written = read_project_file(tmp_path / PROJECT_MARKER_FILE)
+    assert written.version == 1
+    assert (tmp_path / PROJECT_MARKER_FILE) not in result.created
+
+
 # --- secrets hygiene ---------------------------------------------------
 
 
