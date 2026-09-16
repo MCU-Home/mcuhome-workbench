@@ -461,7 +461,7 @@ def test_unsetting_the_last_secret_leaves_an_empty_file(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     write_secrets(project.secrets_file, "# my secrets\nwifi_password: x\n")
 
-    assert api.unset_secret(project, kind="main", key="wifi_password") is True
+    assert api.unset_secret(project, kind="main", key="wifi_password").changed
 
     written = project.secrets_file.read_text(encoding="utf-8")
     assert project.secrets_file.is_file()
@@ -476,8 +476,8 @@ def test_unsetting_what_is_not_there_answers_false_and_writes_nothing(tmp_path: 
     write_secrets(project.secrets_file, original)
 
     add_device(project, "kitchen")
-    assert api.unset_secret(project, kind="main", key="never_set") is False
-    assert api.unset_secret(project, kind="device", name="kitchen", key="x") is False
+    assert not api.unset_secret(project, kind="main", key="never_set").changed
+    assert not api.unset_secret(project, kind="device", name="kitchen", key="x").changed
     assert project.secrets_file.read_text(encoding="utf-8") == original
 
 
@@ -487,9 +487,9 @@ def test_a_deleted_file_is_a_whole_scope_and_only_a_named_one(tmp_path: Path) ->
     write_secrets(project.device_secrets_file("thermostat"), "passcode: 1\n")
     write_secrets(project.builder_secrets_file("attic"), "token: t\n")
 
-    assert api.delete_secret_file(project, kind="device", name="thermostat") is True
-    assert api.delete_secret_file(project, kind="device", name="thermostat") is False
-    assert api.delete_secret_file(project, kind="builder", name="attic") is True
+    assert api.delete_secret_file(project, kind="device", name="thermostat").changed
+    assert not api.delete_secret_file(project, kind="device", name="thermostat").changed
+    assert api.delete_secret_file(project, kind="builder", name="attic").changed
     assert not project.device_secrets_file("thermostat").exists()
 
 
@@ -506,6 +506,75 @@ def test_the_projects_own_files_are_never_deleted_as_a_file(tmp_path: Path) -> N
 
     assert project.secrets_file.is_file()
     assert project.signing_secrets_file.is_file()
+
+
+# --------------------------------------------------------------------------
+# What the three writing calls answer
+# --------------------------------------------------------------------------
+
+
+def test_every_write_answers_the_same_shape_with_its_scope(tmp_path: Path) -> None:
+    """One document for all three, so six commands render one thing.
+
+    The scope is the whole location — kind, name, file, whether it is
+    there — instead of two loose fields some of the calls carry and the
+    rest do not.
+    """
+    project = make_project(tmp_path)
+    add_device(project, "kitchen")
+
+    written = api.set_secret(project, kind="main", key="wifi_password", value="x")
+
+    assert written.scope.kind == "main"
+    assert written.scope.file == project.secrets_file
+    assert written.scope.exists, "the file the first secret created is there now"
+    assert written.key == "wifi_password"
+    assert written.changed
+    document = written.to_dict()
+    assert sorted(document) == ["changed", "key", "scope"]
+    assert document["scope"] == written.scope.to_dict()
+    assert json.dumps(document)
+
+
+def test_setting_a_value_that_is_already_there_changes_nothing(tmp_path: Path) -> None:
+    """The call was asked to make a statement true, and it already was."""
+    project = make_project(tmp_path)
+    write_secrets(project.secrets_file, "wifi_password: x\n")
+    before = project.secrets_file.stat().st_mtime_ns
+
+    again = api.set_secret(project, kind="main", key="wifi_password", value="x")
+
+    assert not again.changed
+    assert project.secrets_file.read_text(encoding="utf-8") == "wifi_password: x\n"
+    assert project.secrets_file.stat().st_mtime_ns == before, "the file was not rewritten"
+
+    other = api.set_secret(project, kind="main", key="wifi_password", value="y")
+    assert other.changed
+
+
+def test_a_deleted_file_answers_a_scope_that_is_no_longer_there(tmp_path: Path) -> None:
+    """The state a client shows afterwards is the state afterwards.
+
+    A whole file is the subject, so the key is empty — and the scope is
+    read again rather than resolved again: resolving one refuses a
+    device the project no longer has, which is exactly the leftover file
+    this call removes.
+    """
+    project = make_project(tmp_path)
+    add_device(project, "thermostat")
+    file = write_secrets(project.device_secrets_file("thermostat"), "passcode: 1\n")
+
+    removed = api.delete_secret_file(project, kind="device", name="thermostat")
+
+    assert removed.key == ""
+    assert removed.changed
+    assert removed.scope.name == "thermostat"
+    assert removed.scope.file == file
+    assert not removed.scope.exists
+
+    again = api.delete_secret_file(project, kind="device", name="thermostat")
+    assert not again.changed
+    assert not again.scope.exists
 
 
 # --------------------------------------------------------------------------
@@ -572,7 +641,7 @@ def test_the_signing_reference_can_still_be_removed(tmp_path: Path) -> None:
     project = signing_project(tmp_path)
     key_file = api.resolve_signing_key(env={}, project=project).path
 
-    assert api.unset_secret(project, kind="signing", key="firmware_signing_key") is True
+    assert api.unset_secret(project, kind="signing", key="firmware_signing_key").changed
 
     assert "{}" not in project.signing_secrets_file.read_text(encoding="utf-8")
     assert key_file.is_file(), "the key file is not removed by an edit of the YAML"

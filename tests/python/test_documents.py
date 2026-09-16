@@ -247,6 +247,9 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         token="s3cret",
         container_image=None,
     ),
+    "SecretChange": lambda: api.SecretChange(
+        scope=SAMPLES["SecretScope"](), key="wifi_password", changed=True
+    ),
     "SecretFile": lambda: api.SecretFile(
         scope=SAMPLES["SecretScope"](), keys=(SAMPLES["SecretKey"](),)
     ),

@@ -429,9 +429,11 @@ def read_secrets(project: Project, *, kind: str, name: str = "") -> SecretFile
 def reveal_secret(project: Project, *, kind: str, name: str = "", key: str) -> str
 def set_secret(
     project: Project, *, kind: str, name: str = "", key: str, value: str
-) -> None
-def unset_secret(project: Project, *, kind: str, name: str = "", key: str) -> bool
-def delete_secret_file(project: Project, *, kind: str, name: str) -> bool
+) -> SecretChange
+def unset_secret(
+    project: Project, *, kind: str, name: str = "", key: str
+) -> SecretChange
+def delete_secret_file(project: Project, *, kind: str, name: str) -> SecretChange
 ```
 `find_secret_scopes` answers every scope the project could have and
 whether its file exists — which devices and which builders have one.
@@ -442,10 +444,21 @@ devices' own configurations without resolving anything in them, their
 `reveal_secret` is a verb of its own so that the one call which returns a
 value cannot be made by accident; it answers exactly the key asked for.
 `set_secret` writes one key, creating the file with mode 0600 if it is
-the first; `unset_secret` removes one and answers whether it was there;
-`delete_secret_file` removes a whole `device` or `builder` file and
-refuses for `main` and `signing`, which are the project's own and are
-emptied key by key rather than removed under a user's feet.
+the first; `unset_secret` removes one; `delete_secret_file` removes a
+whole `device` or `builder` file and refuses for `main` and `signing`,
+which are the project's own and are emptied key by key rather than
+removed under a user's feet.
+
+All three answer a `SecretChange` (frozen): `scope`, `key`, `changed`,
+`to_dict()` — one shape for the three writing calls, so a client renders
+them the same way. `changed` says whether the call changed anything: an
+entry that was not there to remove, a file that was not there to delete
+and a value that is already the one stated are all `false`, and
+`set_secret` does not rewrite a file to state what it already says.
+`key` is empty for `delete_secret_file`, whose subject is the file. The
+`scope` is the file **after** the call, so a client that just deleted
+one sees `exists: false`. The document carries no value, like every
+other one here.
 
 Every one of them calls `require_secret_file` first, so an exposed file
 is refused rather than read — with `key_material=True`, which is
@@ -503,6 +516,7 @@ empty string.
 
 `SecretScope` (frozen): `kind`, `name` (empty for `main` and `signing`),
 `file`, `exists`, `to_dict()`.
+`SecretChange` (frozen): `scope`, `key`, `changed`, `to_dict()`.
 `SecretKey` (frozen): `key`, `masked`, `used_by`, `to_dict()`.
 `SecretFile` (frozen): `scope`, `keys`, `to_dict()`.
 
@@ -2008,6 +2022,9 @@ devices whose `!secret` references reach this entry, the shared file's
 entry being shadowed by a device's own file of the same name.
 `SecretFile.to_dict()`: `{scope, keys}` — one file, as its scope and its
 entries in the order the file spells them.
+`SecretChange.to_dict()`: `{scope, key, changed}` — what one write to
+the secrets did and where. `key` is empty where the subject was the
+whole file, and `changed` is false where there was nothing to change.
 `Project.to_dict()`: `{root, id, discovered, version}` — `version` is the
 layout version the project's file states, `null` for the stand-in
 project a device file outside any project gets.
@@ -2132,7 +2149,7 @@ this package is public.
 `delete_device`, `DeleteResult`, `require_secret_file`,
 `read_yaml_file`, `find_secret_scopes`, `read_secrets`, `reveal_secret`,
 `set_secret`, `unset_secret`, `delete_secret_file`, `SecretScope`,
-`SecretKey`, `SecretFile`, `Project`,
+`SecretKey`, `SecretFile`, `SecretChange`, `Project`,
 `ProjectFile`, `UpgradeRecord`, `DeviceRecord`, `NewProject`, `NewDevice`,
 `NewPairing`,
 `DeviceOutline`, `BusChoice`, `PeripheralChoice`, `EndpointChoice`,

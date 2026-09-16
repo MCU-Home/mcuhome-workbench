@@ -99,6 +99,7 @@ from mcuhome.workbench.project import Project, ensure_secrets_dir, require_secre
 __all__ = [
     "MASKED_VALUE",
     "SECRET_KINDS",
+    "SecretChange",
     "SecretFile",
     "SecretKey",
     "SecretScope",
@@ -187,6 +188,35 @@ class SecretKey:
 
     def to_dict(self) -> dict[str, Any]:
         return {"key": self.key, "masked": self.masked, "used_by": list(self.used_by)}
+
+
+@dataclass(frozen=True)
+class SecretChange:
+    """What one write to the secrets did, and where.
+
+    The one shape all three writing calls answer, so the six commands
+    over them render one document instead of two loose ``kind`` and
+    ``name`` fields in some of them and a nested scope in the rest. It
+    carries **no value**, like every other document here.
+
+    :attr:`scope` is the file as it stands *after* the call, so a client
+    that just removed the last file of a device sees ``exists`` false
+    rather than the state it asked about.
+    """
+
+    #: The file that was written, after the change.
+    scope: SecretScope
+    #: The entry that was written; empty where the subject was the whole
+    #: file.
+    key: str
+    #: Whether this call changed anything. False for an entry that was
+    #: not there to remove, a file that was not there to delete, and a
+    #: value that was already the one stated.
+    changed: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """This change as a document, JSON-ready and complete."""
+        return {"scope": self.scope.to_dict(), "key": self.key, "changed": self.changed}
 
 
 @dataclass(frozen=True)
@@ -696,13 +726,36 @@ def _render(yaml: Any, data: Any) -> str:
     return text
 
 
-def set_secret(project: Project, *, kind: str, name: str = "", key: str, value: str) -> None:
+def _changed(scope: SecretScope, *, key: str, changed: bool) -> SecretChange:
+    """One answer for the three writing calls, with the file re-read.
+
+    The scope a call started from says whether the file existed *before*
+    it ran, and what a client wants to show afterwards is what is there
+    now — a file the first secret created, or one a delete took away.
+    Re-read rather than re-resolved: resolving a scope refuses a device
+    the project no longer has, and a leftover file of a deleted device is
+    exactly what this call is often removing.
+    """
+    now = SecretScope(
+        kind=scope.kind, name=scope.name, file=scope.file, exists=scope.file.is_file()
+    )
+    return SecretChange(scope=now, key=key, changed=changed)
+
+
+def set_secret(
+    project: Project, *, kind: str, name: str = "", key: str, value: str
+) -> SecretChange:
     """Set one secret, leaving the rest of the file exactly as it was.
 
     The file is read and written through the round-trip parser, so
     comments, order, blank lines, quoting style and every other entry
     survive the edit; a new key is appended. The first secret of a scope
     creates the file with mode 0600 and the directories to it with 0700.
+
+    Answers a :class:`SecretChange` naming the file it wrote and the key
+    it wrote there. An entry that already holds exactly this value is
+    ``changed`` false and the file is **not** rewritten: the call was
+    asked to make a statement true, and it already was.
 
     Refuses the ``signing`` scope: the firmware signing key is a file,
     drawn by
@@ -726,17 +779,20 @@ def set_secret(project: Project, *, kind: str, name: str = "", key: str, value: 
         # and gets the entry appended after them.
         prefix = _NEW_FILE_HEADER if not scope.exists else _ending_in_newline(scope.file)
         _write(project, scope, {key: value}, prefix=prefix)
-        return
+        return _changed(scope, key=key, changed=True)
     if not isinstance(data, dict):
         raise _refuse_not_a_mapping(scope.file)
     if key in data and not _is_plain(data[key]):
         raise _refuse_not_plain(scope, key, data[key])
+    if key in data and data[key] == value:
+        return _changed(scope, key=key, changed=False)
     data[key] = value
     _write(project, scope, data)
+    return _changed(scope, key=key, changed=True)
 
 
-def unset_secret(project: Project, *, kind: str, name: str = "", key: str) -> bool:
-    """Remove one secret; ``False`` when the file did not hold it.
+def unset_secret(project: Project, *, kind: str, name: str = "", key: str) -> SecretChange:
+    """Remove one secret; ``changed`` false when the file did not hold it.
 
     The rest of the file is untouched, and removing the **last** entry
     leaves an empty file rather than a deleted one or a ``{}``: the file
@@ -745,23 +801,25 @@ def unset_secret(project: Project, *, kind: str, name: str = "", key: str) -> bo
     scope = _scope(project, kind, name)
     _guard(scope)
     if not scope.exists:
-        return False
+        return _changed(scope, key=key, changed=False)
     data = read_editable_yaml(scope.file)
     if data is None:
-        return False
+        return _changed(scope, key=key, changed=False)
     if not isinstance(data, dict):
         raise _refuse_not_a_mapping(scope.file)
     if key not in data:
-        return False
+        return _changed(scope, key=key, changed=False)
     del data[key]
     _write(project, scope, data)
-    return True
+    return _changed(scope, key=key, changed=True)
 
 
-def delete_secret_file(project: Project, *, kind: str, name: str) -> bool:
+def delete_secret_file(project: Project, *, kind: str, name: str) -> SecretChange:
     """Remove a whole ``device`` or ``builder`` secrets file.
 
-    Answers whether there was one. Refuses for ``main`` and ``signing``:
+    Answers a :class:`SecretChange` whose ``key`` is empty — the subject
+    was the file — and whose ``changed`` says whether there was one.
+    Refuses for ``main`` and ``signing``:
     those two belong to the project itself — the values every device
     shares, and the key the project's firmware is signed with — and are
     emptied entry by entry with :func:`unset_secret` instead of
@@ -777,9 +835,9 @@ def delete_secret_file(project: Project, *, kind: str, name: str) -> bool:
     scope = _scope(project, kind, name)
     _guard(scope)
     if not scope.exists:
-        return False
+        return _changed(scope, key="", changed=False)
     try:
         scope.file.unlink()
     except OSError as error:
         raise _refuse_unwritable(scope.file, error.strerror or "cannot remove") from error
-    return True
+    return _changed(scope, key="", changed=True)

@@ -393,6 +393,7 @@ from mcuhome.workbench.scaffold import (
 from mcuhome.workbench.schema import parse_config
 from mcuhome.workbench.secrets import (
     SECRET_KINDS,
+    SecretChange,
     SecretFile,
     SecretKey,
     SecretScope,
@@ -600,6 +601,7 @@ __all__ = [
     "SdkPin",
     "SdkUnavailable",
     "SeatWait",
+    "SecretChange",
     "SecretFile",
     "SecretKey",
     "SecretScope",
