@@ -723,6 +723,7 @@ __all__ = [
     "set_secret",
     "sha256_file",
     "sign_firmware",
+    "stack_versions",
     "to_json",
     "unset_config_value",
     "unset_secret",
@@ -735,6 +736,48 @@ __all__ = [
 #: range — deliberately not the model's, which versions with the SDK
 #: repository.
 VERSION = __version__
+
+#: The distribution the code generator ships as. Named here rather than
+#: imported: this package deliberately does not depend on it (a
+#: dashboard install must not carry a toolchain), so the only honest
+#: question about it is what is installed.
+_GENERATOR_PACKAGE = "mcuhome-compiler"
+
+
+def stack_versions() -> dict[str, str]:
+    """Which MCUHome packages are installed here, and at which version.
+
+    The three this package knows of — itself, the device-model package
+    it is built on, and the code generator that turns a model into a
+    Zephyr application — keyed by distribution name, in that order. A
+    package that is not installed answers the empty string rather than
+    being absent: the answer is about the stack, and "not here" is one of
+    the things it says.
+
+    It is the first thing a bug report states, which is why it is one
+    call rather than three lookups a client stitches together. **A
+    consumer's own version is not in it** and is not added to it: the
+    workbench cannot know what is embedding it, and a client that edited
+    a document it was given would be assembling one — a command line
+    prints its own version *beside* this answer instead.
+
+    The two packages this one imports answer with their own
+    ``__version__`` (:data:`VERSION`, :data:`MODEL_PACKAGE_VERSION`) —
+    what is running, rather than what some metadata says about it. The
+    generator is not imported, so the installed distribution's metadata
+    is the only channel there is.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        generator = version(_GENERATOR_PACKAGE)
+    except PackageNotFoundError:
+        generator = ""
+    return {
+        "mcuhome-workbench": VERSION,
+        "mcuhome-model": MODEL_PACKAGE_VERSION,
+        _GENERATOR_PACKAGE: generator,
+    }
 
 
 def expand_user_path(path: Path | str, *, env: Mapping[str, str]) -> Path:

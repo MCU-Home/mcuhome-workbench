@@ -33,14 +33,15 @@ model = api.load_model(entry, project=project)
 11. [Checking a build host](#checking-a-build-host)
 12. [Upgrading a project](#upgrading-a-project)
 13. [Errors](#errors) (incl. [Findings](#findings))
-14. [Constants](#constants)
-15. [Options](#options)
-16. [Environment variables](#environment-variables)
-17. [Files and directories](#files-and-directories)
-18. [Documents](#documents)
-19. [Names re-exported from the device-model package](#names-re-exported-from-the-device-model-package)
-20. [What is not public](#what-is-not-public)
-21. [Index of exported names](#index-of-exported-names)
+14. [The installed stack](#the-installed-stack)
+15. [Constants](#constants)
+16. [Options](#options)
+17. [Environment variables](#environment-variables)
+18. [Files and directories](#files-and-directories)
+19. [Documents](#documents)
+20. [Names re-exported from the device-model package](#names-re-exported-from-the-device-model-package)
+21. [What is not public](#what-is-not-public)
+22. [Index of exported names](#index-of-exported-names)
 
 ## Conventions
 These hold for every name below; they are stated once here rather than
@@ -1677,6 +1678,27 @@ not know a value still has the message:
 Every function that can report one takes `on_warning`; a result that can
 carry findings answers them in its `diagnostics` list.
 
+## The installed stack
+```python
+def stack_versions() -> dict[str, str]
+```
+Which MCUHome packages are installed here, and at which version: this
+package, the device-model package it is built on, and the code generator,
+keyed by distribution name, in that order. A package that is not
+installed answers the empty string rather than being absent — "not here"
+is one of the things the answer says. It is the first thing a bug report
+states, which is why it is one call rather than three lookups a client
+stitches together.
+
+**A consumer's own version is not in it** and is not added to it: this
+package cannot know what embeds it, and a client that edited a document
+it was given would be assembling one. A command line prints its own
+version beside this answer instead. The two packages this one imports
+answer with their own `__version__` (`VERSION`, `MODEL_PACKAGE_VERSION`)
+— what is running, rather than what metadata says about it; the
+generator is not imported, so what is installed is the only channel
+there is.
+
 ## Constants
 | Name | Value / meaning |
 |---|---|
@@ -2254,6 +2276,8 @@ this package is public.
 `ProjectFileError`, `ProjectUpgradeRequired`, `ProjectVersionUnsupported`,
 `UpgradeInProgress`, `UpgradeInterrupted`, `MigrationFailed`,
 `MigrationRefused`.
+
+**The installed stack** — `stack_versions`.
 
 **Constants** — `VERSION`, `MODEL_VERSION`, `MODEL_PACKAGE_VERSION`,
 `PROJECT_VERSION`, `SPEC_GENERATION`, `PROJECT_MARKER_FILE`,

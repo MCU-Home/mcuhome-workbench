@@ -240,6 +240,42 @@ def test_the_version_is_the_package_version() -> None:
     assert "from mcuhome.workbench import __version__" in Path(api.__file__).read_text("utf-8")
 
 
+def test_the_stack_is_answered_by_package_name(monkeypatch) -> None:
+    """One call for the first line of every bug report.
+
+    Keyed by distribution name, the two imported packages answering with
+    their own ``__version__`` — what is running, rather than what some
+    metadata file says about it.
+    """
+    stack = api.stack_versions()
+
+    assert list(stack) == ["mcuhome-workbench", "mcuhome-model", "mcuhome-compiler"]
+    assert stack["mcuhome-workbench"] == api.VERSION
+    assert stack["mcuhome-model"] == api.MODEL_PACKAGE_VERSION
+    assert json.dumps(stack)
+
+
+def test_a_package_that_is_not_installed_is_the_empty_string(monkeypatch) -> None:
+    """A package that is not here says so with a value, not with an absence."""
+    import importlib.metadata
+
+    def missing(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+
+    assert api.stack_versions()["mcuhome-compiler"] == ""
+
+
+def test_the_stack_does_not_carry_a_consumers_own_version() -> None:
+    """A client prints its own version beside this answer, never inside it.
+
+    The workbench cannot know what embeds it, and a client that added
+    itself to a document it was given would be assembling one.
+    """
+    assert "mcuhome-cli" not in api.stack_versions()
+
+
 def test_the_build_targets_are_part_of_the_surface() -> None:
     """Driving a build is supported, not an implementation detail.
 
