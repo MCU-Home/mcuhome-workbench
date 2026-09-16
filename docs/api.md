@@ -2318,7 +2318,7 @@ container_image}` — `origin` is the layer that defined the entry and
 `SelectedBuilder.to_dict()`: `{target, builder, server, container_image}`
 — the token is a secret and is in no document.
 `RegistrySettings.to_dict()`: `{base_domain, origin, source, untrusted,
-anchor, mirrors}` — `origin` and `source` are empty for a registry no
+mirrors, anchor}` — `origin` and `source` are empty for a registry no
 layer defined.
 `Artifact.to_dict()`: `{root, path, role, sha256}` — `root` is the
 artifact root the build environment declared the file under (`out`),

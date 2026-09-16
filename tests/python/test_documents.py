@@ -456,17 +456,26 @@ def test_every_sample_is_a_documented_document() -> None:
 
 @pytest.mark.parametrize("name", CHECKED)
 def test_the_document_carries_exactly_the_documented_keys(name: str) -> None:
-    """Every declared key, and no key the reference does not declare.
+    """Every declared key, no other key, and in the order it is declared.
 
     Both directions are the promise: a client reads a key without asking
     whether this version has it, and a key nobody documented is a
     surface that was never agreed on — the first client to find it makes
     it one.
+
+    The **order** is compared too. It changes nothing for a parser, and
+    that is the point: what the reference shows is what a person reads a
+    printed document against, so a key that drifted to another place in
+    one of the two is a document the reference no longer shows.
     """
     document = SAMPLES[name]().to_dict()
     assert sorted(document) == sorted(DOCUMENTS[name]), (
         f"{name}: the reference declares {sorted(DOCUMENTS[name])}, "
         f"the code answers {sorted(document)}"
+    )
+    assert list(document) == DOCUMENTS[name], (
+        f"{name}: the reference states the keys in the order {DOCUMENTS[name]}, "
+        f"the code answers them in {list(document)}"
     )
 
 
