@@ -139,6 +139,13 @@ SAMPLES: dict[str, Callable[[], Any]] = {
         out_dir=ROOT / "build" / "thermostat",
         report="build-report.json",
         container_image="ghcr.io/mcu-home/build-environment@sha256:" + "d" * 64,
+        diagnostics=(
+            api.Diagnostic(
+                severity="error",
+                message="the build environment exited 1",
+                kind="BuildError",
+            ),
+        ),
         detail=object(),
     ),
     "CleanResult": lambda: api.CleanResult(

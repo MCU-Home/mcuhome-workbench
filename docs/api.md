@@ -962,13 +962,26 @@ server to run without a container than it can ask it to run with one.
 Frozen dataclass. Fields `ok`, `stopped`, `target`, `device`,
 `context_id`, `artifacts: tuple[Artifact, ...]`, `out_dir`, `report` (the
 report's file name in `out_dir`), `container_image` (the image that ran,
-empty where none did), `detail`. Method `to_dict()` — see
+empty where none did), `diagnostics: tuple[Diagnostic, ...]`, `detail`.
+Method `to_dict()` — see
 [Documents](#documents). There is no `status`: a firmware build either
 produced the artifacts or it did not, and a build environment that
 answers `unsupported` to the build action is an unusable environment
 (`EnvironmentUnusable`), not a failed build. `detail` is the
 composition's own object, useful for logging and never part of a
 document.
+
+`diagnostics` is what a build that did not deliver has to say, as the one
+findings list every result that can carry them answers: the delivery
+conditions the step failed and the specification violation an
+environment committed at a local target — both with `kind` `BuildError`
+— and the words a build server refused with at the remote one, `kind`
+`ServerRefusal`, its refusal envelope's details included. It is empty
+for a build that produced its artifacts. A build reports its warnings
+through `on_line` while it runs, because that is where the person
+watching a build is looking, so what arrives here are errors; the list
+is the same shape either way. A client renders it and never unwraps
+`detail`, whose shape depends on which composition ran.
 
 ### Progress
 `on_step(key, **facts)` is called when a build enters a step, and a
@@ -1887,14 +1900,16 @@ and the warnings, each with its severity, so a client renders one list:
 }
 ```
 
-`BuildResult.to_dict()`:
+`BuildResult.to_dict()` — `diagnostics` is the one list of findings, and
+it is empty for a build that delivered:
 ```json
 {
   "ok": true, "stopped": false, "target": "local",
   "device": "thermostat", "context_id": "…",
   "out_dir": "/…/build/thermostat", "report": "build-report.json",
   "container_image": "ghcr.io/mcu-home/build-environment@sha256:…",
-  "artifacts": [{"root": "out", "path": "firmware.bin", "role": "firmware", "sha256": "…"}]
+  "artifacts": [{"root": "out", "path": "firmware.bin", "role": "firmware", "sha256": "…"}],
+  "diagnostics": []
 }
 ```
 

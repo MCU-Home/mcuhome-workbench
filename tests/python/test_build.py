@@ -704,12 +704,14 @@ def test_a_build_answers_one_document_whichever_target_ran(model, tmp_path, monk
         "report",
         "container_image",
         "artifacts",
+        "diagnostics",
     ]
     assert document["ok"] is True
     assert document["stopped"] is False
     assert document["device"] == model.device.name
     assert document["out_dir"] == str(tmp_path / "delivery")
     assert document["artifacts"] == [entry.to_dict() for entry in _artifacts()]
+    assert document["diagnostics"] == [], "a build that delivered has nothing to report"
     # A document, not an object graph: it survives json.dumps, and the
     # composition's own result is deliberately not in it.
     assert json.loads(json.dumps(document)) == document
@@ -718,6 +720,116 @@ def test_a_build_answers_one_document_whichever_target_ran(model, tmp_path, monk
     # There is no third word for the verdict.
     assert not hasattr(outcome, "status")
     assert not hasattr(outcome, "successful")
+
+
+def test_a_failed_local_build_states_its_findings(model, tmp_path, monkeypatch) -> None:
+    """A failed build says why, in the one list every result carries.
+
+    Without it the client that renders the failure has to unwrap the
+    composition's own object and dig the sentences out of it — which is
+    the one place a client would be formatting a refusal itself.
+    """
+
+    def fake(device_model, **kwargs):
+        del device_model, kwargs
+        return containerbuild.ContainerBuildResult(
+            outcome=StepResult(
+                action="build",
+                context_id="sha256:" + "1" * 64,
+                exit_code=1,
+                status="failure",
+                problems=("the build environment exited 1",),
+                violation="the result document says 'success' and it exited 1",
+                out_dir=tmp_path / "delivery",
+            ),
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            container_image="registry.example.test/other/environment:test",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    outcome = _run(build.BuildRequest(model=model, out_dir=tmp_path), build.TARGET_LOCAL)
+
+    assert not outcome.ok
+    assert [finding.message for finding in outcome.diagnostics] == [
+        "the build environment exited 1",
+        "the result document says 'success' and it exited 1",
+    ]
+    assert {finding.severity for finding in outcome.diagnostics} == {"error"}
+    assert {finding.kind for finding in outcome.diagnostics} == {"BuildError"}
+    document = outcome.to_dict()
+    assert document["diagnostics"] == [finding.to_dict() for finding in outcome.diagnostics]
+    assert json.loads(json.dumps(document)) == document
+
+
+def test_a_remote_refusal_travels_in_the_findings(model, tmp_path, monkeypatch) -> None:
+    """The far side is the only one that saw the build, so its words are it.
+
+    The envelope's details travel with the message: a server that
+    refuses before it runs anything writes that document and not a line
+    of build log.
+    """
+
+    async def remote(context_dir, **kwargs):
+        del context_dir, kwargs
+        return sessionclient.RemoteBuildResult(
+            action="build",
+            context_id="sha256:" + "2" * 64,
+            status="failure",
+            artifacts=(),
+            out_dir=None,
+            error={
+                "code": "context.too-large",
+                "message": "The build context is larger than this server accepts.",
+                "details": {"limit": 1024},
+            },
+            invocation_id="inv-1",
+        )
+
+    context = tmp_path / "context"
+    context.mkdir()
+    monkeypatch.setattr(sessionclient, "run_remote_build", remote)
+    outcome = _run(
+        build.BuildRequest(
+            model=model,
+            out_dir=tmp_path,
+            context_dir=context,
+            builder=SelectedBuilder(target=build.TARGET_REMOTE, server="attic"),
+        ),
+        build.TARGET_REMOTE,
+    )
+
+    assert not outcome.ok
+    (finding,) = outcome.diagnostics
+    assert finding.kind == "ServerRefusal"
+    assert finding.message.startswith("The build context is larger")
+    assert '"limit": 1024' in finding.message
+
+
+def test_a_build_that_delivered_reports_nothing(model, tmp_path, monkeypatch) -> None:
+    """Findings are what went wrong, and nothing went wrong."""
+
+    def fake(device_model, **kwargs):
+        del device_model, kwargs
+        return containerbuild.ContainerBuildResult(
+            outcome=StepResult(
+                action="build",
+                context_id="sha256:" + "1" * 64,
+                exit_code=0,
+                status="success",
+                artifacts=_artifacts(),
+                out_dir=tmp_path / "delivery",
+            ),
+            out_dir=tmp_path / "delivery",
+            context_dir=tmp_path / "context",
+            container_image="registry.example.test/other/environment:test",
+        )
+
+    monkeypatch.setattr(build, "compose_local_build", fake)
+    outcome = _run(build.BuildRequest(model=model, out_dir=tmp_path), build.TARGET_LOCAL)
+
+    assert outcome.ok
+    assert outcome.diagnostics == ()
 
 
 @pytest.mark.parametrize(

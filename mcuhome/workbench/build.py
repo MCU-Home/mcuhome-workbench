@@ -77,6 +77,7 @@ format or the ID rule.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
@@ -139,7 +140,7 @@ from mcuhome.workbench.contextdir import (
     require_empty_context_dir,
     write_context,
 )
-from mcuhome.workbench.diagnostics import Diagnostic
+from mcuhome.workbench.diagnostics import SEVERITY_ERROR, Diagnostic
 from mcuhome.workbench.imgtool import BUILD_REPORT_FILE
 from mcuhome.workbench.project import Project
 from mcuhome.workbench.resolve_pins import (
@@ -821,6 +822,15 @@ class BuildResult:
     #: whose last step succeeded while the stop was arriving produced the
     #: firmware, and that is the answer its caller wanted.
     stopped: bool = False
+    #: What this build found, as the one list of findings every result
+    #: that can carry them answers: a build that did not produce its
+    #: artifacts says why here — the delivery conditions the step failed,
+    #: the specification violation an environment committed, the words a
+    #: build server refused with. Empty for a build that succeeded.
+    #: Errors and warnings would travel in one list; a build reports its
+    #: warnings through ``on_line`` while it runs, so today these are
+    #: errors.
+    diagnostics: tuple[Diagnostic, ...] = ()
     #: The composition's own result object, untouched. Useful for
     #: logging and never part of a document: what is in it depends on
     #: which composition ran, which is the one thing this class exists to
@@ -845,6 +855,7 @@ class BuildResult:
             "report": self.report,
             "container_image": self.container_image,
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+            "diagnostics": [finding.to_dict() for finding in self.diagnostics],
         }
 
 
@@ -950,6 +961,57 @@ def _reported(limits: BuildLimits) -> dict[str, Any]:
     derives that from these two, and this side would be guessing at it.
     """
     return {"cpus": limits.cpus, "memory_bytes": limits.memory_bytes}
+
+
+def _step_findings(outcome: Any) -> tuple[Diagnostic, ...]:
+    """What a local build's step says about a build that did not deliver.
+
+    Two voices, and both are the orchestrator's own: the delivery
+    conditions the step failed
+    (:attr:`~mcuhome.workbench.buildenvsession.StepResult.problems`,
+    which already carry the environment's own message where it wrote
+    one) and the specification violation an environment committed
+    (:attr:`~mcuhome.workbench.buildenvsession.StepResult.violation`),
+    which is about the *environment* rather than about the build and is
+    therefore a finding of its own rather than a sentence folded into
+    another.
+
+    They are findings rather than a refusal because the build answers
+    rather than raises: a caller that renders a failed build needs the
+    same list a caller that renders a stopped one does. ``kind`` is
+    ``BuildError`` — the class a build's failure is raised as everywhere
+    else on this surface, and therefore the word a client switches on.
+    """
+    if outcome.ok:
+        return ()
+    said = [*outcome.problems]
+    if outcome.violation:
+        said.append(outcome.violation)
+    return tuple(
+        Diagnostic(severity=SEVERITY_ERROR, message=message, kind="BuildError") for message in said
+    )
+
+
+def _refusal_findings(error: Mapping[str, Any] | None) -> tuple[Diagnostic, ...]:
+    """A build server's refusal envelope, as the finding a client renders.
+
+    The far side is the only one that saw the build, so its words are
+    what a failed remote build has to say. The envelope's ``details``
+    travel in the message rather than being dropped: a server that
+    refuses before it runs anything writes that document and not a line
+    of build log, and without it the whole diagnosis of a refusal it
+    explained precisely would be "the build failed".
+
+    ``kind`` is ``ServerRefusal``, the exception this package raises for
+    the same envelope when it arrives as an answer to a command.
+    """
+    if not error:
+        return ()
+    message = str(error.get("message") or "The build server refused this build.")
+    details = error.get("details")
+    if isinstance(details, Mapping) and details:
+        message = f"{message} ({json.dumps(dict(details), sort_keys=True)})"
+    return (Diagnostic(severity=SEVERITY_ERROR, message=message, kind="ServerRefusal"),)
 
 
 def _work_root(request: BuildRequest, name: str) -> Path:
@@ -2420,6 +2482,7 @@ async def _run_subprocess(request: BuildRequest, execution: SubprocessExecution)
         # stopped. A predicate that turned true while the last step was
         # already succeeding stopped nothing.
         stopped=stop.stopped and not outcome.ok,
+        diagnostics=_step_findings(outcome),
         detail=result,
     )
 
@@ -2466,6 +2529,7 @@ async def _run_local(request: BuildRequest, execution: ContainerExecution) -> Bu
         # See the subprocess execution above: a build that produced its
         # artifacts was not stopped, whenever the predicate turned.
         stopped=stop.stopped and not outcome.ok,
+        diagnostics=_step_findings(outcome),
         detail=result,
     )
 
@@ -2667,5 +2731,6 @@ async def _run_remote(request: BuildRequest, target: RemoteBuild) -> BuildResult
         container_image=result.container_image,
         # A verdict of success is neither, however late the stop came.
         stopped=ended and not result.ok,
+        diagnostics=() if result.ok else _refusal_findings(result.error),
         detail=result,
     )
