@@ -182,6 +182,12 @@ build:
   builder: attic
 ```
 
+One entry of such a map is written key by key, so a builder and a registry need
+no hand-edited YAML either: `mcuhome config set builder.attic.target remote`,
+`mcuhome config set registry.packages.mcuhome.org.mirrors.sdk /srv/mirror`, and
+`mcuhome config unset` takes the entry with its last key and the map with its
+last entry.
+
 A key that used to be an option is **refused where it is written**, naming the
 option it is today: `ccache_dir` is `build.cache_root`, `default_builder` is
 `build.builder`, `builders` is the map `builder` (with `type:` as `target:` and
