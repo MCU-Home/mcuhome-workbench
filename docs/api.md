@@ -206,6 +206,7 @@ def resolve_project(
     cwd: Path,
     require_version: bool = True,
     allow_upgrading: bool = False,
+    stated_as: str = "",
 ) -> Project
 ```
 The bootstrap ladder: *project_dir* first, `MCUHOME_PROJECT_DIR` in *env*
@@ -227,6 +228,15 @@ still has to apply. Nothing that **acts** on a project may pass it — a
 half-migrated layout is exactly what nothing may work on — and
 `is_upgrading` is what such a caller asks about the project it gets
 back.
+
+*stated_as* names the channel *project_dir* arrived through, for the two
+refusals that quote it — the directory that does not exist, and the one
+that carries no marker. Empty is the option's own flag
+(`--project-dir`), the same rule `Argument.flag` follows, so a caller
+that takes the directory as a positional or under a name of its own
+states that name and the refusal says the words the person actually
+wrote. The environment channel always names its variable: that spelling
+is the only one it has.
 
 ```python
 def read_project(

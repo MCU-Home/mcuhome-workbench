@@ -358,6 +358,7 @@ def resolve_project(
     cwd: Path,
     require_version: bool = True,
     allow_upgrading: bool = False,
+    stated_as: str = "",
 ) -> Project:
     """Resolve the project directory: the bootstrap ladder.
 
@@ -365,6 +366,14 @@ def resolve_project(
     fallback; either disables the search and is an error when the named
     directory carries no marker. With neither set, the search walks
     *cwd* upward and takes the first directory carrying the marker.
+
+    *stated_as* is what a refusal calls the channel *project_dir* came
+    in through, and is the option's own flag where it is empty — the
+    same rule :class:`~mcuhome.workbench.configuration.Argument` follows
+    for a value's spelling. A caller that takes the directory some other
+    way says so, so the refusal quotes the words the person used instead
+    of a flag nobody typed. The environment channel names its variable
+    either way: that spelling is the only one it has.
 
     Whichever way the directory was found, its project file is read and
     its version checked — a project MCUHome does not speak is refused
@@ -383,7 +392,7 @@ def resolve_project(
     """
     declared = _project_dir_option()
     for value, named_by in (
-        (project_dir, declared.flag),
+        (project_dir, stated_as or declared.flag),
         (env.get(declared.env_var), declared.env_var),
     ):
         if not value:

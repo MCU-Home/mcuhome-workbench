@@ -137,6 +137,34 @@ def test_a_missing_explicit_project_dir_is_an_error(tmp_path: Path) -> None:
     assert "--project-dir" in caught.value.message
 
 
+def test_a_refusal_names_the_channel_the_caller_states(tmp_path: Path) -> None:
+    """A caller that takes the directory its own way says so, and is quoted.
+
+    The two refusals of the stated directory name the flag by default,
+    which is a spelling nobody typed where the directory arrived as a
+    positional.
+    """
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(ConfigError) as missing:
+        resolve_project(tmp_path / "nope", env={}, cwd=tmp_path, stated_as="<directory>")
+    assert "(<directory>)" in missing.value.message
+    assert "--project-dir" not in missing.value.message
+
+    with pytest.raises(ConfigError) as no_marker:
+        resolve_project(plain, env={}, cwd=tmp_path, stated_as="<directory>")
+    assert (no_marker.value.hint or "").startswith("<directory> must name the directory")
+
+
+def test_the_environment_channel_keeps_its_variable(tmp_path: Path) -> None:
+    """The variable is the only spelling that channel has."""
+    with pytest.raises(ConfigError) as caught:
+        resolve_project(
+            env={PROJECT_DIR_VAR: str(tmp_path / "nope")}, cwd=tmp_path, stated_as="<directory>"
+        )
+    assert f"({PROJECT_DIR_VAR})" in caught.value.message
+
+
 def test_the_environment_variable_is_the_fallback(tmp_path: Path) -> None:
     named = tmp_path / "named"
     make_project(named)
