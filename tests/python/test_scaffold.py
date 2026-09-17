@@ -136,6 +136,21 @@ def test_the_starter_uses_the_boards_own_transport() -> None:
     assert "device_role: ftd" in text
 
 
+def test_rendering_refuses_what_writing_refuses() -> None:
+    """Showing the text before writing it must meet the same answer.
+
+    A caller that renders first — a wizard, ``--dry-run`` — would
+    otherwise be told nothing at all about a board nobody brought up,
+    and hear it only from the call that writes.
+    """
+    with pytest.raises(ConfigError) as board:
+        scaffold.render_device_file("bench-node", board="nrf52840dk/nonesuch")
+    assert "is not a board MCUHome knows" in board.value.message
+    with pytest.raises(ConfigError) as name:
+        scaffold.render_device_file("Bench Node", board=BOARD)
+    assert "usable device name" in name.value.message
+
+
 def test_the_scaffold_is_deterministic() -> None:
     assert scaffold.render_device_file("bench-node", board=BOARD) == scaffold.render_device_file(
         "bench-node", board=BOARD

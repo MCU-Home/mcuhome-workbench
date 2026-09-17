@@ -399,7 +399,17 @@ def render_device_file(
     *outline* is what the caller already knows about the device's
     hardware and endpoints. Left out — or empty — the file carries the
     commented example instead, which is the command line's case.
+
+    It refuses what :func:`create_device` refuses — a name that cannot
+    become a folder and a hostname, a board nobody has brought up, an
+    outline naming something that is not there — because a caller that
+    shows the text before writing it must meet the same answer as the
+    call that writes it, and in the same words.
     """
+    if not schema.is_device_name(name):
+        raise schema.refuse_device_name(name)
+    if board not in registry.BOARDS:
+        raise _refuse_unknown_board(board)
     definition = registry.BOARDS[board]
     if outline is not None and not outline.is_empty():
         _check_outline(outline)
