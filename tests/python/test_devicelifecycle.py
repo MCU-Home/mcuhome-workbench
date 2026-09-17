@@ -267,6 +267,57 @@ def test_a_rename_refuses_a_device_the_project_does_not_have(tmp_path: Path) -> 
     assert "bench-node" in (caught.value.hint or "")
 
 
+@pytest.mark.parametrize(
+    "spelling", ["devices/bench-node", "../bench-node", "bench/node", ".", "..", ""]
+)
+def test_a_device_is_named_and_never_a_path(tmp_path: Path, spelling: str) -> None:
+    """A path joined to the project's directories does not stay in them.
+
+    ``devices_dir / "/somewhere/else"`` *is* ``/somewhere/else``, and a
+    call that empties and removes what it is given must never be handed
+    one: both take the name the project knows a device by, and a path is
+    ``resolve_device``'s business.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "notes.txt").write_text("somebody's work", encoding="utf-8")
+
+    for stated in (spelling, str(outside), str(project.devices_dir / "bench-node")):
+        with pytest.raises(ConfigError) as deleting:
+            api.delete_device(stated, project=project)
+        assert "no device called" in str(deleting.value)
+        with pytest.raises(ConfigError) as renaming:
+            api.rename_device(stated, project=project, to="kitchen")
+        assert "no device called" in str(renaming.value)
+
+    assert project.device_file("bench-node").is_file(), "the project's device is untouched"
+    assert outside.is_dir()
+    assert (outside / "notes.txt").read_text(encoding="utf-8") == "somebody's work"
+
+
+def test_an_absolute_path_to_a_device_folder_is_refused_rather_than_removed(
+    tmp_path: Path,
+) -> None:
+    """The one that looks most like a name: the device's own folder.
+
+    It holds a ``main.yaml``, so a check that only asked whether the file
+    is there would take it — and every path the call derives would then
+    be the *stated* one rather than one under the project.
+    """
+    project = make_project(tmp_path)
+    make_device(project, "bench-node")
+    folder = project.devices_dir / "bench-node"
+
+    with pytest.raises(ConfigError) as caught:
+        api.delete_device(str(folder), project=project)
+
+    assert "no device called" in str(caught.value)
+    assert "bench-node" in (caught.value.hint or "")
+    assert (folder / "main.yaml").is_file()
+
+
 @pytest.mark.parametrize("name", ["Kitchen", "kitchen-", "-kitchen", "kit chen", "1234", "k" * 33])
 def test_a_rename_refuses_a_target_that_is_not_a_device_name(tmp_path: Path, name: str) -> None:
     """The rule `create_device` follows, at the other end of a device's life.

@@ -428,7 +428,18 @@ has one for the length of the call and not afterwards; the project's
 `build/` goes the same way when it was this call that brought it into
 existence, and stays when it was already there.
 
-Both raise `ConfigError` for a name the project does not have.
+**Both take the name a project knows a device by, and never a path.**
+*name* is checked against the device-name rule `create_device` follows
+**before** it is joined to anything, because it is not joined once: a
+name with a separator in it, or an absolute one, would answer paths
+outside the project — `devices_dir / "/somewhere/else"` *is*
+`/somewhere/else` — and these are the two calls that empty and remove
+what they are given. A path is `resolve_device`'s business; what reaches
+these is the name it resolved to. Anything else is the `ConfigError`
+below, naming the devices the project has, and nothing is touched.
+
+Both raise `ConfigError` for a name the project does not have, which
+covers a name that could not be one.
 `rename_device` also raises it for a *to* that is not a usable device
 name (the rule `create_device` follows), for one the device already
 carries, for one a device folder, a device secrets file or a build

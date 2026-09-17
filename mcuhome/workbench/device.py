@@ -160,8 +160,19 @@ class DeleteResult:
 
 
 def _require_device(project: Project, name: str) -> Path:
-    """The device folder of *name*, or the refusal that lists what is there."""
-    if not project.device_file(name).is_file():
+    """The device folder of *name*, or the refusal that lists what is there.
+
+    **The name is checked before it is joined to anything.** These two
+    calls address a device the way the project knows it — by name — and
+    every path they then work on is that name under the project's own
+    directories. A name with a separator in it, or an absolute one,
+    would not stay under them: joining ``/somewhere/else`` to a
+    directory answers ``/somewhere/else``, and the call would empty and
+    remove a directory nobody named. A path is
+    :func:`~mcuhome.workbench.project.resolve_device`'s business, and
+    reaches these calls as the name it resolved to.
+    """
+    if not schema.is_device_name(name) or not project.device_file(name).is_file():
         raise refuse_unknown_device(project, name)
     return project.devices_dir / name
 
