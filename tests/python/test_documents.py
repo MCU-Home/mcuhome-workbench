@@ -227,6 +227,7 @@ SAMPLES: dict[str, Callable[[], Any]] = {
     "NewProject": lambda: api.NewProject(
         project=_sample_project(), created=(ROOT / ".mcuhome-project-root",)
     ),
+    "Pairing": lambda: TEST_PAIRING,
     "Project": _sample_project,
     "ResolvedPackage": lambda: api.ResolvedPackage(
         name="mcuhome-build-tools_linux-amd64",
@@ -508,40 +509,52 @@ def test_a_verdict_is_the_first_key(name: str) -> None:
         assert next(iter(document)) == "ok", f"{name}: ok is not the first key"
 
 
-def test_the_pairing_sub_document_carries_what_the_reference_declares() -> None:
-    """The one nested shape the reference spells out key by key.
+class _CredentialsStandIn(api.Pairing):
+    """A credentials tuple whose document says who answered it.
 
-    :func:`_top_level_keys` reads the outermost braces, which is right
-    for every other document here — the nested ones are documents of
-    their own and checked as such. ``NewPairing`` is the exception: the
-    credentials it carries come from a value that has no ``to_dict()``
-    of its own (the model package's ``Pairing``), so the keys are
-    written out in this package and would otherwise be checked by
-    nothing.
+    Used by the test below and nowhere else: it is the only way to see
+    from the outside *which* object produced the nested document.
     """
-    section = _documents_section(REFERENCE.read_text("utf-8"))
-    paragraph = section.split("`NewPairing.to_dict()`", 1)[1]
-    shapes = re.findall(r"`(\{.*?\})`", paragraph, re.DOTALL)
-    # The first shape is the document itself, the second the `pairing`
-    # value inside it.
-    declared = _top_level_keys(shapes[1].replace("\n", " "))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"answered_by": "the credentials themselves"}
+
+
+def test_the_new_pairing_document_asks_the_credentials_for_theirs() -> None:
+    """The nested document is the value's own, not a copy spelled again.
+
+    ``Pairing`` answers a document of its own and is checked above like
+    every other class here. What this adds is the part that check cannot
+    see: ``NewPairing`` hands that document through rather than listing
+    the seven keys a second time. It matters because ``read_pairing``
+    answers the bare value — a client shows drawn credentials exactly as
+    it shows read ones, and two spellings of one document drift apart
+    the first time a key of it moves.
+    """
+    stand_in = _CredentialsStandIn(
+        discriminator=TEST_PAIRING.discriminator,
+        passcode=TEST_PAIRING.passcode,
+        salt=TEST_PAIRING.salt,
+        iterations=TEST_PAIRING.iterations,
+    )
+    assembled = dataclasses.replace(SAMPLES["NewPairing"](), pairing=stand_in).to_dict()
+    assert assembled["pairing"] == {"answered_by": "the credentials themselves"}
 
     document = SAMPLES["NewPairing"]().to_dict()["pairing"]
-    assert sorted(document) == sorted(declared), (
-        f"the reference declares {sorted(declared)} inside `pairing`, "
-        f"the code answers {sorted(document)}"
-    )
+    assert document == TEST_PAIRING.to_dict()
+    assert list(document) == DOCUMENTS["Pairing"]
     assert json.dumps(document)
 
 
 def test_the_declaration_sub_document_carries_what_the_reference_declares() -> None:
-    """The second nested shape written out by hand in this package.
+    """The one nested shape written out by hand in this package.
 
-    Like the pairing credentials: the value comes from a type of the
-    device-model package that states no document of its own, so the keys
-    are this package's to keep and would otherwise be checked by
-    nothing. The package members keep the specification's own spelling,
-    which is what makes them comparable to what an image declares.
+    The value comes from a type of the device-model package that states
+    no document of its own — unlike the pairing credentials, which
+    answer theirs — so the keys are this package's to keep and would
+    otherwise be checked by nothing. The package members keep the
+    specification's own spelling, which is what makes them comparable to
+    what an image declares.
     """
     section = _documents_section(REFERENCE.read_text("utf-8"))
     paragraph = section.split("`ContainerImageMatch.to_dict()`", 1)[1]

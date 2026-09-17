@@ -425,6 +425,9 @@ def read_pairing(entry: Path, *, project: Project) -> Pairing | None
 The commissioning credentials a device already has, or `None`. The
 counterpart of `create_pairing`, which refuses rather than replacing
 them, and the only way to show a device's codes without drawing new ones.
+The value answers the credentials document under "Documents" — the one
+`create_pairing` carries inside `NewPairing`, so a client shows drawn
+and read credentials the same way.
 
 ```python
 def require_secret_file(
@@ -2349,25 +2352,25 @@ layout version the project's file states, `null` for the stand-in
 project a device file outside any project gets.
 `NewProject.to_dict()`: `{project, created}` — every path the call
 created or changed, in creation order.
-`NewPairing.to_dict()`: `{entry, secrets_file, pairing, replaced}`, with
-`pairing` carrying `{discriminator, passcode, salt, iterations,
-test_credentials, manual_code, qr_payload}` — the credentials this call
-drew, and the two codes a person types into a controller. They are in
-the document because the call is the explicit ask for them and because a
-client that recomputed the codes from the values would be assembling a
-document itself. The resolved model carries the same four values under
-`network.pairing`, so `ValidationResult.to_dict()["model"]` carries them
-too: they are part of the device's configuration, and a build compiles
-them into the firmware. Where a client shows them and where it masks
-them is the client's decision — these documents do not decide it.
-
-Those seven keys are the credentials document in their own right, and
-`read_pairing` answers a value carrying them. That value comes from the
-device-model package and answers no `to_dict()` of its own, so a client
-that shows credentials it did not just draw is the one place on this
-surface where it reads a document off an object's fields. It is stated
-here so that both ways of showing a device's codes render the same seven
-keys.
+`Pairing.to_dict()`: `{discriminator, passcode, salt, iterations,
+test_credentials, manual_code, qr_payload}` — one device's commissioning
+credentials with the two codes a person types into a controller. The
+codes are in the document because deriving them is the device-model
+package's arithmetic, and a client that recomputed them would be
+assembling a document out of fields it read off an object. The SPAKE2+
+verifier is not in it: that is the value the device itself stores, and
+it is derived from the passcode the document already carries. Both ways
+of showing a device's codes answer this one document — `read_pairing`
+answers the value that carries it, `create_pairing` carries it inside
+the document below.
+`NewPairing.to_dict()`: `{entry, secrets_file, pairing, replaced}` —
+where the credentials went, with the credentials document above under
+`pairing`. They are in it because the call is the explicit ask for them.
+The resolved model carries the same four values under `network.pairing`,
+so `ValidationResult.to_dict()["model"]` carries them too: they are part
+of the device's configuration, and a build compiles them into the
+firmware. Where a client shows them and where it masks them is the
+client's decision — these documents do not decide it.
 
 On-disk records this package writes and reads:
 - project marker (TOML): `version`, `id`, and `[upgrade]` with `started`,

@@ -84,28 +84,23 @@ class NewPairing:
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready, every declared key present.
 
+        ``pairing`` is the credentials document the tuple itself
+        answers, not a copy assembled here: :func:`read_pairing` hands a
+        client the same value, and a client that showed drawn
+        credentials differently from read ones would be showing two
+        documents for one thing.
+
         It carries the credentials deliberately: they were drawn by
-        *this* call, at the caller's explicit request, and the two codes
-        a person types into a controller are derived from them — a
-        client that had to recompute those would be assembling a
-        document out of fields it read off an object, which is what
-        these documents exist to prevent. The resolved model carries the
-        same four values under ``network.pairing``, because they are
-        part of the device's configuration; showing them or masking them
-        is the client's decision, not this document's.
+        *this* call, at the caller's explicit request. The resolved
+        model carries the same four values under ``network.pairing``,
+        because they are part of the device's configuration; showing
+        them or masking them is the client's decision, not this
+        document's.
         """
         return {
             "entry": str(self.entry),
             "secrets_file": str(self.secrets_file),
-            "pairing": {
-                "discriminator": self.pairing.discriminator,
-                "passcode": self.pairing.passcode,
-                "salt": self.pairing.salt,
-                "iterations": self.pairing.iterations,
-                "test_credentials": self.pairing.test_credentials,
-                "manual_code": self.pairing.manual_code,
-                "qr_payload": self.pairing.qr_payload,
-            },
+            "pairing": self.pairing.to_dict(),
             "replaced": self.replaced,
         }
 
