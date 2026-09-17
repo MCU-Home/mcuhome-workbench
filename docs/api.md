@@ -205,6 +205,7 @@ def resolve_project(
     env: Mapping[str, str],
     cwd: Path,
     require_version: bool = True,
+    allow_upgrading: bool = False,
 ) -> Project
 ```
 The bootstrap ladder: *project_dir* first, `MCUHOME_PROJECT_DIR` in *env*
@@ -216,11 +217,25 @@ project raises `ProjectUpgradeRequired`, a newer one
 for the caller that exists to fix the first of them. Raises
 `ProjectFileError` for a marker that cannot be read.
 
+`allow_upgrading=True` turns the last of those refusals off: the project
+an upgrade is holding — or died holding — is resolved from its renamed
+marker and described, at whatever layout version the upgrade had
+reached, instead of being refused. It is for the caller a person runs
+*because* something refused them and for no other: a command line's
+`project info`, which states that an upgrade is in flight and what it
+still has to apply. Nothing that **acts** on a project may pass it — a
+half-migrated layout is exactly what nothing may work on — and
+`is_upgrading` is what such a caller asks about the project it gets
+back.
+
 ```python
-def read_project(root: Path, *, require_version: bool = True) -> Project
+def read_project(
+    root: Path, *, require_version: bool = True, allow_upgrading: bool = False
+) -> Project
 ```
 The project at a known root, without the ladder: reads the marker into a
-`Project`. Same refusals.
+`Project`. Same refusals, and the same *allow_upgrading*, which reads
+the renamed marker where the plain one is gone.
 
 ```python
 def create_project(root: Path, *, force: bool = False) -> NewProject
@@ -247,10 +262,17 @@ written, and `UpgradeInProgress` / `UpgradeInterrupted` for a directory
 whose project an upgrade has renamed.
 
 ```python
-def find_project_root(start: Path) -> Path | None
+def find_project_root(start: Path, *, allow_upgrading: bool = False) -> Path | None
 def is_project_root(path: Path) -> bool
 def is_upgrading(path: Path) -> bool
 ```
+The upward search answers the first directory carrying the marker, and
+`None` where there is none. A directory an upgrade is holding stops it
+with `UpgradeInProgress` / `UpgradeInterrupted` rather than being walked
+past — a project that is plainly there is not "no project found" — and
+*allow_upgrading* answers that directory instead, for the caller
+`resolve_project` names. `is_upgrading` is the plain question, true for a
+running upgrade and for one that was interrupted.
 
 ```python
 def resolve_device(

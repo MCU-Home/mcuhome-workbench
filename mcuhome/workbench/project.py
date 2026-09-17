@@ -279,13 +279,17 @@ def is_upgrading(path: Path) -> bool:
     return (path / UPGRADE_MARKER_FILE).is_file()
 
 
-def find_project_root(start: Path) -> Path | None:
+def find_project_root(start: Path, *, allow_upgrading: bool = False) -> Path | None:
     """Walk *start* upwards and return the first directory carrying the marker.
 
     A directory that is *being upgraded* stops the walk too, with the
     refusal that says so: its marker is renamed for the duration, and
     walking past it would end in "no project found here" for a project
     that is plainly there.
+
+    *allow_upgrading* answers that directory instead of refusing, for
+    the caller that exists to describe such a project rather than work
+    on it (:func:`resolve_project` says which one).
     """
     current = start.resolve()
     if current.is_file():
@@ -294,17 +298,29 @@ def find_project_root(start: Path) -> Path | None:
         if is_project_root(candidate):
             return candidate
         if is_upgrading(candidate):
+            if allow_upgrading:
+                return candidate
             raise in_flight_error(candidate)
     return None
 
 
-def read_project(root: Path, *, require_version: bool = True) -> Project:
+def read_project(
+    root: Path, *, require_version: bool = True, allow_upgrading: bool = False
+) -> Project:
     """The project in *root*, its file read and — by default — checked.
 
     *require_version* is False for exactly one caller: the upgrade
     itself, which exists to make an outdated project current again.
+
+    *allow_upgrading* reads the renamed marker of a project an upgrade
+    is holding — or died holding — instead of failing over the marker
+    that is not there. The project it answers is the one on disk right
+    now, at whatever layout version the upgrade had reached.
     """
-    file = read_project_file(root / PROJECT_MARKER_FILE, root=root)
+    marker = root / PROJECT_MARKER_FILE
+    if allow_upgrading and not marker.is_file() and is_upgrading(root):
+        marker = root / UPGRADE_MARKER_FILE
+    file = read_project_file(marker, root=root)
     if require_version:
         require_current(file)
     return Project(root=root, discovered=True, file=file)
@@ -341,6 +357,7 @@ def resolve_project(
     env: Mapping[str, str],
     cwd: Path,
     require_version: bool = True,
+    allow_upgrading: bool = False,
 ) -> Project:
     """Resolve the project directory: the bootstrap ladder.
 
@@ -353,6 +370,13 @@ def resolve_project(
     its version checked — a project MCUHome does not speak is refused
     here, once, rather than in each of the commands. *require_version*
     turns only that last step off, for the upgrade that fixes it.
+
+    *allow_upgrading* is the other refusal turned off: a project an
+    upgrade is holding, or died holding, is resolved and described
+    instead of refused. It exists for the caller a person runs *because*
+    something refused them — a command that says what the state of the
+    project is — and never for one that works on the project: what a
+    half-migrated layout holds is exactly what nothing may act on.
 
     Both *env* and *cwd* are stated, never read from the process — the
     module docstring says why.
@@ -375,12 +399,17 @@ def resolve_project(
                 ),
             )
         if not is_project_root(directory):
-            if is_upgrading(directory):
+            if not is_upgrading(directory):
+                raise _refuse_no_marker(directory, named_by=named_by)
+            if not allow_upgrading:
                 raise in_flight_error(directory)
-            raise _refuse_no_marker(directory, named_by=named_by)
-        return read_project(directory.resolve(), require_version=require_version)
+        return read_project(
+            directory.resolve(),
+            require_version=require_version,
+            allow_upgrading=allow_upgrading,
+        )
 
-    found = find_project_root(cwd)
+    found = find_project_root(cwd, allow_upgrading=allow_upgrading)
     if found is None:
         raise ConfigError(
             "No MCUHome project found here.",
@@ -391,7 +420,7 @@ def resolve_project(
                 "    mcuhome project init"
             ),
         )
-    return read_project(found, require_version=require_version)
+    return read_project(found, require_version=require_version, allow_upgrading=allow_upgrading)
 
 
 def refuse_unknown_device(project: Project, name: str) -> ConfigError:

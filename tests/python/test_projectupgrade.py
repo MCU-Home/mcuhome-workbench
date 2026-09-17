@@ -33,7 +33,7 @@ from mcuhome.workbench.api import (
 )
 from mcuhome.workbench.configuration import resolve_builder, resolve_settings
 from mcuhome.workbench.migrations import MIGRATIONS, Migration, plan_upgrade, v2_secrets_layout
-from mcuhome.workbench.project import Project, create_project, resolve_project
+from mcuhome.workbench.project import Project, create_project, read_project, resolve_project
 from mcuhome.workbench.projectfile import (
     PROJECT_MARKER_FILE,
     PROJECT_VERSION,
@@ -228,6 +228,70 @@ def test_a_failing_migration_leaves_the_project_marked_and_says_so(tmp_path: Pat
         resolve_project(root, env={}, cwd=tmp_path)
     assert "explodes" in refusal.value.message
     assert "backup" in (refusal.value.hint or "")
+
+
+def interrupted_project(tmp_path: Path) -> Path:
+    """A project an upgrade died in: the marker renamed, one migration begun."""
+    root = legacy_project(tmp_path / "old")
+
+    def explode(_root, _file):
+        raise RuntimeError("disk is on fire")
+
+    broken = Migration(
+        from_version=0,
+        to_version=1,
+        name="explodes",
+        description="fail on purpose",
+        details="x\ny",
+        run=explode,
+    )
+    with pytest.raises(MigrationFailed), open_upgrade_session(root) as session:
+        session.plan = (broken,)
+        session.apply()
+    assert (root / UPGRADE_MARKER_FILE).is_file()
+    return root
+
+
+def test_an_interrupted_project_can_be_described_rather_than_refused(tmp_path: Path) -> None:
+    """The one caller that has to see such a project: the one that reports on it.
+
+    Every command refuses it, so the command a person runs *because*
+    something refused them would have nothing to say — which is what
+    ``allow_upgrading`` is for.
+    """
+    root = interrupted_project(tmp_path)
+
+    project = resolve_project(
+        root, env={}, cwd=tmp_path, require_version=False, allow_upgrading=True
+    )
+    assert project.root == root
+    assert project.file is not None
+    assert project.file.version == 0, "the layout version the upgrade had reached"
+    assert is_upgrading(root)
+    assert plan_upgrade(project.file.version) == MIGRATIONS
+
+
+def test_the_upward_search_answers_an_interrupted_project_when_asked_to(tmp_path: Path) -> None:
+    root = interrupted_project(tmp_path)
+    deep = root / "devices"
+
+    with pytest.raises(UpgradeInterrupted):
+        resolve_project(env={}, cwd=deep, require_version=False)
+    found = resolve_project(env={}, cwd=deep, require_version=False, allow_upgrading=True)
+    assert found.root == root
+
+
+def test_describing_one_is_off_unless_it_is_asked_for(tmp_path: Path) -> None:
+    """The refusal is the default, for every caller that acts on a project."""
+    root = interrupted_project(tmp_path)
+
+    with pytest.raises(UpgradeInterrupted):
+        resolve_project(root, env={}, cwd=tmp_path, require_version=False)
+    with pytest.raises(MCUHomeError):
+        read_project(root, require_version=False)
+    described = read_project(root, require_version=False, allow_upgrading=True)
+    assert described.file is not None
+    assert described.file.upgrade is not None, "the record of the upgrade that died"
 
 
 def test_an_upgrade_of_a_current_project_has_nothing_to_do(tmp_path: Path) -> None:
