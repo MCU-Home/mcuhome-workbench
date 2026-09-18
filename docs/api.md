@@ -1252,9 +1252,12 @@ def format_generator_chain(entries: Iterable[GeneratorEntry]) -> str
 Locking computes the integrity list and the context ID — it is the act of
 whoever builds the context, and a client that sent one checks the
 identity the server answers with. `verify_context` answers a
-`ContextVerification(root, manifest, actual_id, mismatches)` — `ok`
-property, `to_dict()`, and `FileMismatch(path, declared_sha256,
-actual_sha256)` entries with a `describe()` — rather than raising.
+`ContextVerification(root, manifest, actual_id, mismatches)` — the
+properties `declared_id` (the id the manifest states, against `actual_id`
+recomputed from the bytes on disk) and `ok`, the methods `problems()`
+(every disagreement as one plain sentence, the file mismatches first) and
+`to_dict()`, and `FileMismatch(path, declared_sha256, actual_sha256)`
+entries with a `describe()` — rather than raising.
 `lock_context` raises `ConfigError` for a context directory it cannot
 close and `ContextFormatVersionError` for one this version does not read;
 `read_context_manifest` raises the same for a manifest it cannot read.
