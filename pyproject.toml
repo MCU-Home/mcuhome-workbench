@@ -88,7 +88,7 @@ dependencies = [
 remote = ["aiohttp>=3.10,<4"]
 # `generate_application` and nothing else: writing a device's Zephyr
 # application on this machine, for the caller who wants the tree for its own sake
-# (`mcuhome device build --generate-only`). No build needs it — a
+# (`mcuhome device generate-application`). No build needs it — a
 # build environment generates from the model its context carries — so it
 # is an optional edge resolved at call time, and an
 # install that never generates locally carries no part of stage 4.
