@@ -2510,17 +2510,26 @@ Any seam that has an exported equivalent is used through the exported
 one — a test that could call `api` and reaches into a module instead is
 a defect in the test, not a seam.
 
+Two suites are meant: this repository's, and the build server's, which
+drives the same container profile from the other side and therefore
+needs the same few names. The second column says which of them a row is
+for where it is not both.
+
 This list is not written by hand: the suite's own imports are read out of
 it and compared against the table, in both directions, so a module that
 becomes a seam without being named here fails, and so does a name in the
-table that nothing reaches for any more. What the comparison cannot see
-is *why* a test reaches for something — that judgement stays with the
-reviewer, and the reasons are what the second column is for.
+table that nothing reaches for any more. That comparison reads this
+repository's suite — another repository's is not readable from here, so a
+row that exists only for the build server is held to the weaker rule that
+what it names still exists. What no comparison can see is *why* a test
+reaches for something — that judgement stays with the reviewer, and the
+reasons are what the second column is for.
 
 | What a test reaches for | Why |
 |---|---|
 | the modules behind the surface, each the subject of the tests that import it — `build`, `buildenvsession`, `buildenvstore`, `buildlock`, `buildprocess`, `buildrecord`, `buildtarget`, `configschema`, `configuration`, `containerbuild`, `contextdir`, `device`, `devworkspace`, `generate`, `generatorconstraint`, `hostcheck`, `imgtool`, `loader`, `migrations`, `ociregistry`, `otafile`, `packagefetch`, `packageregistry`, `project`, `projectfile`, `provision`, `resolve_image`, `resolve_pins`, `scaffold`, `schema`, `secrets`, `sessionclient`, `signing`, `subprocessbuild` | the workbench's own unit tests are tests *of* those modules. A unit test that may only enter through `api` is an integration test, and the behaviour it pins would be asserted three layers away from where it lives. A module that is reached for *only* to get a name `api` exports is not on this list — that one is an import to fix, and the comparison fails on it |
-| `containerbuild.ENTRY_POINT_PATH`, `containerbuild.REQUEST_TARGET`, `containerbuild.OUT_TARGET` | the container layout of one execution profile. A double standing in for a build environment has to read the request document at the path the real profile mounts it at, and that path is not something the surface answers |
+| `containerbuild.ENTRY_POINT_PATH`, `containerbuild.REQUEST_TARGET`, `containerbuild.OUT_TARGET` | the container layout of one execution profile, reached for by both suites. A double standing in for a build environment has to read the request document at the path the real profile mounts it at, and that path is not something the surface answers |
+| `containerbuild.run_command`, `containerbuild.spawn_process` | the net both suites hang under themselves so that no test ever drives a container program for real, whatever path it takes. `ContainerRuntime(runner=, spawner=)` is the supported injection and covers one call — a runtime the code under test constructs for itself is exactly what this catches, which is why the net is hung on the module and not passed in |
 | the composition functions the build targets are made of — `build.compose_local_build`, `build.compose_subprocess_build`, `subprocessbuild.run_locked_build`, `sessionclient.run_remote_build` and their neighbours | replaced wholesale so that one build path can be driven without a container, a registry or a socket. The surface deliberately has no seam between `build_firmware` and the composition it picks |
 | `secrets.MASKED_VALUE` | what `read_secrets` puts in place of a value is one constant of that module and deliberately not on the surface — a client renders the `masked` it is given and never compares it against one of its own. The test that proves no document carries a value states the same constant, so a change to it cannot pass unnoticed |
 | `open_package_registry(opener=, now=)`, `generate_key_pem(scalar=)` | injection parameters on exported functions: an HTTP opener, a clock, and one known private key to compare bytes against. They are stated in the signatures above and are not part of the supported call |

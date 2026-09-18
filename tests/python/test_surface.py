@@ -472,6 +472,24 @@ def test_every_named_seam_resolves() -> None:
         assert hasattr(imported, attribute), f"{module}.{attribute} is in the table and not there"
 
 
+def test_no_seam_the_table_names_has_an_exported_equivalent() -> None:
+    """The checkable half of the rule the table's own text states.
+
+    A row that names ``module.attribute`` for a name `api` exports is not
+    a seam: every reader of the table would then be told to reach behind
+    the surface for something that is on it. The rows that legitimately
+    name an exported name are the injection ones, and those name a call
+    with its parameters rather than an attribute, so they are a different
+    shape and not read here.
+    """
+    named = [
+        f"{module}.{attribute}"
+        for module, attribute in _table_attributes()
+        if attribute in api.__all__
+    ]
+    assert not named, f"{named} are named as seams and are exported — use the exported name"
+
+
 def test_every_injection_parameter_the_table_names_is_in_the_signature() -> None:
     """The stated exceptions on exported functions are still parameters.
 
