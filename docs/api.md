@@ -1075,9 +1075,9 @@ Frozen dataclass — the `build` section resolved once, and a property of
 *this machine*: `target`, `mode`, `builder`, `container_repositories`,
 `container_program`, `cpus`, `memory`, `pids`, `env_store`,
 `dev_workspace`, `python`, `sdk_sources`, `workspace_sources`,
-`tools_sources`,
-`sdk_max_bytes`, `workspace_max_bytes`, `tools_max_bytes`, `cache_root`,
-`cache_local`, `cache_shared`, `cache_session`, `cache_project`, and
+`tools_sources`, `sdk_max_bytes`, `workspace_max_bytes`,
+`tools_max_bytes`, `cache_root`, `cache_local`, `cache_shared`,
+`cache_session`, `cache_project`, and
 `sources: Mapping[str, str]` — where each value came from. Methods
 `source(leaf)`, `limits() -> BuildLimits`, `bound(kind)`, `to_dict()`.
 Unset values are `None` and mean *the default of whatever consumes them*,
@@ -1536,9 +1536,9 @@ labels, empty for an image carrying none. It is exported because a caller
 that stands its own client in for this one has to answer with the type
 this one answers with: a type a caller cannot name is a parameter it
 cannot fill.
-`ContainerImagePin(repository,
-tag, digest)` with the properties `stated` and `canonical` and the
-method `described()` is what `parse_container_image` answers.
+`ContainerImagePin(repository, tag, digest)` with the properties
+`stated` and `canonical` and the method `described()` is what
+`parse_container_image` answers.
 `Launcher` is `Callable[[Step, LineSink | None], Running]` — a type
 alias, so a caller may supply its own.
 `parse_container_reference` is the device-model package's own parser for
@@ -2603,8 +2603,7 @@ this package is public.
 `BuilderSession`, `Step`, `StepResult`, `CacheTier`, `Liveness`,
 `Launcher`, `StoreEntry`, `ContainerRuntime`, `ContainerLimits`,
 `ContainerImagePin`, `ContainerImageMatch`, `ImageRegistry`,
-`ImageFacts`, `Reference`,
-`Declaration`, `PackageMember`.
+`ImageFacts`, `Reference`, `Declaration`, `PackageMember`.
 
 **Packages and registries** — `open_package_registry`,
 `fetch_sdk_package`, `resolve_package`, `sha256_file`, `RegistrySource`,
