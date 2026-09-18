@@ -619,6 +619,27 @@ def test_the_recommended_limits_are_the_ones_the_container_is_held_to(tmp_path, 
     assert argv[argv.index("--pids-limit") + 1] == str(containerbuild.DEFAULT_CONTAINER_PIDS)
 
 
+def test_the_configured_process_bound_is_the_one_the_container_gets(tmp_path, model, public_pem):
+    """``build.pids`` reaches the run that creates the container.
+
+    The third figure of the set and the only one that is not a budget, so
+    it travels the other way round from the other two: it is set on the
+    container and it is *not* in the request document, because a process
+    count is not something a build environment sizes itself to.
+    """
+    make_sdk_source(tmp_path / "src")
+    seam, result = _build(
+        tmp_path,
+        model,
+        public_pem,
+        options=build.BuildOptions(pids=64),
+    )
+    assert result.outcome.ok
+    argv = seam.step
+    assert argv[argv.index("--pids-limit") + 1] == "64"
+    assert "pids" not in seam.request["limits"]
+
+
 def test_a_build_nobody_bounded_is_given_this_machine(tmp_path, model, public_pem):
     """Unset is the machine as it is — a local build is not a tenant —
     and the guard is still there, because it exists against an

@@ -29,6 +29,7 @@ from mcuhome.workbench.build import resolve_build_options
 from mcuhome.workbench.buildtarget import (
     BUILD_MODES,
     BUILD_TARGETS,
+    DEFAULT_CONTAINER_PIDS,
     DEFAULT_CONTAINER_REPOSITORIES,
     MODE_CONTAINER,
     MODE_SUBPROCESS,
@@ -58,6 +59,7 @@ KEYS = {
     "build.container_repositories": "MCUHOME_BUILD_CONTAINER_REPOSITORIES",
     "build.cpus": "MCUHOME_BUILD_CPUS",
     "build.memory": "MCUHOME_BUILD_MEMORY",
+    "build.pids": "MCUHOME_BUILD_PIDS",
     "build.env_store": "MCUHOME_BUILD_ENV_STORE",
     "build.dev_workspace": "MCUHOME_BUILD_DEV_WORKSPACE",
     "build.python": "MCUHOME_BUILD_PYTHON",
@@ -276,6 +278,35 @@ def test_a_cpu_share_is_a_number_and_a_memory_figure_is_a_word(project: Project)
     limits = resolve_build_options(settings).limits()
     assert limits.cpus == 2.5
     assert limits.memory_bytes == 6 * 1024**3
+
+
+def test_the_process_bound_has_a_value_nobody_configured(project: Project) -> None:
+    """``build.pids`` is the one figure of the three with a declared
+    default: the other two mean "this machine as it is" when unset, and
+    a process bound that meant that would be no bound at all."""
+    settings = resolve_settings(project=project, env={})
+    assert settings.value("build.pids") == DEFAULT_CONTAINER_PIDS
+    assert settings.origin("build.pids") == "default"
+    assert resolve_build_options(settings).pids == DEFAULT_CONTAINER_PIDS
+
+
+def test_the_process_bound_travels_the_layers_like_every_other_key(project: Project) -> None:
+    write_project(project, "build:\n  pids: 512\n")
+    settings = resolve_settings(project=project, env={})
+    assert resolve_build_options(settings).pids == 512
+    settings = resolve_settings(project=project, env={"MCUHOME_BUILD_PIDS": "256"})
+    assert resolve_build_options(settings).pids == 256
+    assert settings.origin("build.pids") == "environment"
+
+
+@pytest.mark.parametrize("stated", ["0", "-2", "viele"])
+def test_a_process_bound_that_is_not_one_is_refused(project: Project, stated: str) -> None:
+    """A container with zero processes runs nothing, so zero is not a
+    smaller bound — it is a value the layer that supplied it is named
+    for."""
+    with pytest.raises(ConfigError) as caught:
+        resolve_settings(project=project, env={"MCUHOME_BUILD_PIDS": stated})
+    assert "MCUHOME_BUILD_PIDS" in caught.value.message
 
 
 def test_a_cpu_share_from_the_environment_is_a_number_too(project: Project) -> None:

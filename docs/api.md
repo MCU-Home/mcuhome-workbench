@@ -1073,14 +1073,17 @@ does not use is ignored rather than refused.
 ### BuildOptions
 Frozen dataclass — the `build` section resolved once, and a property of
 *this machine*: `target`, `mode`, `builder`, `container_repositories`,
-`container_program`, `cpus`, `memory`, `env_store`, `dev_workspace`,
-`python`, `sdk_sources`, `workspace_sources`, `tools_sources`,
+`container_program`, `cpus`, `memory`, `pids`, `env_store`,
+`dev_workspace`, `python`, `sdk_sources`, `workspace_sources`,
+`tools_sources`,
 `sdk_max_bytes`, `workspace_max_bytes`, `tools_max_bytes`, `cache_root`,
 `cache_local`, `cache_shared`, `cache_session`, `cache_project`, and
 `sources: Mapping[str, str]` — where each value came from. Methods
 `source(leaf)`, `limits() -> BuildLimits`, `bound(kind)`, `to_dict()`.
 Unset values are `None` and mean *the default of whatever consumes them*,
-never a value invented here.
+never a value invented here. `pids` is the one exception and is never
+`None`: a process bound a machine did not set is still applied, and
+`DEFAULT_CONTAINER_PIDS` is the value.
 
 ```python
 def resolve_build_options(settings: Settings) -> BuildOptions
@@ -1509,7 +1512,16 @@ spawner=None)` — the seam over the container command line; methods `run`,
 `spawn`, `present`, `pull`, `remove`.
 `ContainerLimits(memory=None, cpus=None, pids=None)` with
 `from_build_limits(limits, *, pids=DEFAULT_CONTAINER_PIDS)` and
-`to_arguments()`.
+`to_arguments()`. The three become `--memory`, `--cpus` and
+`--pids-limit` on the run that creates the container, and a figure that
+was not stated becomes no flag rather than a zero — this runtime reads a
+zero as *no limit*. The first two are the `BuildLimits` the step is
+given, so they are also written into the request document as the
+recommendation the environment sizes itself to; `pids` is not, because a
+process count is not something an environment sizes itself to. It comes
+from `build.pids` (`BuildOptions.pids`), it is `DEFAULT_CONTAINER_PIDS`
+on a machine that configured none, and it holds for this profile alone:
+a subprocess build runs on the host and has no container to bound.
 `ImageRegistry` is the container-registry client
 `resolve_container_image` may be handed; `ContainerImagePin(repository,
 tag, digest)` with the properties `stated` and `canonical` and the
@@ -2067,6 +2079,7 @@ keyed on — `builder` by builder name, `registry` by base domain.
 | `build.container_repositories` | strings | the official build-environment repository | – | y/y/y | `MCUHOME_BUILD_CONTAINER_REPOSITORIES` | `--build-container-repositories` |
 | `build.cpus` | number (> 0) | – | every core of the machine | y/y/y | `MCUHOME_BUILD_CPUS` | `--build-cpus` |
 | `build.memory` | string (bytes or `k`/`m`/`g`) | – | whatever is free | y/y/y | `MCUHOME_BUILD_MEMORY` | `--build-memory` |
+| `build.pids` | integer (≥ 1) | `4096` | – | y/y/y | `MCUHOME_BUILD_PIDS` | `--build-pids` |
 | `build.env_store` | path | – | `${XDG_CACHE_HOME:-~/.cache}/mcuhome/build-environments` | y/y/y | `MCUHOME_BUILD_ENV_STORE` | `--build-env-store` |
 | `build.dev_workspace` | path | – | – | y/y/y | `MCUHOME_BUILD_DEV_WORKSPACE` | `--build-dev-workspace` |
 | `build.python` | string | – | the interpreter this package runs on | y/y/y | `MCUHOME_BUILD_PYTHON` | `--build-python` |
@@ -2372,12 +2385,13 @@ which is a name in its own vocabulary and not a path segment: `path` is
 relative to the directory the result names, and after a delivery that is
 the build directory itself.
 `BuildOptions.to_dict()`: `{target, mode, builder,
-container_repositories, container_program, cpus, memory, env_store,
+container_repositories, container_program, cpus, memory, pids, env_store,
 dev_workspace, python, sdk_sources, workspace_sources, tools_sources,
 sdk_max_bytes, workspace_max_bytes, tools_max_bytes, cache_root,
 cache_local, cache_shared, cache_session, cache_project, sources}` —
-every key of the section, `null` where nobody configured one, and
-`sources` saying where each value came from by the key's leaf name.
+every key of the section, `null` where nobody configured one — `pids`
+excepted, which always carries a number — and `sources` saying where each
+value came from by the key's leaf name.
 `SecretScope.to_dict()`: `{kind, name, file, exists}` — where one
 secrets file is and whether it is there. A scope is a location, so this
 document carries neither a key nor a value.

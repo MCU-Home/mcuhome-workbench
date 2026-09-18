@@ -123,6 +123,7 @@ from mcuhome.workbench.buildtarget import (
     BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
     DEFAULT_BUILD_TARGET,
+    DEFAULT_CONTAINER_PIDS,
     DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
     DEFAULT_MAX_WAIT_SECONDS,
@@ -400,6 +401,14 @@ class BuildOptions:
     #: itself from, and the container profile enforces them besides.
     cpus: float | None = None
     memory: str | None = None
+    #: ``build.pids``: how many processes one build container may have at
+    #: once. The third of that set and the one that is not a budget but a
+    #: bound — the line between "many jobs" and a fork bomb — so it has a
+    #: value even where nobody configured one, and it reaches the
+    #: container profile alone: the request document states what the
+    #: environment should size itself to, and a process count is not
+    #: that.
+    pids: int = DEFAULT_CONTAINER_PIDS
     #: ``build.env_store``: the store's root. ``None`` is the user's
     #: cache home, which is where a machine nobody configured keeps it.
     env_store: Path | None = None
@@ -485,6 +494,7 @@ class BuildOptions:
             "container_program": self.container_program,
             "cpus": self.cpus,
             "memory": self.memory,
+            "pids": self.pids,
             "env_store": _as_text(self.env_store),
             "dev_workspace": _as_text(self.dev_workspace),
             "python": self.python,
@@ -538,6 +548,7 @@ def resolve_build_options(settings: Settings) -> BuildOptions:
         container_repositories=tuple(settings.value("build.container_repositories")),
         cpus=settings.value("build.cpus"),
         memory=settings.value("build.memory") or None,
+        pids=int(settings.value("build.pids")),
         env_store=path("build.env_store"),
         dev_workspace=path("build.dev_workspace"),
         container_program=settings.value("build.container_program"),
@@ -2386,6 +2397,7 @@ def compose_container_build(
         work_root=work_root / "backend",
         env=dict(env),
         limits=limits,
+        pids=options.pids,
         sdk_max_bytes=options.sdk_max_bytes,
         zephyr_constraint=model.toolchain.zephyr_constraint,
         container_program=containerbuild.resolve_container_program(options=options),

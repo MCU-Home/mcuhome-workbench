@@ -57,6 +57,7 @@ __all__ = [
     "BUILD_TARGETS",
     "DEFAULT_BUILD_MODE",
     "DEFAULT_BUILD_TARGET",
+    "DEFAULT_CONTAINER_PIDS",
     "DEFAULT_CONTAINER_PROGRAM",
     "DEFAULT_CONTAINER_REPOSITORIES",
     "DEFAULT_MAX_WAIT_SECONDS",
@@ -86,6 +87,15 @@ DEFAULT_CONTAINER_REPOSITORIES: tuple[str, ...] = (ENVIRONMENT_IMAGE_REPOSITORY,
 #: profile that drives it: the option registry declares it without
 #: importing a build path.
 DEFAULT_CONTAINER_PROGRAM = "docker"
+
+#: How many processes one step's container may have. Not a tuning knob:
+#: a build spawns compilers, and a build that has spawned four thousand
+#: of them is not compiling. It is the bound between "many jobs" and "a
+#: fork bomb", and nothing that builds firmware comes near it. Stated
+#: here with the other build defaults so that the option registry can
+#: declare it as the default of ``build.pids`` without importing the
+#: profile that sets the flag.
+DEFAULT_CONTAINER_PIDS = 4096
 
 
 #: The two targets, as the words a configuration writes them in: the

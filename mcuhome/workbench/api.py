@@ -209,6 +209,7 @@ from mcuhome.workbench.buildtarget import (
     BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
     DEFAULT_BUILD_TARGET,
+    DEFAULT_CONTAINER_PIDS,
     DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
     DEFAULT_MAX_WAIT_SECONDS,
@@ -244,7 +245,6 @@ from mcuhome.workbench.configuration import (
     unset_config_value,
 )
 from mcuhome.workbench.containerbuild import (
-    DEFAULT_CONTAINER_PIDS,
     ContainerLimits,
     ContainerRuntime,
     create_launcher,

@@ -97,6 +97,7 @@ from mcuhome.workbench.buildprocess import (
     spawn_process,
 )
 from mcuhome.workbench.buildtarget import (
+    DEFAULT_CONTAINER_PIDS,
     DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
 )
@@ -119,7 +120,6 @@ if TYPE_CHECKING:  # pragma: no cover - types only
 
 __all__ = [
     "CONTAINER_REPOSITORIES_OPTION",
-    "DEFAULT_CONTAINER_PIDS",
     "ENTRY_POINT_PATH",
     "ContainerBuildResult",
     "ContainerLimits",
@@ -162,11 +162,6 @@ CONTEXT_TARGET = f"{_TREE}/{STEP_CONTEXT}"
 OUT_TARGET = f"{_TREE}/{STEP_OUT}"
 CACHE_TARGET = f"{_TREE}/{STEP_CACHE}"
 
-#: How many processes one step's container may have. Not a tuning knob:
-#: a build spawns compilers, and a build that has spawned four thousand
-#: of them is not compiling. It is the bound between "many jobs" and "a
-#: fork bomb", and nothing that builds firmware comes near it.
-DEFAULT_CONTAINER_PIDS = 4096
 
 #: What every container this profile starts is called: the step's own
 #: invocation id, which §6.1 promises is safe in a file name and which
@@ -217,6 +212,13 @@ class ContainerLimits:
     what an unhealthy one can do to the machine around it. The one
     exception is memory on a host whose memory cannot be measured: it is
     left unbounded there, unless ``build.memory`` is configured.
+
+    The process count is ``build.pids``, carried here as
+    :attr:`~mcuhome.workbench.build.BuildOptions.pids`, and unlike the
+    other two it always has a value: an unset budget means this machine
+    as it is, while an unset process bound would mean no bound at all.
+    It is the one of the three the request document does not carry —
+    a process count is not a figure an environment sizes itself to.
     """
 
     memory: str | None = None

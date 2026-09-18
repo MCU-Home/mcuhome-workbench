@@ -112,6 +112,7 @@ from mcuhome.workbench.buildtarget import (
     BUILD_TARGETS,
     DEFAULT_BUILD_MODE,
     DEFAULT_BUILD_TARGET,
+    DEFAULT_CONTAINER_PIDS,
     DEFAULT_CONTAINER_PROGRAM,
     DEFAULT_CONTAINER_REPOSITORIES,
 )
@@ -396,6 +397,20 @@ OPTIONS: tuple[Option, ...] = (
         "build.memory",
         kind="string",
         help="how much memory one build may use (512m, 8g, or bytes); unset means what is free",
+    ),
+    # The third of that set, and the one that is not a budget: a process
+    # count no build has a use for exceeding. It is the bound between
+    # "many jobs" and "a fork bomb", so it has a declared default where
+    # the other two have none — a machine nobody configured still gets
+    # it. The container profile is the only one that can hold anything to
+    # it, and the request document does not carry it: what the build
+    # environment is told to size itself to is the CPU and the memory.
+    Option(
+        "build.pids",
+        kind="integer",
+        default=DEFAULT_CONTAINER_PIDS,
+        minimum=1,
+        help="how many processes one build container may have at once",
     ),
     Option(
         "build.env_store",
