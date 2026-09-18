@@ -1523,7 +1523,17 @@ from `build.pids` (`BuildOptions.pids`), it is `DEFAULT_CONTAINER_PIDS`
 on a machine that configured none, and it holds for this profile alone:
 a subprocess build runs on the host and has no container to bound.
 `ImageRegistry` is the container-registry client
-`resolve_container_image` may be handed; `ContainerImagePin(repository,
+`resolve_container_image` may be handed — one registry host, asked about
+one repository at a time, with the two questions `tags(reference)` and
+`facts(reference, *, platform=None)`. `facts` answers an
+`ImageFacts(digest, labels)`: the manifest the labels were read from —
+**not** the index that pointed at it, which names every architecture at
+once and therefore no bytes that run here — and that manifest's config
+labels, empty for an image carrying none. It is exported because a caller
+that stands its own client in for this one has to answer with the type
+this one answers with: a type a caller cannot name is a parameter it
+cannot fill.
+`ContainerImagePin(repository,
 tag, digest)` with the properties `stated` and `canonical` and the
 method `described()` is what `parse_container_image` answers.
 `Launcher` is `Callable[[Step, LineSink | None], Running]` — a type
@@ -2580,7 +2590,8 @@ this package is public.
 `parse_memory`, `resolve_shutdown_seconds`, `current_user`,
 `BuilderSession`, `Step`, `StepResult`, `CacheTier`, `Liveness`,
 `Launcher`, `StoreEntry`, `ContainerRuntime`, `ContainerLimits`,
-`ContainerImagePin`, `ContainerImageMatch`, `ImageRegistry`, `Reference`,
+`ContainerImagePin`, `ContainerImageMatch`, `ImageRegistry`,
+`ImageFacts`, `Reference`,
 `Declaration`, `PackageMember`.
 
 **Packages and registries** — `open_package_registry`,

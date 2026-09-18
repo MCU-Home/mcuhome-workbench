@@ -312,6 +312,7 @@ from mcuhome.workbench.migrations import (
     plan_upgrade,
 )
 from mcuhome.workbench.ociregistry import (
+    ImageFacts,
     ImageRegistry,
     ImageRegistryError,
     ImageRegistryUnauthorized,
@@ -522,6 +523,7 @@ __all__ = [
     "HOST_CHECKS",
     "HostCheckResult",
     "HostFinding",
+    "ImageFacts",
     "ImageRegistry",
     "ImageRegistryError",
     "ImageRegistryUnauthorized",
